@@ -6,18 +6,29 @@ import { deleteFile } from "../services/storage";
 
 const router = Router();
 
-// CNPJ lookup proxy — avoids CORS issues when frontend calls BrasilAPI directly
+// CNPJ lookup proxy — avoids CORS issues when frontend calls BrasilAPI directly.
+// User-Agent header required: BrasilAPI returns 403 to default Node fetch UA.
 router.get("/cnpj/:cnpj", async (req: AuthRequest, res: Response): Promise<void> => {
   const digits = (req.params.cnpj as string).replace(/\D/g, "");
   if (digits.length !== 14) { res.status(400).json({ error: "CNPJ inválido" }); return; }
 
   try {
-    const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`);
+    const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`, {
+      headers: {
+        "User-Agent": "Quantua/1.0 (+https://quantua.com.br)",
+        Accept: "application/json",
+      },
+    });
     if (response.status === 404) { res.status(404).json({ error: "CNPJ não encontrado na Receita Federal" }); return; }
-    if (!response.ok) { res.status(502).json({ error: "Erro ao consultar CNPJ" }); return; }
+    if (!response.ok) {
+      console.error(`[BrasilAPI] CNPJ ${digits} → HTTP ${response.status}`);
+      res.status(502).json({ error: "Erro ao consultar CNPJ" });
+      return;
+    }
     const data = await response.json();
     res.json(data);
-  } catch {
+  } catch (err) {
+    console.error("[BrasilAPI] fetch failed:", err);
     res.status(502).json({ error: "Falha ao conectar com a Receita Federal" });
   }
 });

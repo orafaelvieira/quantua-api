@@ -17,6 +17,75 @@ const eventSchema = z.object({
   reason: z.string().optional(),
 });
 
+router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
+  const userId = req.userId!;
+  const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+  const pageSize = Math.min(200, Math.max(10, parseInt(String(req.query.pageSize ?? "50"), 10) || 50));
+  const skip = (page - 1) * pageSize;
+
+  const filterUserId = req.query.userId as string | undefined;
+  const filterEntity = req.query.entity as string | undefined;
+  const from = req.query.from as string | undefined;
+  const to = req.query.to as string | undefined;
+
+  const where = {
+    OR: [
+      { analysis: { userId } },
+      { analysisId: null, userId },
+    ],
+    ...(filterUserId ? { userId: filterUserId } : {}),
+    ...(filterEntity ? { entity: filterEntity } : {}),
+    ...(from || to
+      ? {
+          timestamp: {
+            ...(from ? { gte: new Date(from) } : {}),
+            ...(to ? { lte: new Date(to) } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const [items, total] = await Promise.all([
+    prisma.auditEvent.findMany({
+      where,
+      orderBy: { timestamp: "desc" },
+      skip,
+      take: pageSize,
+      include: {
+        analysis: {
+          select: {
+            id: true,
+            nome: true,
+            company: { select: { razaoSocial: true, nomeFantasia: true } },
+          },
+        },
+      },
+    }),
+    prisma.auditEvent.count({ where }),
+  ]);
+
+  const out = items.map((e) => ({
+    id: e.id,
+    timestamp: e.timestamp.toISOString(),
+    userId: e.userId,
+    userName: e.userName,
+    entity: e.entity,
+    entityId: e.entityId,
+    field: e.field,
+    before: e.before,
+    after: e.after,
+    source: e.source,
+    reason: e.reason,
+    analysisId: e.analysisId,
+    analysisName: e.analysis?.nome ?? null,
+    companyName: e.analysis?.company
+      ? e.analysis.company.nomeFantasia || e.analysis.company.razaoSocial
+      : null,
+  }));
+
+  res.json({ items: out, total, page, pageSize });
+});
+
 router.post("/events", async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = eventSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
