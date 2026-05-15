@@ -31,24 +31,60 @@ const DEMO_PASSWORD = "demo1234";
 async function clean() {
   console.log("→ Limpando dados de demo anteriores…");
 
-  const ws = await prisma.workspace.findFirst({ where: { cnpj: DEMO_CNPJ } });
-  if (ws) {
-    // Find users in this workspace
-    const users = await prisma.user.findMany({ where: { workspaceId: ws.id } });
-    console.log(`  ${users.length} user(s) demo encontrados — cascateando delete`);
-    for (const u of users) {
-      // Deleting user cascades: companies → analyses → documents → audit/time/etc.
-      await prisma.user.delete({ where: { id: u.id } }).catch((e) => {
-        console.warn(`  falhou delete user ${u.email}: ${e.message}`);
-      });
+  // Identifica demo users pelo email pattern (cobre órfãos sem workspace)
+  const demoUsers = await prisma.user.findMany({
+    where: { email: { endsWith: DEMO_EMAIL_DOMAIN } },
+  });
+  const userIds = demoUsers.map((u) => u.id);
+
+  if (userIds.length > 0) {
+    console.log(`  ${userIds.length} user(s) demo encontrados`);
+
+    // 1. Engagements (e suas dependências)
+    const engagements = await prisma.engagement.findMany({
+      where: { OR: [{ userId: { in: userIds } }, { rtId: { in: userIds } }] },
+    });
+    const engagementIds = engagements.map((e) => e.id);
+    if (engagementIds.length > 0) {
+      await prisma.invoice.deleteMany({ where: { engagementId: { in: engagementIds } } });
+      await prisma.engagementSignature.deleteMany({ where: { engagementId: { in: engagementIds } } });
+      await prisma.clientInvitation.deleteMany({ where: { engagementId: { in: engagementIds } } });
+      await prisma.engagement.deleteMany({ where: { id: { in: engagementIds } } });
     }
-    await prisma.workspace.delete({ where: { id: ws.id } });
-    console.log("  workspace removido");
+
+    // 2. Analyses (cascade: documents, audit, time, allocations, covenants)
+    await prisma.analysis.deleteMany({ where: { userId: { in: userIds } } });
+
+    // 3. Companies (cascade: documents)
+    await prisma.company.deleteMany({ where: { userId: { in: userIds } } });
+
+    // 4. Audit events restantes (analysisId=null) — bloqueariam o delete user
+    await prisma.auditEvent.deleteMany({ where: { userId: { in: userIds } } });
+
+    // 5. Time entries restantes
+    await prisma.timeEntry.deleteMany({ where: { userId: { in: userIds } } });
+
+    // 6. Allocations restantes
+    await prisma.allocation.deleteMany({ where: { userId: { in: userIds } } });
+
+    // 7. Team invites criados por demo users
+    await prisma.teamInvite.deleteMany({ where: { invitedById: { in: userIds } } });
+
+    // 8. Users
+    await prisma.user.deleteMany({ where: { id: { in: userIds } } });
+    console.log("  users + dados relacionados deletados em cascata manual");
   } else {
-    console.log("  nenhum workspace demo prévio");
+    console.log("  nenhum user demo prévio");
   }
 
-  // Demo leads (independentes de workspace — limpa pelo email pattern)
+  // 9. Workspace (apenas pelo CNPJ sentinela)
+  const ws = await prisma.workspace.findFirst({ where: { cnpj: DEMO_CNPJ } });
+  if (ws) {
+    await prisma.workspace.delete({ where: { id: ws.id } });
+    console.log("  workspace removido");
+  }
+
+  // 10. Leads de demo (pelo email pattern — independente de workspace)
   const leadCount = await prisma.lead.deleteMany({
     where: { contactEmail: { endsWith: DEMO_EMAIL_DOMAIN } },
   });
@@ -217,7 +253,7 @@ async function seed() {
   // 5. Analyses + Engagements
   console.log("→ Criando engagements + IBRs…");
 
-  // 5a. Frigorífico Pampa — IBR em curso (kicked_off, dia 7/10)
+  // 5a. Frigorífico Pampa — IBR HEADLINE (engagement em curso; análise já consolidada)
   const ibrFrigorifico = await prisma.analysis.create({
     data: {
       companyId: frigorifico.id,
@@ -225,11 +261,137 @@ async function seed() {
       nome: "IBR Frigorífico Pampa · Jun/2026",
       periodo: "2024 · 2025 · 2026-LTM",
       tipo: "Completa",
-      status: "Em andamento",
+      status: "Concluída",
       kind: "ibr",
       ibrType: "full",
-      reviewState: "draft",
+      reviewState: "in_review",
       confianca: 87,
+      resultado: {
+        kpis: {
+          receita: { valor: 62000000, status: "critico", variacao: -20.5 },
+          margemBruta: { valor: 9.2, status: "critico", variacao: -4.3 },
+          ebitda: { valor: -4800000, status: "critico", variacao: -169 },
+          margemEbitda: { valor: -7.7, status: "critico", variacao: -6.0 },
+          liquidezCorrente: { valor: 0.74, status: "critico", variacao: -0.12 },
+          endividamento: { valor: 124, status: "critico", variacao: 19 },
+          roe: { valor: 0, status: "critico", variacao: 0 },
+          roa: { valor: -29, status: "critico", variacao: -15 },
+        },
+        semaforo: [
+          {
+            area: "Liquidez",
+            status: "critico",
+            descricao: "Caixa em R$ 850k contra covenant de R$ 1M (BREACH). Runway operacional ~6 semanas sem novo fôlego.",
+          },
+          {
+            area: "Rentabilidade",
+            status: "critico",
+            descricao: "EBITDA negativo nos últimos 12 meses (-R$ 4.8M LTM vs R$ 6.5M em 2024). Tendência de deterioração.",
+          },
+          {
+            area: "Endividamento",
+            status: "critico",
+            descricao: "Patrimônio Líquido negativo (-R$ 12.1M) configura insolvência técnica. Alavancagem total em 124% do ativo.",
+          },
+          {
+            area: "Working capital",
+            status: "atencao",
+            descricao: "Ciclo de caixa quase dobrou: 30 dias (2024) → 58 dias (LTM). DSO 59d · DPO 64d · DIO 63d.",
+          },
+          {
+            area: "Operacional",
+            status: "critico",
+            descricao: "Receita -35% em 2 anos (R$ 95M → R$ 62M) por perda do cliente principal (Carrefour, -22% do faturamento).",
+          },
+          {
+            area: "Cumprimento de covenants",
+            status: "critico",
+            descricao: "4 de 4 covenants em BREACH: Dívida Líq./EBITDA 9.8x (limite 3.0x); DSCR 0.4x (1.2x); Liquidez 0.74 (1.0); Caixa mínimo R$ 850k (R$ 1M).",
+          },
+        ],
+        destaques: [
+          "Receita Líquida em queda de 35% em 2 anos (R$ 95M → R$ 62M) por perda do cliente Carrefour (-22% do faturamento) e ajuste regulatório do SISBI.",
+          "EBITDA negativo nos últimos 12 meses (-R$ 4.8M LTM vs +R$ 6.5M em 2024). Margem EBITDA: 6.8% → -7.7%.",
+          "Patrimônio Líquido negativo: -R$ 12.1M (insolvência técnica configurada pelo art. 1.066 da Lei 6.404).",
+          "Ciclo de caixa quase dobrou: 30 dias (2024) → 58 dias (LTM) — sinal forte de stress de capital de giro.",
+          "Todos os 4 covenants em BREACH desde Q4/2025: Dívida Líq./EBITDA · DSCR · Current ratio · Cash mínimo.",
+          "Concentração de clientes elevada: top-3 = 62% do faturamento. Risco de morte súbita por evento adverso isolado.",
+        ],
+        recomendacoes: [
+          {
+            titulo: "Reperfilamento de dívida + waiver dos covenants",
+            descricao:
+              "Negociar com sindicato bancário (4 credores, Banco Beta líder): converter ~R$ 22M de empréstimos de curto prazo em longo prazo, prazo 5 anos, custo 6% am. Solicitar waiver formal dos covenants até dez/2027 condicional à execução do plano operacional.",
+            prioridade: "P0",
+            impacto: "Alto — economia de R$ 7.2M/ano em serviço de dívida no curto prazo, libera ~12 meses de runway",
+            esforco: "Alto",
+            horizonte: "1-3 meses",
+          },
+          {
+            titulo: "Redução de custos fixos R$ 4M/ano",
+            descricao:
+              "Fechamento da unidade de Bagé (operando a 35% da capacidade, EBITDA negativo de R$ 1.8M/ano). Renegociação dos contratos com 3 frigoríficos terceirizados eliminando cláusulas take-or-pay. Corte de 18 posições administrativas em duplicidade.",
+            prioridade: "P0",
+            impacto: "Recuperação direta de EBITDA em ~R$ 4M/ano (margem +6 p.p.)",
+            esforco: "Médio",
+            horizonte: "3-6 meses",
+          },
+          {
+            titulo: "Venda da unidade não-core de Curitiba",
+            descricao:
+              "Unidade secundária operando 35% da capacidade, fora da estratégia core (carne bovina sul). Sondagem inicial via Suzano Advisors indica interesse de 2 players regionais. Estimativa de venda: R$ 8-12M líquido.",
+            prioridade: "P1",
+            impacto: "Aporte de caixa R$ 8-12M + remoção de drag operacional de R$ 600k/ano",
+            esforco: "Alto",
+            horizonte: "6-12 meses",
+          },
+          {
+            titulo: "Aporte de equity (founders + fundo PE regional)",
+            descricao:
+              "Discussões iniciais com Hércules Capital indicam apetite por aporte de R$ 15M em troca de 30% do equity + 2 assentos no board. Founders concordam com diluição contra recapitalização.",
+            prioridade: "P1",
+            impacto: "Recapitalização total, reverte PL negativo, sinaliza confiança ao mercado",
+            esforco: "Alto",
+            horizonte: "6-9 meses",
+          },
+        ],
+        swot: {
+          forcas: [
+            "Marca tradicional regional (28 anos), reconhecida no Sul",
+            "Planta principal em Santa Maria/RS com licença SISBI completa + selo SIF para exportação",
+            "Time operacional experiente (turnover < 8%/ano)",
+            "Contratos de longo prazo com 2 redes de varejo regionais",
+          ],
+          fraquezas: [
+            "Patrimônio Líquido negativo (-R$ 12M)",
+            "EBITDA recorrentemente negativo nos últimos 12 meses",
+            "Alta concentração de clientes (top-3 = 62%)",
+            "Capital de giro insuficiente para o ciclo operacional",
+            "Dependência crítica de financiamento bancário (alavancagem 124%)",
+          ],
+          oportunidades: [
+            "Consolidação setorial em curso — vários frigoríficos pequenos saindo do mercado",
+            "Demanda crescente por carne premium (Wagyu/Angus) e exportação Halal",
+            "Possibilidade de exportar via parceiros licenciados (China + países árabes)",
+            "Programa BNDES de subsídio à modernização do parque frigorífico",
+          ],
+          riscos: [
+            "Inflação contínua de bovinos (~+18% em 12 meses)",
+            "Perda de qualquer cliente do top-3 → impacto irrecuperável no curto prazo",
+            "RJ de fornecedor estratégico (3 produtores rurais representam 28% das compras)",
+            "Pressão ESG crescente sobre o setor (greenwashing risk)",
+            "Risco de protesto trabalhista (R$ 4.2M em ações em curso)",
+          ],
+        },
+        dreData: [
+          { mes: "Jan/26", receita: 5800, custos: -4900, lucroBruto: 900, despesas: -1200, ebitda: -300 },
+          { mes: "Fev/26", receita: 5300, custos: -4600, lucroBruto: 700, despesas: -1180, ebitda: -480 },
+          { mes: "Mar/26", receita: 5100, custos: -4500, lucroBruto: 600, despesas: -1150, ebitda: -550 },
+          { mes: "Abr/26", receita: 4900, custos: -4400, lucroBruto: 500, despesas: -1100, ebitda: -600 },
+          { mes: "Mai/26", receita: 5200, custos: -4600, lucroBruto: 600, despesas: -1120, ebitda: -520 },
+          { mes: "Jun/26", receita: 5400, custos: -4700, lucroBruto: 700, despesas: -1110, ebitda: -410 },
+        ],
+      },
     },
   });
   const engFrigorifico = await prisma.engagement.create({
@@ -262,11 +424,78 @@ async function seed() {
       nome: "IBR Têxtil Sul Mineiro · Abr/2026",
       periodo: "2023 · 2024 · 2025",
       tipo: "Completa",
-      status: "Concluído",
+      status: "Concluída",
       kind: "ibr",
       ibrType: "full",
       reviewState: "signed",
       confianca: 92,
+      resultado: {
+        kpis: {
+          receita: { valor: 45200000, status: "atencao", variacao: -3.5 },
+          margemBruta: { valor: 22.4, status: "ok", variacao: 1.8 },
+          ebitda: { valor: 4900000, status: "ok", variacao: 12.0 },
+          margemEbitda: { valor: 10.8, status: "ok", variacao: 1.4 },
+          liquidezCorrente: { valor: 1.18, status: "ok", variacao: 0.08 },
+          endividamento: { valor: 71, status: "atencao", variacao: -4 },
+          roe: { valor: 14.2, status: "ok", variacao: 2.1 },
+          roa: { valor: 5.8, status: "ok", variacao: 0.9 },
+        },
+        semaforo: [
+          {
+            area: "Rentabilidade",
+            status: "ok",
+            descricao: "Margem EBITDA estável em 10.8%, recuperação confirmada após reperfilamento de Mar/2026.",
+          },
+          {
+            area: "Liquidez",
+            status: "ok",
+            descricao: "Liquidez corrente em 1.18, headroom de 18% sobre o covenant de 1.0.",
+          },
+          {
+            area: "Endividamento",
+            status: "atencao",
+            descricao: "Alavancagem total ainda em 71%, dentro do limite mas com pouco headroom.",
+          },
+          {
+            area: "Concentração",
+            status: "atencao",
+            descricao: "Top-5 clientes = 47% da receita. Risco moderado de evento de cliente isolado.",
+          },
+        ],
+        destaques: [
+          "Reperfilamento de dívida concluído em Mar/2026 — sindicato bancário de 4 credores converteu R$ 22M de CP para LP, prazo 5 anos.",
+          "Margem EBITDA recuperada para 10.8% (vs 8.4% em 2024), com viabilidade operacional confirmada.",
+          "Linha de tinturaria (não-core, EBITDA -R$ 2.8M/ano) descontinuada em Jan/2026.",
+          "Investimento de R$ 1.8M em ETE provisionado para conclusão até dez/2026.",
+          "Hedge cambial em curso cobre 60% da exposição a insumos importados (~22% do CMV).",
+        ],
+        recomendacoes: [
+          {
+            titulo: "Monitoramento trimestral dos covenants",
+            descricao:
+              "Manter relatório mensal de aderência aos covenants pactuados no acordo de reperfilamento (Dívida/EBITDA <= 3.5x, Liquidez >= 1.0, DSCR >= 1.2).",
+            prioridade: "P0",
+            impacto: "Detecção precoce de eventual deterioração",
+            esforco: "Baixo",
+            horizonte: "Recorrente",
+          },
+          {
+            titulo: "Programa de diversificação de clientes",
+            descricao:
+              "Prospecção ativa de varejo regional (Pernambuco e Bahia) para reduzir concentração top-5 abaixo de 40%.",
+            prioridade: "P1",
+            impacto: "Médio — redução de risco sistêmico",
+            esforco: "Médio",
+            horizonte: "12-18 meses",
+          },
+        ],
+        swot: {
+          forcas: ["Marca consolidada no segmento de algodão", "Time técnico experiente", "Reperfilamento recente libera fôlego"],
+          fraquezas: ["Concentração de clientes top-5 = 47%", "Exposição cambial em insumos"],
+          oportunidades: ["Expansão para Nordeste", "Linhas premium de algodão orgânico"],
+          riscos: ["Inflação de algodão", "Pressão ESG"],
+        },
+      },
       executiveSummary: {
         recommendationToLender: "restructure",
         rationale:
