@@ -3,6 +3,7 @@ import { z } from "zod";
 import crypto from "crypto";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
+import { computeProjections } from "../services/projection-engine";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -88,6 +89,46 @@ router.post("/:id/options", async (req: AuthRequest, res: Response): Promise<voi
     data: { options: [...current, created] as unknown as object },
   });
   res.status(201).json(created);
+});
+
+/* ─────────────  Projeções (12 meses, computadas pelo engine)  ───────────── */
+
+router.get("/:id/projections", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id;
+  if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: req.userId! },
+    include: { company: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  const scenarioKind = (req.query.scenarioId as string) || "base";
+  const scenarios = (analysis.scenarios as Array<{ kind: string; assumptions: any }> | null) ?? [];
+  const scenario = scenarios.find((s) => s.kind === scenarioKind) || scenarios[0];
+  if (!scenario) {
+    res.status(400).json({ error: "Nenhum cenário disponível para projetar. Configure cenários antes." });
+    return;
+  }
+
+  try {
+    const projections = computeProjections({
+      dadosEstruturados: analysis.dadosEstruturados,
+      stcf: analysis.stcf,
+      scenario,
+      setor: analysis.company?.setor ?? null,
+      startMonth: new Date(),
+    });
+    // Cache no campo projections (sob a chave do cenário)
+    const cached = ((analysis as any).projections as Record<string, unknown> | null) ?? {};
+    await prisma.analysis.update({
+      where: { id: analysis.id },
+      data: { projections: { ...cached, [scenarioKind]: projections } } as any,
+    });
+    res.json({ scenarioKind, scenarioName: scenario.kind, months: projections });
+  } catch (err) {
+    console.error("Projection engine error:", err);
+    res.status(500).json({ error: "Falha ao computar projeções", detail: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 /* ─────────────  Sumário Executivo  ───────────── */

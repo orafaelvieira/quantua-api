@@ -138,6 +138,7 @@ model Analysis {
   stcf              Json?
   scenarios         Json?
   options           Json?
+  projections       Json?
   executiveSummary  Json?    @map("executive_summary")
   reviewMeta        Json?    @map("review_meta")
   signature         Json?

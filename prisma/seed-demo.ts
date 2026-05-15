@@ -21,6 +21,13 @@
 
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import {
+  dadosEstruturadosFor,
+  stcfFor,
+  scenariosFor,
+  optionsFor,
+  execSummaryFor,
+} from "./demo-financials";
 
 const prisma = new PrismaClient();
 
@@ -392,6 +399,17 @@ async function seed() {
           { mes: "Jun/26", receita: 5400, custos: -4700, lucroBruto: 700, despesas: -1110, ebitda: -410 },
         ],
       },
+      dadosEstruturados: dadosEstruturadosFor("frigorifico"),
+      options: optionsFor("frigorifico"),
+      executiveSummary: execSummaryFor("frigorifico"),
+    },
+  });
+  // Update com stcf + scenarios que precisam do id real da análise
+  await prisma.analysis.update({
+    where: { id: ibrFrigorifico.id },
+    data: {
+      stcf: stcfFor("frigorifico", ibrFrigorifico.id, partner.id, now.toISOString()) as any,
+      scenarios: scenariosFor(ibrFrigorifico.id) as any,
     },
   });
   const engFrigorifico = await prisma.engagement.create({
@@ -496,33 +514,22 @@ async function seed() {
           riscos: ["Inflação de algodão", "Pressão ESG"],
         },
       },
-      executiveSummary: {
-        recommendationToLender: "restructure",
-        rationale:
-          "Operação core do segmento de algodão tem viabilidade clara após reperfilamento. " +
-          "Margem EBITDA recuperável para 11-13% em 18 meses condicional a: " +
-          "(i) reperfilamento de R$ 22M de CP para LP em 5 anos, " +
-          "(ii) descontinuação da linha de tinturaria (não-core, EBITDA negativo de R$ 2.8M/ano) e " +
-          "(iii) renegociação de contratos com 3 fornecedores estratégicos.",
-        keyRisks: [
-          "Exposição a oscilação cambial via insumos importados (~22% do CMV)",
-          "Concentração de clientes (top-5 = 47% da receita)",
-          "Pressão regulatória na cadeia têxtil (compliance ambiental)",
-        ],
-        keyMitigations: [
-          "Hedge cambial parcial via NDF (já em curso)",
-          "Programa de prospecção de novos clientes (varejo regional)",
-          "Investimento de R$ 1.8M em ETE até 12/2026 (já provisionado)",
-        ],
-        liquidityRunwayWeeks: 38,
-        covenantHeadroom: 0.18,
-      },
+      executiveSummary: execSummaryFor("textil"),
       signature: {
         signedAt: new Date(now.getTime() - 21 * 24 * 60 * 60 * 1000).toISOString(),
         signedBy: partner.name,
         professionalRegistration: partner.professionalRegistration,
         contentHash: "sha256:demo-textil-final-v1",
       },
+      dadosEstruturados: dadosEstruturadosFor("textil"),
+      options: optionsFor("textil"),
+    },
+  });
+  await prisma.analysis.update({
+    where: { id: ibrTextil.id },
+    data: {
+      stcf: stcfFor("textil", ibrTextil.id, partner.id, now.toISOString()) as any,
+      scenarios: scenariosFor(ibrTextil.id) as any,
     },
   });
   const engTextil = await prisma.engagement.create({
