@@ -15,15 +15,20 @@ model User {
   workspaceType           String     @default("consultoria") @map("workspace_type")
   role                    String?
   professionalRegistration String?   @map("professional_registration")
+  invitedAt               DateTime?  @map("invited_at")
+  mustChangePassword      Boolean    @default(false) @map("must_change_password")
   createdAt               DateTime   @default(now()) @map("created_at")
 
-  companies        Company[]
-  analyses         Analysis[]
-  dictionaries     AccountDictionary[]
-  auditEvents      AuditEvent[]
-  timeEntries      TimeEntry[]
-  ownedEngagements Engagement[] @relation("EngagementRT")
+  companies           Company[]
+  analyses            Analysis[]
+  dictionaries        AccountDictionary[]
+  auditEvents         AuditEvent[]
+  timeEntries         TimeEntry[]
+  ownedEngagements    Engagement[]          @relation("EngagementRT")
+  createdInvitations  ClientInvitation[]    @relation("InvitationCreator")
+  engagementSignatures EngagementSignature[] @relation("Signer")
 
+  @@index([role])
   @@map("users")
 }
 
@@ -123,36 +128,42 @@ model Document {
 }
 
 model Engagement {
-  id                String   @id @default(uuid())
-  analysisId        String?  @unique @map("analysis_id")
-  userId            String   @map("user_id")
-  rtId              String?  @map("rt_id")
-  companyName       String   @map("company_name")
-  requestedBy       String   @map("requested_by")
-  requestedByType   String   @map("requested_by_type")
-  scope             String   @default("")
-  state             String   @default("lead")
-  deadline          DateTime?
-  feeAmount         Float?   @map("fee_amount")
-  feeCurrency       String   @default("BRL") @map("fee_currency")
-  signedAt          DateTime? @map("signed_at")
-  proposalUrl       String?  @map("proposal_url")
-  contractUrls      Json?    @map("contract_urls")
-  notes             String?
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+  id                  String    @id @default(uuid())
+  analysisId          String?   @unique @map("analysis_id")
+  userId              String    @map("user_id")
+  rtId                String?   @map("rt_id")
+  companyName         String    @map("company_name")
+  requestedBy         String    @map("requested_by")
+  requestedByType     String    @map("requested_by_type")
+  scope               String    @default("")
+  state               String    @default("lead")
+  deadline            DateTime?
+  feeAmount           Float?    @map("fee_amount")
+  feeCurrency         String    @default("BRL") @map("fee_currency")
+  signedAt            DateTime? @map("signed_at")
+  proposalUrl         String?   @map("proposal_url")
+  contractUrls        Json?     @map("contract_urls")
+  notes               String?
+  letterAcceptedAt    DateTime? @map("letter_accepted_at")
+  letterContentHash   String?   @map("letter_content_hash")
+  letterVersion       String?   @map("letter_version")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
 
-  analysis Analysis? @relation(fields: [analysisId], references: [id], onDelete: SetNull)
-  rt       User?     @relation("EngagementRT", fields: [rtId], references: [id], onDelete: SetNull)
+  analysis    Analysis?             @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  rt          User?                 @relation("EngagementRT", fields: [rtId], references: [id], onDelete: SetNull)
+  invitations ClientInvitation[]
+  signatures  EngagementSignature[]
 
   @@index([userId])
   @@index([state])
+  @@index([letterAcceptedAt])
   @@map("engagements")
 }
 
 model AuditEvent {
   id         String   @id @default(uuid())
-  analysisId String   @map("analysis_id")
+  analysisId String?  @map("analysis_id")
   userId     String   @map("user_id")
   userName   String   @map("user_name")
   entity     String
@@ -164,11 +175,11 @@ model AuditEvent {
   reason     String?
   timestamp  DateTime @default(now())
 
-  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
-  user     User     @relation(fields: [userId], references: [id])
+  analysis Analysis? @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  user     User      @relation(fields: [userId], references: [id])
 
   @@index([analysisId, timestamp])
-  @@index([entity])
+  @@index([entity, entityId, timestamp])
   @@map("audit_events")
 }
 
@@ -204,4 +215,46 @@ model Lead {
 
   @@index([status, createdAt])
   @@map("leads")
+}
+
+model ClientInvitation {
+  id           String    @id @default(uuid())
+  engagementId String    @map("engagement_id")
+  email        String
+  tokenHash    String    @unique @map("token_hash")
+  expiresAt    DateTime  @map("expires_at")
+  usedAt       DateTime? @map("used_at")
+  status       String    @default("pending")
+  createdById  String    @map("created_by_id")
+  resendCount  Int       @default(0) @map("resend_count")
+  lastSentAt   DateTime  @default(now()) @map("last_sent_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  engagement Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  createdBy  User       @relation("InvitationCreator", fields: [createdById], references: [id])
+
+  @@index([engagementId, status])
+  @@index([email])
+  @@map("client_invitations")
+}
+
+model EngagementSignature {
+  id            String   @id @default(uuid())
+  engagementId  String   @map("engagement_id")
+  signerType    String   @map("signer_type")
+  signerUserId  String?  @map("signer_user_id")
+  signerName    String   @map("signer_name")
+  signerEmail   String   @map("signer_email")
+  signerCpf     String?  @map("signer_cpf")
+  contentHash   String   @map("content_hash")
+  letterVersion String   @map("letter_version")
+  signedAt      DateTime @default(now()) @map("signed_at")
+  ipAddress     String   @map("ip_address")
+  userAgent     String   @map("user_agent")
+
+  engagement Engagement @relation(fields: [engagementId], references: [id], onDelete: Cascade)
+  signer     User?      @relation("Signer", fields: [signerUserId], references: [id])
+
+  @@index([engagementId, signerType])
+  @@map("engagement_signatures")
 }
