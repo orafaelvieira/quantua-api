@@ -150,6 +150,53 @@ Equipe Quantua`;
   return sendSafe({ to: v.to, subject, html, text });
 }
 
+export interface TeamInviteVars {
+  to: string;
+  workspaceName: string;
+  invitedByName: string;
+  role: string; // "operator" | "reviewer" | "partner"
+  magicLink: string;
+  expiresAt: Date;
+}
+
+const ROLE_LABEL: Record<string, string> = {
+  operator: "Analista",
+  reviewer: "Revisor",
+  partner: "Partner",
+};
+
+export async function sendTeamInviteEmail(v: TeamInviteVars): Promise<{ ok: boolean; error?: string }> {
+  const expiresFmt = v.expiresAt.toLocaleDateString("pt-BR", { day: "2-digit", month: "long" });
+  const roleLabel = ROLE_LABEL[v.role] ?? v.role;
+  const subject = `Convite Quantua · ${v.workspaceName} · ${roleLabel}`;
+  const text = `Olá,
+
+${v.invitedByName} convidou você para integrar a equipe da ${v.workspaceName} no Quantua como ${roleLabel}.
+
+Clique no link abaixo para criar sua senha e acessar o workspace:
+
+${v.magicLink}
+
+Este convite expira em ${expiresFmt}. O link é de uso único.
+
+Equipe Quantua`;
+  const html = `<div style="${baseStyle}">
+  <div style="${labelStyle}">○ CONVITE DE EQUIPE</div>
+  <h1 style="font-size: 24px; font-weight: 500; letter-spacing: -0.02em; margin: 16px 0 12px;">
+    ${v.invitedByName} convidou você para a equipe da ${v.workspaceName}.
+  </h1>
+  <p style="font-family: Georgia, serif; line-height: 1.6; font-size: 15px;">
+    Você foi adicionado como <strong>${roleLabel}</strong>. Crie sua senha para acessar o workspace
+    e começar a colaborar nos Independent Business Reviews.
+  </p>
+  <a href="${v.magicLink}" style="${buttonStyle}">Aceitar convite →</a>
+  <p style="${labelStyle} margin-top: 24px;">
+    Convite expira em ${expiresFmt} · Uso único · Quantua Serviços de Análise Ltda.
+  </p>
+</div>`;
+  return sendSafe({ to: v.to, subject, html, text });
+}
+
 export interface LeadConfirmationVars {
   to: string;
   contactName?: string;

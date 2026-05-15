@@ -99,7 +99,27 @@ router.get("/me", requireAuth, async (req: AuthRequest, res: Response): Promise<
       email: true,
       workspaceType: true,
       role: true,
+      phone: true,
+      cargo: true,
+      timezone: true,
+      language: true,
+      onboardedAt: true,
+      workspaceId: true,
       createdAt: true,
+      workspace: {
+        select: {
+          id: true,
+          type: true,
+          cnpj: true,
+          razaoSocial: true,
+          nomeFantasia: true,
+          setor: true,
+          porte: true,
+          defaultCurrency: true,
+          fiscalYearStart: true,
+          auditLogsOn: true,
+        },
+      },
     },
   });
   if (!user) { res.status(404).json({ error: "Usuário não encontrado" }); return; }

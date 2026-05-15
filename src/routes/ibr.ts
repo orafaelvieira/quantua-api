@@ -392,4 +392,69 @@ router.get("/:id/time/summary", async (req: AuthRequest, res: Response): Promise
   });
 });
 
+/* ─────────────  Covenants  ───────────── */
+
+const covenantSchema = z.object({
+  name: z.string().min(2),
+  metric: z.string().min(2),
+  operator: z.enum(["<=", ">=", "<", ">", "=="]),
+  threshold: z.number(),
+  periodicity: z.enum(["monthly", "quarterly", "annual"]).default("quarterly"),
+  notes: z.string().optional(),
+});
+
+router.get("/:id/covenants", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const covenants = await prisma.covenant.findMany({
+    where: { analysisId: analysis.id },
+    orderBy: { createdAt: "asc" },
+  });
+  res.json({ items: covenants });
+});
+
+router.post("/:id/covenants", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const parsed = covenantSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const covenant = await prisma.covenant.create({
+    data: { analysisId: analysis.id, ...parsed.data },
+  });
+  res.status(201).json(covenant);
+});
+
+router.put("/:id/covenants/:covenantId", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const covenantId = req.params.covenantId;
+  if (!covenantId || typeof covenantId !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+  const existing = await prisma.covenant.findFirst({
+    where: { id: covenantId, analysisId: analysis.id },
+    select: { id: true },
+  });
+  if (!existing) { res.status(404).json({ error: "Covenant não encontrado" }); return; }
+  const parsed = covenantSchema.partial().safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const updated = await prisma.covenant.update({
+    where: { id: covenantId },
+    data: parsed.data,
+  });
+  res.json(updated);
+});
+
+router.delete("/:id/covenants/:covenantId", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const covenantId = req.params.covenantId;
+  if (!covenantId || typeof covenantId !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+  const existing = await prisma.covenant.findFirst({
+    where: { id: covenantId, analysisId: analysis.id },
+    select: { id: true },
+  });
+  if (!existing) { res.status(404).json({ error: "Covenant não encontrado" }); return; }
+  await prisma.covenant.delete({ where: { id: covenantId } });
+  res.status(204).end();
+});
+
 export default router;

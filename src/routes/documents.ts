@@ -1,5 +1,6 @@
 import { Router, Response } from "express";
 import multer from "multer";
+import crypto from "crypto";
 import { z } from "zod";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
@@ -74,6 +75,7 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
   const nome = fixFilename(req.file.originalname);
   const key = `uploads/${req.userId}/${analysisId}/${Date.now()}-${nome}`;
   const storagePath = await uploadFile(req.file.buffer, key, req.file.mimetype);
+  const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
 
   const tamanho = req.file.size > 1024 * 1024
     ? `${(req.file.size / 1024 / 1024).toFixed(1)} MB`
@@ -88,6 +90,7 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
       competencia,
       moeda,
       storagePath,
+      hash,
       tamanho,
       status: "Pendente",
     },
