@@ -40,35 +40,80 @@ function tierFromIbrType(ibrType: string | null | undefined): "Light" | "Full" |
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const userId = req.userId!;
 
+  // Filtros opcionais via query
+  const typesParam = (req.query.types as string | undefined) ?? "";
+  const includeTypes = typesParam
+    ? new Set(typesParam.split(",").map((s) => s.trim()).filter(Boolean))
+    : null;
+  const q = ((req.query.q as string | undefined) ?? "").trim();
+  const from = req.query.from as string | undefined;
+  const to = req.query.to as string | undefined;
+
+  const dateFilter = (from || to)
+    ? { createdAt: { ...(from ? { gte: new Date(from) } : {}), ...(to ? { lte: new Date(to) } : {}) } }
+    : {};
+
+  const wantLeads = !includeTypes || includeTypes.has("lead");
+  const wantEngagements = !includeTypes || includeTypes.has("engagement");
+  const wantAnalyses = !includeTypes || includeTypes.has("analysis");
+
   const [leads, engagements, analyses] = await Promise.all([
-    prisma.lead.findMany({
-      where: { status: { in: ["new", "contacted"] } },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-    }),
-    prisma.engagement.findMany({
-      where: { userId, state: "proposal_sent" },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-      include: {
-        analysis: {
-          select: {
-            id: true,
-            ibrType: true,
-            company: { select: { setor: true } },
+    wantLeads
+      ? prisma.lead.findMany({
+          where: {
+            status: { in: ["new", "contacted"] },
+            ...dateFilter,
+            ...(q ? { OR: [
+              { targetCompany: { contains: q, mode: "insensitive" } },
+              { contactName: { contains: q, mode: "insensitive" } },
+              { contactEmail: { contains: q, mode: "insensitive" } },
+            ] } : {}),
           },
-        },
-      },
-    }),
-    prisma.analysis.findMany({
-      where: { userId, kind: "ibr", reviewState: "in_review" },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-      include: {
-        company: { select: { razaoSocial: true, nomeFantasia: true, setor: true } },
-        engagement: { select: { requestedBy: true, feeAmount: true } },
-      },
-    }),
+          orderBy: { createdAt: "desc" },
+          take: 50,
+        })
+      : Promise.resolve([]),
+    wantEngagements
+      ? prisma.engagement.findMany({
+          where: {
+            userId,
+            state: "proposal_sent",
+            ...dateFilter,
+            ...(q ? { OR: [
+              { companyName: { contains: q, mode: "insensitive" } },
+              { requestedBy: { contains: q, mode: "insensitive" } },
+            ] } : {}),
+          },
+          orderBy: { createdAt: "desc" },
+          take: 50,
+          include: {
+            analysis: {
+              select: { id: true, ibrType: true, company: { select: { setor: true } } },
+            },
+          },
+        })
+      : Promise.resolve([]),
+    wantAnalyses
+      ? prisma.analysis.findMany({
+          where: {
+            userId,
+            kind: "ibr",
+            reviewState: "in_review",
+            ...dateFilter,
+            ...(q ? { OR: [
+              { nome: { contains: q, mode: "insensitive" } },
+              { company: { is: { razaoSocial: { contains: q, mode: "insensitive" } } } },
+              { company: { is: { nomeFantasia: { contains: q, mode: "insensitive" } } } },
+            ] } : {}),
+          },
+          orderBy: { createdAt: "desc" },
+          take: 50,
+          include: {
+            company: { select: { razaoSocial: true, nomeFantasia: true, setor: true } },
+            engagement: { select: { requestedBy: true, feeAmount: true } },
+          },
+        })
+      : Promise.resolve([]),
   ]);
 
   const items: InboxItem[] = [];

@@ -4,6 +4,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "../config/env";
 
 let s3: S3Client | null = null;
@@ -60,5 +61,28 @@ export async function deleteFile(storagePath: string): Promise<void> {
   if (!env.spaces.enabled || storagePath.startsWith("local:")) return;
   await getClient().send(
     new DeleteObjectCommand({ Bucket: env.spaces.bucket, Key: storagePath })
+  );
+}
+
+/**
+ * Gera URL pré-assinada (default 5min) para download direto do S3.
+ * Para storagePath="local:..." retorna um data URI base64 (apenas dev).
+ */
+export async function getSignedDownloadUrl(
+  storagePath: string,
+  ttlSeconds = 300,
+  mimeType = "application/octet-stream",
+): Promise<string> {
+  if (storagePath.startsWith("local:")) {
+    const base64 = storagePath.replace("local:", "");
+    return `data:${mimeType};base64,${base64}`;
+  }
+  if (!env.spaces.enabled) {
+    throw new Error("Storage não configurado (env.spaces.enabled = false)");
+  }
+  return getSignedUrl(
+    getClient(),
+    new GetObjectCommand({ Bucket: env.spaces.bucket, Key: storagePath }),
+    { expiresIn: ttlSeconds },
   );
 }
