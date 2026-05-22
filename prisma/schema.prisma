@@ -17,6 +17,7 @@ model User {
   professionalRegistration String?   @map("professional_registration")
   invitedAt               DateTime?  @map("invited_at")
   mustChangePassword      Boolean    @default(false) @map("must_change_password")
+  emailConfirmedAt        DateTime?  @map("email_confirmed_at")
   phone                   String?
   cargo                   String?
   timezone                String?    @default("America/Sao_Paulo")
@@ -36,10 +37,41 @@ model User {
   createdInvitations  ClientInvitation[]    @relation("InvitationCreator")
   engagementSignatures EngagementSignature[] @relation("Signer")
   createdTeamInvites  TeamInvite[]          @relation("TeamInviteCreator")
+  passwordResets      PasswordResetToken[]
+  emailConfirmations  EmailConfirmationToken[]
 
   @@index([role])
   @@index([workspaceId])
   @@map("users")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  ipAddress String?   @map("ip_address")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
+  @@map("password_reset_tokens")
+}
+
+model EmailConfirmationToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
+  @@map("email_confirmation_tokens")
 }
 
 model Workspace {

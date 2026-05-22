@@ -1,10 +1,11 @@
 import { Router, Response } from "express";
 import multer from "multer";
 import crypto from "crypto";
+import { z } from "zod";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole, requireEngagementSigned } from "../middleware/permissions";
-import { uploadFile } from "../services/storage";
+import { uploadFile, getSignedDownloadUrl } from "../services/storage";
 import { getIntakeTemplate } from "../services/intake-templates";
 
 const router = Router();
@@ -295,6 +296,87 @@ router.get("/deliverable", requireEngagementSigned, async (req: AuthRequest, res
     recommendation,
     companions: [],
   });
+});
+
+const scheduleCallSchema = z.object({
+  preferredDate: z.string().min(8), // ISO datetime
+  altDate: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+/**
+ * Cliente solicita call de revisão. Registra evento de auditoria, envia
+ * notificação por email para o RT (via console adapter por enquanto).
+ * Persistência em modelo `ReviewCall` é trabalho futuro.
+ */
+router.post("/deliverable/schedule-call", requireEngagementSigned, async (req: AuthRequest, res: Response): Promise<void> => {
+  const parsed = scheduleCallSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+
+  const analysis = await loadClientAnalysis(req.userId!);
+  if (!analysis) { res.status(404).json({ error: "Sem IBR ativo" }); return; }
+
+  const user = await prisma.user.findUnique({ where: { id: req.userId! }, select: { name: true, email: true } });
+  const rt = analysis.engagement?.rt;
+
+  await prisma.auditEvent.create({
+    data: {
+      analysisId: analysis.id,
+      userId: req.userId!,
+      userName: user?.name ?? "Cliente",
+      entity: "engagement",
+      entityId: analysis.engagement?.id,
+      field: "review_call_requested",
+      after: {
+        preferredDate: parsed.data.preferredDate,
+        altDate: parsed.data.altDate ?? null,
+        notes: parsed.data.notes ?? null,
+        clientEmail: user?.email,
+      } as object,
+      source: "client",
+    },
+  });
+
+  // Best-effort email to RT — log via console adapter
+  if (rt?.email) {
+    console.log(`[REVIEW CALL] Cliente ${user?.name} solicitou call de revisão para ${parsed.data.preferredDate}.`);
+    console.log(`  Para RT: ${rt.email}`);
+    console.log(`  Observações: ${parsed.data.notes ?? "—"}`);
+  }
+
+  res.status(201).json({
+    ok: true,
+    status: "requested",
+    preferredDate: parsed.data.preferredDate,
+    altDate: parsed.data.altDate ?? null,
+  });
+});
+
+/**
+ * Retorna URL pré-assinada do PDF entregue. Por enquanto, gera URL
+ * apontando para `/api/analyses/:id/pdf` (o cliente gera client-side).
+ */
+router.get("/deliverable/download", requireEngagementSigned, async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadClientAnalysis(req.userId!);
+  if (!analysis) { res.status(404).json({ ready: false }); return; }
+
+  const ready = analysis.reviewState === "signed" || analysis.reviewState === "delivered";
+  if (!ready) { res.status(409).json({ ready: false, reason: "IBR ainda em elaboração" }); return; }
+
+  // Se o snapshot do PDF estiver salvo no signature JSON, devolve presigned URL real.
+  const sig = analysis.signature as { deliverablePdfKey?: string } | null;
+  if (sig?.deliverablePdfKey) {
+    try {
+      const url = await getSignedDownloadUrl(sig.deliverablePdfKey, 600, "application/pdf");
+      res.json({ url, expiresIn: 600 });
+      return;
+    } catch (err) {
+      console.warn("Falha presigned URL:", err);
+    }
+  }
+
+  // Caso contrário, sinaliza ao frontend que use a rota client-side de geração.
+  res.json({ url: null, ready: true, useClientGenerator: true, analysisId: analysis.id });
 });
 
 export default router;

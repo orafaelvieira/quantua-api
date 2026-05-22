@@ -464,4 +464,126 @@ router.post(
   }
 );
 
+/**
+ * Gera proposta comercial baseada no engagement letter. Renderiza HTML
+ * inline e expõe via GET /:id/proposal-html (cliente abre em nova aba e
+ * imprime → PDF). Atualiza Engagement.proposalUrl.
+ *
+ * TODO: substituir por geração PDF real com pdfkit em iteração futura.
+ */
+router.post("/:id/generate-proposal", requireRole("partner", "operator"), async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id;
+  if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+  const eng = await prisma.engagement.findFirst({
+    where: { id, userId: req.userId! },
+    include: { rt: { select: { name: true, professionalRegistration: true } } },
+  });
+  if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
+
+  const letter = renderLetter({
+    engagementId: eng.id,
+    companyName: eng.companyName,
+    requestedBy: eng.requestedBy,
+    requestedByType: eng.requestedByType,
+    scope: eng.scope,
+    feeAmount: eng.feeAmount,
+    feeCurrency: eng.feeCurrency,
+    deadline: eng.deadline,
+    rtName: eng.rt?.name ?? null,
+    rtRegistration: eng.rt?.professionalRegistration ?? null,
+  });
+
+  const proposalUrl = `${env.frontendUrl || ""}/api/engagements/${eng.id}/proposal-html`;
+
+  await prisma.engagement.update({
+    where: { id: eng.id },
+    data: { proposalUrl },
+  });
+
+  const user = await prisma.user.findUnique({ where: { id: req.userId! }, select: { name: true } });
+  if (eng.analysisId) {
+    await prisma.auditEvent.create({
+      data: {
+        analysisId: eng.analysisId,
+        userId: req.userId!,
+        userName: user?.name ?? "Usuário",
+        entity: "engagement",
+        entityId: eng.id,
+        field: "proposal_generated",
+        after: { proposalUrl, version: letter.version, contentHash: letter.contentHash } as object,
+        source: "manual",
+      },
+    });
+  }
+
+  res.json({ proposalUrl, version: letter.version, contentHash: letter.contentHash });
+});
+
+/**
+ * Serve a proposta como HTML estilizado para impressão (Cmd+P → Save as PDF).
+ * Endpoint público dentro do contexto do engagement (não exige client login).
+ */
+router.get("/:id/proposal-html", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id;
+  if (!id || typeof id !== "string") { res.status(404).send("ID inválido"); return; }
+  const eng = await prisma.engagement.findFirst({
+    where: { id, userId: req.userId! },
+    include: { rt: { select: { name: true, professionalRegistration: true } } },
+  });
+  if (!eng) { res.status(404).send("Engagement não encontrado"); return; }
+
+  const letter = renderLetter({
+    engagementId: eng.id,
+    companyName: eng.companyName,
+    requestedBy: eng.requestedBy,
+    requestedByType: eng.requestedByType,
+    scope: eng.scope,
+    feeAmount: eng.feeAmount,
+    feeCurrency: eng.feeCurrency,
+    deadline: eng.deadline,
+    rtName: eng.rt?.name ?? null,
+    rtRegistration: eng.rt?.professionalRegistration ?? null,
+  });
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  const sectionsHtml = letter.sections.map(
+    (s) => `<section><h2>${escapeHtml(s.title)}</h2>${s.body.split("\n").map((p) => `<p>${escapeHtml(p)}</p>`).join("")}</section>`,
+  ).join("");
+  res.send(`<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Proposta · ${escapeHtml(eng.companyName)} · Quantua</title>
+  <style>
+    @media print { @page { margin: 28mm 22mm; } }
+    body { font-family: Georgia, serif; background: #F5F2EC; color: #161513; max-width: 720px; margin: 0 auto; padding: 48px 32px; line-height: 1.65; }
+    h1 { font-size: 28px; font-weight: 500; letter-spacing: -0.02em; margin-bottom: 8px; }
+    h2 { font-size: 16px; font-weight: 600; margin-top: 32px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.08em; color: #5A554C; }
+    .ref { font-family: 'Courier New', monospace; font-size: 11px; letter-spacing: 0.1em; color: #8A8478; text-transform: uppercase; margin-bottom: 24px; }
+    p { margin: 8px 0; font-size: 15px; }
+    .meta { background: #EDE8DE; padding: 16px; margin-bottom: 32px; font-size: 13px; }
+    .meta div { margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <div class="ref">○ PROPOSTA QUANTUA · ${letter.meta.reference}</div>
+  <h1>${escapeHtml(letter.meta.companyName)}</h1>
+  <div class="meta">
+    <div><strong>Solicitante:</strong> ${escapeHtml(letter.meta.requesterLine)}</div>
+    <div><strong>RT:</strong> ${escapeHtml(letter.meta.rtLine)}</div>
+    <div><strong>Prazo de entrega:</strong> ${escapeHtml(letter.meta.deadlineFormatted)}</div>
+    <div><strong>Honorários:</strong> ${escapeHtml(letter.meta.feeFormatted)}</div>
+  </div>
+  ${sectionsHtml}
+  <p style="margin-top: 48px; font-size: 11px; color: #8A8478; text-align: center;">
+    Quantua Serviços de Análise Ltda. · Versão ${letter.version} · Hash ${letter.contentHash.slice(0, 12)}…
+  </p>
+</body>
+</html>`);
+});
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 export default router;

@@ -129,6 +129,60 @@ router.get("/kpis", async (req: AuthRequest, res: Response): Promise<void> => {
   });
 });
 
+router.get("/invoices/:id", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id;
+  if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+
+  const invoice = await prisma.invoice.findFirst({
+    where: { id, engagement: { userId: req.userId! } },
+    include: {
+      engagement: {
+        select: {
+          id: true,
+          companyName: true,
+          requestedBy: true,
+          requestedByType: true,
+          state: true,
+          analysisId: true,
+          deadline: true,
+          feeAmount: true,
+          feeCurrency: true,
+          analysis: { select: { id: true, ibrType: true, nome: true } },
+        },
+      },
+    },
+  });
+  if (!invoice) { res.status(404).json({ error: "Invoice não encontrada" }); return; }
+
+  res.json({
+    id: invoice.id,
+    engagementId: invoice.engagementId,
+    engagement: {
+      id: invoice.engagement.id,
+      companyName: invoice.engagement.companyName,
+      requestedBy: invoice.engagement.requestedBy,
+      requestedByType: invoice.engagement.requestedByType,
+      state: invoice.engagement.state,
+      analysisId: invoice.engagement.analysisId,
+      deadline: invoice.engagement.deadline?.toISOString() ?? null,
+      feeAmount: invoice.engagement.feeAmount,
+      feeCurrency: invoice.engagement.feeCurrency,
+      analysis: invoice.engagement.analysis,
+    },
+    milestone: invoice.milestone,
+    amount: invoice.amount,
+    currency: invoice.currency,
+    status: invoice.status,
+    issuedAt: invoice.issuedAt?.toISOString() ?? null,
+    dueDate: invoice.dueDate?.toISOString() ?? null,
+    paidAt: invoice.paidAt?.toISOString() ?? null,
+    invoiceNumber: invoice.invoiceNumber,
+    notes: invoice.notes,
+    createdAt: invoice.createdAt.toISOString(),
+    updatedAt: invoice.updatedAt.toISOString(),
+  });
+});
+
 router.post("/invoices", async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = invoiceCreateSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }

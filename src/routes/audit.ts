@@ -86,6 +86,93 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   res.json({ items: out, total, page, pageSize });
 });
 
+/**
+ * Export do audit trail filtrado em CSV. Streamming linha a linha (sem buffer total).
+ * Limita a 10k registros para evitar OOM em workspaces grandes.
+ */
+router.get("/export", async (req: AuthRequest, res: Response): Promise<void> => {
+  const userId = req.userId!;
+  const format = (req.query.format as string | undefined) ?? "csv";
+
+  if (format !== "csv") {
+    res.status(400).json({ error: "Apenas format=csv é suportado no momento" });
+    return;
+  }
+
+  const filterUserId = req.query.userId as string | undefined;
+  const filterEntity = req.query.entity as string | undefined;
+  const from = req.query.from as string | undefined;
+  const to = req.query.to as string | undefined;
+
+  const where = {
+    OR: [
+      { analysis: { userId } },
+      { analysisId: null, userId },
+    ],
+    ...(filterUserId ? { userId: filterUserId } : {}),
+    ...(filterEntity ? { entity: filterEntity } : {}),
+    ...(from || to
+      ? {
+          timestamp: {
+            ...(from ? { gte: new Date(from) } : {}),
+            ...(to ? { lte: new Date(to) } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const events = await prisma.auditEvent.findMany({
+    where,
+    orderBy: { timestamp: "desc" },
+    take: 10_000,
+    include: {
+      analysis: {
+        select: {
+          id: true,
+          nome: true,
+          company: { select: { razaoSocial: true, nomeFantasia: true } },
+        },
+      },
+    },
+  });
+
+  const date = new Date().toISOString().slice(0, 10);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="audit-${date}.csv"`);
+
+  const escape = (v: unknown): string => {
+    if (v === null || v === undefined) return "";
+    const s = typeof v === "string" ? v : JSON.stringify(v);
+    if (s.includes('"') || s.includes(",") || s.includes("\n")) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  };
+
+  res.write("timestamp,user_id,user_name,entity,entity_id,field,source,reason,analysis_id,analysis_name,company,before,after\n");
+  for (const e of events) {
+    const company = e.analysis?.company?.nomeFantasia || e.analysis?.company?.razaoSocial || "";
+    res.write(
+      [
+        e.timestamp.toISOString(),
+        e.userId,
+        escape(e.userName),
+        e.entity,
+        e.entityId ?? "",
+        escape(e.field),
+        e.source,
+        escape(e.reason ?? ""),
+        e.analysisId ?? "",
+        escape(e.analysis?.nome ?? ""),
+        escape(company),
+        escape(e.before),
+        escape(e.after),
+      ].join(",") + "\n",
+    );
+  }
+  res.end();
+});
+
 router.post("/events", async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = eventSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }

@@ -42,3 +42,19 @@ export const resendLimiter = rateLimit({
   max: 3,
   keyGenerator: (req) => `resend:${(req.body?.email ?? req.ip ?? "anon").toLowerCase()}`,
 });
+
+/** 3 requests por email por hora (anti-bombardeio na inbox da vítima). */
+export const forgotPasswordEmailLimiter = rateLimit({
+  ...baseConfig,
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  keyGenerator: (req) => `forgot-email:${(req.body?.email ?? req.ip ?? "anon").toLowerCase()}`,
+});
+
+/** 10 requests por IP por hora (anti-scan de emails válidos). */
+export const forgotPasswordIpLimiter = rateLimit({
+  ...baseConfig,
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => `forgot-ip:${req.ip ?? "anon"}`,
+});

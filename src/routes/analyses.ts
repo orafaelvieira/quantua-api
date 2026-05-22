@@ -1,8 +1,10 @@
 import { Router, Response } from "express";
 import { z } from "zod";
+import crypto from "crypto";
+import multer from "multer";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { downloadFile } from "../services/storage";
+import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { generateAnalysis } from "../services/claude";
 import { mapExtractedToBP, mapExtractedToDRE, detectPeriodos, normalizePeriods } from "../services/account-mapper";
@@ -12,6 +14,11 @@ import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } fro
 
 const router = Router();
 router.use(requireAuth);
+
+const dataRoomUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
 
 const analysisSchema = z.object({
   companyId: z.string().uuid(),
@@ -657,5 +664,161 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
     },
   });
 });
+
+/* ─────────────  Data Room (uploads internos pela equipe)  ───────────── */
+
+router.post(
+  "/:id/documents/upload",
+  dataRoomUpload.single("file"),
+  async (req: AuthRequest, res: Response): Promise<void> => {
+    const id = req.params.id;
+    if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+    if (!req.file) { res.status(400).json({ error: "Arquivo ausente" }); return; }
+
+    const analysis = await prisma.analysis.findFirst({
+      where: { id, userId: req.userId! },
+      select: { id: true, companyId: true },
+    });
+    if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+    const key = `data-room/${analysis.id}/${Date.now()}-${req.file.originalname}`;
+    const url = await uploadFile(req.file.buffer as Buffer, key, req.file.mimetype);
+    const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
+
+    const doc = await prisma.document.create({
+      data: {
+        analysisId: analysis.id,
+        companyId: analysis.companyId,
+        nome: req.file.originalname,
+        tipo: detectDocType(req.file.originalname, req.file.mimetype),
+        status: "Pendente",
+        storagePath: url,
+        hash,
+        tamanho: formatSize(req.file.size),
+      },
+    });
+
+    const user = await prisma.user.findUnique({ where: { id: req.userId! }, select: { name: true } });
+    await prisma.auditEvent.create({
+      data: {
+        analysisId: analysis.id,
+        userId: req.userId!,
+        userName: user?.name ?? "Usuário",
+        entity: "document",
+        entityId: doc.id,
+        field: "upload",
+        after: { nome: doc.nome, hash, tamanho: doc.tamanho } as object,
+        source: "manual",
+      },
+    });
+
+    res.status(201).json({
+      id: doc.id,
+      nome: doc.nome,
+      tipo: doc.tipo,
+      status: doc.status,
+      hash: doc.hash,
+      tamanho: doc.tamanho,
+      createdAt: doc.createdAt.toISOString(),
+    });
+  },
+);
+
+router.delete("/:id/documents/:docId", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id;
+  const docId = req.params.docId;
+  if (!id || !docId || typeof id !== "string" || typeof docId !== "string") {
+    res.status(404).json({ error: "ID inválido" }); return;
+  }
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: req.userId! },
+    select: { id: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  const doc = await prisma.document.findFirst({
+    where: { id: docId, analysisId: analysis.id },
+  });
+  if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+
+  if (doc.storagePath) {
+    try { await deleteFile(doc.storagePath); } catch (e) { console.warn("deleteFile failed:", e); }
+  }
+  await prisma.document.delete({ where: { id: doc.id } });
+
+  const user = await prisma.user.findUnique({ where: { id: req.userId! }, select: { name: true } });
+  await prisma.auditEvent.create({
+    data: {
+      analysisId: analysis.id,
+      userId: req.userId!,
+      userName: user?.name ?? "Usuário",
+      entity: "document",
+      entityId: doc.id,
+      field: "delete",
+      before: { nome: doc.nome, hash: doc.hash } as object,
+      source: "manual",
+    },
+  });
+
+  res.status(204).end();
+});
+
+router.get("/:id/documents/:docId/download", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id;
+  const docId = req.params.docId;
+  if (!id || !docId || typeof id !== "string" || typeof docId !== "string") {
+    res.status(404).json({ error: "ID inválido" }); return;
+  }
+  const doc = await prisma.document.findFirst({
+    where: { id: docId, analysis: { id, userId: req.userId! } },
+  });
+  if (!doc || !doc.storagePath) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+
+  try {
+    const url = await getSignedDownloadUrl(doc.storagePath, 300);
+    res.json({ url, expiresIn: 300, nome: doc.nome, hash: doc.hash });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Falha ao gerar URL" });
+  }
+});
+
+router.get("/:id/data-room/manifest", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id;
+  if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: req.userId! },
+    select: { id: true, nome: true, documents: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  const date = new Date().toISOString().slice(0, 10);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="data-room-${analysis.id.slice(0,8)}-${date}.csv"`);
+
+  const escape = (v: unknown): string => {
+    if (v === null || v === undefined) return "";
+    const s = String(v);
+    if (s.includes('"') || s.includes(",") || s.includes("\n")) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  res.write("id,nome,tipo,competencia,tamanho,status,sha256,created_at\n");
+  for (const d of analysis.documents) {
+    res.write([d.id, escape(d.nome), escape(d.tipo), escape(d.competencia ?? ""), escape(d.tamanho ?? ""), escape(d.status), d.hash ?? "", d.createdAt.toISOString()].join(",") + "\n");
+  }
+  res.end();
+});
+
+function detectDocType(filename: string, mimeType: string): string {
+  const ext = filename.split(".").pop()?.toUpperCase();
+  if (ext === "PDF" || mimeType === "application/pdf") return "PDF";
+  if (ext === "XLSX" || ext === "XLS") return "XLSX";
+  if (ext === "CSV") return "CSV";
+  return "Outro";
+}
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024).toFixed(0)} KB`;
+}
 
 export default router;

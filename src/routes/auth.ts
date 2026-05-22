@@ -7,9 +7,9 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../db/client";
 import { env } from "../config/env";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { loginLimiter, publicReadLimiter, publicWriteLimiter, resendLimiter } from "../middleware/rate-limit";
+import { loginLimiter, publicReadLimiter, publicWriteLimiter, resendLimiter, forgotPasswordEmailLimiter, forgotPasswordIpLimiter } from "../middleware/rate-limit";
 import { renderLetter } from "../services/letter-templates";
-import { sendInviteEmail } from "../services/email";
+import { sendInviteEmail, sendPasswordResetEmail, sendEmailConfirmationEmail } from "../services/email";
 
 const router = Router();
 
@@ -34,6 +34,19 @@ const acceptInviteSchema = z.object({
 
 const resendInviteSchema = z.object({
   email: z.string().email(),
+});
+
+const forgotPasswordSchema = z.object({
+  email: z.string().email(),
+});
+
+const resetPasswordSchema = z.object({
+  token: z.string().min(32),
+  password: z.string().min(8),
+});
+
+const confirmEmailSchema = z.object({
+  token: z.string().min(32),
 });
 
 function signToken(userId: string): string {
@@ -419,5 +432,210 @@ router.post("/magic-link/resend", resendLimiter, async (req: Request, res: Respo
 
   res.json({ ok: true });
 });
+
+/**
+ * Solicita link de redefinição de senha. Resposta sempre 200 (anti-enumeração).
+ * Rate-limited por email (3/h) e por IP (10/h).
+ */
+router.post(
+  "/forgot-password",
+  forgotPasswordIpLimiter,
+  forgotPasswordEmailLimiter,
+  async (req: Request, res: Response): Promise<void> => {
+    const parsed = forgotPasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.json({ ok: true });
+      return;
+    }
+    const email = parsed.data.email.toLowerCase();
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    if (!user) {
+      res.json({ ok: true });
+      return;
+    }
+
+    // Invalida todos os tokens pendentes do usuário antes de gerar novo (evita TOCTOU).
+    await prisma.passwordResetToken.updateMany({
+      where: { userId: user.id, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = hashInvitationToken(rawToken);
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1h
+    const ipAddress = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+
+    await prisma.passwordResetToken.create({
+      data: { userId: user.id, tokenHash, expiresAt, ipAddress },
+    });
+
+    await sendPasswordResetEmail({
+      to: user.email,
+      name: user.name,
+      resetLink: `${env.frontendUrl}/redefinir-senha?token=${rawToken}`,
+      expiresAt,
+    });
+
+    res.json({ ok: true });
+  },
+);
+
+/**
+ * Aplica a nova senha. Invalida o token usado + todos os outros pendentes do user.
+ */
+router.post(
+  "/reset-password",
+  publicWriteLimiter,
+  async (req: Request, res: Response): Promise<void> => {
+    const parsed = resetPasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Dados inválidos" });
+      return;
+    }
+    const { token, password } = parsed.data;
+    const tokenHash = hashInvitationToken(token);
+
+    const record = await prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+      include: { user: { select: { id: true, name: true, email: true } } },
+    });
+    if (!record) {
+      res.status(410).json({ error: "Link inválido" });
+      return;
+    }
+    if (record.usedAt) {
+      res.status(410).json({ error: "Link já utilizado" });
+      return;
+    }
+    if (record.expiresAt.getTime() < Date.now()) {
+      res.status(410).json({ error: "Link expirado" });
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: record.userId },
+        data: { passwordHash },
+      }),
+      prisma.passwordResetToken.updateMany({
+        where: { userId: record.userId, usedAt: null },
+        data: { usedAt: new Date() },
+      }),
+      prisma.auditEvent.create({
+        data: {
+          userId: record.userId,
+          userName: record.user.name,
+          entity: "user",
+          entityId: record.userId,
+          field: "password_reset",
+          before: Prisma.JsonNull,
+          after: { resetAt: new Date().toISOString() },
+          source: "self_service",
+        },
+      }),
+    ]);
+
+    res.json({ ok: true });
+  },
+);
+
+/**
+ * Reenvia email de confirmação. Sempre 200 (anti-enum). Rate-limited por email.
+ */
+router.post(
+  "/resend-confirmation",
+  resendLimiter,
+  async (req: Request, res: Response): Promise<void> => {
+    const parsed = forgotPasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.json({ ok: true });
+      return;
+    }
+    const email = parsed.data.email.toLowerCase();
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    if (!user || user.emailConfirmedAt) {
+      // Já confirmado ou não existe — resposta genérica.
+      res.json({ ok: true });
+      return;
+    }
+
+    await prisma.emailConfirmationToken.updateMany({
+      where: { userId: user.id, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = hashInvitationToken(rawToken);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 dias
+
+    await prisma.emailConfirmationToken.create({
+      data: { userId: user.id, tokenHash, expiresAt },
+    });
+
+    await sendEmailConfirmationEmail({
+      to: user.email,
+      name: user.name,
+      confirmLink: `${env.frontendUrl}/confirmar-email?token=${rawToken}`,
+      expiresAt,
+    });
+
+    res.json({ ok: true });
+  },
+);
+
+/**
+ * Confirma email via token. Idempotente: se já confirmado, retorna 200 com flag.
+ */
+router.post(
+  "/confirm-email",
+  publicWriteLimiter,
+  async (req: Request, res: Response): Promise<void> => {
+    const parsed = confirmEmailSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Token inválido" });
+      return;
+    }
+    const tokenHash = hashInvitationToken(parsed.data.token);
+
+    const record = await prisma.emailConfirmationToken.findUnique({
+      where: { tokenHash },
+      include: { user: { select: { id: true, emailConfirmedAt: true } } },
+    });
+    if (!record) {
+      res.status(410).json({ error: "Link inválido" });
+      return;
+    }
+    if (record.user.emailConfirmedAt) {
+      res.json({ ok: true, alreadyConfirmed: true });
+      return;
+    }
+    if (record.usedAt) {
+      res.status(410).json({ error: "Link já utilizado" });
+      return;
+    }
+    if (record.expiresAt.getTime() < Date.now()) {
+      res.status(410).json({ error: "Link expirado" });
+      return;
+    }
+
+    const now = new Date();
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: record.userId },
+        data: { emailConfirmedAt: now },
+      }),
+      prisma.emailConfirmationToken.update({
+        where: { id: record.id },
+        data: { usedAt: now },
+      }),
+    ]);
+
+    res.json({ ok: true });
+  },
+);
 
 export default router;

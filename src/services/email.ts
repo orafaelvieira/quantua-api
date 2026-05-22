@@ -203,6 +203,79 @@ export interface LeadConfirmationVars {
   targetCompany: string;
 }
 
+export interface PasswordResetVars {
+  to: string;
+  name: string;
+  resetLink: string;
+  expiresAt: Date;
+}
+
+export async function sendPasswordResetEmail(v: PasswordResetVars): Promise<{ ok: boolean; error?: string }> {
+  const expiresFmt = v.expiresAt.toLocaleString("pt-BR", { day: "2-digit", month: "long", hour: "2-digit", minute: "2-digit" });
+  const subject = `Redefinição de senha · Quantua`;
+  const text = `${v.name},
+
+Recebemos um pedido para redefinir sua senha no Quantua.
+
+Clique no link abaixo para criar uma nova senha:
+
+${v.resetLink}
+
+Este link expira em ${expiresFmt}. Se você não solicitou a redefinição, ignore este e-mail — sua senha continua a mesma.
+
+Equipe Quantua`;
+  const html = `<div style="${baseStyle}">
+  <div style="${labelStyle}">○ REDEFINIÇÃO DE SENHA</div>
+  <h1 style="font-size: 22px; font-weight: 500; letter-spacing: -0.02em; margin: 16px 0 12px;">
+    ${v.name}, redefina sua senha
+  </h1>
+  <p style="font-family: Georgia, serif; line-height: 1.6; font-size: 15px;">
+    Clique no botão abaixo para criar uma nova senha. Se você não solicitou esta redefinição,
+    pode ignorar este e-mail — sua senha continua a mesma.
+  </p>
+  <a href="${v.resetLink}" style="${buttonStyle}">Redefinir senha →</a>
+  <p style="${labelStyle} margin-top: 24px;">
+    Link expira em ${expiresFmt} · Uso único · Quantua Serviços de Análise Ltda.
+  </p>
+</div>`;
+  return sendSafe({ to: v.to, subject, html, text });
+}
+
+export interface EmailConfirmationVars {
+  to: string;
+  name: string;
+  confirmLink: string;
+  expiresAt: Date;
+}
+
+export async function sendEmailConfirmationEmail(v: EmailConfirmationVars): Promise<{ ok: boolean; error?: string }> {
+  const expiresFmt = v.expiresAt.toLocaleString("pt-BR", { day: "2-digit", month: "long" });
+  const subject = `Confirme seu e-mail · Quantua`;
+  const text = `${v.name},
+
+Para ativar sua conta no Quantua, confirme seu endereço de e-mail clicando no link abaixo:
+
+${v.confirmLink}
+
+Este link expira em ${expiresFmt}.
+
+Equipe Quantua`;
+  const html = `<div style="${baseStyle}">
+  <div style="${labelStyle}">○ CONFIRMAÇÃO DE E-MAIL</div>
+  <h1 style="font-size: 22px; font-weight: 500; letter-spacing: -0.02em; margin: 16px 0 12px;">
+    ${v.name}, confirme seu e-mail
+  </h1>
+  <p style="font-family: Georgia, serif; line-height: 1.6; font-size: 15px;">
+    Para ativar sua conta e começar a usar o Quantua, clique no botão abaixo para confirmar seu e-mail.
+  </p>
+  <a href="${v.confirmLink}" style="${buttonStyle}">Confirmar e-mail →</a>
+  <p style="${labelStyle} margin-top: 24px;">
+    Link expira em ${expiresFmt} · Quantua Serviços de Análise Ltda.
+  </p>
+</div>`;
+  return sendSafe({ to: v.to, subject, html, text });
+}
+
 export async function sendLeadConfirmationEmail(v: LeadConfirmationVars): Promise<{ ok: boolean; error?: string }> {
   const subject = `Recebemos sua solicitação · IBR · ${v.targetCompany}`;
   const greeting = v.contactName ? `${v.contactName},` : "Olá,";
