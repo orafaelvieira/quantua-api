@@ -166,6 +166,18 @@ const SECTOR_OVERRIDES: Record<string, IntakeQuestion[]> = {
   default: [],
 };
 
+/**
+ * Setores reconhecidos com perguntas dedicadas. Lista usada por
+ * `resolveIntakeForm` para decidir entre status="ready" (setor mapeado) e
+ * "pending_sector" (cliente cadastrado mas RT ainda não classificou).
+ */
+export const RECOGNIZED_SECTORS = Object.keys(SECTOR_OVERRIDES).filter((k) => k !== "default");
+
+export function isRecognizedSector(sectorId: string | null | undefined): boolean {
+  if (!sectorId) return false;
+  return RECOGNIZED_SECTORS.includes(sectorId.toLowerCase());
+}
+
 export function getIntakeTemplate(sectorId: string | null | undefined): IntakeTemplate {
   const key = (sectorId ?? "default").toLowerCase();
   const overrides = SECTOR_OVERRIDES[key] ?? SECTOR_OVERRIDES.default ?? [];
@@ -174,4 +186,24 @@ export function getIntakeTemplate(sectorId: string | null | undefined): IntakeTe
     version: "v1.0",
     questions: [...COMMON_QUESTIONS, ...overrides],
   };
+}
+
+/**
+ * Resolve o intake form pra um Analysis específico, distinguindo
+ * "pending_sector" (RT ainda não classificou o setor da empresa-alvo)
+ * de "ready" (setor reconhecido, perguntas direcionadas disponíveis).
+ *
+ * Importante para a UX do cliente: antes só caíamos no template genérico
+ * silenciosamente. Agora o frontend renderiza estado claro de espera.
+ */
+export interface ResolvedIntakeForm {
+  status: "ready" | "pending_sector";
+  template: IntakeTemplate | null;
+}
+
+export function resolveIntakeForm(sectorId: string | null | undefined): ResolvedIntakeForm {
+  if (!isRecognizedSector(sectorId)) {
+    return { status: "pending_sector", template: null };
+  }
+  return { status: "ready", template: getIntakeTemplate(sectorId) };
 }
