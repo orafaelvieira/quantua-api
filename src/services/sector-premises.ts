@@ -1,11 +1,18 @@
 /**
- * Premissas setoriais — benchmarks usados pelo projection-engine.
+ * Premissas setoriais — versão hardcoded legada.
  *
- * Lookup pelo campo `Company.setor` (string). Fallback genérico se setor não bate.
+ * @deprecated Em v3 (pivot B2B-3, 2026-05-25), foi adicionado o pipeline
+ * DB-driven em `sector-benchmark.ts`. Novos callers devem usar
+ * `resolveSectorPremises({ sectorCode, setorText })` daquele módulo.
  *
- * Valores baseados em IBGE/Sebrae + agregados setoriais públicos. Para uso de
- * demonstração; substituir por integração com base real (Damodaran, IBGE PIA, etc.)
- * em iteração futura.
+ * Este arquivo continua existindo como FALLBACK pra:
+ *   1. Análises legadas sem `Analysis.sectorId` (substring match em `Company.setor`)
+ *   2. Bootstrap de testes que não querem montar fixture do DB
+ *
+ * Quando os warnings `[sector-benchmark] fallbackFromText` ficarem zerados em
+ * prod (sinal de que todas as Analysis têm sectorId), este arquivo pode ser
+ * deletado. Os números aqui DEVEM espelhar `prisma/seed-sectors.ts` pros 7
+ * setores que existem em ambos — se divergir, snapshot test pega.
  */
 
 export interface SectorPremises {
