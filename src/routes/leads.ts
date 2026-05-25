@@ -76,10 +76,42 @@ router.get("/", requireAuth, async (req: AuthRequest, res: Response): Promise<vo
   res.json(leads);
 });
 
+/**
+ * GET /leads/:id — retorna o lead completo (todos os campos nominais BPO)
+ * para o dialog de triagem no Inbox consumir. Sem isolamento por userId
+ * porque Leads são pool global (todos os RTs podem triar).
+ */
+router.get("/:id", requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id;
+  if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+  const lead = await prisma.lead.findUnique({ where: { id } });
+  if (!lead) { res.status(404).json({ error: "Lead não encontrado" }); return; }
+  res.json(lead);
+});
+
+/**
+ * Status aceitos no lifecycle de triagem. Documentado aqui (até v2.1 o campo
+ * era free-form); endpoints novos validam contra esse set, endpoints antigos
+ * permanecem permissivos por retrocompat.
+ *
+ *  new       — recém-criado pelo formulário público
+ *  contacted — RT já fez contato inicial (não promoveu ainda)
+ *  converted — promovido para Engagement (vide POST /engagements com leadId)
+ *  lost      — descartado (não bate ICP, sumiu, etc.)
+ */
+const LEAD_STATUSES = ["new", "contacted", "converted", "lost"] as const;
+type LeadStatus = (typeof LEAD_STATUSES)[number];
+
+const updateSchema = z.object({
+  status: z.enum(LEAD_STATUSES).optional(),
+});
+
 router.put("/:id", requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
-  const status = (req.body?.status as string) || undefined;
+  const parsed = updateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const status = parsed.data.status;
   const updated = await prisma.lead.update({
     where: { id },
     data: { ...(status ? { status } : {}) },
@@ -88,3 +120,4 @@ router.put("/:id", requireAuth, async (req: AuthRequest, res: Response): Promise
 });
 
 export default router;
+export { LEAD_STATUSES, type LeadStatus };
