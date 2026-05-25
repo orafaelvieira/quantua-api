@@ -1,9 +1,20 @@
 import { Router, Response } from "express";
 import { requireAuth, AuthRequest } from "../middleware/auth";
+import { requireRole } from "../middleware/permissions";
 import { getSectorBenchmark, listSectors } from "../services/sector-benchmark";
+import { getBenchmarkCoverage } from "../services/benchmark-coverage";
 
 const router = Router();
 router.use(requireAuth);
+
+// GET /sectors/coverage — observability do pipeline #6 pra UI partner.
+// Mesma data shape do /admin/benchmarks/coverage, mas autenticação via JWT
+// + role partner (em vez de token ops). Registrado ANTES do /:code/benchmark
+// pra evitar conflito de path.
+router.get("/coverage", requireRole("partner"), async (_req: AuthRequest, res: Response): Promise<void> => {
+  const report = await getBenchmarkCoverage();
+  res.json(report);
+});
 
 // GET /sectors — lista todos os setores ativos do catálogo Quantua.
 router.get("/", async (_req: AuthRequest, res: Response): Promise<void> => {
