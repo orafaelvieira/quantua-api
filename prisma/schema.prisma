@@ -463,3 +463,80 @@ model Covenant {
   @@index([analysisId])
   @@map("covenants")
 }
+
+/// Catálogo canônico de setores Quantua.
+/// `code` é string semântica (não UUID) pra debug — ex.: "industria_textil", "varejo".
+/// Hierarquia opcional via parentCode (ex.: industria_textil → industria).
+/// Source-of-truth pra dropdown do wizard e pra `Analysis.sectorId`.
+model Sector {
+  code              String   @id
+  name              String
+  parentCode        String?  @map("parent_code")
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  parent            Sector?            @relation("SectorHierarchy", fields: [parentCode], references: [code])
+  children          Sector[]           @relation("SectorHierarchy")
+  benchmarks        SectorBenchmark[]
+  cnaeMappings      CnaeMapping[]
+  damodaranMappings DamodaranMapping[]
+
+  @@index([parentCode])
+  @@map("sectors")
+}
+
+/// Benchmarks setoriais — EAV (entity-attribute-value) append-only.
+/// Nunca UPDATE; sempre INSERT de nova linha quando a fonte atualiza.
+/// `metric` exemplos: "receita_growth", "margem_bruta_p50", "dso_p50",
+/// "capex_pct_receita", "custo_medio_divida".
+/// `source`: "manual_curation" | "damodaran" | "ibge_pia" | "bcb_sgs".
+model SectorBenchmark {
+  id           String   @id @default(uuid())
+  sectorCode   String   @map("sector_code")
+  year         Int
+  source       String
+  metric       String
+  value        Float
+  percentile   Int?
+  unit         String
+  sampleSize   Int?     @map("sample_size")
+  rawSourceUrl String?  @map("raw_source_url")
+  fetchedAt    DateTime @map("fetched_at")
+  notes        String?
+
+  sector       Sector   @relation(fields: [sectorCode], references: [code])
+
+  @@unique([sectorCode, year, source, metric, percentile])
+  @@index([sectorCode, year])
+  @@index([source, fetchedAt])
+  @@map("sector_benchmarks")
+}
+
+/// Mapeamento CNAE (Brasil) → setor Quantua.
+/// CNAE sem ponto, ex.: "10112" (não "10.11-2").
+/// Granularidade 2-3 dígitos pra MVP; 5-dig é overkill.
+model CnaeMapping {
+  cnae        String   @id
+  sectorCode  String   @map("sector_code")
+  description String?
+  confidence  String   @default("high")
+  reviewedAt  DateTime @map("reviewed_at")
+
+  sector      Sector   @relation(fields: [sectorCode], references: [code])
+
+  @@index([sectorCode])
+  @@map("cnae_mappings")
+}
+
+/// Mapeamento Damodaran (NYU Stern) industries → setor Quantua.
+/// Ex.: "Apparel" → "industria_textil".
+model DamodaranMapping {
+  damodaranIndustry String   @id @map("damodaran_industry")
+  sectorCode        String   @map("sector_code")
+  notes             String?
+
+  sector            Sector   @relation(fields: [sectorCode], references: [code])
+
+  @@index([sectorCode])
+  @@map("damodaran_mappings")
+}
