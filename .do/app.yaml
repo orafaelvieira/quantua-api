@@ -10,7 +10,10 @@ services:
     build_command: npm install && npm run build && npx prisma generate
     run_command: npm start
     http_port: 3001
-    instance_size_slug: basic-xxs
+    # Bump basic-xxs → basic-xs (1GB RAM): Puppeteer + @sparticuz/chromium
+    # consome ~150-300MB de RAM em pico de render (fricção #8). xxs (512MB)
+    # ficava apertado e podia OOM.
+    instance_size_slug: basic-xs
     instance_count: 1
     health_check:
       http_path: /health

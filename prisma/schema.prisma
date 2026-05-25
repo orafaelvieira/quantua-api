@@ -239,6 +239,12 @@ model Engagement {
   letterAcceptedAt    DateTime? @map("letter_accepted_at")
   letterContentHash   String?   @map("letter_content_hash")
   letterVersion       String?   @map("letter_version")
+  /// PDF gerado pelo endpoint generate-proposal (fricção #8).
+  /// `proposalUrl` continua válido pra retrocompat (browser-print fallback),
+  /// mas o caminho preferido é PDF binário em Spaces servido via signed URL.
+  proposalPdfStoragePath String?   @map("proposal_pdf_storage_path")
+  proposalPdfHash        String?   @map("proposal_pdf_hash")
+  proposalGeneratedAt    DateTime? @map("proposal_generated_at")
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")
 
