@@ -6,7 +6,7 @@ import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole, requireEngagementSigned } from "../middleware/permissions";
 import { uploadFile, getSignedDownloadUrl } from "../services/storage";
-import { getIntakeTemplate } from "../services/intake-templates";
+import { getIntakeTemplate, resolveIntakeForm } from "../services/intake-templates";
 
 const router = Router();
 router.use(requireAuth);
@@ -212,17 +212,35 @@ router.put("/questionnaire", requireEngagementSigned, async (req: AuthRequest, r
 /**
  * Intake form sectorizado. Pega template via sectorId e merge com respostas
  * salvas em Analysis.questionnaire.answers (mesmo storage do questionnaire legado).
+ *
+ * Response inclui `status`:
+ *   - "ready"           → template carregado, frontend renderiza form
+ *   - "pending_sector"  → RT ainda não classificou setor; frontend mostra
+ *                         mensagem clara de espera (não cai mais no genérico
+ *                         silenciosamente, que enganava o cliente)
  */
 router.get("/intake-form", requireEngagementSigned, async (req: AuthRequest, res: Response): Promise<void> => {
   const analysis = await loadClientAnalysis(req.userId!);
   if (!analysis) { res.status(404).json({ error: "Sem IBR ativo" }); return; }
-  const template = getIntakeTemplate(analysis.sectorId);
+  const resolved = resolveIntakeForm(analysis.sectorId);
   const data = (analysis.questionnaire as { answers?: Record<string, unknown> } | null) ?? {};
+  const answeredCount = Object.keys(data.answers ?? {}).length;
+  if (resolved.status === "pending_sector" || !resolved.template) {
+    res.json({
+      status: "pending_sector" as const,
+      template: null,
+      answers: data.answers ?? {},
+      answeredCount,
+      totalCount: 0,
+    });
+    return;
+  }
   res.json({
-    template,
+    status: "ready" as const,
+    template: resolved.template,
     answers: data.answers ?? {},
-    answeredCount: Object.keys(data.answers ?? {}).length,
-    totalCount: template.questions.length,
+    answeredCount,
+    totalCount: resolved.template.questions.length,
   });
 });
 
