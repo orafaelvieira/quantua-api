@@ -13,6 +13,7 @@
  */
 
 import { prisma } from "../db/client";
+import { getSectorPremises, SectorPremises } from "./sector-premises";
 
 export interface SectorBenchmarkResult {
   sectorCode: string;
@@ -167,4 +168,52 @@ async function resolveLatestYear(sectorCode: string): Promise<number | null> {
  */
 export function clearSectorBenchmarkCache(): void {
   cache.clear();
+}
+
+/**
+ * Resolve as premissas setoriais usadas pelo projection-engine.
+ *
+ * Estratégia (em ordem de prioridade):
+ *   1. Se `sectorCode` está setado, lê benchmark do DB. Se todos os 5 campos
+ *      vierem populados, retorna direto.
+ *   2. Caso contrário, cai pro path legado: substring match em
+ *      sector-premises.ts via `setorText`. Loga warning pra observabilidade —
+ *      a ideia é remover esse fallback quando warnings ficarem zerados.
+ *   3. Última opção: DEFAULT_PREMISES de sector-premises.ts.
+ */
+export async function resolveSectorPremises(input: {
+  sectorCode: string | null | undefined;
+  setorText: string | null | undefined;
+}): Promise<SectorPremises> {
+  if (input.sectorCode) {
+    const result = await getSectorBenchmark(input.sectorCode);
+    if (result && allMetricsPresent(result.metrics)) {
+      return {
+        receitaGrowth: result.metrics.receitaGrowth!,
+        margemBruta: result.metrics.margemBruta!,
+        dsoTarget: result.metrics.dsoTarget!,
+        capexPctReceita: result.metrics.capexPctReceita!,
+        custoMedioDivida: result.metrics.custoMedioDivida!,
+      };
+    }
+    console.warn(
+      `[sector-benchmark] DB lookup incomplete for sectorCode="${input.sectorCode}"; falling back to legacy sector-premises`,
+    );
+  }
+  if (input.setorText) {
+    console.warn(
+      `[sector-benchmark] fallbackFromText dispatched for setor="${input.setorText}" (no sectorCode set)`,
+    );
+  }
+  return getSectorPremises(input.setorText ?? null);
+}
+
+function allMetricsPresent(m: SectorBenchmarkResult["metrics"]): boolean {
+  return (
+    m.receitaGrowth !== null &&
+    m.margemBruta !== null &&
+    m.dsoTarget !== null &&
+    m.capexPctReceita !== null &&
+    m.custoMedioDivida !== null
+  );
 }

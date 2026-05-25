@@ -70,7 +70,18 @@ export interface ProjectionInput {
       dioDeltaDays: number;
     };
   };
-  setor: string | null;
+  /**
+   * Premissas resolvidas pelo caller (preferido — passa por `resolveSectorPremises`
+   * do sector-benchmark service, que faz lookup async no DB).
+   * Quando não fornecido, engine cai no path legado abaixo (`setor` substring match).
+   */
+  premises?: SectorPremises;
+  /**
+   * @deprecated Path legado: substring match contra sector-premises.ts hardcoded.
+   * Mantido pra back-compat e pra fixtures de teste. Em prod o caller deve
+   * setar `premises` explicitamente via `resolveSectorPremises`.
+   */
+  setor?: string | null;
   startMonth: Date;
 }
 
@@ -102,7 +113,7 @@ function findLine(lines: LineWithValores[] | undefined, accountSubstr: string): 
 }
 
 export function computeProjections(input: ProjectionInput): ProjectionMonth[] {
-  const premises: SectorPremises = getSectorPremises(input.setor);
+  const premises: SectorPremises = input.premises ?? getSectorPremises(input.setor ?? null);
   const { dadosEstruturados, stcf, scenario, startMonth } = input;
   const periodos: string[] = dadosEstruturados?.periodos ?? [];
   const bpLines = dadosEstruturados?.bp ?? [];

@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { computeProjections } from "../services/projection-engine";
+import { resolveSectorPremises } from "../services/sector-benchmark";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
@@ -111,11 +112,15 @@ router.get("/:id/projections", async (req: AuthRequest, res: Response): Promise<
   }
 
   try {
+    const premises = await resolveSectorPremises({
+      sectorCode: analysis.sectorId,
+      setorText: analysis.company?.setor ?? null,
+    });
     const projections = computeProjections({
       dadosEstruturados: analysis.dadosEstruturados,
       stcf: analysis.stcf,
       scenario,
-      setor: analysis.company?.setor ?? null,
+      premises,
       startMonth: new Date(),
     });
     // Cache no campo projections (sob a chave do cenário)
