@@ -5,12 +5,15 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "npx prisma generate && npx tsc",
-    "start": "npx prisma db push --skip-generate --accept-data-loss && node dist/server.js",
+    "start": "npx prisma db push --skip-generate --accept-data-loss && npm run db:seed:sectors && node dist/server.js",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate deploy",
     "db:generate": "prisma generate",
     "db:seed": "tsx prisma/seed.ts",
-    "db:seed:demo": "tsx prisma/seed-demo.ts"
+    "db:seed:demo": "tsx prisma/seed-demo.ts",
+    "db:seed:sectors": "tsx prisma/seed-sectors.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -42,6 +45,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "tsx": "^4.19.1"
+    "tsx": "^4.19.1",
+    "vitest": "^1.6.1"
   }
 }
