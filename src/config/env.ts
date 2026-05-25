@@ -35,4 +35,14 @@ export const env = {
     secret: process.env.SPACES_SECRET ?? "",
     enabled: !!process.env.SPACES_KEY,
   },
+  /**
+   * Jobs schedulado (node-cron in-process). Default desabilitado em dev pra
+   * não disparar emails reais durante desenvolvimento. Em prod, setar
+   * JOBS_ENABLED=true via .do/app.yaml.
+   */
+  jobs: {
+    enabled: process.env.JOBS_ENABLED === "true",
+    /** Timezone usado em todos os cron schedules. */
+    timezone: process.env.JOBS_TZ ?? "America/Sao_Paulo",
+  },
 };
