@@ -1,0 +1,107 @@
+{
+  "_meta": {
+    "year": 2024,
+    "source": "ibge_pia",
+    "vintage": "2024-pia-published-mid-2026",
+    "rawSourceUrl": "https://apisidra.ibge.gov.br/values/t/1849",
+    "notes": "Snapshot de Pesquisa Industrial Anual 2024 (publicada mid-2026). Valores plausíveis baseados em ordens de grandeza observadas em PIAs anteriores. O job anual `fetch-ibge-pia` (15 jun) substitui pelo fetch real da SIDRA quando rodar."
+  },
+  "cnae_industries": [
+    {
+      "cnae": "01",
+      "name": "Agricultura, pecuária",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.31, "unit": "decimal" },
+        { "metric": "dso_target", "value": 65, "unit": "dias" }
+      ]
+    },
+    {
+      "cnae": "10",
+      "name": "Fabricação de produtos alimentícios",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.27, "unit": "decimal" },
+        { "metric": "dso_target", "value": 32, "unit": "dias" }
+      ]
+    },
+    {
+      "cnae": "11",
+      "name": "Fabricação de bebidas",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.42, "unit": "decimal" },
+        { "metric": "dso_target", "value": 38, "unit": "dias" }
+      ]
+    },
+    {
+      "cnae": "13",
+      "name": "Fabricação de produtos têxteis",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.24, "unit": "decimal" },
+        { "metric": "dso_target", "value": 58, "unit": "dias" }
+      ]
+    },
+    {
+      "cnae": "14",
+      "name": "Confecção de artigos do vestuário",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.36, "unit": "decimal" },
+        { "metric": "dso_target", "value": 52, "unit": "dias" }
+      ]
+    },
+    {
+      "cnae": "15",
+      "name": "Preparação de couros e fabricação de calçados",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.30, "unit": "decimal" },
+        { "metric": "dso_target", "value": 50, "unit": "dias" }
+      ]
+    },
+    {
+      "cnae": "41",
+      "name": "Construção de edifícios",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.19, "unit": "decimal" },
+        { "metric": "dso_target", "value": 80, "unit": "dias" }
+      ]
+    },
+    {
+      "cnae": "42",
+      "name": "Obras de infraestrutura",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.22, "unit": "decimal" },
+        { "metric": "dso_target", "value": 95, "unit": "dias" }
+      ]
+    },
+    {
+      "cnae": "47",
+      "name": "Comércio varejista",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.30, "unit": "decimal" },
+        { "metric": "dso_target", "value": 10, "unit": "dias" }
+      ]
+    },
+    {
+      "cnae": "49",
+      "name": "Transporte terrestre",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.21, "unit": "decimal" },
+        { "metric": "dso_target", "value": 42, "unit": "dias" }
+      ]
+    },
+    {
+      "cnae": "62",
+      "name": "Atividades dos serviços de tecnologia da informação",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.61, "unit": "decimal" },
+        { "metric": "dso_target", "value": 55, "unit": "dias" }
+      ]
+    },
+    {
+      "cnae": "86",
+      "name": "Atividades de atenção à saúde humana",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.40, "unit": "decimal" },
+        { "metric": "dso_target", "value": 52, "unit": "dias" }
+      ]
+    }
+  ]
+}

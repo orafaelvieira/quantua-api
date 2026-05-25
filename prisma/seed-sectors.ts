@@ -19,6 +19,9 @@
 
 import { PrismaClient } from "@prisma/client";
 import damodaranBootstrap from "./seed-data/damodaran-bootstrap-2026.json";
+import ibgePiaBootstrap from "./seed-data/ibge-pia-bootstrap-2024.json";
+import bcbSgsBootstrap from "./seed-data/bcb-sgs-bootstrap-2026.json";
+import cnaeMappings from "./seed-data/cnae-mappings.json";
 
 const prisma = new PrismaClient();
 
@@ -28,12 +31,12 @@ interface BootstrapMetric {
   unit: string;
 }
 
-interface BootstrapIndustry {
+interface DamodaranIndustry {
   damodaranIndustry: string;
   metrics: BootstrapMetric[];
 }
 
-interface BootstrapFile {
+interface DamodaranFile {
   _meta: {
     year: number;
     source: string;
@@ -41,7 +44,45 @@ interface BootstrapFile {
     rawSourceUrl: string;
     notes: string;
   };
-  industries: BootstrapIndustry[];
+  industries: DamodaranIndustry[];
+}
+
+interface CnaeIndustry {
+  cnae: string;
+  name: string;
+  metrics: BootstrapMetric[];
+}
+
+interface IbgePiaFile {
+  _meta: { year: number; source: string; vintage: string; rawSourceUrl: string; notes: string };
+  cnae_industries: CnaeIndustry[];
+}
+
+interface BcbSeries {
+  series_code: number;
+  metric: string;
+  value: number;
+  unit: string;
+  notes?: string;
+}
+
+interface BcbSgsFile {
+  _meta: { year: number; source: string; vintage: string; rawSourceUrl: string; notes: string };
+  series: BcbSeries[];
+  derived: {
+    custo_medio_divida: { value: number; unit: string; formula: string; notes: string };
+  };
+}
+
+interface CnaeMapping {
+  cnae: string;
+  sectorCode: string;
+  description?: string;
+}
+
+interface CnaeMappingFile {
+  _meta: { vintage: string; notes: string };
+  mappings: CnaeMapping[];
 }
 
 interface SeedSector {
@@ -318,7 +359,7 @@ async function seedDamodaranMappings() {
  */
 async function seedDamodaranBootstrap() {
   console.log("Seeding Damodaran bootstrap benchmarks...");
-  const bootstrap = damodaranBootstrap as unknown as BootstrapFile;
+  const bootstrap = damodaranBootstrap as unknown as DamodaranFile;
   const { year, source, vintage, rawSourceUrl } = bootstrap._meta;
   const now = new Date();
 
@@ -376,12 +417,227 @@ async function seedDamodaranBootstrap() {
   }
 }
 
+/**
+ * Bootstrap de mapeamentos CNAE → setor (Fase 4 do pipeline #6).
+ *
+ * Usado pelo job `fetch-ibge-pia` pra resolver CNAE 2-dig do SIDRA pro
+ * setor canônico Quantua. Idempotente.
+ */
+async function seedCnaeMappings() {
+  console.log("Seeding CNAE mappings...");
+  const file = cnaeMappings as unknown as CnaeMappingFile;
+  const now = new Date();
+
+  let upserted = 0;
+  for (const m of file.mappings) {
+    await prisma.cnaeMapping.upsert({
+      where: { cnae: m.cnae },
+      create: {
+        cnae: m.cnae,
+        sectorCode: m.sectorCode,
+        description: m.description ?? null,
+        confidence: "high",
+        reviewedAt: now,
+      },
+      update: {
+        sectorCode: m.sectorCode,
+        description: m.description ?? null,
+        reviewedAt: now,
+      },
+    });
+    upserted++;
+  }
+
+  console.log(`  CNAE mappings: ${upserted} upserted`);
+}
+
+/**
+ * Bootstrap de benchmarks IBGE PIA 2024 (Fase 4 do pipeline #6).
+ *
+ * Resolve CNAE 2-dig → sectorCode via CnaeMapping seedada acima. Industries
+ * sem mapping são logadas (CNAEs adicionais podem ser curados depois).
+ *
+ * Idempotente. Quando o job anual `fetch-ibge-pia` rodar com sucesso,
+ * sobrescreve esses valores com fetch real da SIDRA.
+ */
+async function seedIbgeBootstrap() {
+  console.log("Seeding IBGE PIA bootstrap benchmarks...");
+  const bootstrap = ibgePiaBootstrap as unknown as IbgePiaFile;
+  const { year, source, vintage, rawSourceUrl } = bootstrap._meta;
+  const now = new Date();
+
+  const cnaes = await prisma.cnaeMapping.findMany();
+  const sectorByCnae = new Map(cnaes.map((c) => [c.cnae, c.sectorCode]));
+
+  // Múltiplos CNAEs podem mapear pro mesmo setor — agregamos por setor
+  // tomando a média ponderada simples (sem peso de receita, MVP).
+  const aggregated = new Map<string, Map<string, { sum: number; count: number; unit: string }>>();
+  let unmapped: string[] = [];
+
+  for (const industry of bootstrap.cnae_industries) {
+    const sectorCode = sectorByCnae.get(industry.cnae);
+    if (!sectorCode) {
+      unmapped.push(industry.cnae);
+      continue;
+    }
+    if (!aggregated.has(sectorCode)) {
+      aggregated.set(sectorCode, new Map());
+    }
+    const sectorMetrics = aggregated.get(sectorCode)!;
+    for (const m of industry.metrics) {
+      const prev = sectorMetrics.get(m.metric);
+      if (prev) {
+        prev.sum += m.value;
+        prev.count += 1;
+      } else {
+        sectorMetrics.set(m.metric, { sum: m.value, count: 1, unit: m.unit });
+      }
+    }
+  }
+
+  let upserted = 0;
+  for (const [sectorCode, metrics] of aggregated.entries()) {
+    for (const [metric, agg] of metrics.entries()) {
+      const value = agg.sum / agg.count;
+      await prisma.sectorBenchmark.upsert({
+        where: {
+          sectorCode_year_source_metric_percentile: {
+            sectorCode,
+            year,
+            source,
+            metric,
+            percentile: 50,
+          },
+        },
+        create: {
+          sectorCode,
+          year,
+          source,
+          metric,
+          value,
+          percentile: 50,
+          unit: agg.unit,
+          fetchedAt: now,
+          rawSourceUrl,
+          notes: `Bootstrap ${vintage} (média de ${agg.count} CNAE${agg.count > 1 ? "s" : ""} mapeado${agg.count > 1 ? "s" : ""})`,
+        },
+        update: {
+          value,
+          unit: agg.unit,
+          fetchedAt: now,
+        },
+      });
+      upserted++;
+    }
+  }
+
+  console.log(`  IBGE PIA bootstrap: ${upserted} upserted across ${aggregated.size} setor(es)`);
+  if (unmapped.length > 0) {
+    console.warn(`  ⚠ CNAEs sem mapping: ${unmapped.join(", ")}`);
+  }
+}
+
+/**
+ * Bootstrap de macros BCB SGS (Fase 4 do pipeline #6).
+ *
+ * Aplica:
+ *   1. Macros raw (cdi_anual, selic_anual, spread_pj_medio_anual) a
+ *      sectorCode="default" — observability + futuro consumo direto.
+ *   2. `custo_medio_divida` derivado (cdi + spread) a TODOS os setores —
+ *      sobrescreve o valor de manual_curation da Fase 1 porque BCB
+ *      ordena alfabético antes (bcb_sgs < manual_curation).
+ *
+ * Idempotente. Quando o job trimestral `fetch-bcb-sgs` rodar com sucesso,
+ * sobrescreve esses valores com fetch real da API.
+ */
+async function seedBcbBootstrap() {
+  console.log("Seeding BCB SGS bootstrap benchmarks...");
+  const bootstrap = bcbSgsBootstrap as unknown as BcbSgsFile;
+  const { year, source, vintage, rawSourceUrl } = bootstrap._meta;
+  const now = new Date();
+
+  let upserted = 0;
+
+  // 1. Macros raw → sector "default"
+  for (const series of bootstrap.series) {
+    await prisma.sectorBenchmark.upsert({
+      where: {
+        sectorCode_year_source_metric_percentile: {
+          sectorCode: "default",
+          year,
+          source,
+          metric: series.metric,
+          percentile: -1, // sentinela; séries macro não têm distribuição
+        },
+      },
+      create: {
+        sectorCode: "default",
+        year,
+        source,
+        metric: series.metric,
+        value: series.value,
+        percentile: -1,
+        unit: series.unit,
+        fetchedAt: now,
+        rawSourceUrl: `${rawSourceUrl}.${series.series_code}/dados/ultimos/4?formato=json`,
+        notes: `Bootstrap ${vintage} — SGS série ${series.series_code} (${series.notes ?? ""})`,
+      },
+      update: {
+        value: series.value,
+        unit: series.unit,
+        fetchedAt: now,
+      },
+    });
+    upserted++;
+  }
+
+  // 2. custo_medio_divida derivado → todos os setores ativos
+  const allSectors = await prisma.sector.findMany({ where: { active: true } });
+  const custoDivida = bootstrap.derived.custo_medio_divida;
+  for (const sector of allSectors) {
+    await prisma.sectorBenchmark.upsert({
+      where: {
+        sectorCode_year_source_metric_percentile: {
+          sectorCode: sector.code,
+          year,
+          source,
+          metric: "custo_medio_divida",
+          percentile: -1,
+        },
+      },
+      create: {
+        sectorCode: sector.code,
+        year,
+        source,
+        metric: "custo_medio_divida",
+        value: custoDivida.value,
+        percentile: -1,
+        unit: custoDivida.unit,
+        fetchedAt: now,
+        rawSourceUrl,
+        notes: `Bootstrap ${vintage} — derivado: ${custoDivida.formula}`,
+      },
+      update: {
+        value: custoDivida.value,
+        unit: custoDivida.unit,
+        fetchedAt: now,
+      },
+    });
+    upserted++;
+  }
+
+  console.log(`  BCB SGS bootstrap: ${upserted} upserted (${bootstrap.series.length} macros + custo_medio_divida em ${allSectors.length} setores)`);
+}
+
 async function main() {
   console.log(`Seeding Quantua sector catalog (year=${SEED_YEAR}, source=${SEED_SOURCE})...`);
   await seedSectors();
   await seedBenchmarks();
   await seedDamodaranMappings();
   await seedDamodaranBootstrap();
+  await seedCnaeMappings();
+  await seedIbgeBootstrap();
+  await seedBcbBootstrap();
   console.log("Done.");
 }
 

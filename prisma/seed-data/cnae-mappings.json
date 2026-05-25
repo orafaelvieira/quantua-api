@@ -1,0 +1,20 @@
+{
+  "_meta": {
+    "vintage": "2026-05 curadoria manual",
+    "notes": "Mapeamento CNAE 2-dig → setor Quantua. ~12 entries iniciais; expansível conforme demanda. Granularidade 5-dig é overkill pra MVP."
+  },
+  "mappings": [
+    { "cnae": "01", "sectorCode": "agro", "description": "Agricultura, pecuária e serviços relacionados" },
+    { "cnae": "10", "sectorCode": "industria_alimentos", "description": "Fabricação de produtos alimentícios" },
+    { "cnae": "11", "sectorCode": "industria_alimentos", "description": "Fabricação de bebidas" },
+    { "cnae": "13", "sectorCode": "industria_textil", "description": "Fabricação de produtos têxteis" },
+    { "cnae": "14", "sectorCode": "industria_textil", "description": "Confecção de artigos do vestuário e acessórios" },
+    { "cnae": "15", "sectorCode": "industria_calcados", "description": "Preparação de couros e fabricação de artigos de couro, artigos para viagem e calçados" },
+    { "cnae": "41", "sectorCode": "construcao", "description": "Construção de edifícios" },
+    { "cnae": "42", "sectorCode": "construcao", "description": "Obras de infraestrutura" },
+    { "cnae": "47", "sectorCode": "varejo", "description": "Comércio varejista" },
+    { "cnae": "49", "sectorCode": "servicos_transporte", "description": "Transporte terrestre" },
+    { "cnae": "62", "sectorCode": "tech", "description": "Atividades dos serviços de tecnologia da informação" },
+    { "cnae": "86", "sectorCode": "saude", "description": "Atividades de atenção à saúde humana" }
+  ]
+}
