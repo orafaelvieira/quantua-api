@@ -18,6 +18,7 @@ import leadsRouter from "./routes/leads";
 import inboxRouter from "./routes/inbox";
 import billingRouter from "./routes/billing";
 import teamRouter from "./routes/team";
+import sectorsRouter from "./routes/sectors";
 
 const app = express();
 
@@ -63,6 +64,7 @@ app.use("/leads", leadsRouter);
 app.use("/inbox", inboxRouter);
 app.use("/billing", billingRouter);
 app.use("/team", teamRouter);
+app.use("/sectors", sectorsRouter);
 
 app.listen(env.port, () => {
   console.log(`Server running on port ${env.port}`);
