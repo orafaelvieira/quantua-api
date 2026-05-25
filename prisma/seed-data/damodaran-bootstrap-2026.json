@@ -1,0 +1,137 @@
+{
+  "_meta": {
+    "year": 2026,
+    "source": "damodaran",
+    "vintage": "2026-01-snapshot-curated",
+    "rawSourceUrl": "https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datacurrent.html",
+    "notes": "Snapshot inicial pra Fase 3 do pipeline #6. Valores plausíveis baseados em ordens de grandeza dos datasets globais de Damodaran (NYU Stern) ano 2026. O job mensal `fetch-damodaran-benchmarks` substitui esses valores com fetch real do XLS quando rodar."
+  },
+  "industries": [
+    {
+      "damodaranIndustry": "Apparel",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.52, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.10, "unit": "decimal" },
+        { "metric": "dso_target", "value": 50, "unit": "dias" },
+        { "metric": "dio_target", "value": 75, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Food Processing",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.30, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.11, "unit": "decimal" },
+        { "metric": "dso_target", "value": 28, "unit": "dias" },
+        { "metric": "dio_target", "value": 35, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Food Wholesalers",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.18, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.04, "unit": "decimal" },
+        { "metric": "dso_target", "value": 30, "unit": "dias" },
+        { "metric": "dio_target", "value": 25, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Healthcare Products",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.58, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.18, "unit": "decimal" },
+        { "metric": "dso_target", "value": 65, "unit": "dias" },
+        { "metric": "dio_target", "value": 90, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Healthcare Facilities",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.42, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.08, "unit": "decimal" },
+        { "metric": "dso_target", "value": 55, "unit": "dias" },
+        { "metric": "dio_target", "value": 18, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Retail (General)",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.32, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.06, "unit": "decimal" },
+        { "metric": "dso_target", "value": 8, "unit": "dias" },
+        { "metric": "dio_target", "value": 75, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Retail (Online)",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.40, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.07, "unit": "decimal" },
+        { "metric": "dso_target", "value": 15, "unit": "dias" },
+        { "metric": "dio_target", "value": 45, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Construction Supplies",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.31, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.10, "unit": "decimal" },
+        { "metric": "dso_target", "value": 55, "unit": "dias" },
+        { "metric": "dio_target", "value": 90, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Engineering/Construction",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.18, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.05, "unit": "decimal" },
+        { "metric": "dso_target", "value": 70, "unit": "dias" },
+        { "metric": "dio_target", "value": 65, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Trucking",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.25, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.10, "unit": "decimal" },
+        { "metric": "dso_target", "value": 45, "unit": "dias" },
+        { "metric": "dio_target", "value": 5, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Software (System & Application)",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.73, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.18, "unit": "decimal" },
+        { "metric": "dso_target", "value": 75, "unit": "dias" },
+        { "metric": "dio_target", "value": 2, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Farming/Agriculture",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.28, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.09, "unit": "decimal" },
+        { "metric": "dso_target", "value": 60, "unit": "dias" },
+        { "metric": "dio_target", "value": 180, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Business & Consumer Services",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.45, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.12, "unit": "decimal" },
+        { "metric": "dso_target", "value": 55, "unit": "dias" },
+        { "metric": "dio_target", "value": 8, "unit": "dias" }
+      ]
+    },
+    {
+      "damodaranIndustry": "Total Market",
+      "metrics": [
+        { "metric": "margem_bruta", "value": 0.43, "unit": "decimal" },
+        { "metric": "margem_operacional", "value": 0.11, "unit": "decimal" },
+        { "metric": "dso_target", "value": 50, "unit": "dias" },
+        { "metric": "dio_target", "value": 50, "unit": "dias" }
+      ]
+    }
+  ]
+}

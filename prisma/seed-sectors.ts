@@ -18,8 +18,31 @@
  */
 
 import { PrismaClient } from "@prisma/client";
+import damodaranBootstrap from "./seed-data/damodaran-bootstrap-2026.json";
 
 const prisma = new PrismaClient();
+
+interface BootstrapMetric {
+  metric: string;
+  value: number;
+  unit: string;
+}
+
+interface BootstrapIndustry {
+  damodaranIndustry: string;
+  metrics: BootstrapMetric[];
+}
+
+interface BootstrapFile {
+  _meta: {
+    year: number;
+    source: string;
+    vintage: string;
+    rawSourceUrl: string;
+    notes: string;
+  };
+  industries: BootstrapIndustry[];
+}
 
 interface SeedSector {
   code: string;
@@ -281,11 +304,84 @@ async function seedDamodaranMappings() {
   console.log(`  Damodaran mappings: ${upserted} upserted`);
 }
 
+/**
+ * Bootstrap de benchmarks Damodaran (Fase 3 do pipeline #6).
+ *
+ * Idempotente: usa upsert por (sectorCode, year, source, metric, percentile).
+ * Quando o job mensal `fetch-damodaran-benchmarks` rodar com sucesso, vai
+ * sobrescrever esses valores com o fetch real do XLS. Antes disso, esse
+ * seed garante que `getSectorBenchmark()` já retorna dados Damodaran
+ * plausíveis em prod desde a primeira deploy.
+ *
+ * Resolve `damodaranIndustry → sectorCode` via DamodaranMapping seedado acima.
+ * Industries sem mapping são logadas e puladas.
+ */
+async function seedDamodaranBootstrap() {
+  console.log("Seeding Damodaran bootstrap benchmarks...");
+  const bootstrap = damodaranBootstrap as unknown as BootstrapFile;
+  const { year, source, vintage, rawSourceUrl } = bootstrap._meta;
+  const now = new Date();
+
+  const mappings = await prisma.damodaranMapping.findMany();
+  const mappingByIndustry = new Map(mappings.map((m) => [m.damodaranIndustry, m.sectorCode]));
+
+  let upserted = 0;
+  let unmapped: string[] = [];
+
+  for (const industry of bootstrap.industries) {
+    const sectorCode = mappingByIndustry.get(industry.damodaranIndustry);
+    if (!sectorCode) {
+      unmapped.push(industry.damodaranIndustry);
+      continue;
+    }
+
+    for (const m of industry.metrics) {
+      await prisma.sectorBenchmark.upsert({
+        where: {
+          sectorCode_year_source_metric_percentile: {
+            sectorCode,
+            year,
+            source,
+            metric: m.metric,
+            percentile: 50, // Damodaran agrega mediana setorial
+          },
+        },
+        create: {
+          sectorCode,
+          year,
+          source,
+          metric: m.metric,
+          value: m.value,
+          percentile: 50,
+          unit: m.unit,
+          fetchedAt: now,
+          rawSourceUrl,
+          notes: `Bootstrap ${vintage} (substituído pelo cron fetch-damodaran-benchmarks no próximo run)`,
+        },
+        update: {
+          value: m.value,
+          unit: m.unit,
+          fetchedAt: now,
+          // notes ficam imutáveis: bootstrap sempre é "bootstrap", refresh
+          // do cron escreve outras linhas (mesmo @@unique key porém update path)
+        },
+      });
+      upserted++;
+    }
+  }
+
+  console.log(`  Damodaran bootstrap: ${upserted} upserted across ${bootstrap.industries.length - unmapped.length} mapped industries`);
+  if (unmapped.length > 0) {
+    console.warn(`  ⚠ Damodaran industries sem mapping: ${unmapped.join(", ")}`);
+  }
+}
+
 async function main() {
   console.log(`Seeding Quantua sector catalog (year=${SEED_YEAR}, source=${SEED_SOURCE})...`);
   await seedSectors();
   await seedBenchmarks();
   await seedDamodaranMappings();
+  await seedDamodaranBootstrap();
   console.log("Done.");
 }
 

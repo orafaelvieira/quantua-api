@@ -45,4 +45,9 @@ export const env = {
     /** Timezone usado em todos os cron schedules. */
     timezone: process.env.JOBS_TZ ?? "America/Sao_Paulo",
   },
+  /**
+   * Token de trigger manual pros jobs via POST /admin/jobs/run/:jobName.
+   * Default vazio = endpoint admin desabilitado. Setar via env em prod.
+   */
+  adminTriggerToken: process.env.ADMIN_TRIGGER_TOKEN ?? "",
 };

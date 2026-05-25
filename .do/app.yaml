@@ -54,5 +54,8 @@ services:
       - key: JOBS_TZ
         scope: RUN_TIME
         value: America/Sao_Paulo
+      - key: ADMIN_TRIGGER_TOKEN
+        scope: RUN_TIME
+        type: SECRET
     routes:
       - path: /
