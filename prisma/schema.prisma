@@ -184,6 +184,17 @@ model Analysis {
   questionnaire     Json?
   createdAt         DateTime @default(now()) @map("created_at")
 
+  /// Próxima revisão agendada (apenas mode=recurring). Cron diário varre
+  /// análises com `nextReviewAt <= now+14d` e dispara email ao RT/operator.
+  /// Calculado em POST /analyses como createdAt + reviewCadenceDays.
+  /// RT pode adiar via POST /analyses/:id/snooze-review (+7d).
+  nextReviewAt          DateTime? @map("next_review_at")
+  /// Última vez que o cron disparou notificação. Usado pra idempotência —
+  /// pula registros notificados < 1d antes do próximo review.
+  lastReviewNotifiedAt  DateTime? @map("last_review_notified_at")
+  /// Cadência em dias entre revisões recorrentes. Default 30 (mensal).
+  reviewCadenceDays     Int       @default(30) @map("review_cadence_days")
+
   company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user        User         @relation(fields: [userId], references: [id])
   documents   Document[]
@@ -193,6 +204,7 @@ model Analysis {
   allocations Allocation[]
   covenants   Covenant[]
 
+  @@index([mode, nextReviewAt])
   @@map("analyses")
 }
 
@@ -414,6 +426,24 @@ model Allocation {
   @@index([userId, startDate])
   @@index([analysisId, phase])
   @@map("allocations")
+}
+
+/// Registro de execuções de jobs schedulados (cron in-process).
+/// Serve para: (1) observabilidade — qual job rodou quando e com que
+/// resultado; (2) lock leve — bloqueia execução concorrente (e prepara
+/// multi-instance no futuro); (3) rescue — runs travadas > 1h viram
+/// status=failed para liberar próximo tick.
+model JobRun {
+  id         String    @id @default(uuid())
+  jobName    String    @map("job_name")
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  status     String    @default("running") // running | success | failed
+  meta       Json?
+
+  @@index([jobName, startedAt])
+  @@index([status, startedAt])
+  @@map("job_runs")
 }
 
 model Covenant {
