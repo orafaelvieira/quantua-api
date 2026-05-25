@@ -150,6 +150,55 @@ Equipe Quantua`;
   return sendSafe({ to: v.to, subject, html, text });
 }
 
+export interface DueReviewVars {
+  to: string;
+  rtName: string;
+  companyName: string;
+  analysisName: string;
+  nextReviewAt: Date;
+  overdueDays: number;
+  inboxUrl: string;
+}
+
+export async function sendDueReviewEmail(v: DueReviewVars): Promise<{ ok: boolean; error?: string }> {
+  const dueFmt = v.nextReviewAt.toLocaleDateString("pt-BR", { day: "2-digit", month: "long" });
+  const overdueText =
+    v.overdueDays > 0
+      ? `vencida há ${v.overdueDays} dia${v.overdueDays === 1 ? "" : "s"}`
+      : v.overdueDays === 0
+      ? "vence hoje"
+      : `vence em ${Math.abs(v.overdueDays)} dia${Math.abs(v.overdueDays) === 1 ? "" : "s"}`;
+  const subject =
+    v.overdueDays > 0
+      ? `[Atrasada] Revisão mensal · ${v.companyName}`
+      : `Revisão mensal · ${v.companyName} · ${dueFmt}`;
+  const text = `${v.rtName},
+
+A revisão recorrente de ${v.companyName} (${v.analysisName}) está ${overdueText} (data programada: ${dueFmt}).
+
+Abra o Inbox para iniciar a próxima rodada ou adiar 7 dias:
+${v.inboxUrl}
+
+Equipe Quantua`;
+  const accentColor = v.overdueDays > 0 ? "#A8351E" : "#B07A1B";
+  const html = `<div style="${baseStyle}">
+  <div style="${labelStyle} color: ${accentColor};">○ REVISÃO RECORRENTE</div>
+  <h1 style="font-size: 22px; font-weight: 500; letter-spacing: -0.02em; margin: 16px 0 12px;">
+    ${v.companyName} — revisão ${overdueText}.
+  </h1>
+  <p style="font-family: Georgia, serif; line-height: 1.6; font-size: 15px;">
+    A próxima rodada do diagnóstico mensal de <strong>${v.analysisName}</strong> está programada
+    para <strong>${dueFmt}</strong>. Você pode iniciar a coleta agora ou adiar 7 dias se ainda
+    não tem documentos novos.
+  </p>
+  <a href="${v.inboxUrl}" style="${buttonStyle}">Abrir Inbox →</a>
+  <p style="${labelStyle} margin-top: 24px;">
+    Notificação automática · cadência mensal · Quantua Serviços de Análise Ltda.
+  </p>
+</div>`;
+  return sendSafe({ to: v.to, subject, html, text });
+}
+
 export interface TeamInviteVars {
   to: string;
   workspaceName: string;

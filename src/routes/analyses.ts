@@ -74,6 +74,14 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   // legado (kind=ibr → mode=ibr; kind=diagnostico → mode=recurring).
   const resolvedMode = analysisData.mode ?? (analysisData.kind === "ibr" ? "ibr" : "recurring");
 
+  // Modo recorrente ganha nextReviewAt agendado pra +30d (cadência padrão).
+  // Cron diário scan-due-reviews varre análises vencendo e dispara email.
+  const reviewCadenceDays = 30;
+  const nextReviewAt =
+    resolvedMode === "recurring"
+      ? new Date(Date.now() + reviewCadenceDays * 24 * 60 * 60 * 1000)
+      : null;
+
   const analysis = await prisma.analysis.create({
     data: {
       companyId: analysisData.companyId,
@@ -86,6 +94,8 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       sectorId: analysisData.sectorId,
       documentChecklist: documentChecklist as object | undefined,
       userId: req.userId!,
+      nextReviewAt,
+      reviewCadenceDays,
     },
   });
 
@@ -129,6 +139,42 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
   if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   await prisma.analysis.delete({ where: { id } });
   res.status(204).send();
+});
+
+/**
+ * Adia a próxima revisão recorrente em N dias (default 7). Usado pelo RT
+ * quando vê o item "due_review" no Inbox mas ainda não tem documentos
+ * novos pra rodar a próxima rodada. Limpa lastReviewNotifiedAt pra que o
+ * próximo email seja enviado quando o novo nextReviewAt se aproxime.
+ *
+ * Aceita apenas análises com mode=recurring.
+ */
+const snoozeSchema = z.object({
+  days: z.number().int().min(1).max(60).default(7),
+});
+
+router.post("/:id/snooze-review", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const existing = await prisma.analysis.findFirst({ where: { id, userId: req.userId! } });
+  if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  if (existing.mode !== "recurring") {
+    res.status(400).json({ error: "Snooze só faz sentido em análises recorrentes" });
+    return;
+  }
+  const parsed = snoozeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+
+  // Soma N dias ao base — usa nextReviewAt atual se existir, senão usa now.
+  const base = existing.nextReviewAt ?? new Date();
+  const nextReviewAt = new Date(base.getTime() + parsed.data.days * 24 * 60 * 60 * 1000);
+
+  const updated = await prisma.analysis.update({
+    where: { id },
+    data: { nextReviewAt, lastReviewNotifiedAt: null },
+    select: { id: true, nextReviewAt: true },
+  });
+
+  res.json({ id: updated.id, nextReviewAt: updated.nextReviewAt?.toISOString() ?? null });
 });
 
 // Endpoint principal: dispara extração dos documentos + geração da análise com Claude

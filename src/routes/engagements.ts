@@ -26,6 +26,12 @@ const engagementCreateSchema = z.object({
   feeCurrency: z.string().default("BRL"),
   rtId: z.string().uuid().optional(),
   notes: z.string().optional(),
+  /**
+   * Promoção via dialog de triagem do Inbox. Quando preenchido, a criação
+   * roda em transação: cria Engagement + atualiza Lead.status="converted".
+   * Bloqueia se o Lead já está convertido (race condition em abas paralelas).
+   */
+  leadId: z.string().uuid().optional(),
 });
 
 const engagementUpdateSchema = engagementCreateSchema.partial();
@@ -97,19 +103,74 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = engagementCreateSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const data = parsed.data;
+
+  // Caminho com leadId: promoção via dialog de triagem do Inbox. Transação
+  // garante atomicidade entre criação do Engagement e mudança de Lead.status.
+  if (data.leadId) {
+    try {
+      const created = await prisma.$transaction(async (tx) => {
+        const lead = await tx.lead.findUnique({ where: { id: data.leadId! } });
+        if (!lead) throw new Error("LEAD_NOT_FOUND");
+        if (lead.status === "converted") throw new Error("LEAD_ALREADY_CONVERTED");
+        const eng = await tx.engagement.create({
+          data: {
+            userId: req.userId!,
+            companyName: data.companyName,
+            requestedBy: data.requestedBy,
+            requestedByType: data.requestedByType,
+            scope: data.scope,
+            state: data.state,
+            deadline: data.deadline ? new Date(data.deadline) : null,
+            feeAmount: data.feeAmount,
+            feeCurrency: data.feeCurrency,
+            rtId: data.rtId,
+            notes: data.notes,
+          },
+          include: { rt: { select: { id: true, name: true } } },
+        });
+        await tx.lead.update({
+          where: { id: data.leadId! },
+          data: { status: "converted" },
+        });
+        return eng;
+      });
+      res.status(201).json({
+        ...created,
+        rtName: created.rt?.name ?? null,
+        deadline: created.deadline?.toISOString(),
+        signedAt: created.signedAt?.toISOString(),
+        promotedFromLeadId: data.leadId,
+      });
+      return;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === "LEAD_NOT_FOUND") {
+        res.status(404).json({ error: "Lead não encontrado" });
+        return;
+      }
+      if (message === "LEAD_ALREADY_CONVERTED") {
+        res.status(409).json({ error: "Este lead já foi convertido em engagement" });
+        return;
+      }
+      throw err;
+    }
+  }
+
+  // Caminho padrão: criação direta sem promover lead.
   const created = await prisma.engagement.create({
     data: {
       userId: req.userId!,
-      companyName: parsed.data.companyName,
-      requestedBy: parsed.data.requestedBy,
-      requestedByType: parsed.data.requestedByType,
-      scope: parsed.data.scope,
-      state: parsed.data.state,
-      deadline: parsed.data.deadline ? new Date(parsed.data.deadline) : null,
-      feeAmount: parsed.data.feeAmount,
-      feeCurrency: parsed.data.feeCurrency,
-      rtId: parsed.data.rtId,
-      notes: parsed.data.notes,
+      companyName: data.companyName,
+      requestedBy: data.requestedBy,
+      requestedByType: data.requestedByType,
+      scope: data.scope,
+      state: data.state,
+      deadline: data.deadline ? new Date(data.deadline) : null,
+      feeAmount: data.feeAmount,
+      feeCurrency: data.feeCurrency,
+      rtId: data.rtId,
+      notes: data.notes,
     },
     include: { rt: { select: { id: true, name: true } } },
   });
