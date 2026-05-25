@@ -1,0 +1,40 @@
+{
+  "_meta": {
+    "year": 2026,
+    "source": "bcb_sgs",
+    "vintage": "2026-q2-snapshot",
+    "rawSourceUrl": "https://api.bcb.gov.br/dados/serie/bcdata.sgs",
+    "notes": "Snapshot trimestral do Banco Central via Sistema Gerenciador de Séries Temporais (SGS). Valores plausíveis pro Brasil 2026-Q2. O job trimestral `fetch-bcb-sgs` (1 jan/abr/jul/out) substitui pelo fetch real quando rodar. CDI/SELIC publicados em decimal anual; spread PJ médio é diferencial sobre CDI."
+  },
+  "series": [
+    {
+      "series_code": 4189,
+      "metric": "cdi_anual",
+      "value": 0.128,
+      "unit": "decimal",
+      "notes": "Taxa CDI anualizada (média móvel 252 dias)"
+    },
+    {
+      "series_code": 432,
+      "metric": "selic_anual",
+      "value": 0.125,
+      "unit": "decimal",
+      "notes": "Meta SELIC anual"
+    },
+    {
+      "series_code": 20714,
+      "metric": "spread_pj_medio_anual",
+      "value": 0.055,
+      "unit": "decimal",
+      "notes": "Spread médio das operações de crédito PJ — diferencial sobre CDI"
+    }
+  ],
+  "derived": {
+    "custo_medio_divida": {
+      "value": 0.183,
+      "unit": "decimal",
+      "formula": "cdi_anual + spread_pj_medio_anual",
+      "notes": "Métrica consumida diretamente pelo projection-engine. Aplica-se a TODOS os setores (override macro do custo_medio_divida que estava em manual_curation desde Fase 1)."
+    }
+  }
+}
