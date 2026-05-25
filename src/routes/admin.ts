@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { env } from "../config/env";
-import { prisma } from "../db/client";
 import { TRIGGERABLE_JOBS } from "../jobs";
+import { getBenchmarkCoverage } from "../services/benchmark-coverage";
 
 const router = Router();
 
@@ -71,81 +71,8 @@ router.post("/jobs/run/:jobName", async (req: Request, res: Response): Promise<v
  * Auth herda do middleware do router (X-Admin-Token).
  */
 router.get("/benchmarks/coverage", async (_req: Request, res: Response): Promise<void> => {
-  // Setores ativos + última leitura por (sector, source)
-  const sectors = await prisma.sector.findMany({
-    where: { active: true },
-    orderBy: [{ parentCode: { sort: "asc", nulls: "first" } }, { code: "asc" }],
-  });
-
-  const benchmarks = await prisma.sectorBenchmark.findMany({
-    select: { sectorCode: true, source: true, metric: true, fetchedAt: true, year: true },
-  });
-
-  // Agrega por (sectorCode, source): última fetchedAt + métricas distintas.
-  const coverageBySector = new Map<
-    string,
-    Map<string, { fetchedAt: Date; metrics: Set<string>; latestYear: number }>
-  >();
-  for (const b of benchmarks) {
-    if (!coverageBySector.has(b.sectorCode)) coverageBySector.set(b.sectorCode, new Map());
-    const sectorMap = coverageBySector.get(b.sectorCode)!;
-    const existing = sectorMap.get(b.source);
-    if (!existing) {
-      sectorMap.set(b.source, {
-        fetchedAt: b.fetchedAt,
-        metrics: new Set([b.metric]),
-        latestYear: b.year,
-      });
-    } else {
-      existing.metrics.add(b.metric);
-      if (b.fetchedAt > existing.fetchedAt) existing.fetchedAt = b.fetchedAt;
-      if (b.year > existing.latestYear) existing.latestYear = b.year;
-    }
-  }
-
-  // Últimos JobRuns por jobName.
-  const recentRuns = await prisma.jobRun.findMany({
-    orderBy: { startedAt: "desc" },
-    take: 200,
-  });
-  const lastRunByJob = new Map<string, typeof recentRuns[number]>();
-  for (const run of recentRuns) {
-    if (!lastRunByJob.has(run.jobName)) lastRunByJob.set(run.jobName, run);
-  }
-
-  const sectorRows = sectors.map((s) => {
-    const sources = coverageBySector.get(s.code) ?? new Map();
-    return {
-      code: s.code,
-      name: s.name,
-      parentCode: s.parentCode,
-      sources: Array.from(sources.entries()).map(([source, info]) => ({
-        source,
-        fetchedAt: info.fetchedAt,
-        latestYear: info.latestYear,
-        metricCount: info.metrics.size,
-        metrics: Array.from(info.metrics).sort(),
-      })),
-    };
-  });
-
-  const jobRows = Object.keys(TRIGGERABLE_JOBS).map((jobName) => {
-    const last = lastRunByJob.get(jobName);
-    return {
-      jobName,
-      lastStartedAt: last?.startedAt ?? null,
-      lastFinishedAt: last?.finishedAt ?? null,
-      lastStatus: last?.status ?? "never_run",
-      lastMeta: last?.meta ?? null,
-    };
-  });
-
-  res.json({
-    generatedAt: new Date().toISOString(),
-    sectorCount: sectors.length,
-    sectors: sectorRows,
-    jobs: jobRows,
-  });
+  const report = await getBenchmarkCoverage();
+  res.json(report);
 });
 
 export default router;
