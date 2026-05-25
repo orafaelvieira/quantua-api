@@ -6,8 +6,10 @@ import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/permissions";
 import { inviteLimiter } from "../middleware/rate-limit";
-import { renderLetter } from "../services/letter-templates";
+import { renderLetter, renderProposalHtml, type SignatureRenderInput } from "../services/letter-templates";
 import { sendInviteEmail, sendEngagementSignedEmail } from "../services/email";
+import { renderHtmlToPdf } from "../services/pdf-renderer";
+import { uploadProposalPdf, getProposalSignedUrl } from "../services/proposal-storage";
 import { env } from "../config/env";
 
 const router = Router();
@@ -24,6 +26,12 @@ const engagementCreateSchema = z.object({
   feeCurrency: z.string().default("BRL"),
   rtId: z.string().uuid().optional(),
   notes: z.string().optional(),
+  /**
+   * Promoção via dialog de triagem do Inbox. Quando preenchido, a criação
+   * roda em transação: cria Engagement + atualiza Lead.status="converted".
+   * Bloqueia se o Lead já está convertido (race condition em abas paralelas).
+   */
+  leadId: z.string().uuid().optional(),
 });
 
 const engagementUpdateSchema = engagementCreateSchema.partial();
@@ -95,19 +103,74 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = engagementCreateSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const data = parsed.data;
+
+  // Caminho com leadId: promoção via dialog de triagem do Inbox. Transação
+  // garante atomicidade entre criação do Engagement e mudança de Lead.status.
+  if (data.leadId) {
+    try {
+      const created = await prisma.$transaction(async (tx) => {
+        const lead = await tx.lead.findUnique({ where: { id: data.leadId! } });
+        if (!lead) throw new Error("LEAD_NOT_FOUND");
+        if (lead.status === "converted") throw new Error("LEAD_ALREADY_CONVERTED");
+        const eng = await tx.engagement.create({
+          data: {
+            userId: req.userId!,
+            companyName: data.companyName,
+            requestedBy: data.requestedBy,
+            requestedByType: data.requestedByType,
+            scope: data.scope,
+            state: data.state,
+            deadline: data.deadline ? new Date(data.deadline) : null,
+            feeAmount: data.feeAmount,
+            feeCurrency: data.feeCurrency,
+            rtId: data.rtId,
+            notes: data.notes,
+          },
+          include: { rt: { select: { id: true, name: true } } },
+        });
+        await tx.lead.update({
+          where: { id: data.leadId! },
+          data: { status: "converted" },
+        });
+        return eng;
+      });
+      res.status(201).json({
+        ...created,
+        rtName: created.rt?.name ?? null,
+        deadline: created.deadline?.toISOString(),
+        signedAt: created.signedAt?.toISOString(),
+        promotedFromLeadId: data.leadId,
+      });
+      return;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === "LEAD_NOT_FOUND") {
+        res.status(404).json({ error: "Lead não encontrado" });
+        return;
+      }
+      if (message === "LEAD_ALREADY_CONVERTED") {
+        res.status(409).json({ error: "Este lead já foi convertido em engagement" });
+        return;
+      }
+      throw err;
+    }
+  }
+
+  // Caminho padrão: criação direta sem promover lead.
   const created = await prisma.engagement.create({
     data: {
       userId: req.userId!,
-      companyName: parsed.data.companyName,
-      requestedBy: parsed.data.requestedBy,
-      requestedByType: parsed.data.requestedByType,
-      scope: parsed.data.scope,
-      state: parsed.data.state,
-      deadline: parsed.data.deadline ? new Date(parsed.data.deadline) : null,
-      feeAmount: parsed.data.feeAmount,
-      feeCurrency: parsed.data.feeCurrency,
-      rtId: parsed.data.rtId,
-      notes: parsed.data.notes,
+      companyName: data.companyName,
+      requestedBy: data.requestedBy,
+      requestedByType: data.requestedByType,
+      scope: data.scope,
+      state: data.state,
+      deadline: data.deadline ? new Date(data.deadline) : null,
+      feeAmount: data.feeAmount,
+      feeCurrency: data.feeCurrency,
+      rtId: data.rtId,
+      notes: data.notes,
     },
     include: { rt: { select: { id: true, name: true } } },
   });
@@ -465,20 +528,21 @@ router.post(
 );
 
 /**
- * Gera proposta comercial baseada no engagement letter. Renderiza HTML
- * inline e expõe via GET /:id/proposal-html (cliente abre em nova aba e
- * imprime → PDF). Atualiza Engagement.proposalUrl.
- *
- * TODO: substituir por geração PDF real com pdfkit em iteração futura.
+ * Carrega Engagement + RT + signatures e renderiza o HTML da proposta.
+ * Compartilhado entre preview (GET /proposal-html) e geração PDF (POST).
  */
-router.post("/:id/generate-proposal", requireRole("partner", "operator"), async (req: AuthRequest, res: Response): Promise<void> => {
-  const id = req.params.id;
-  if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+async function buildProposalHtmlForEngagement(
+  engagementId: string,
+  userId: string,
+): Promise<{ engagement: NonNullable<Awaited<ReturnType<typeof prisma.engagement.findFirst>>>; html: string; letter: ReturnType<typeof renderLetter> } | null> {
   const eng = await prisma.engagement.findFirst({
-    where: { id, userId: req.userId! },
-    include: { rt: { select: { name: true, professionalRegistration: true } } },
+    where: { id: engagementId, userId },
+    include: {
+      rt: { select: { name: true, professionalRegistration: true } },
+      signatures: { orderBy: { signedAt: "asc" } },
+    },
   });
-  if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
+  if (!eng) return null;
 
   const letter = renderLetter({
     engagementId: eng.id,
@@ -493,97 +557,154 @@ router.post("/:id/generate-proposal", requireRole("partner", "operator"), async 
     rtRegistration: eng.rt?.professionalRegistration ?? null,
   });
 
-  const proposalUrl = `${env.frontendUrl || ""}/api/engagements/${eng.id}/proposal-html`;
+  const signatures: SignatureRenderInput[] = eng.signatures.map((s) => ({
+    signerType: s.signerType,
+    signerName: s.signerName,
+    signerEmail: s.signerEmail,
+    signerCpf: s.signerCpf,
+    signedAt: s.signedAt,
+    contentHash: s.contentHash,
+    letterVersion: s.letterVersion,
+    ipAddress: s.ipAddress,
+  }));
 
-  await prisma.engagement.update({
-    where: { id: eng.id },
-    data: { proposalUrl },
-  });
-
-  const user = await prisma.user.findUnique({ where: { id: req.userId! }, select: { name: true } });
-  if (eng.analysisId) {
-    await prisma.auditEvent.create({
-      data: {
-        analysisId: eng.analysisId,
-        userId: req.userId!,
-        userName: user?.name ?? "Usuário",
-        entity: "engagement",
-        entityId: eng.id,
-        field: "proposal_generated",
-        after: { proposalUrl, version: letter.version, contentHash: letter.contentHash } as object,
-        source: "manual",
-      },
-    });
-  }
-
-  res.json({ proposalUrl, version: letter.version, contentHash: letter.contentHash });
-});
+  const html = renderProposalHtml({ letter, signatures });
+  return { engagement: eng, html, letter };
+}
 
 /**
- * Serve a proposta como HTML estilizado para impressão (Cmd+P → Save as PDF).
- * Endpoint público dentro do contexto do engagement (não exige client login).
+ * Gera PDF real da proposta comercial.
+ *
+ * Pipeline: renderLetter → renderProposalHtml → renderHtmlToPdf (Puppeteer)
+ * → upload Spaces → salva storagePath + hash + generatedAt → retorna
+ * signed URL (24h). `proposalUrl` legado preservado pra retrocompat com
+ * UI que ainda usa o browser-print fallback.
+ *
+ * Quando a carta já foi assinada (`letterAcceptedAt`), o PDF inclui seção
+ * "Assinatura digital". Se o hash da carta mudou após assinatura
+ * (`letterContentHash` diverge), `renderProposalHtml` marca cada
+ * assinatura como "ASSINATURA INVÁLIDA" no PDF.
+ */
+router.post(
+  "/:id/generate-proposal",
+  requireRole("partner", "operator"),
+  async (req: AuthRequest, res: Response): Promise<void> => {
+    const id = req.params.id;
+    if (!id || typeof id !== "string") {
+      res.status(404).json({ error: "ID inválido" });
+      return;
+    }
+
+    const built = await buildProposalHtmlForEngagement(id, req.userId!);
+    if (!built) {
+      res.status(404).json({ error: "Engagement não encontrado" });
+      return;
+    }
+    const { engagement: eng, html, letter } = built;
+
+    let pdfBuffer: Buffer;
+    try {
+      pdfBuffer = await renderHtmlToPdf(html);
+    } catch (err) {
+      console.error("[generate-proposal] PDF render falhou:", err);
+      res.status(500).json({
+        error: "Falha ao renderizar PDF da proposta",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    let storagePath: string;
+    let pdfHash: string;
+    try {
+      const uploaded = await uploadProposalPdf({
+        engagementId: eng.id,
+        version: letter.version,
+        pdfBuffer,
+      });
+      storagePath = uploaded.storagePath;
+      pdfHash = uploaded.pdfHash;
+    } catch (err) {
+      console.error("[generate-proposal] upload Spaces falhou:", err);
+      res.status(500).json({
+        error: "Falha ao subir PDF pro storage",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    const proposalUrl = await getProposalSignedUrl(storagePath);
+    const generatedAt = new Date();
+
+    await prisma.engagement.update({
+      where: { id: eng.id },
+      data: {
+        proposalPdfStoragePath: storagePath,
+        proposalPdfHash: pdfHash,
+        proposalGeneratedAt: generatedAt,
+        // proposalUrl mantido pra UI legacy que ainda renderiza browser-print
+        // (signed URL é temporária, não dá pra persistir).
+        proposalUrl: `${env.frontendUrl || ""}/api/engagements/${eng.id}/proposal-html`,
+      },
+    });
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId! },
+      select: { name: true },
+    });
+    if (eng.analysisId) {
+      await prisma.auditEvent.create({
+        data: {
+          analysisId: eng.analysisId,
+          userId: req.userId!,
+          userName: user?.name ?? "Usuário",
+          entity: "engagement",
+          entityId: eng.id,
+          field: "proposal_generated",
+          after: {
+            storagePath,
+            pdfHash,
+            version: letter.version,
+            contentHash: letter.contentHash,
+            generatedAt: generatedAt.toISOString(),
+          } as object,
+          source: "manual",
+        },
+      });
+    }
+
+    res.json({
+      proposalUrl,
+      proposalPdfStoragePath: storagePath,
+      proposalPdfHash: pdfHash,
+      proposalGeneratedAt: generatedAt.toISOString(),
+      version: letter.version,
+      contentHash: letter.contentHash,
+    });
+  },
+);
+
+/**
+ * Preview HTML da proposta — RT abre em nova aba pra revisar layout
+ * antes de gerar o PDF oficial via POST /:id/generate-proposal.
+ *
+ * Continua acessível pra retrocompat com UI legacy que faz Cmd+P → PDF.
  */
 router.get("/:id/proposal-html", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id;
-  if (!id || typeof id !== "string") { res.status(404).send("ID inválido"); return; }
-  const eng = await prisma.engagement.findFirst({
-    where: { id, userId: req.userId! },
-    include: { rt: { select: { name: true, professionalRegistration: true } } },
-  });
-  if (!eng) { res.status(404).send("Engagement não encontrado"); return; }
+  if (!id || typeof id !== "string") {
+    res.status(404).send("ID inválido");
+    return;
+  }
 
-  const letter = renderLetter({
-    engagementId: eng.id,
-    companyName: eng.companyName,
-    requestedBy: eng.requestedBy,
-    requestedByType: eng.requestedByType,
-    scope: eng.scope,
-    feeAmount: eng.feeAmount,
-    feeCurrency: eng.feeCurrency,
-    deadline: eng.deadline,
-    rtName: eng.rt?.name ?? null,
-    rtRegistration: eng.rt?.professionalRegistration ?? null,
-  });
+  const built = await buildProposalHtmlForEngagement(id, req.userId!);
+  if (!built) {
+    res.status(404).send("Engagement não encontrado");
+    return;
+  }
 
   res.setHeader("Content-Type", "text/html; charset=utf-8");
-  const sectionsHtml = letter.sections.map(
-    (s) => `<section><h2>${escapeHtml(s.title)}</h2>${s.body.split("\n").map((p) => `<p>${escapeHtml(p)}</p>`).join("")}</section>`,
-  ).join("");
-  res.send(`<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <title>Proposta · ${escapeHtml(eng.companyName)} · Quantua</title>
-  <style>
-    @media print { @page { margin: 28mm 22mm; } }
-    body { font-family: Georgia, serif; background: #F5F2EC; color: #161513; max-width: 720px; margin: 0 auto; padding: 48px 32px; line-height: 1.65; }
-    h1 { font-size: 28px; font-weight: 500; letter-spacing: -0.02em; margin-bottom: 8px; }
-    h2 { font-size: 16px; font-weight: 600; margin-top: 32px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.08em; color: #5A554C; }
-    .ref { font-family: 'Courier New', monospace; font-size: 11px; letter-spacing: 0.1em; color: #8A8478; text-transform: uppercase; margin-bottom: 24px; }
-    p { margin: 8px 0; font-size: 15px; }
-    .meta { background: #EDE8DE; padding: 16px; margin-bottom: 32px; font-size: 13px; }
-    .meta div { margin: 4px 0; }
-  </style>
-</head>
-<body>
-  <div class="ref">○ PROPOSTA QUANTUA · ${letter.meta.reference}</div>
-  <h1>${escapeHtml(letter.meta.companyName)}</h1>
-  <div class="meta">
-    <div><strong>Solicitante:</strong> ${escapeHtml(letter.meta.requesterLine)}</div>
-    <div><strong>RT:</strong> ${escapeHtml(letter.meta.rtLine)}</div>
-    <div><strong>Prazo de entrega:</strong> ${escapeHtml(letter.meta.deadlineFormatted)}</div>
-    <div><strong>Honorários:</strong> ${escapeHtml(letter.meta.feeFormatted)}</div>
-  </div>
-  ${sectionsHtml}
-  <p style="margin-top: 48px; font-size: 11px; color: #8A8478; text-align: center;">
-    Quantua Serviços de Análise Ltda. · Versão ${letter.version} · Hash ${letter.contentHash.slice(0, 12)}…
-  </p>
-</body>
-</html>`);
+  res.send(built.html);
 });
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-}
 
 export default router;

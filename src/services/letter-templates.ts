@@ -147,3 +147,157 @@ export function renderLetter(input: LetterRenderInput): RenderedLetter {
     meta,
   };
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * Proposal HTML renderer — reusado por:
+ *   1. GET /engagements/:id/proposal-html (preview no browser)
+ *   2. POST /engagements/:id/generate-proposal (Puppeteer → PDF)
+ *
+ * Single source of truth pro layout. Mudanças visuais ficam aqui — uma vez —
+ * e propagam pra preview + PDF oficial.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+export interface SignatureRenderInput {
+  /** Tipo de signatário (ex.: "partner" | "client"). */
+  signerType: string;
+  signerName: string;
+  signerEmail: string;
+  signerCpf?: string | null;
+  signedAt: Date;
+  /** Hash da carta no momento da assinatura. Comparado com contentHash atual. */
+  contentHash: string;
+  letterVersion: string;
+  ipAddress: string;
+}
+
+export interface ProposalHtmlInput {
+  letter: RenderedLetter;
+  /**
+   * Assinaturas já registradas. Se vazio ou ausente, renderiza placeholder
+   * "Aguardando assinatura". Se hash da assinatura ≠ hash atual da carta,
+   * marca "ASSINATURA INVÁLIDA — conteúdo alterado após assinatura".
+   */
+  signatures?: SignatureRenderInput[];
+}
+
+function escapeHtmlForProposal(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatSignedAt(d: Date): string {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Sao_Paulo",
+  }).format(d);
+}
+
+function renderSignatureSection(input: ProposalHtmlInput): string {
+  const signatures = input.signatures ?? [];
+  if (signatures.length === 0) {
+    return `
+  <section class="signature-block">
+    <h2>Assinatura digital</h2>
+    <p class="signature-placeholder">Aguardando assinatura do solicitante.</p>
+  </section>`;
+  }
+
+  const cards = signatures
+    .map((s) => {
+      const invalid = s.contentHash !== input.letter.contentHash;
+      const invalidBanner = invalid
+        ? `<div class="signature-invalid">ASSINATURA INVÁLIDA — Conteúdo da carta foi alterado após a assinatura (hash divergente).</div>`
+        : "";
+      const roleLabel =
+        s.signerType === "partner" ? "RT (Partner)" :
+        s.signerType === "client" ? "Cliente" :
+        s.signerType;
+      const cpfLine = s.signerCpf ? `<div class="signature-meta">CPF: ${escapeHtmlForProposal(s.signerCpf)}</div>` : "";
+      return `
+    <div class="signature-card${invalid ? " signature-card--invalid" : ""}">
+      ${invalidBanner}
+      <div class="signature-role">${escapeHtmlForProposal(roleLabel)}</div>
+      <div class="signature-name">${escapeHtmlForProposal(s.signerName)}</div>
+      <div class="signature-meta">${escapeHtmlForProposal(s.signerEmail)}</div>
+      ${cpfLine}
+      <div class="signature-meta">Assinado em: ${escapeHtmlForProposal(formatSignedAt(s.signedAt))} · IP ${escapeHtmlForProposal(s.ipAddress)}</div>
+      <div class="signature-meta">Hash: <code>${escapeHtmlForProposal(s.contentHash.slice(0, 16))}…</code> · Versão ${escapeHtmlForProposal(s.letterVersion)}</div>
+    </div>`;
+    })
+    .join("");
+
+  return `
+  <section class="signature-block">
+    <h2>Assinatura digital</h2>
+    ${cards}
+  </section>`;
+}
+
+/**
+ * Renderiza HTML completo da proposta. Pronto pra:
+ *   - servir como text/html (preview com print-CSS pra Cmd+P → PDF)
+ *   - passar pro Puppeteer com `page.setContent(html)` e gerar PDF binário
+ */
+export function renderProposalHtml(input: ProposalHtmlInput): string {
+  const { letter } = input;
+  const sectionsHtml = letter.sections
+    .map(
+      (s) =>
+        `<section><h2>${escapeHtmlForProposal(s.title)}</h2>${s.body
+          .split("\n")
+          .map((p) => `<p>${escapeHtmlForProposal(p)}</p>`)
+          .join("")}</section>`,
+    )
+    .join("");
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Proposta · ${escapeHtmlForProposal(letter.meta.companyName)} · Quantua</title>
+  <style>
+    @media print { @page { margin: 28mm 22mm; } }
+    body { font-family: Georgia, 'Times New Roman', serif; background: #F5F2EC; color: #161513; max-width: 720px; margin: 0 auto; padding: 48px 32px; line-height: 1.65; }
+    h1 { font-size: 28px; font-weight: 500; letter-spacing: -0.02em; margin-bottom: 8px; }
+    h2 { font-size: 16px; font-weight: 600; margin-top: 32px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.08em; color: #5A554C; }
+    .ref { font-family: 'Courier New', 'Consolas', monospace; font-size: 11px; letter-spacing: 0.1em; color: #8A8478; text-transform: uppercase; margin-bottom: 24px; }
+    p { margin: 8px 0; font-size: 15px; }
+    .meta { background: #EDE8DE; padding: 16px; margin-bottom: 32px; font-size: 13px; }
+    .meta div { margin: 4px 0; }
+    .signature-block { margin-top: 48px; border-top: 1px solid #1614132A; padding-top: 32px; }
+    .signature-placeholder { font-style: italic; color: #8A8478; }
+    .signature-card { background: #EDE8DE; border-left: 3px solid #3D6B47; padding: 16px; margin-top: 16px; }
+    .signature-card--invalid { border-left-color: #A8351E; background: #F4E0DA; }
+    .signature-invalid { font-family: 'Courier New', 'Consolas', monospace; font-size: 11px; font-weight: bold; letter-spacing: 0.08em; color: #A8351E; text-transform: uppercase; margin-bottom: 12px; }
+    .signature-role { font-family: 'Courier New', 'Consolas', monospace; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #5A554C; margin-bottom: 4px; }
+    .signature-name { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+    .signature-meta { font-size: 12px; color: #2A2824; margin-top: 4px; }
+    .signature-meta code { font-family: 'Courier New', 'Consolas', monospace; }
+    .footer { margin-top: 48px; font-size: 11px; color: #8A8478; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="ref">○ PROPOSTA QUANTUA · ${escapeHtmlForProposal(letter.meta.reference)}</div>
+  <h1>${escapeHtmlForProposal(letter.meta.companyName)}</h1>
+  <div class="meta">
+    <div><strong>Solicitante:</strong> ${escapeHtmlForProposal(letter.meta.requesterLine)}</div>
+    <div><strong>RT:</strong> ${escapeHtmlForProposal(letter.meta.rtLine)}</div>
+    <div><strong>Prazo de entrega:</strong> ${escapeHtmlForProposal(letter.meta.deadlineFormatted)}</div>
+    <div><strong>Honorários:</strong> ${escapeHtmlForProposal(letter.meta.feeFormatted)}</div>
+  </div>
+  ${sectionsHtml}
+${renderSignatureSection(input)}
+  <p class="footer">
+    Quantua Serviços de Análise Ltda. · Versão ${escapeHtmlForProposal(letter.version)} · Hash ${escapeHtmlForProposal(letter.contentHash.slice(0, 12))}…
+  </p>
+</body>
+</html>`;
+}
