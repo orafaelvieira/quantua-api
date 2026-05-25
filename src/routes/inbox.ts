@@ -22,6 +22,26 @@ interface InboxItem {
   daysUntilDue?: number;
   /** Pra due_review: data programada da próxima revisão. */
   dueAt?: string;
+  // Campos nominais BPO — populados apenas em items type="lead" qualificados
+  // como design partner. Leads pré-pivot (motivo credor) terão undefined.
+  /** Tipo de firma do lead BPO. */
+  firmType?: string;
+  /** Faixa de carteira ("lt30" | "30_80" | "80_200" | "gt200"). */
+  portfolioSize?: string;
+  /** % na faixa R$ 5M-50M ("lt30" | "30_50" | "gt50" | "nao_sei"). */
+  portfolioMidMarketPct?: string;
+  /** Tamanho do time ("lt5" | "5_15" | "15_50" | "gt50"). */
+  teamSize?: string;
+  /** Modelo de cobrança consultiva. */
+  consultingPricingModel?: string;
+  /** Papel do contato no lead. */
+  contactRole?: string;
+  /** Telefone do contato (mascarado no display). */
+  contactPhone?: string;
+  /** Disposição de 1h/semana de feedback nos primeiros 3 meses. */
+  weeklyAvailability?: boolean;
+  /** Email do contato (exposto para triagem rápida). */
+  contactEmail?: string;
 }
 
 function refForLead(id: string): string {
@@ -156,6 +176,16 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
       debtVolume: lead.debtVolume ?? undefined,
       receivedAt: lead.createdAt.toISOString(),
       href: `/inbox/lead/${lead.id}`,
+      // Campos nominais BPO — undefined em leads pré-pivot.
+      firmType: lead.firmType ?? undefined,
+      portfolioSize: lead.portfolioSize ?? undefined,
+      portfolioMidMarketPct: lead.portfolioMidMarketPct ?? undefined,
+      teamSize: lead.teamSize ?? undefined,
+      consultingPricingModel: lead.consultingPricingModel ?? undefined,
+      contactRole: lead.contactRole ?? undefined,
+      contactPhone: lead.contactPhone ?? undefined,
+      weeklyAvailability: lead.weeklyAvailability ?? undefined,
+      contactEmail: lead.contactEmail,
     });
   }
 
