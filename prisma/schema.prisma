@@ -160,7 +160,14 @@ model Analysis {
   tipo              String   @default("Completa")
   status            String   @default("Rascunho")
   confianca         Int?
+  /// kind (legado, até v2.1): "diagnostico" | "ibr" — granularidade só de tipo de produto.
+  /// Mantido para retrocompat com análises pré-pivot B2B-3.
   kind              String   @default("diagnostico")
+  /// mode (pivot B2B-3, v3): "recurring" | "ibr" — modalidade de operação.
+  /// "recurring": diagnóstico mensal/trimestral do BPO sobre cliente da carteira (default).
+  /// "ibr": modalidade premium contratada à parte para momentos críticos (valuation,
+  /// readiness de crédito, M&A, restructuring). Quando "ibr", o Engagement é obrigatório.
+  mode              String?  @map("mode")
   ibrType           String?  @map("ibr_type")
   sectorId          String?  @map("sector_id")
   reviewState       String   @default("draft") @map("review_state")
@@ -287,19 +294,42 @@ model TimeEntry {
   @@map("time_entries")
 }
 
+/// Lead — captura de prospects.
+///
+/// Histórico:
+/// - v1 (até 2026-05-22): IBR pontual lado credor. Campos: targetCompany, reason
+///   (enum credor: credit_approval/judicial_recovery/refinancing/due_diligence/monitoring),
+///   debtVolume, desiredDeadline.
+/// - v2 (2026-05-22+, pivot B2B-3): qualificação de design partner. targetCompany
+///   carrega o nome da FIRMA (parceiro BPO), reason carrega firmType
+///   (contabilidade_consultiva/bpo_financeiro/cfoaas/contabilidade_tradicional).
+///   Campos nominais novos (firmType, portfolioSize, etc.) são opcionais — frontend
+///   ainda envia parte dos dados em notes markdown legível por enquanto.
+///
+/// debtVolume e desiredDeadline ficam para retrocompat com leads históricos.
 model Lead {
-  id              String   @id @default(uuid())
-  targetCompany   String   @map("target_company")
-  reason          String
-  debtVolume      String?  @map("debt_volume")
-  desiredDeadline DateTime? @map("desired_deadline")
-  contactName     String?  @map("contact_name")
-  contactEmail    String   @map("contact_email")
-  notes           String?
-  status          String   @default("new")
-  createdAt       DateTime @default(now()) @map("created_at")
+  id                     String   @id @default(uuid())
+  targetCompany          String   @map("target_company")
+  reason                 String
+  debtVolume             String?  @map("debt_volume")
+  desiredDeadline        DateTime? @map("desired_deadline")
+  contactName            String?  @map("contact_name")
+  contactEmail           String   @map("contact_email")
+  notes                  String?
+  status                 String   @default("new")
+  // Pivot B2B-3: campos nominais para qualificação de design partner (opcionais).
+  contactRole            String?  @map("contact_role")
+  contactPhone           String?  @map("contact_phone")
+  firmType               String?  @map("firm_type")
+  portfolioSize          String?  @map("portfolio_size")
+  portfolioMidMarketPct  String?  @map("portfolio_midmarket_pct")
+  teamSize               String?  @map("team_size")
+  consultingPricingModel String?  @map("consulting_pricing_model")
+  weeklyAvailability     Boolean? @map("weekly_availability")
+  createdAt              DateTime @default(now()) @map("created_at")
 
   @@index([status, createdAt])
+  @@index([firmType])
   @@map("leads")
 }
 

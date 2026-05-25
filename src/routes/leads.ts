@@ -5,14 +5,37 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 
 const router = Router();
 
+// Reason agora cobre dois eras:
+// - Legado (até 2026-05-22): solicitação IBR lado credor
+// - v2 (pivot B2B-3, 2026-05-22+): firmType da firma candidata a design partner.
+// Mantém ambos no enum para retrocompat e para aceitar leads de canais antigos.
 const leadSchema = z.object({
   targetCompany: z.string().min(2),
-  reason: z.enum(["credit_approval", "judicial_recovery", "refinancing", "due_diligence", "monitoring"]),
+  reason: z.enum([
+    // Legado credor
+    "credit_approval", "judicial_recovery", "refinancing", "due_diligence", "monitoring",
+    // Novo (pivot B2B-3): tipo de firma do parceiro candidato
+    "contabilidade_consultiva", "bpo_financeiro", "cfoaas", "contabilidade_tradicional",
+  ]),
   debtVolume: z.string().optional(),
   desiredDeadline: z.string().optional(),
   contactName: z.string().optional(),
   contactEmail: z.string().email(),
   notes: z.string().optional(),
+  // Pivot B2B-3: campos nominais opcionais. Frontend (PR /solicitar-ibr) hoje
+  // empacota tudo em notes markdown legível; em PR futuro vai migrar pra estes.
+  contactRole: z.enum(["socio", "gerente_carteira", "analista", "outro"]).optional(),
+  contactPhone: z.string().optional(),
+  firmType: z.enum([
+    "contabilidade_consultiva", "bpo_financeiro", "cfoaas", "contabilidade_tradicional",
+  ]).optional(),
+  portfolioSize: z.enum(["lt30", "30_80", "80_200", "gt200"]).optional(),
+  portfolioMidMarketPct: z.enum(["lt30", "30_50", "gt50", "nao_sei"]).optional(),
+  teamSize: z.enum(["lt5", "5_15", "15_50", "gt50"]).optional(),
+  consultingPricingModel: z.enum([
+    "incluido_fee_fiscal", "hora_baseado", "produto_separado", "nao_cobramos",
+  ]).optional(),
+  weeklyAvailability: z.boolean().optional(),
 });
 
 // POST público — landing page envia direto sem auth.
@@ -28,6 +51,14 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       contactName: parsed.data.contactName,
       contactEmail: parsed.data.contactEmail,
       notes: parsed.data.notes,
+      contactRole: parsed.data.contactRole,
+      contactPhone: parsed.data.contactPhone,
+      firmType: parsed.data.firmType,
+      portfolioSize: parsed.data.portfolioSize,
+      portfolioMidMarketPct: parsed.data.portfolioMidMarketPct,
+      teamSize: parsed.data.teamSize,
+      consultingPricingModel: parsed.data.consultingPricingModel,
+      weeklyAvailability: parsed.data.weeklyAvailability,
       status: "new",
     },
   });

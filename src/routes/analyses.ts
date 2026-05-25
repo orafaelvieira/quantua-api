@@ -26,6 +26,9 @@ const analysisSchema = z.object({
   periodo: z.string().optional(),
   tipo: z.enum(["Completa", "Rápida"]).default("Completa"),
   kind: z.enum(["ibr", "diagnostico"]).default("diagnostico"),
+  // Pivot B2B-3 (v3, 2026-05-22+): wizard frontend bifurca em recorrente vs IBR pontual.
+  // mode é a forma canônica; kind continua aceito para retrocompat.
+  mode: z.enum(["recurring", "ibr"]).optional(),
   ibrType: z.enum(["light", "full", "crisis"]).optional(),
   sectorId: z.string().optional(),
   documentChecklist: z.array(z.object({
@@ -67,6 +70,10 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
 
   const { engagement, documentChecklist, ...analysisData } = parsed.data;
 
+  // Resolve mode canônico: se frontend novo enviou mode, usa. Senão deriva de kind
+  // legado (kind=ibr → mode=ibr; kind=diagnostico → mode=recurring).
+  const resolvedMode = analysisData.mode ?? (analysisData.kind === "ibr" ? "ibr" : "recurring");
+
   const analysis = await prisma.analysis.create({
     data: {
       companyId: analysisData.companyId,
@@ -74,6 +81,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       periodo: analysisData.periodo,
       tipo: analysisData.tipo,
       kind: analysisData.kind,
+      mode: resolvedMode,
       ibrType: analysisData.ibrType,
       sectorId: analysisData.sectorId,
       documentChecklist: documentChecklist as object | undefined,
@@ -81,8 +89,8 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     },
   });
 
-  // Cria Engagement vinculado quando IBR.
-  if (parsed.data.kind === "ibr" && engagement) {
+  // Cria Engagement vinculado quando IBR (mode canônico, ou kind legado).
+  if ((resolvedMode === "ibr" || parsed.data.kind === "ibr") && engagement) {
     await prisma.engagement.create({
       data: {
         analysisId: analysis.id,
