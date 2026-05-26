@@ -1,5 +1,6 @@
 import { Router, Response } from "express";
 import crypto from "crypto";
+import multer from "multer";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/client";
@@ -10,10 +11,46 @@ import { renderLetter, renderProposalHtml, type SignatureRenderInput } from "../
 import { sendInviteEmail, sendEngagementSignedEmail } from "../services/email";
 import { renderHtmlToPdf } from "../services/pdf-renderer";
 import { uploadProposalPdf, getProposalSignedUrl } from "../services/proposal-storage";
+import {
+  uploadEngagementDocument,
+  deleteEngagementDocument,
+  getEngagementDocumentSignedUrl,
+  type EngagementDocumentEntry,
+} from "../services/engagement-documents";
 import { env } from "../config/env";
 
 const router = Router();
 router.use(requireAuth);
+
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
+});
+
+function fixFilename(raw: string): string {
+  try {
+    const fixed = Buffer.from(raw, "latin1").toString("utf8");
+    if (!fixed.includes("�") || raw.includes("�")) return fixed;
+  } catch {
+    /* fallthrough */
+  }
+  return raw;
+}
+
+function maskCpf(cpf: string | null | undefined): string | null {
+  if (!cpf) return null;
+  const digits = cpf.replace(/\D/g, "");
+  if (digits.length < 4) return "•••";
+  return `•••.•••.${digits.slice(-6, -3)}-${digits.slice(-2)}`;
+}
+
+function parseContractUrls(raw: unknown): EngagementDocumentEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (it): it is EngagementDocumentEntry =>
+      it && typeof it === "object" && typeof (it as { id?: unknown }).id === "string",
+  );
+}
 
 const engagementCreateSchema = z.object({
   companyName: z.string().min(2),
@@ -86,7 +123,7 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     where: { id, userId: req.userId! },
     include: {
       rt: { select: { id: true, name: true } },
-      invitations: { orderBy: { createdAt: "desc" }, take: 5 },
+      invitations: { orderBy: { createdAt: "desc" }, take: 10 },
       signatures: { orderBy: { signedAt: "desc" } },
     },
   });
@@ -94,9 +131,33 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   res.json({
     ...eng,
     rtName: eng.rt?.name ?? null,
-    deadline: eng.deadline?.toISOString(),
-    signedAt: eng.signedAt?.toISOString(),
+    deadline: eng.deadline?.toISOString() ?? null,
+    signedAt: eng.signedAt?.toISOString() ?? null,
     letterAcceptedAt: eng.letterAcceptedAt?.toISOString() ?? null,
+    proposalGeneratedAt: eng.proposalGeneratedAt?.toISOString() ?? null,
+    invitations: eng.invitations.map((inv) => ({
+      id: inv.id,
+      email: inv.email,
+      status: inv.status,
+      expiresAt: inv.expiresAt.toISOString(),
+      usedAt: inv.usedAt?.toISOString() ?? null,
+      lastSentAt: inv.lastSentAt.toISOString(),
+      resendCount: inv.resendCount,
+      createdAt: inv.createdAt.toISOString(),
+    })),
+    signatures: eng.signatures.map((sig) => ({
+      id: sig.id,
+      signerType: sig.signerType,
+      signerName: sig.signerName,
+      signerEmail: sig.signerEmail,
+      signerCpfMasked: maskCpf(sig.signerCpf),
+      contentHash: sig.contentHash,
+      letterVersion: sig.letterVersion,
+      signedAt: sig.signedAt.toISOString(),
+      ipAddress: sig.ipAddress,
+      userAgent: sig.userAgent,
+    })),
+    contractUrls: parseContractUrls(eng.contractUrls),
   });
 });
 
@@ -705,6 +766,372 @@ router.get("/:id/proposal-html", async (req: AuthRequest, res: Response): Promis
 
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.send(built.html);
+});
+
+/**
+ * Timeline unificada do engagement — agrega eventos de Engagement
+ * (criação, transições, proposta, carta), ClientInvitation, EngagementSignature
+ * e auto-criação do IBR. Ordenado desc por timestamp.
+ */
+interface TimelineEvent {
+  id: string;
+  type:
+    | "engagement_created"
+    | "ibr_created"
+    | "proposal_generated"
+    | "invitation_sent"
+    | "invitation_resent"
+    | "letter_accepted"
+    | "signature_added"
+    | "state_changed"
+    | "document_uploaded";
+  timestamp: string;
+  actor: string;
+  description: string;
+  metadata?: Record<string, unknown>;
+}
+
+router.get("/:id/timeline", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id;
+  if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+
+  const eng = await prisma.engagement.findFirst({
+    where: { id, userId: req.userId! },
+    include: {
+      invitations: { orderBy: { createdAt: "desc" } },
+      signatures: { orderBy: { signedAt: "desc" } },
+      rt: { select: { name: true } },
+    },
+  });
+  if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
+
+  const owner = await prisma.user.findUnique({
+    where: { id: eng.userId },
+    select: { name: true },
+  });
+  const ownerName = owner?.name ?? "Usuário";
+
+  const events: TimelineEvent[] = [];
+
+  events.push({
+    id: `created-${eng.id}`,
+    type: "engagement_created",
+    timestamp: eng.createdAt.toISOString(),
+    actor: ownerName,
+    description: `Engagement criado para ${eng.companyName}`,
+    metadata: { requestedBy: eng.requestedBy, requestedByType: eng.requestedByType },
+  });
+
+  if (eng.proposalGeneratedAt) {
+    events.push({
+      id: `proposal-${eng.proposalPdfHash ?? eng.id}`,
+      type: "proposal_generated",
+      timestamp: eng.proposalGeneratedAt.toISOString(),
+      actor: ownerName,
+      description: `Proposta ${eng.letterVersion ?? "v1"} gerada`,
+      metadata: {
+        version: eng.letterVersion,
+        pdfHash: eng.proposalPdfHash,
+        contentHash: eng.letterContentHash,
+      },
+    });
+  }
+
+  if (eng.letterAcceptedAt) {
+    events.push({
+      id: `letter-accepted-${eng.letterContentHash ?? eng.id}`,
+      type: "letter_accepted",
+      timestamp: eng.letterAcceptedAt.toISOString(),
+      actor: "Cliente",
+      description: "Carta de engajamento aceita",
+      metadata: { contentHash: eng.letterContentHash, version: eng.letterVersion },
+    });
+  }
+
+  for (const inv of eng.invitations) {
+    events.push({
+      id: `inv-${inv.id}`,
+      type: inv.resendCount > 0 ? "invitation_resent" : "invitation_sent",
+      timestamp: inv.lastSentAt.toISOString(),
+      actor: ownerName,
+      description:
+        inv.resendCount > 0
+          ? `Convite reenviado para ${inv.email} (${inv.resendCount}× reenvios)`
+          : `Convite enviado para ${inv.email}`,
+      metadata: {
+        invitationId: inv.id,
+        status: inv.status,
+        expiresAt: inv.expiresAt.toISOString(),
+        resendCount: inv.resendCount,
+      },
+    });
+  }
+
+  for (const sig of eng.signatures) {
+    events.push({
+      id: `sig-${sig.id}`,
+      type: "signature_added",
+      timestamp: sig.signedAt.toISOString(),
+      actor: sig.signerName,
+      description:
+        sig.signerType === "client"
+          ? `Cliente assinou (${sig.signerEmail})`
+          : `RT assinou (${sig.signerName})`,
+      metadata: {
+        signerType: sig.signerType,
+        contentHash: sig.contentHash,
+        letterVersion: sig.letterVersion,
+        ipAddress: sig.ipAddress,
+      },
+    });
+  }
+
+  if (eng.analysisId) {
+    const ibr = await prisma.analysis.findUnique({
+      where: { id: eng.analysisId },
+      select: { id: true, createdAt: true, nome: true },
+    });
+    if (ibr) {
+      events.push({
+        id: `ibr-${ibr.id}`,
+        type: "ibr_created",
+        timestamp: ibr.createdAt.toISOString(),
+        actor: ownerName,
+        description: `IBR criado: ${ibr.nome}`,
+        metadata: { analysisId: ibr.id },
+      });
+    }
+  }
+
+  // AuditEvents extras (state_changed, document_uploaded etc.) registrados pelos endpoints novos
+  if (eng.analysisId) {
+    const audits = await prisma.auditEvent.findMany({
+      where: {
+        analysisId: eng.analysisId,
+        entity: "engagement",
+        entityId: eng.id,
+        field: { in: ["state", "document_uploaded", "document_removed"] },
+      },
+      orderBy: { timestamp: "desc" },
+    });
+    for (const a of audits) {
+      const type: TimelineEvent["type"] =
+        a.field === "state"
+          ? "state_changed"
+          : "document_uploaded";
+      const description =
+        a.field === "state"
+          ? `Estado mudou para ${(a.after as { to?: string } | null)?.to ?? "?"}`
+          : a.field === "document_removed"
+            ? `Documento removido: ${(a.before as { label?: string } | null)?.label ?? ""}`
+            : `Documento anexado: ${(a.after as { label?: string } | null)?.label ?? ""}`;
+      events.push({
+        id: `audit-${a.id}`,
+        type,
+        timestamp: a.timestamp.toISOString(),
+        actor: a.userName,
+        description,
+        metadata: { before: a.before, after: a.after },
+      });
+    }
+  }
+
+  events.sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1));
+  res.json(events);
+});
+
+/**
+ * Upload de documento contratual (NDA, contrato assinado, anexos).
+ * Persiste em DigitalOcean Spaces e atualiza Engagement.contractUrls (JSON).
+ */
+router.post(
+  "/:id/documents",
+  requireRole("partner", "operator"),
+  documentUpload.single("file"),
+  async (req: AuthRequest, res: Response): Promise<void> => {
+    const id = req.params.id;
+    if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+    if (!req.file) { res.status(400).json({ error: "Nenhum arquivo enviado" }); return; }
+
+    const eng = await prisma.engagement.findFirst({ where: { id, userId: req.userId! } });
+    if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId! },
+      select: { name: true },
+    });
+    const filename = fixFilename(req.file.originalname);
+    const customLabel = typeof req.body.label === "string" && req.body.label.trim() ? req.body.label.trim() : filename;
+
+    const { doc } = await uploadEngagementDocument({
+      engagementId: eng.id,
+      filename,
+      mimeType: req.file.mimetype || "application/octet-stream",
+      buffer: req.file.buffer,
+      uploadedBy: user?.name ?? "Usuário",
+    });
+    doc.label = customLabel;
+
+    const current = parseContractUrls(eng.contractUrls);
+    const next = [...current, doc];
+
+    await prisma.engagement.update({
+      where: { id: eng.id },
+      data: { contractUrls: next as unknown as Prisma.InputJsonValue },
+    });
+
+    if (eng.analysisId) {
+      await prisma.auditEvent.create({
+        data: {
+          analysisId: eng.analysisId,
+          userId: req.userId!,
+          userName: user?.name ?? "Usuário",
+          entity: "engagement",
+          entityId: eng.id,
+          field: "document_uploaded",
+          before: Prisma.JsonNull,
+          after: { label: doc.label, id: doc.id, hash: doc.hash, size: doc.size },
+          source: "manual",
+        },
+      });
+    }
+
+    const signedUrl = await getEngagementDocumentSignedUrl(doc.storagePath, doc.mimeType).catch(() => null);
+    res.status(201).json({ ...doc, url: signedUrl });
+  },
+);
+
+/**
+ * Remove documento contratual do storage + da lista contractUrls.
+ */
+router.delete(
+  "/:id/documents/:docId",
+  requireRole("partner", "operator"),
+  async (req: AuthRequest, res: Response): Promise<void> => {
+    const id = req.params.id;
+    const docId = req.params.docId;
+    if (!id || typeof id !== "string" || !docId || typeof docId !== "string") {
+      res.status(404).json({ error: "Parâmetros inválidos" });
+      return;
+    }
+
+    const eng = await prisma.engagement.findFirst({ where: { id, userId: req.userId! } });
+    if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
+
+    const current = parseContractUrls(eng.contractUrls);
+    const removed = current.find((d) => d.id === docId);
+    if (!removed) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+
+    try {
+      await deleteEngagementDocument(removed.storagePath);
+    } catch (err) {
+      console.warn("[delete-document] falha ao remover do Spaces:", err);
+    }
+
+    const next = current.filter((d) => d.id !== docId);
+    await prisma.engagement.update({
+      where: { id: eng.id },
+      data: { contractUrls: next as unknown as Prisma.InputJsonValue },
+    });
+
+    if (eng.analysisId) {
+      const user = await prisma.user.findUnique({
+        where: { id: req.userId! },
+        select: { name: true },
+      });
+      await prisma.auditEvent.create({
+        data: {
+          analysisId: eng.analysisId,
+          userId: req.userId!,
+          userName: user?.name ?? "Usuário",
+          entity: "engagement",
+          entityId: eng.id,
+          field: "document_removed",
+          before: { label: removed.label, id: removed.id, hash: removed.hash },
+          after: Prisma.JsonNull,
+          source: "manual",
+        },
+      });
+    }
+
+    res.status(204).end();
+  },
+);
+
+/**
+ * Snapshot do IBR vinculado — KPIs principais, status e completude estimada.
+ * Retorna null se o engagement ainda não tem analysisId (pré-won).
+ */
+router.get("/:id/ibr-snapshot", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id;
+  if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+
+  const eng = await prisma.engagement.findFirst({
+    where: { id, userId: req.userId! },
+    select: { analysisId: true, deadline: true },
+  });
+  if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
+  if (!eng.analysisId) { res.json(null); return; }
+
+  const analysis = await prisma.analysis.findUnique({
+    where: { id: eng.analysisId },
+    include: {
+      company: { select: { razaoSocial: true, setor: true } },
+    },
+  });
+  if (!analysis) { res.json(null); return; }
+
+  const resultado = (analysis.resultado as Record<string, unknown> | null) ?? {};
+  const kpisRaw = (resultado.kpis as Record<string, { valor?: number }> | undefined) ?? {};
+
+  const kpis = {
+    receita: kpisRaw.receita?.valor ?? null,
+    ebitda: kpisRaw.ebitda?.valor ?? null,
+    margemEbitda: kpisRaw.margemEbitda?.valor ?? null,
+  };
+
+  // Completude estimada: presença de dados nas seções principais do resultado JSON
+  // + presença de documentos (proxy de Data room) + Covenant table.
+  const sections = [
+    "kpis",
+    "dreData",
+    "semaforo",
+    "swot",
+    "recomendacoes",
+    "destaques",
+    "stcf",
+    "scenarios",
+    "options",
+  ];
+  const filledSections = sections.filter((k) => {
+    const v = resultado[k];
+    if (Array.isArray(v)) return v.length > 0;
+    if (v && typeof v === "object") return Object.keys(v).length > 0;
+    return false;
+  }).length;
+  const covenantsCount = await prisma.covenant
+    .count({ where: { analysisId: analysis.id } })
+    .catch(() => 0);
+  const completedTabs = Math.min(10, filledSections + (covenantsCount > 0 ? 1 : 0));
+  const totalTabs = 10;
+
+  const daysUntilDeadline = eng.deadline
+    ? Math.ceil((eng.deadline.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    : null;
+
+  res.json({
+    analysisId: analysis.id,
+    nome: analysis.nome,
+    status: analysis.status,
+    reviewState: analysis.reviewState ?? null,
+    companyName: analysis.company?.razaoSocial ?? null,
+    sector: analysis.company?.setor ?? null,
+    kpis,
+    completedTabs,
+    totalTabs,
+    daysUntilDeadline,
+    deadline: eng.deadline?.toISOString() ?? null,
+  });
 });
 
 export default router;
