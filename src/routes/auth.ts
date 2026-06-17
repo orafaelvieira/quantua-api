@@ -18,6 +18,8 @@ const registerSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
   workspaceType: z.enum(["empresa", "consultoria"]).default("consultoria"),
+  // Perfil de ICP escolhido na página /para/<perfil>. Opcional.
+  partnerProfile: z.enum(["contabilidade", "bpo", "cfo"]).optional(),
 });
 
 const loginSchema = z.object({
@@ -66,7 +68,7 @@ router.post("/register", async (req: Request, res: Response): Promise<void> => {
     res.status(400).json({ error: parsed.error.flatten() });
     return;
   }
-  const { name, email, password, workspaceType } = parsed.data;
+  const { name, email, password, workspaceType, partnerProfile } = parsed.data;
 
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
@@ -76,8 +78,8 @@ router.post("/register", async (req: Request, res: Response): Promise<void> => {
 
   const passwordHash = await bcrypt.hash(password, 12);
   const user = await prisma.user.create({
-    data: { name, email, passwordHash, workspaceType },
-    select: { id: true, name: true, email: true, workspaceType: true, role: true },
+    data: { name, email, passwordHash, workspaceType, partnerProfile: partnerProfile ?? null },
+    select: { id: true, name: true, email: true, workspaceType: true, partnerProfile: true, role: true },
   });
 
   res.status(201).json({ user, token: signToken(user.id) });
@@ -111,6 +113,7 @@ router.get("/me", requireAuth, async (req: AuthRequest, res: Response): Promise<
       name: true,
       email: true,
       workspaceType: true,
+      partnerProfile: true,
       role: true,
       phone: true,
       cargo: true,

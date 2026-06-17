@@ -13,6 +13,9 @@ model User {
   name                    String
   passwordHash            String     @map("password_hash")
   workspaceType           String     @default("consultoria") @map("workspace_type")
+  // Perfil de ICP auto-declarado no cadastro via páginas /para/* (contabilidade | bpo | cfo).
+  // Opcional: nulo em cadastros que não vieram de uma página de perfil.
+  partnerProfile          String?    @map("partner_profile")
   role                    String?
   professionalRegistration String?   @map("professional_registration")
   invitedAt               DateTime?  @map("invited_at")
