@@ -57,5 +57,20 @@ services:
       - key: ADMIN_TRIGGER_TOKEN
         scope: RUN_TIME
         type: SECRET
+      # E-mail (Resend). Requer domínio quantua.com.br verificado no Resend
+      # para entregar a destinatários externos; enquanto não, use EMAIL_FROM
+      # com onboarding@resend.dev (entrega só ao dono da conta).
+      - key: EMAIL_PROVIDER
+        scope: RUN_TIME
+        value: resend
+      - key: RESEND_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: EMAIL_FROM
+        scope: RUN_TIME
+        value: Quantua <nao-responda@quantua.com.br>
+      - key: TEAM_INBOX_EMAIL
+        scope: RUN_TIME
+        value: emerson@valoo.com.br,giovanni@valoo.com.br,rafael@manzoti.com,jorge@valoo.com.br
     routes:
       - path: /

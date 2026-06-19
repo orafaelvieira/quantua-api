@@ -7,6 +7,8 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole, requireEngagementSigned } from "../middleware/permissions";
 import { uploadFile, getSignedDownloadUrl } from "../services/storage";
 import { getIntakeTemplate, resolveIntakeForm } from "../services/intake-templates";
+import { env } from "../config/env";
+import { sendScheduleCallNotificationEmail } from "../services/email";
 
 const router = Router();
 router.use(requireAuth);
@@ -355,12 +357,16 @@ router.post("/deliverable/schedule-call", requireEngagementSigned, async (req: A
     },
   });
 
-  // Best-effort email to RT — log via console adapter
-  if (rt?.email) {
-    console.log(`[REVIEW CALL] Cliente ${user?.name} solicitou call de revisão para ${parsed.data.preferredDate}.`);
-    console.log(`  Para RT: ${rt.email}`);
-    console.log(`  Observações: ${parsed.data.notes ?? "—"}`);
-  }
+  // Notifica o RT (se houver) + a caixa do time. Best-effort.
+  await sendScheduleCallNotificationEmail({
+    to: rt?.email ? [rt.email, ...env.email.teamInbox] : env.email.teamInbox,
+    clientName: user?.name ?? "Cliente",
+    companyName: analysis.engagement?.companyName ?? analysis.company?.razaoSocial ?? "—",
+    preferredDate: parsed.data.preferredDate,
+    altDate: parsed.data.altDate ?? null,
+    notes: parsed.data.notes ?? null,
+    portalUrl: `${env.frontendUrl}/engagements/${analysis.engagement?.id ?? ""}`,
+  });
 
   res.status(201).json({
     ok: true,

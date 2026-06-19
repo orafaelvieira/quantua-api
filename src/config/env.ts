@@ -26,6 +26,18 @@ export const env = {
     provider: emailProvider,
     resendApiKey: requiredIf("RESEND_API_KEY", emailProvider === "resend"),
     from: process.env.EMAIL_FROM ?? "Quantua <onboarding@resend.dev>",
+    /**
+     * Caixa(s) do time que recebem notificação de cada form de entrada
+     * (leads, contato, integração, agendar call, novo cadastro). Lista
+     * separada por vírgula. Default = time fundador.
+     */
+    teamInbox: (
+      process.env.TEAM_INBOX_EMAIL ??
+      "emerson@valoo.com.br,giovanni@valoo.com.br,rafael@manzoti.com,jorge@valoo.com.br"
+    )
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
   },
   spaces: {
     endpoint: process.env.SPACES_ENDPOINT ?? "",

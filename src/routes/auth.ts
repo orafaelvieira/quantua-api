@@ -9,7 +9,7 @@ import { env } from "../config/env";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { loginLimiter, publicReadLimiter, publicWriteLimiter, resendLimiter, forgotPasswordEmailLimiter, forgotPasswordIpLimiter } from "../middleware/rate-limit";
 import { renderLetter } from "../services/letter-templates";
-import { sendInviteEmail, sendPasswordResetEmail, sendEmailConfirmationEmail } from "../services/email";
+import { sendInviteEmail, sendPasswordResetEmail, sendEmailConfirmationEmail, sendNewSignupNotificationEmail } from "../services/email";
 
 const router = Router();
 
@@ -80,6 +80,15 @@ router.post("/register", async (req: Request, res: Response): Promise<void> => {
   const user = await prisma.user.create({
     data: { name, email, passwordHash, workspaceType, partnerProfile: partnerProfile ?? null },
     select: { id: true, name: true, email: true, workspaceType: true, partnerProfile: true, role: true },
+  });
+
+  // Notifica o time sobre o novo cadastro. Best-effort.
+  await sendNewSignupNotificationEmail({
+    to: env.email.teamInbox,
+    name: user.name,
+    email: user.email,
+    workspaceType: user.workspaceType,
+    partnerProfile: user.partnerProfile,
   });
 
   res.status(201).json({ user, token: signToken(user.id) });

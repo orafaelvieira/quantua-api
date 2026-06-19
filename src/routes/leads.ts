@@ -1,7 +1,9 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../db/client";
+import { env } from "../config/env";
 import { requireAuth, AuthRequest } from "../middleware/auth";
+import { sendLeadNotificationEmail, sendLeadConfirmationEmail } from "../services/email";
 
 const router = Router();
 
@@ -16,6 +18,8 @@ const leadSchema = z.object({
     "credit_approval", "judicial_recovery", "refinancing", "due_diligence", "monitoring",
     // Novo (pivot B2B-3): tipo de firma do parceiro candidato
     "contabilidade_consultiva", "bpo_financeiro", "cfoaas", "contabilidade_tradicional",
+    // Canais de entrada genéricos: form de contato e interesse em integração ERP
+    "contact", "integration_interest",
   ]),
   debtVolume: z.string().optional(),
   desiredDeadline: z.string().optional(),
@@ -62,6 +66,24 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       status: "new",
     },
   });
+
+  // Notifica o time + auto-resposta ao remetente. Best-effort: sendSafe engole
+  // erros, então a resposta 201 nunca depende do sucesso do e-mail.
+  await Promise.allSettled([
+    sendLeadNotificationEmail({
+      to: env.email.teamInbox,
+      lead,
+      inboxUrl: `${env.frontendUrl}/inbox`,
+    }),
+    lead.contactEmail
+      ? sendLeadConfirmationEmail({
+          to: lead.contactEmail,
+          contactName: lead.contactName ?? undefined,
+          targetCompany: lead.targetCompany,
+        })
+      : Promise.resolve(),
+  ]);
+
   res.status(201).json({ id: lead.id });
 });
 
