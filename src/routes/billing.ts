@@ -22,13 +22,13 @@ const invoiceCreateSchema = z.object({
 const invoiceUpdateSchema = invoiceCreateSchema.partial();
 
 router.get("/invoices", async (req: AuthRequest, res: Response): Promise<void> => {
-  const userId = req.userId!;
+  const scopeIds = req.scopeUserIds!;
   const status = req.query.status as string | undefined;
   const engagementId = req.query.engagementId as string | undefined;
 
   const invoices = await prisma.invoice.findMany({
     where: {
-      engagement: { userId },
+      engagement: { userId: { in: scopeIds } },
       ...(status ? { status } : {}),
       ...(engagementId ? { engagementId } : {}),
     },
@@ -68,7 +68,7 @@ router.get("/invoices", async (req: AuthRequest, res: Response): Promise<void> =
 });
 
 router.get("/kpis", async (req: AuthRequest, res: Response): Promise<void> => {
-  const userId = req.userId!;
+  const scopeIds = req.scopeUserIds!;
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -76,7 +76,7 @@ router.get("/kpis", async (req: AuthRequest, res: Response): Promise<void> => {
   const [paidMtd, paidPrevMonth, receivable30, allInvoices, signedIbrCount] = await Promise.all([
     prisma.invoice.aggregate({
       where: {
-        engagement: { userId },
+        engagement: { userId: { in: scopeIds } },
         status: "paid",
         paidAt: { gte: startOfMonth },
       },
@@ -85,7 +85,7 @@ router.get("/kpis", async (req: AuthRequest, res: Response): Promise<void> => {
     }),
     prisma.invoice.aggregate({
       where: {
-        engagement: { userId },
+        engagement: { userId: { in: scopeIds } },
         status: "paid",
         paidAt: { gte: startOfPrevMonth, lt: startOfMonth },
       },
@@ -93,7 +93,7 @@ router.get("/kpis", async (req: AuthRequest, res: Response): Promise<void> => {
     }),
     prisma.invoice.aggregate({
       where: {
-        engagement: { userId },
+        engagement: { userId: { in: scopeIds } },
         status: { in: ["issued", "overdue"] },
         dueDate: { lte: new Date(Date.now() + 30 * 24 * 3600 * 1000) },
       },
@@ -101,12 +101,12 @@ router.get("/kpis", async (req: AuthRequest, res: Response): Promise<void> => {
       _count: true,
     }),
     prisma.invoice.aggregate({
-      where: { engagement: { userId }, status: "paid" },
+      where: { engagement: { userId: { in: scopeIds } }, status: "paid" },
       _sum: { amount: true },
       _count: true,
     }),
     prisma.analysis.count({
-      where: { userId, kind: "ibr", reviewState: "signed" },
+      where: { userId: { in: scopeIds }, kind: "ibr", reviewState: "signed" },
     }),
   ]);
 
@@ -134,7 +134,7 @@ router.get("/invoices/:id", async (req: AuthRequest, res: Response): Promise<voi
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
 
   const invoice = await prisma.invoice.findFirst({
-    where: { id, engagement: { userId: req.userId! } },
+    where: { id, engagement: { userId: { in: req.scopeUserIds! } } },
     include: {
       engagement: {
         select: {
@@ -188,7 +188,7 @@ router.post("/invoices", async (req: AuthRequest, res: Response): Promise<void> 
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
   const eng = await prisma.engagement.findFirst({
-    where: { id: parsed.data.engagementId, userId: req.userId! },
+    where: { id: parsed.data.engagementId, userId: { in: req.scopeUserIds! } },
     select: { id: true },
   });
   if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
@@ -214,7 +214,7 @@ router.patch("/invoices/:id", async (req: AuthRequest, res: Response): Promise<v
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
   const invoice = await prisma.invoice.findFirst({
-    where: { id, engagement: { userId: req.userId! } },
+    where: { id, engagement: { userId: { in: req.scopeUserIds! } } },
     select: { id: true },
   });
   if (!invoice) { res.status(404).json({ error: "Invoice não encontrada" }); return; }
@@ -238,7 +238,7 @@ router.delete("/invoices/:id", async (req: AuthRequest, res: Response): Promise<
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
   const invoice = await prisma.invoice.findFirst({
-    where: { id, engagement: { userId: req.userId! } },
+    where: { id, engagement: { userId: { in: req.scopeUserIds! } } },
     select: { id: true },
   });
   if (!invoice) { res.status(404).json({ error: "Invoice não encontrada" }); return; }

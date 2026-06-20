@@ -51,7 +51,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const companyId = req.query.companyId as string | undefined;
   const documents = await prisma.document.findMany({
     where: {
-      company: { userId: req.userId! },
+      company: { userId: { in: req.scopeUserIds! } },
       ...(analysisId ? { analysisId } : {}),
       ...(companyId ? { companyId } : {}),
     },
@@ -69,7 +69,7 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
   const { analysisId, companyId, tipo, competencia, moeda } = parsed.data;
 
   // Verifica que a análise pertence ao usuário
-  const analysis = await prisma.analysis.findFirst({ where: { id: analysisId, userId: req.userId! } });
+  const analysis = await prisma.analysis.findFirst({ where: { id: analysisId, userId: { in: req.scopeUserIds! } } });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
 
   const nome = fixFilename(req.file.originalname);
@@ -114,7 +114,7 @@ router.put("/:id/dados-extraidos", async (req: AuthRequest, res: Response): Prom
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
   const doc = await prisma.document.findFirst({
-    where: { id, company: { userId: req.userId! } },
+    where: { id, company: { userId: { in: req.scopeUserIds! } } },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
 
@@ -140,7 +140,7 @@ router.put("/:id/tipo", async (req: AuthRequest, res: Response): Promise<void> =
   }
 
   const doc = await prisma.document.findFirst({
-    where: { id, company: { userId: req.userId! } },
+    where: { id, company: { userId: { in: req.scopeUserIds! } } },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
 
@@ -154,7 +154,7 @@ router.put("/:id/tipo", async (req: AuthRequest, res: Response): Promise<void> =
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const doc = await prisma.document.findFirst({
-    where: { id, company: { userId: req.userId! } },
+    where: { id, company: { userId: { in: req.scopeUserIds! } } },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
 

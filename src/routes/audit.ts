@@ -18,7 +18,7 @@ const eventSchema = z.object({
 });
 
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
-  const userId = req.userId!;
+  const scopeIds = req.scopeUserIds!;
   const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
   const pageSize = Math.min(200, Math.max(10, parseInt(String(req.query.pageSize ?? "50"), 10) || 50));
   const skip = (page - 1) * pageSize;
@@ -30,8 +30,8 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
 
   const where = {
     OR: [
-      { analysis: { userId } },
-      { analysisId: null, userId },
+      { analysis: { userId: { in: scopeIds } } },
+      { analysisId: null, userId: { in: scopeIds } },
     ],
     ...(filterUserId ? { userId: filterUserId } : {}),
     ...(filterEntity ? { entity: filterEntity } : {}),
@@ -91,7 +91,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
  * Limita a 10k registros para evitar OOM em workspaces grandes.
  */
 router.get("/export", async (req: AuthRequest, res: Response): Promise<void> => {
-  const userId = req.userId!;
+  const scopeIds = req.scopeUserIds!;
   const format = (req.query.format as string | undefined) ?? "csv";
 
   if (format !== "csv") {
@@ -106,8 +106,8 @@ router.get("/export", async (req: AuthRequest, res: Response): Promise<void> => 
 
   const where = {
     OR: [
-      { analysis: { userId } },
-      { analysisId: null, userId },
+      { analysis: { userId: { in: scopeIds } } },
+      { analysisId: null, userId: { in: scopeIds } },
     ],
     ...(filterUserId ? { userId: filterUserId } : {}),
     ...(filterEntity ? { entity: filterEntity } : {}),
@@ -178,7 +178,7 @@ router.post("/events", async (req: AuthRequest, res: Response): Promise<void> =>
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
   const analysis = await prisma.analysis.findFirst({
-    where: { id: parsed.data.analysisId, userId: req.userId! },
+    where: { id: parsed.data.analysisId, userId: { in: req.scopeUserIds! } },
     select: { id: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }

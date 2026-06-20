@@ -46,7 +46,7 @@ const companySchema = z.object({
 
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const companies = await prisma.company.findMany({
-    where: { userId: req.userId! },
+    where: { userId: { in: req.scopeUserIds! } },
     orderBy: { createdAt: "desc" },
     include: { _count: { select: { analyses: true } } },
   });
@@ -66,7 +66,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
 router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const company = await prisma.company.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     include: { analyses: { orderBy: { createdAt: "desc" }, take: 10 } },
   });
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
@@ -75,7 +75,7 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 
 router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
-  const existing = await prisma.company.findFirst({ where: { id, userId: req.userId! } });
+  const existing = await prisma.company.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
   if (!existing) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
   const parsed = companySchema.partial().safeParse(req.body);
@@ -87,7 +87,7 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
-  const existing = await prisma.company.findFirst({ where: { id, userId: req.userId! } });
+  const existing = await prisma.company.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
   if (!existing) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
   try {

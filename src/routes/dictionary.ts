@@ -12,8 +12,8 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
 
   const where: any = {
     OR: [
-      { userId: null },        // global seed entries
-      { userId: req.userId! }, // user-specific entries
+      { userId: null },                        // global seed entries
+      { userId: { in: req.scopeUserIds! } },   // entries do workspace (firma)
     ],
   };
 
@@ -100,8 +100,8 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     return;
   }
 
-  // Can only edit user-owned entries (not global seed data)
-  if (existing.userId !== null && existing.userId !== req.userId!) {
+  // Pode editar entradas do próprio workspace (não as globais do sistema)
+  if (existing.userId !== null && !req.scopeUserIds!.includes(existing.userId)) {
     res.status(403).json({ error: "Sem permissão para editar esta entrada" });
     return;
   }
@@ -151,7 +151,7 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
     return;
   }
 
-  if (existing.userId !== req.userId!) {
+  if (!req.scopeUserIds!.includes(existing.userId)) {
     res.status(403).json({ error: "Sem permissão" });
     return;
   }

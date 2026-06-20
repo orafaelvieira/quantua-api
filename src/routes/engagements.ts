@@ -102,7 +102,7 @@ function hashInvitationToken(rawToken: string): string {
 
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const items = await prisma.engagement.findMany({
-    where: { userId: req.userId! },
+    where: { userId: { in: req.scopeUserIds! } },
     orderBy: { createdAt: "desc" },
     include: { rt: { select: { id: true, name: true } } },
   });
@@ -120,7 +120,7 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
   const eng = await prisma.engagement.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     include: {
       rt: { select: { id: true, name: true } },
       invitations: { orderBy: { createdAt: "desc" }, take: 10 },
@@ -246,7 +246,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
 router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
-  const eng = await prisma.engagement.findFirst({ where: { id, userId: req.userId! } });
+  const eng = await prisma.engagement.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
   if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
   const parsed = engagementUpdateSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
@@ -263,7 +263,7 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 router.post("/:id/transition", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
-  const eng = await prisma.engagement.findFirst({ where: { id, userId: req.userId! } });
+  const eng = await prisma.engagement.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
   if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
   const toState = (req.body?.toState as string) || "";
   const allowed = VALID_TRANSITIONS[eng.state] ?? [];
@@ -276,7 +276,7 @@ router.post("/:id/transition", async (req: AuthRequest, res: Response): Promise<
   let analysisId = eng.analysisId;
   if (toState === "won" && !analysisId) {
     const existingCompany = await prisma.company.findFirst({
-      where: { userId: req.userId!, razaoSocial: eng.companyName },
+      where: { userId: { in: req.scopeUserIds! }, razaoSocial: eng.companyName },
     });
     const company =
       existingCompany ??
@@ -325,7 +325,7 @@ router.get("/:id/letter", async (req: AuthRequest, res: Response): Promise<void>
 
   // Tenta como staff primeiro
   let eng = await prisma.engagement.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     include: { rt: { select: { name: true, professionalRegistration: true } } },
   });
 
@@ -395,7 +395,7 @@ router.post(
     const { email, contactName, expiresInDays } = parsed.data;
 
     const eng = await prisma.engagement.findFirst({
-      where: { id, userId: req.userId! },
+      where: { id, userId: { in: req.scopeUserIds! } },
       include: { rt: { select: { name: true } } },
     });
     if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
@@ -594,10 +594,10 @@ router.post(
  */
 async function buildProposalHtmlForEngagement(
   engagementId: string,
-  userId: string,
+  scopeUserIds: string[],
 ): Promise<{ engagement: NonNullable<Awaited<ReturnType<typeof prisma.engagement.findFirst>>>; html: string; letter: ReturnType<typeof renderLetter> } | null> {
   const eng = await prisma.engagement.findFirst({
-    where: { id: engagementId, userId },
+    where: { id: engagementId, userId: { in: scopeUserIds } },
     include: {
       rt: { select: { name: true, professionalRegistration: true } },
       signatures: { orderBy: { signedAt: "asc" } },
@@ -656,7 +656,7 @@ router.post(
       return;
     }
 
-    const built = await buildProposalHtmlForEngagement(id, req.userId!);
+    const built = await buildProposalHtmlForEngagement(id, req.scopeUserIds!);
     if (!built) {
       res.status(404).json({ error: "Engagement não encontrado" });
       return;
@@ -758,7 +758,7 @@ router.get("/:id/proposal-html", async (req: AuthRequest, res: Response): Promis
     return;
   }
 
-  const built = await buildProposalHtmlForEngagement(id, req.userId!);
+  const built = await buildProposalHtmlForEngagement(id, req.scopeUserIds!);
   if (!built) {
     res.status(404).send("Engagement não encontrado");
     return;
@@ -796,7 +796,7 @@ router.get("/:id/timeline", async (req: AuthRequest, res: Response): Promise<voi
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
 
   const eng = await prisma.engagement.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     include: {
       invitations: { orderBy: { createdAt: "desc" } },
       signatures: { orderBy: { signedAt: "desc" } },
@@ -953,7 +953,7 @@ router.post(
     if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
     if (!req.file) { res.status(400).json({ error: "Nenhum arquivo enviado" }); return; }
 
-    const eng = await prisma.engagement.findFirst({ where: { id, userId: req.userId! } });
+    const eng = await prisma.engagement.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
     if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
 
     const user = await prisma.user.findUnique({
@@ -1015,7 +1015,7 @@ router.delete(
       return;
     }
 
-    const eng = await prisma.engagement.findFirst({ where: { id, userId: req.userId! } });
+    const eng = await prisma.engagement.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
     if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
 
     const current = parseContractUrls(eng.contractUrls);
@@ -1067,7 +1067,7 @@ router.get("/:id/ibr-snapshot", async (req: AuthRequest, res: Response): Promise
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
 
   const eng = await prisma.engagement.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     select: { analysisId: true, deadline: true },
   });
   if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }

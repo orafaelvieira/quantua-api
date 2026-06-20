@@ -50,7 +50,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const companyId = req.query.companyId as string | undefined;
   const analyses = await prisma.analysis.findMany({
     where: {
-      userId: req.userId!,
+      userId: { in: req.scopeUserIds! },
       ...(companyId ? { companyId } : {}),
     },
     orderBy: { createdAt: "desc" },
@@ -64,7 +64,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
   const company = await prisma.company.findFirst({
-    where: { id: parsed.data.companyId, userId: req.userId! },
+    where: { id: parsed.data.companyId, userId: { in: req.scopeUserIds! } },
   });
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
@@ -123,7 +123,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
 router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     include: {
       company: true,
       documents: { orderBy: { createdAt: "asc" } },
@@ -135,7 +135,7 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
-  const existing = await prisma.analysis.findFirst({ where: { id, userId: req.userId! } });
+  const existing = await prisma.analysis.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
   if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   await prisma.analysis.delete({ where: { id } });
   res.status(204).send();
@@ -155,7 +155,7 @@ const snoozeSchema = z.object({
 
 router.post("/:id/snooze-review", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
-  const existing = await prisma.analysis.findFirst({ where: { id, userId: req.userId! } });
+  const existing = await prisma.analysis.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
   if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   if (existing.mode !== "recurring") {
     res.status(400).json({ error: "Snooze só faz sentido em análises recorrentes" });
@@ -181,7 +181,7 @@ router.post("/:id/snooze-review", async (req: AuthRequest, res: Response): Promi
 router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     include: { company: true, documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -252,7 +252,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // Pre-fetch dictionary entries for this user (BP + DRE)
     const dictEntries = await prisma.accountDictionary.findMany({
       where: {
-        OR: [{ userId: null }, { userId: req.userId! }],
+        OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }],
       },
       select: { nomeOriginal: true, contaDestino: true, grupoConta: true, userId: true, tipo: true },
     });
@@ -490,7 +490,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
 router.get("/:id/dados-estruturados", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -501,7 +501,7 @@ router.get("/:id/dados-estruturados", async (req: AuthRequest, res: Response): P
 router.put("/:id/dados-estruturados/bp", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -519,7 +519,7 @@ router.put("/:id/dados-estruturados/bp", async (req: AuthRequest, res: Response)
 router.put("/:id/dados-estruturados/dre", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -537,7 +537,7 @@ router.put("/:id/dados-estruturados/dre", async (req: AuthRequest, res: Response
 router.put("/:id/dados-estruturados/indicadores/override", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -561,7 +561,7 @@ router.put("/:id/dados-estruturados/indicadores/override", async (req: AuthReque
 router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -591,7 +591,7 @@ router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Respons
 router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -617,7 +617,7 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
 router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     include: { documents: { orderBy: { createdAt: "asc" } } },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -730,7 +730,7 @@ router.post(
     if (!req.file) { res.status(400).json({ error: "Arquivo ausente" }); return; }
 
     const analysis = await prisma.analysis.findFirst({
-      where: { id, userId: req.userId! },
+      where: { id, userId: { in: req.scopeUserIds! } },
       select: { id: true, companyId: true },
     });
     if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -785,7 +785,7 @@ router.delete("/:id/documents/:docId", async (req: AuthRequest, res: Response): 
     res.status(404).json({ error: "ID inválido" }); return;
   }
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     select: { id: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -824,7 +824,7 @@ router.get("/:id/documents/:docId/download", async (req: AuthRequest, res: Respo
     res.status(404).json({ error: "ID inválido" }); return;
   }
   const doc = await prisma.document.findFirst({
-    where: { id: docId, analysis: { id, userId: req.userId! } },
+    where: { id: docId, analysis: { id, userId: { in: req.scopeUserIds! } } },
   });
   if (!doc || !doc.storagePath) { res.status(404).json({ error: "Documento não encontrado" }); return; }
 
@@ -840,7 +840,7 @@ router.get("/:id/data-room/manifest", async (req: AuthRequest, res: Response): P
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     select: { id: true, nome: true, documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }

@@ -13,7 +13,7 @@ async function loadAnalysis(req: AuthRequest) {
   const id = req.params.id;
   if (!id || typeof id !== "string") return null;
   return prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
   });
 }
 
@@ -98,7 +98,7 @@ router.get("/:id/projections", async (req: AuthRequest, res: Response): Promise<
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: req.userId! },
+    where: { id, userId: { in: req.scopeUserIds! } },
     include: { company: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -171,7 +171,7 @@ router.get("/:id/engagement", async (req: AuthRequest, res: Response): Promise<v
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
   const eng = await prisma.engagement.findFirst({
-    where: { analysisId: id, userId: req.userId! },
+    where: { analysisId: id, userId: { in: req.scopeUserIds! } },
   });
   res.json(eng);
 });
