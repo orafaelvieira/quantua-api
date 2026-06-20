@@ -62,7 +62,9 @@ function tierFromIbrType(ibrType: string | null | undefined): "Light" | "Full" |
 }
 
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
-  const userId = req.userId!;
+  // Visibilidade de firma: inbox cobre engagements/análises de todos os membros
+  // do workspace (ou só o próprio usuário se ele não estiver em um).
+  const scopeIds = req.scopeUserIds!;
 
   // Filtros opcionais via query
   const typesParam = (req.query.types as string | undefined) ?? "";
@@ -105,7 +107,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     wantEngagements
       ? prisma.engagement.findMany({
           where: {
-            userId,
+            userId: { in: scopeIds },
             state: "proposal_sent",
             ...dateFilter,
             ...(q ? { OR: [
@@ -125,7 +127,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     wantAnalyses
       ? prisma.analysis.findMany({
           where: {
-            userId,
+            userId: { in: scopeIds },
             kind: "ibr",
             reviewState: "in_review",
             ...dateFilter,
@@ -146,7 +148,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     wantDueReviews
       ? prisma.analysis.findMany({
           where: {
-            userId,
+            userId: { in: scopeIds },
             mode: "recurring",
             nextReviewAt: { lte: in14Days },
             ...(q ? { OR: [

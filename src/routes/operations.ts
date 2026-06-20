@@ -19,7 +19,7 @@ function phaseFor(reviewState: string, hasDocuments: boolean, status: string): P
 
 router.get("/pipeline", async (req: AuthRequest, res: Response): Promise<void> => {
   const analyses = await prisma.analysis.findMany({
-    where: { userId: req.userId!, kind: "ibr" },
+    where: { userId: { in: req.scopeUserIds! }, kind: "ibr" },
     orderBy: { createdAt: "desc" },
     include: {
       company: { select: { razaoSocial: true, nomeFantasia: true } },
@@ -72,7 +72,7 @@ router.get("/workload", async (req: AuthRequest, res: Response): Promise<void> =
 
   const entries = await prisma.timeEntry.findMany({
     where: {
-      analysis: { userId: req.userId! },
+      analysis: { userId: { in: req.scopeUserIds! } },
       date: { gte: new Date(Date.now() - 30 * 24 * 3600 * 1000) },
     },
     select: { userId: true, hours: true, analysisId: true },
@@ -100,26 +100,26 @@ router.get("/workload", async (req: AuthRequest, res: Response): Promise<void> =
 });
 
 router.get("/kpis", async (req: AuthRequest, res: Response): Promise<void> => {
-  const userId = req.userId!;
+  const scopeIds = req.scopeUserIds!;
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const [inProduction, deliveredThisMonth, deliveredAll, slaAtRiskRaw] = await Promise.all([
     prisma.analysis.count({
-      where: { userId, kind: "ibr", reviewState: { notIn: ["delivered"] } },
+      where: { userId: { in: scopeIds }, kind: "ibr", reviewState: { notIn: ["delivered"] } },
     }),
     prisma.analysis.count({
-      where: { userId, kind: "ibr", reviewState: "delivered" /*, deliveredAt >= startOfMonth */ },
+      where: { userId: { in: scopeIds }, kind: "ibr", reviewState: "delivered" /*, deliveredAt >= startOfMonth */ },
     }),
     prisma.analysis.findMany({
-      where: { userId, kind: "ibr", reviewState: "delivered" },
+      where: { userId: { in: scopeIds }, kind: "ibr", reviewState: "delivered" },
       select: { createdAt: true },
       orderBy: { createdAt: "desc" },
       take: 50,
     }),
     prisma.analysis.findMany({
       where: {
-        userId,
+        userId: { in: scopeIds },
         kind: "ibr",
         reviewState: { notIn: ["delivered", "signed"] },
         engagement: { deadline: { not: null } },
@@ -149,7 +149,7 @@ router.get("/kpis", async (req: AuthRequest, res: Response): Promise<void> => {
 
   // Margem média: requer time entries + fee. Fórmula simplificada.
   const fees = await prisma.engagement.findMany({
-    where: { userId, feeAmount: { not: null }, analysisId: { not: null } },
+    where: { userId: { in: scopeIds }, feeAmount: { not: null }, analysisId: { not: null } },
     select: { feeAmount: true, analysisId: true },
   });
   const HOURLY_COST = 350;
@@ -179,12 +179,12 @@ router.get("/kpis", async (req: AuthRequest, res: Response): Promise<void> => {
 });
 
 router.get("/alerts", async (req: AuthRequest, res: Response): Promise<void> => {
-  const userId = req.userId!;
+  const scopeIds = req.scopeUserIds!;
   const alerts: { id: string; severity: "info" | "warning" | "critical"; message: string; analysisId?: string }[] = [];
 
   // IBRs sem RT atribuído
   const noRT = await prisma.engagement.findMany({
-    where: { userId, rtId: null, state: { in: ["won", "kicked_off"] } },
+    where: { userId: { in: scopeIds }, rtId: null, state: { in: ["won", "kicked_off"] } },
     take: 5,
     select: { id: true, companyName: true, analysisId: true },
   });
@@ -200,7 +200,7 @@ router.get("/alerts", async (req: AuthRequest, res: Response): Promise<void> => 
   // Deadlines próximas
   const nearDeadline = await prisma.engagement.findMany({
     where: {
-      userId,
+      userId: { in: scopeIds },
       deadline: {
         gte: new Date(),
         lte: new Date(Date.now() + 5 * 24 * 3600 * 1000),

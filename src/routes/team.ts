@@ -189,7 +189,7 @@ router.post("/allocations", async (req: AuthRequest, res: Response): Promise<voi
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
   const analysis = await prisma.analysis.findFirst({
-    where: { id: parsed.data.analysisId, userId: req.userId! },
+    where: { id: parsed.data.analysisId, userId: { in: req.scopeUserIds! } },
     select: { id: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -212,7 +212,7 @@ router.delete("/allocations/:id", async (req: AuthRequest, res: Response): Promi
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
   const allocation = await prisma.allocation.findFirst({
-    where: { id, analysis: { userId: req.userId! } },
+    where: { id, analysis: { userId: { in: req.scopeUserIds! } } },
     select: { id: true },
   });
   if (!allocation) { res.status(404).json({ error: "Alocação não encontrada" }); return; }
