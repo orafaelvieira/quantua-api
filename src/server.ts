@@ -24,6 +24,13 @@ import { startJobs } from "./jobs";
 
 const app = express();
 
+// Atrás do proxy da DigitalOcean App Platform há exatamente 1 hop. Sem isso,
+// o Express trata trust proxy como false e o express-rate-limit lança
+// ValidationError (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR) ao ver X-Forwarded-For,
+// além de não conseguir identificar o IP real do cliente. Trust=1 (não `true`)
+// para não confiar em XFF arbitrário e evitar bypass do rate limit.
+app.set("trust proxy", 1);
+
 app.use(cors({
   origin: [
     env.frontendUrl,
