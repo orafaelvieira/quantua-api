@@ -15,6 +15,10 @@ export interface ValidationResult {
   equacaoPatrimonial: boolean;
   composicaoAtivo: boolean;
   composicaoPassivo: boolean;
+  /** false quando algum grupo do BP fecha no subtotal mas o detalhe está incompleto */
+  detalheCompleto: boolean;
+  /** grupos do BP com detalhe incompleto (subtotal ≠ soma das contas) */
+  gruposIncompletos: string[];
 }
 
 /**
@@ -215,8 +219,51 @@ export function validateFinancialData(
     alertas.push({ tipo: "info", area: "Completude DRE", mensagem: "Lucro Líquido não encontrado na DRE — ROE/ROA dependem do BP" });
   }
 
+  // ===== 7.5 Completude do DETALHE (subtotal vs soma das contas detalhadas) =====
+  // INTEGRIDADE: um BP pode fechar Ativo=Passivo no subtotal e ter o detalhe
+  // vazio. Isso quebra SILENCIOSAMENTE indicadores (liquidez seca, prazos médios,
+  // dívida líquida, capital de terceiros, NCG) sem o analista perceber. Detectamos
+  // e sinalizamos de forma destacada — o produto não pode gerar análise enganosa.
+  const SUBTOTAIS_BP = new Set([
+    "Ativo Total", "Ativo Circulante", "Ativo Não Circulante",
+    "Passivo Total", "Passivo Circulante", "Passivo Não Circulante", "Patrimônio Líquido",
+  ]);
+  const gruposDetalhe: Array<{ grupo: string; detailClasses: string[] }> = [
+    { grupo: "Ativo Circulante", detailClasses: ["AF", "AO"] },
+    { grupo: "Ativo Não Circulante", detailClasses: ["ANC"] },
+    { grupo: "Passivo Circulante", detailClasses: ["PO", "PF"] },
+    { grupo: "Passivo Não Circulante", detailClasses: ["PNC"] },
+    { grupo: "Patrimônio Líquido", detailClasses: ["PL"] },
+  ];
+  const gruposIncompletos: string[] = [];
+  for (const { grupo, detailClasses } of gruposDetalhe) {
+    let pior: { sub: number; det: number; per: string } | null = null;
+    for (const periodo of periodos) {
+      const sub = Math.abs(bpVal(bp, grupo, periodo));
+      if (sub < 1000) continue;
+      const det = bp
+        .filter(b => detailClasses.includes(b.classificacao) && !SUBTOTAIS_BP.has(b.conta))
+        .reduce((s, b) => s + Math.abs(b.valores[periodo] ?? 0), 0);
+      if (det / sub < 0.97 && (!pior || (sub - det) > (pior.sub - pior.det))) {
+        pior = { sub, det, per: periodo };
+      }
+    }
+    if (pior) {
+      gruposIncompletos.push(grupo);
+      const cob = pior.det / pior.sub;
+      alertas.push({
+        tipo: cob < 0.05 ? "erro" : "aviso",
+        area: "Completude do detalhe",
+        mensagem: `${grupo}: subtotal ${fmtBRL(pior.sub)} mas as contas detalhadas somam apenas ${fmtBRL(pior.det)} (${(cob * 100).toFixed(0)}%) em ${pior.per}`,
+        detalhes: `Faltam ${fmtBRL(pior.sub - pior.det)} em contas detalhadas. Indicadores que dependem delas (liquidez seca, prazos médios, dívida líquida, capital de terceiros, NCG) podem estar INCORRETOS. Use "Conciliar com IA" ou preencha no "Editar".`,
+      });
+    }
+  }
+  const detalheCompleto = gruposIncompletos.length === 0;
+
   // ===== 8. Calculate overall confidence score =====
   let confiancaGeral = 100;
+  if (!detalheCompleto) confiancaGeral -= 15 + gruposIncompletos.length * 5;
 
   // Deduct for missing critical items
   if (!hasAtivoTotal) confiancaGeral -= 15;
@@ -254,6 +301,8 @@ export function validateFinancialData(
     equacaoPatrimonial,
     composicaoAtivo,
     composicaoPassivo,
+    detalheCompleto,
+    gruposIncompletos,
   };
 }
 
