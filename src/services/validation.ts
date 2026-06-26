@@ -261,6 +261,27 @@ export function validateFinancialData(
   }
   const detalheCompleto = gruposIncompletos.length === 0;
 
+  // ===== 7.6 Granularidade: muito valor em "Outros" → indicadores menos precisos =====
+  const baldesOutros: Array<{ outros: string; subtotal: string }> = [
+    { outros: "Outros Ativos Circulantes", subtotal: "Ativo Circulante" },
+    { outros: "Outros Passivos Circulantes", subtotal: "Passivo Circulante" },
+  ];
+  for (const { outros, subtotal } of baldesOutros) {
+    for (const periodo of periodos) {
+      const o = Math.abs(bpVal(bp, outros, periodo));
+      const s = Math.abs(bpVal(bp, subtotal, periodo));
+      if (s > 1000 && o / s > 0.2 && o > 1000) {
+        alertas.push({
+          tipo: "aviso",
+          area: "Granularidade",
+          mensagem: `${fmtBRL(o)} agregados em "${outros}" (${((o / s) * 100).toFixed(0)}% do ${subtotal}) em ${periodo}`,
+          detalhes: `Classifique as contas originais (auditoria) para precisão dos indicadores que dependem do detalhe.`,
+        });
+        break;
+      }
+    }
+  }
+
   // ===== 8. Calculate overall confidence score =====
   let confiancaGeral = 100;
   if (!detalheCompleto) confiancaGeral -= 15 + gruposIncompletos.length * 5;

@@ -9,7 +9,7 @@ import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocum
 import { generateAnalysis } from "../services/claude";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods } from "../services/account-mapper";
 import { calculateIndicators } from "../services/indicator-calculator";
-import { extractFinancialsWithAI } from "../services/ai-extraction";
+import { extractFinancialsWithAI, foldBP } from "../services/ai-extraction";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
@@ -538,6 +538,35 @@ router.put("/:id/dados-estruturados/dre", async (req: AuthRequest, res: Response
     data: { dadosEstruturados: dados },
   });
   res.json({ ok: true });
+});
+
+// Re-dobra (fold) a árvore original guardada com o dicionário ATUAL — sem IA.
+// Usado após o analista classificar uma conta "Outros": reprocessa de graça.
+router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: { in: req.scopeUserIds! } },
+    select: { dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const dados = analysis.dadosEstruturados as any;
+  const arvore = dados?.arvoreOriginalBP;
+  if (!arvore) { res.status(400).json({ error: "Sem árvore original — rode 'Conciliar com IA' primeiro" }); return; }
+
+  const dictRows = await prisma.accountDictionary.findMany({
+    where: { OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }], tipo: "BP" },
+    select: { nomeOriginal: true, contaDestino: true, grupoConta: true },
+  });
+  const periodos: string[] = dados.periodos ?? Object.keys(arvore);
+  const { bp, naoMapeados } = foldBP(arvore, periodos, dictRows);
+
+  dados.bp = bp;
+  dados.naoMapeados = naoMapeados;
+  dados.arvoreOriginalBP = arvore; // re-anotado pelo foldBP (destinos atualizados)
+  dados.indicadores = calculateIndicators(bp, dados.dre ?? [], periodos);
+
+  await prisma.analysis.update({ where: { id }, data: { dadosEstruturados: dados } });
+  res.json({ ok: true, naoMapeados: naoMapeados.length });
 });
 
 // Salva a árvore original do BP (auditoria original ↔ padrão) + não-mapeados

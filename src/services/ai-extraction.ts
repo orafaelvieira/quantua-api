@@ -88,7 +88,7 @@ const OUTROS_GRUPO: Record<string, string | null> = {
   ANC: null, PNC: null, PL: null, // sem balde limpo → vira gap sinalizado (integridade)
 };
 
-function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryEntry[]): { bp: BPLineItem[]; naoMapeados: NaoMapeado[] } {
+export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryEntry[]): { bp: BPLineItem[]; naoMapeados: NaoMapeado[] } {
   const detalhe: Record<string, Record<string, number>> = {}; // conta → periodo → valor
   const subtotal: Record<string, Record<string, number>> = {}; // grupoCode → periodo → valor
   const naoMapeados: NaoMapeado[] = [];
