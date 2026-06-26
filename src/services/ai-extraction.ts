@@ -16,40 +16,42 @@ export interface AIExtractionResult {
   bp: BPLineItem[];
   dre: DRELineItem[];
   periodos: string[];
+  /** subtotais como DECLARADOS nos PDFs (para reconciliação) — por período */
+  declarados: Record<string, Record<string, number>>;
 }
 
 const yearOf = (p: string): string | null => (p.match(/(20[0-3]\d)/) || [])[1] ?? null;
 
 function periodKeyInstruction(periodos: string[]): string {
   if (!periodos.length) return "Use o(s) período(s) do documento como chave (ex.: o ano).";
-  return `Use EXATAMENTE estas chaves de período no JSON: ${JSON.stringify(periodos)}. Mapeie o(s) período(s) do documento para a chave de mesmo ano.`;
+  return `Use EXATAMENTE estas chaves de período no JSON: ${JSON.stringify(periodos)}. Mapeie o período do documento para a chave de mesmo ano.`;
 }
 
-function drerompt(periodos: string[]): string {
+function drePrompt(periodos: string[]): string {
   return `Você é especialista em contabilidade brasileira. Extraia a DRE deste PDF e mapeie para o MODELO PADRÃO.
 REGRAS:
-- Respeite a HIERARQUIA visual (indentação/negrito): contas indentadas são FILHAS de um total. Use os TOTAIS de cada seção e NÃO some um total com seus próprios filhos (dupla contagem).
+- Respeite a HIERARQUIA visual (indentação/negrito): contas indentadas são FILHAS de um total. Use os TOTAIS de cada seção e NÃO some um total com seus próprios filhos.
 - Sinais: RECEITAS positivas; DEDUÇÕES, CUSTOS, DESPESAS e IR/CSLL NEGATIVOS.
 - ${periodKeyInstruction(periodos)}
-- Use 0 quando a conta não existir.
-Contas de input da DRE (os subtotais serão calculados pelo sistema — não os retorne):
+Contas de input (subtotais NÃO — serão calculados):
 ${dreInputs.map((c) => "- " + c).join("\n")}
-Retorne APENAS JSON: { "<periodo>": { "<conta>": <numero>, ... }, ... }. Sem markdown.`;
+Retorne APENAS JSON, sem markdown:
+{ "inputs": { "<periodo>": { "<conta>": <num>, ... } },
+  "declarados": { "<periodo>": { "Receita Líquida": <valor exibido no PDF>, "Lucro Bruto": <valor exibido>, "Lucro Líquido": <valor exibido> } } }`;
 }
 
-function bprompt(periodos: string[]): string {
+function bpPrompt(periodos: string[]): string {
   return `Você é especialista em contabilidade brasileira. Extraia o BALANÇO PATRIMONIAL deste PDF e mapeie para o MODELO PADRÃO.
 REGRAS:
-- Respeite a HIERARQUIA visual (indentação/negrito): use os TOTAIS de cada grupo; não some um total com seus filhos.
+- Respeite a HIERARQUIA visual: use os TOTAIS de cada grupo; não some um total com seus filhos. Mapeie cada conta detalhada para a conta-padrão correta (não deixe nenhuma de fora — agregue em "Outros..." quando não houver correspondência exata).
 - Ativo positivo. Ativo Total DEVE igualar Passivo Total. Preencha também os subtotais (Ativo Total, Ativo Circulante, Passivo Total, Passivo Circulante, Patrimônio Líquido, etc.).
 - ${periodKeyInstruction(periodos)}
-- Use 0 quando a conta não existir.
 Contas do BP:
 ${bpContas.map((c) => "- " + c).join("\n")}
-Retorne APENAS JSON: { "<periodo>": { "<conta>": <numero>, ... }, ... }. Sem markdown.`;
+Retorne APENAS JSON, sem markdown: { "<periodo>": { "<conta>": <num>, ... }, ... }`;
 }
 
-async function askJson(buffer: Buffer, prompt: string): Promise<Record<string, Record<string, number>>> {
+async function ask(buffer: Buffer, prompt: string): Promise<any> {
   const msg = await client.messages.create({
     model: AI_MODEL,
     max_tokens: 3000,
@@ -63,47 +65,75 @@ async function askJson(buffer: Buffer, prompt: string): Promise<Record<string, R
   try { return JSON.parse(txt); } catch { return {}; }
 }
 
-/** Mapeia uma chave de período retornada pela IA para a chave canônica (mesmo ano). */
 function canonicalPeriod(returned: string, canonicos: string[]): string {
   if (canonicos.includes(returned)) return returned;
   const y = yearOf(returned);
-  if (y) { const match = canonicos.find((c) => yearOf(c) === y); if (match) return match; }
+  if (y) { const m = canonicos.find((c) => yearOf(c) === y); if (m) return m; }
   return returned;
 }
 
 /**
- * Extrai BP + DRE de documentos (PDF) usando Claude com visão (PDF nativo),
- * mapeando direto ao modelo padrão. Prompts FOCADOS por tipo de documento.
- * Fallback acionado pelo analista quando o parser heurístico não reconcilia.
+ * Extrai BP + DRE de documentos (PDF) via Claude com visão (PDF nativo), com
+ * prompts FOCADOS por tipo e em PARALELO. A própria IA devolve os subtotais
+ * declarados (sem reparse heurístico). Fallback acionado pelo analista.
  */
 export async function extractFinancialsWithAI(
   docs: Array<{ buffer: Buffer; tipo: string }>,
   periodos: string[]
 ): Promise<AIExtractionResult> {
+  // Dispara todas as chamadas em paralelo
+  const tasks = docs.flatMap((doc) => {
+    const t = doc.tipo.toLowerCase();
+    const isDRE = /dre|resultado|demonstra/.test(t);
+    const isBP = /balan|patrimonial|\bbp\b/.test(t);
+    const out: Array<Promise<{ kind: "dre" | "bp"; data: any }>> = [];
+    if (isDRE || !isBP) out.push(ask(doc.buffer, drePrompt(periodos)).then((data) => ({ kind: "dre" as const, data })));
+    if (isBP || (!isDRE && !isBP)) out.push(ask(doc.buffer, bpPrompt(periodos)).then((data) => ({ kind: "bp" as const, data })));
+    return out;
+  });
+  const results = await Promise.all(tasks);
+
   const bpAcc: Record<string, Record<string, number>> = {};
   const dreAcc: Record<string, Record<string, number>> = {};
+  const declarados: Record<string, Record<string, number>> = {};
   const periodSet = new Set<string>(periodos);
 
   const store = (acc: Record<string, Record<string, number>>, raw: Record<string, Record<string, number>>) => {
-    for (const [pRaw, contas] of Object.entries(raw)) {
-      const p = canonicalPeriod(pRaw, periodos);
-      periodSet.add(p);
+    for (const [pRaw, contas] of Object.entries(raw ?? {})) {
+      if (!contas || typeof contas !== "object") continue;
+      const p = canonicalPeriod(pRaw, periodos); periodSet.add(p);
       for (const [conta, valor] of Object.entries(contas)) {
-        if (typeof valor === "number" && valor !== 0) { (acc[conta] ??= {})[p] = valor; }
+        if (typeof valor === "number" && valor !== 0) (acc[conta] ??= {})[p] = valor;
       }
     }
   };
 
-  for (const doc of docs) {
-    const t = doc.tipo.toLowerCase();
-    const isDRE = /dre|resultado|demonstra/.test(t);
-    const isBP = /balan|patrimonial|\bbp\b/.test(t);
-    if (isDRE || !isBP) store(dreAcc, await askJson(doc.buffer, drerompt(periodos)));
-    if (isBP || (!isDRE && !isBP)) store(bpAcc, await askJson(doc.buffer, bprompt(periodos)));
+  // declarados é período→conta→valor (diferente de store, que é conta→período).
+  // Aceita aninhado { "2023": {...} } ou achatado { "Lucro Bruto": n }.
+  const setDecl = (p: string, conta: string, valor: unknown) => {
+    if (typeof valor === "number" && valor !== 0) (declarados[p] ??= {})[conta] = valor;
+  };
+  const storeDeclarados = (raw: any) => {
+    if (!raw || typeof raw !== "object") return;
+    const aninhado = Object.values(raw).some((v) => v && typeof v === "object");
+    if (aninhado) {
+      for (const [pRaw, contas] of Object.entries(raw)) {
+        if (!contas || typeof contas !== "object") continue;
+        const p = canonicalPeriod(pRaw, periodos); periodSet.add(p);
+        for (const [conta, valor] of Object.entries(contas as any)) setDecl(p, conta, valor);
+      }
+    } else {
+      const p = periodos[0] ?? Array.from(periodSet)[0] ?? "0";
+      for (const [conta, valor] of Object.entries(raw)) setDecl(p, conta, valor);
+    }
+  };
+
+  for (const r of results) {
+    if (r.kind === "bp") store(bpAcc, r.data);
+    else { store(dreAcc, r.data?.inputs); storeDeclarados(r.data?.declarados); }
   }
 
   const allPeriodos = Array.from(periodSet);
-
   const bp: BPLineItem[] = BP_TEMPLATE.map((t) => ({
     classificacao: t.classificacao, conta: t.conta, valores: bpAcc[t.conta] ?? {}, nivel: t.nivel, editado: false,
   }));
@@ -113,5 +143,5 @@ export async function extractFinancialsWithAI(
   normalizeDRESigns(dre, allPeriodos);
   recomputeDRESubtotals(dre, allPeriodos);
 
-  return { bp, dre, periodos: allPeriodos };
+  return { bp, dre, periodos: allPeriodos, declarados };
 }

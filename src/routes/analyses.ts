@@ -603,53 +603,37 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
     include: { documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
-  const docs = analysis.documents.filter((d) => d.storagePath);
-  if (docs.length === 0) { res.status(400).json({ error: "Nenhum documento disponível" }); return; }
 
-  // Períodos autoritativos: os já usados na análise (para o resultado da IA alinhar
-  // com o display). Se ainda não houver, deduz do parser heurístico mais abaixo.
-  const periodosExistentes: string[] = ((analysis.dadosEstruturados as any)?.periodos as string[]) ?? [];
+  // Apenas DEMONSTRAÇÕES (BP/DRE/Balancete) — ignora data-room/contratos/etc.
+  const docs = analysis.documents.filter(
+    (d) => d.storagePath && /dre|resultado|demonstra|balan|patrimonial|\bbp\b/i.test(`${d.tipo} ${d.nome}`)
+  );
+  if (docs.length === 0) { res.status(400).json({ error: "Nenhuma demonstração (BP/DRE) disponível para reconciliar" }); return; }
 
-  // Subtotais declarados nos PDFs (oráculo de reconciliação) — via parser heurístico
-  const declarados: Record<string, number> = {};
-  const declPats: Array<[RegExp, string]> = [
-    [/^receita liquida|^receita operacional liquida/, "Receita Líquida"],
-    [/^lucro bruto|^resultado bruto/, "Lucro Bruto"],
-    [/^lucro liquido|^resultado liquido/, "Lucro Líquido"],
-  ];
-  const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+  // Períodos autoritativos: os já usados na análise (alinha o resultado ao display).
+  const periodosAlvo: string[] = ((analysis.dadosEstruturados as any)?.periodos as string[]) ?? [];
 
   try {
-    const buffers: Array<{ buffer: Buffer; tipo: string }> = [];
-    const periodosHint = new Set<string>();
-    for (const d of docs) {
-      const buffer = await downloadFile(d.storagePath!);
-      buffers.push({ buffer, tipo: d.tipo });
-      try {
-        const parsed = await parseDocument(buffer, d.nome, d.tipo);
-        for (const p of parsed.periodos) periodosHint.add(p);
-        const p0 = parsed.periodos[0];
-        if (p0) for (const l of parsed.linhas) {
-          const n = norm(l.conta);
-          for (const [re, key] of declPats) {
-            if (re.test(n) && declarados[key] === undefined && l.valores[p0]) declarados[key] = l.valores[p0];
-          }
-        }
-      } catch { /* ignora parse heurístico falho */ }
-    }
+    // Download em paralelo
+    const buffers = await Promise.all(
+      docs.map(async (d) => ({ buffer: await downloadFile(d.storagePath!), tipo: d.tipo }))
+    );
 
-    const periodosAlvo = periodosExistentes.length ? periodosExistentes : Array.from(periodosHint);
-    const { bp, dre, periodos } = await extractFinancialsWithAI(buffers, periodosAlvo);
+    const { bp, dre, periodos, declarados } = await extractFinancialsWithAI(buffers, periodosAlvo);
     const indicadores = calculateIndicators(bp, dre, periodos);
 
-    // Reconciliação: subtotal computado pela IA vs declarado no PDF
+    // Reconciliação: subtotal computado vs DECLARADO no PDF (vindo da própria IA)
     const p0 = periodos[0];
+    const decl = declarados[p0] ?? {};
     const comp = (c: string) => dre.find((d) => d.conta === c)?.valores[p0] ?? 0;
-    const reconciliacao = Object.entries(declarados).map(([conta, declarado]) => {
-      const computado = comp(conta);
-      const ok = Math.abs(Math.abs(computado) - Math.abs(declarado)) < Math.max(Math.abs(declarado) * 0.01, 1000);
-      return { conta, declarado, computado, ok };
-    });
+    const reconciliacao = ["Receita Líquida", "Lucro Bruto", "Lucro Líquido"]
+      .filter((c) => typeof decl[c] === "number" && decl[c] !== 0)
+      .map((conta) => {
+        const declarado = decl[conta];
+        const computado = comp(conta);
+        const ok = Math.abs(Math.abs(computado) - Math.abs(declarado)) < Math.max(Math.abs(declarado) * 0.01, 1000);
+        return { conta, declarado, computado, ok };
+      });
 
     res.json({ bp, dre, indicadores, periodos, reconciliacao });
   } catch (err: any) {
