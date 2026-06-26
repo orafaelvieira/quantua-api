@@ -540,6 +540,23 @@ router.put("/:id/dados-estruturados/dre", async (req: AuthRequest, res: Response
   res.json({ ok: true });
 });
 
+// Salva a árvore original do BP (auditoria original ↔ padrão) + não-mapeados
+router.put("/:id/dados-estruturados/arvore", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: { in: req.scopeUserIds! } },
+    select: { dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  const dados = (analysis.dadosEstruturados as any) || { bp: [], dre: [], indicadores: [], periodos: [], version: 1 };
+  dados.arvoreOriginalBP = req.body.arvoreOriginalBP ?? null;
+  dados.naoMapeados = req.body.naoMapeados ?? [];
+
+  await prisma.analysis.update({ where: { id }, data: { dadosEstruturados: dados } });
+  res.json({ ok: true });
+});
+
 router.put("/:id/dados-estruturados/indicadores/override", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({

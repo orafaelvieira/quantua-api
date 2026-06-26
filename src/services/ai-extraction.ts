@@ -9,7 +9,7 @@ const AI_MODEL = "claude-sonnet-4-6";
 const dreInputs = DRE_TEMPLATE.filter((t) => !t.subtotal).map((t) => t.conta);
 
 // ── Tipos da árvore N3 do BP ──
-export interface BPN3Item { nome: string; valor: number }
+export interface BPN3Item { nome: string; valor: number; destino?: string }
 export interface BPN3Periodo { grupos: Record<string, BPN3Item[]>; totais?: Record<string, number> }
 /** Árvore original do BP até o nível 3, por período (auditoria). */
 export type ArvoreOriginalBP = Record<string, BPN3Periodo>;
@@ -104,10 +104,12 @@ function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryE
         const dest = mapAccountToBPGroup(it.nome, g, dict);
         if (dest) {
           add(detalhe, dest, p, it.valor);
+          it.destino = dest; // anota a trilha original → padrão
         } else {
           const balde = OUTROS_GRUPO[g];
           if (balde) add(detalhe, balde, p, it.valor);
-          naoMapeados.push({ nome: it.nome, grupo: grupoNome, destino: balde ?? "(não classificado)", valor: it.valor, periodo: p });
+          it.destino = balde ?? "(não classificado)";
+          naoMapeados.push({ nome: it.nome, grupo: grupoNome, destino: it.destino, valor: it.valor, periodo: p });
         }
       }
     }
