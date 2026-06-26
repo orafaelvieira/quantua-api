@@ -88,6 +88,9 @@ const FONT_DISPLAY = `'Sora', -apple-system, BlinkMacSystemFont, 'Segoe UI', Ari
 const FONT_MONO = `'JetBrains Mono', 'SFMono-Regular', Consolas, monospace`;
 const FONT_BODY = `'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif`;
 const DEFAULT_FOOTER = "Quantua Serviços de Análise Ltda. · IBR em 10 dias úteis";
+// Logo da marca hospedada no front (servida em produção). Imagem PNG porque
+// clientes de email bloqueiam SVG e data-URIs; `alt` cobre imagens bloqueadas.
+const LOGO_URL = "https://quantua.com.br/email-logo.png";
 
 /**
  * Envelope visual padrão Quantua: canvas → card centralizado com barra de
@@ -105,8 +108,8 @@ function renderShell(o: { eyebrow: string; body: string; footer?: string; accent
           <td style="padding:32px 40px 0;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
               <tr>
-                <td style="font-family:${FONT_MONO}; font-size:15px; letter-spacing:0.30em; font-weight:700; color:${C.ink}; text-transform:uppercase;">QUANTUA</td>
-                <td align="right" style="font-family:${FONT_MONO}; font-size:9px; letter-spacing:0.14em; color:${C.ink4}; text-transform:uppercase;">IBR · 10 dias úteis</td>
+                <td style="vertical-align:middle;"><img src="${LOGO_URL}" alt="Quantua" width="103" height="30" style="display:block; border:0; height:30px; width:103px;"></td>
+                <td align="right" style="vertical-align:middle; font-family:${FONT_MONO}; font-size:9px; letter-spacing:0.14em; color:${C.ink4}; text-transform:uppercase;">IBR · 10 dias úteis</td>
               </tr>
             </table>
             <div style="margin-top:26px;">
