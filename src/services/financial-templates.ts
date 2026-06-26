@@ -52,32 +52,44 @@ export const BP_TEMPLATE: Array<{ classificacao: string; conta: string; nivel: n
   { classificacao: "PL", conta: "Adiantamento para Futuro Aumento Capital - PL", nivel: 2 },
 ];
 
+// DRE padrão (modelo gerencial Quantua — espelha Modelo_DRE.xlsx).
+// Convenção de sinais (alinhada ao restante do sistema): receitas positivas,
+// deduções/custos/despesas/IR negativos. Subtotais são calculados em cascata
+// por `recomputeDRESubtotals` (account-mapper.ts):
+//   Receita Líquida          = Receita Bruta + Deduções + Impostos s/ Faturamento
+//   Lucro Bruto              = Receita Líquida + Custo Operacional
+//   EBITDA                   = Lucro Bruto + G&A + Vendas + Marketing + P&D + Outras Rec/Desp Op
+//   EBIT                     = EBITDA + Depreciação e Amortização + Equivalência Patrimonial
+//   Resultado Financeiro     = Receitas Financeiras + Despesas Financeiras
+//   Resultado Não Operacional= Outras Receitas Não Op + Outras Despesas Não Op
+//   Resultado Antes do IR    = EBIT + Resultado Financeiro + Resultado Não Operacional
+//   Lucro Líquido            = Resultado Antes do IR e CSLL + IR e CSLL
 export const DRE_TEMPLATE: Array<{ conta: string; subtotal: boolean }> = [
-  { conta: "Receita Bruta de Vendas e/ou Serviços", subtotal: false },
+  { conta: "Receita Bruta", subtotal: false },
   { conta: "Deduções da Receita Bruta", subtotal: false },
+  { conta: "Impostos s/ Faturamento", subtotal: false },
   { conta: "Receita Líquida", subtotal: true },
   { conta: "Custo Operacional", subtotal: false },
-  { conta: "Resultado Bruto", subtotal: true },
+  { conta: "Lucro Bruto", subtotal: true },
   { conta: "Despesas Gerais e Administrativas", subtotal: false },
-  { conta: "Despesas Com Vendas", subtotal: false },
-  { conta: "Perdas pela Não Recuperabilidade de Ativos", subtotal: false },
+  { conta: "Despesas com Vendas", subtotal: false },
+  { conta: "Despesas com Marketing", subtotal: false },
+  { conta: "Despesas com P&D", subtotal: false },
   { conta: "Outras Receitas Operacionais", subtotal: false },
   { conta: "Outras Despesas Operacionais", subtotal: false },
-  { conta: "Resultado Operacional", subtotal: true },
-  { conta: "Resultado da Equivalência Patrimonial", subtotal: false },
-  { conta: "Resultado Financeiro", subtotal: false },
+  { conta: "EBITDA", subtotal: true },
+  { conta: "Depreciação e Amortização", subtotal: false },
+  { conta: "Equivalência Patrimonial", subtotal: false },
+  { conta: "EBIT", subtotal: true },
+  { conta: "Resultado Financeiro", subtotal: true },
   { conta: "Receitas Financeiras", subtotal: false },
   { conta: "Despesas Financeiras", subtotal: false },
-  { conta: "Resultado Não Operacional", subtotal: false },
-  { conta: "Receitas", subtotal: false },
-  { conta: "Despesas", subtotal: false },
-  { conta: "Resultado Antes Tributação/Participações", subtotal: true },
-  { conta: "Provisão para IR e Contribuição Social", subtotal: false },
-  { conta: "IR Diferido", subtotal: false },
-  { conta: "Participações/Contribuições Estatutárias", subtotal: false },
-  { conta: "Reversão dos Juros sobre Capital Próprio", subtotal: false },
-  { conta: "Part. de Acionistas Não Controladores", subtotal: false },
-  { conta: "Lucro ou Prejuízo do Período", subtotal: true },
+  { conta: "Resultado Não Operacional", subtotal: true },
+  { conta: "Outras Receitas Não Operacionais", subtotal: false },
+  { conta: "Outras Despesas Não Operacionais", subtotal: false },
+  { conta: "Resultado Antes do IR e CSLL", subtotal: true },
+  { conta: "IR e CSLL", subtotal: false },
+  { conta: "Lucro Líquido", subtotal: true },
 ];
 
 export const INDICADORES_TEMPLATE: Array<{
@@ -89,13 +101,13 @@ export const INDICADORES_TEMPLATE: Array<{
   // Indicadores Operacionais
   { tipo: "Indicadores Operacionais", nome: "Receita Líquida", formula: "Receita Bruta (-) Impostos (-) Cancelamentos", tipoDado: "R$" },
   { tipo: "Indicadores Operacionais", nome: "Lucro Bruto", formula: "Receita Líquida (-) Custo Operacional", tipoDado: "R$" },
-  { tipo: "Indicadores Operacionais", nome: "Lucro Operacional", formula: "Lucro Bruto (-) Despesas Gerais e Administrativas (-) Despesas Com Vendas (-) Perdas pela Não Recuperabilidade de Ativos (+) Outras Receitas Operacionais (+) Outras Despesas Operacionais", tipoDado: "R$" },
-  { tipo: "Indicadores Operacionais", nome: "Lucro Líquido", formula: "Lucro Bruto (+) Resultado Financeiro (+) Resultado Não Operacional (-) Impostos sobre a Renda", tipoDado: "R$" },
-  { tipo: "Indicadores Operacionais", nome: "NOPAT", formula: "Lucro Operacional × (1 - Impostos (34%))", tipoDado: "R$" },
+  { tipo: "Indicadores Operacionais", nome: "Lucro Operacional", formula: "EBIT = EBITDA (-) Depreciação e Amortização (+) Equivalência Patrimonial", tipoDado: "R$" },
+  { tipo: "Indicadores Operacionais", nome: "Lucro Líquido", formula: "Resultado Antes do IR e CSLL (-) IR e CSLL", tipoDado: "R$" },
+  { tipo: "Indicadores Operacionais", nome: "NOPAT", formula: "EBIT × (1 - Impostos (34%))", tipoDado: "R$" },
 
   // Indicadores de Margens
   { tipo: "Indicadores de Margens", nome: "Margem Bruta", formula: "Lucro Bruto / Receita Líquida", tipoDado: "%" },
-  { tipo: "Indicadores de Margens", nome: "Margem Operacional", formula: "Lucro Operacional / Receita Líquida", tipoDado: "%" },
+  { tipo: "Indicadores de Margens", nome: "Margem Operacional", formula: "EBITDA / Receita Líquida", tipoDado: "%" },
   { tipo: "Indicadores de Margens", nome: "Margem Líquida", formula: "Lucro Líquido / Receita Líquida", tipoDado: "%" },
 
   // Indicadores de Liquidez
@@ -122,16 +134,16 @@ export const INDICADORES_TEMPLATE: Array<{
   { tipo: "Indicadores de Endividamento", nome: "Endividamento de Curto Prazo", formula: "Passivo Circulante / Passivo Total", tipoDado: "%" },
   { tipo: "Indicadores de Endividamento", nome: "Patrimônio Líquido", formula: "Patrimônio Líquido", tipoDado: "R$" },
   { tipo: "Indicadores de Endividamento", nome: "Capital Terceiros s/ PL", formula: "Capital de Terceiros / Patrimônio Líquido", tipoDado: "Índice" },
-  { tipo: "Indicadores de Endividamento", nome: "Dívida Líquida/Lucro Operacional", formula: "Dívida Líquida / Lucro Operacional", tipoDado: "Índice" },
-  { tipo: "Indicadores de Endividamento", nome: "Índice de Cobertura de Juros", formula: "Lucro Operacional / Despesas Financeiras", tipoDado: "Índice" },
+  { tipo: "Indicadores de Endividamento", nome: "Dívida Líquida/Lucro Operacional", formula: "Dívida Líquida / EBITDA", tipoDado: "Índice" },
+  { tipo: "Indicadores de Endividamento", nome: "Índice de Cobertura de Juros", formula: "EBITDA / Despesas Financeiras", tipoDado: "Índice" },
   { tipo: "Indicadores de Endividamento", nome: "Despesa Financeira / Rec. Líquida", formula: "Despesas Financeiras / Receita Líquida", tipoDado: "%" },
 
   // Indicadores de Rentabilidade
-  { tipo: "Indicadores de Rentabilidade", nome: "ROA (Retorno sobre Ativos)", formula: "Lucro ou Prejuízo do Período / Ativo Total", tipoDado: "%" },
+  { tipo: "Indicadores de Rentabilidade", nome: "ROA (Retorno sobre Ativos)", formula: "Lucro Líquido / Ativo Total", tipoDado: "%" },
   { tipo: "Indicadores de Rentabilidade", nome: "ROIC (Retorno sobre Capital Investido)", formula: "NOPAT / (Patrimônio Líquido + Capital de Terceiros)", tipoDado: "%" },
 
   // Indicadores de Rentabilidade - Modelo Dupont
-  { tipo: "Indicadores de Rentabilidade - Modelo Dupont", nome: "ROE (Retorno sobre Patrimônio Líquido)", formula: "Lucro ou Prejuízo do Período / Patrimônio Líquido", tipoDado: "%" },
+  { tipo: "Indicadores de Rentabilidade - Modelo Dupont", nome: "ROE (Retorno sobre Patrimônio Líquido)", formula: "Lucro Líquido / Patrimônio Líquido", tipoDado: "%" },
   { tipo: "Indicadores de Rentabilidade - Modelo Dupont", nome: "Margem Líquida", formula: "Lucro Líquido / Receita Líquida", tipoDado: "%" },
   { tipo: "Indicadores de Rentabilidade - Modelo Dupont", nome: "Giro do Ativo", formula: "Receita Líquida / Ativo Total", tipoDado: "Índice" },
   { tipo: "Indicadores de Rentabilidade - Modelo Dupont", nome: "Alavancagem", formula: "Passivo Total / Patrimônio Líquido", tipoDado: "Índice" },
@@ -628,31 +640,30 @@ export const ACCOUNT_ALIASES: Record<string, string> = {
   "LUCRO DO EXERCICIO": "Resultado do Exercício",
 
   // ===== DRE ALIASES =====
-  "Receita Operacional Bruta": "Receita Bruta de Vendas e/ou Serviços",
-  "Receita Bruta": "Receita Bruta de Vendas e/ou Serviços",
-  "RECEITA BRUTA DE VENDAS E SERVIÇOS": "Receita Bruta de Vendas e/ou Serviços",
-  "RECEITA BRUTA DE VENDAS E SERVICOS": "Receita Bruta de Vendas e/ou Serviços",
-  "Faturamento Bruto": "Receita Bruta de Vendas e/ou Serviços",
-  "VENDA DE MERCADORIAS E PRODUTOS": "Receita Bruta de Vendas e/ou Serviços",
-  "RECEITA OPERACIONAL BRUTA": "Receita Bruta de Vendas e/ou Serviços",
-  "RECEITA BRUTA DE VENDAS": "Receita Bruta de Vendas e/ou Serviços",
-  "RECEITA BRUTA DE SERVIÇOS": "Receita Bruta de Vendas e/ou Serviços",
-  "VENDAS DE MERCADORIAS": "Receita Bruta de Vendas e/ou Serviços",
-  "VENDAS DE PRODUTOS": "Receita Bruta de Vendas e/ou Serviços",
-  "PRESTAÇÃO DE SERVIÇOS": "Receita Bruta de Vendas e/ou Serviços",
-  "FATURAMENTO": "Receita Bruta de Vendas e/ou Serviços",
-  "RECEITA DE VENDAS": "Receita Bruta de Vendas e/ou Serviços",
+  "Receita Operacional Bruta": "Receita Bruta",
+  "Receita Bruta": "Receita Bruta",
+  "RECEITA BRUTA DE VENDAS E SERVIÇOS": "Receita Bruta",
+  "RECEITA BRUTA DE VENDAS E SERVICOS": "Receita Bruta",
+  "Faturamento Bruto": "Receita Bruta",
+  "VENDA DE MERCADORIAS E PRODUTOS": "Receita Bruta",
+  "RECEITA OPERACIONAL BRUTA": "Receita Bruta",
+  "RECEITA BRUTA DE VENDAS": "Receita Bruta",
+  "RECEITA BRUTA DE SERVIÇOS": "Receita Bruta",
+  "VENDAS DE MERCADORIAS": "Receita Bruta",
+  "VENDAS DE PRODUTOS": "Receita Bruta",
+  "PRESTAÇÃO DE SERVIÇOS": "Receita Bruta",
+  "FATURAMENTO": "Receita Bruta",
+  "RECEITA DE VENDAS": "Receita Bruta",
   // Note: "RECEITAS OPERACIONAIS" is NOT Receita Bruta — it's the total after
   // deductions. But in many DREs it's used as the top-level revenue line.
   // Map to Receita Bruta only when no separate Receita Bruta line exists.
-  "RECEITAS OPERACIONAIS": "Receita Bruta de Vendas e/ou Serviços",
+  "RECEITAS OPERACIONAIS": "Receita Bruta",
 
   "(-) Deduções": "Deduções da Receita Bruta",
   "Deduções": "Deduções da Receita Bruta",
   "DEDUCOES DAS VENDAS": "Deduções da Receita Bruta",
   "DEDUÇÕES DAS VENDAS": "Deduções da Receita Bruta",
   "Impostos sobre Vendas": "Deduções da Receita Bruta",
-  "IMPOSTOS S/FATURAMENTO": "Deduções da Receita Bruta",
   "ABATIMENTOS E DEVOLUÇÕES SOBRE VENDAS": "Deduções da Receita Bruta",
   "DEDUÇÕES DA RECEITA": "Deduções da Receita Bruta",
   "IMPOSTOS SOBRE VENDAS": "Deduções da Receita Bruta",
@@ -679,10 +690,10 @@ export const ACCOUNT_ALIASES: Record<string, string> = {
   "CUSTO DAS VENDAS": "Custo Operacional",
   "CMV/CPV/CSP": "Custo Operacional",
 
-  "Lucro Bruto": "Resultado Bruto",
-  "Resultado Operacional Bruto": "Resultado Bruto",
-  "RESULTADO BRUTO": "Resultado Bruto",
-  "LUCRO BRUTO": "Resultado Bruto",
+  "Lucro Bruto": "Lucro Bruto",
+  "Resultado Operacional Bruto": "Lucro Bruto",
+  "RESULTADO BRUTO": "Lucro Bruto",
+  "LUCRO BRUTO": "Lucro Bruto",
 
   "Despesas Administrativas": "Despesas Gerais e Administrativas",
   "Despesas Gerais": "Despesas Gerais e Administrativas",
@@ -692,57 +703,101 @@ export const ACCOUNT_ALIASES: Record<string, string> = {
   "DESPESAS GERAIS E ADMINISTRATIVAS": "Despesas Gerais e Administrativas",
   "DESPESAS COM PESSOAL": "Despesas Gerais e Administrativas",
 
-  "Despesas com Vendas": "Despesas Com Vendas",
-  "Despesas Comerciais": "Despesas Com Vendas",
-  "DESPESAS COMERCIAIS": "Despesas Com Vendas",
-  "DESPESAS COM TRANSPORTES": "Despesas Com Vendas",
-  "DESPESAS DE VENDAS": "Despesas Com Vendas",
+  "Despesas com Vendas": "Despesas com Vendas",
+  "Despesas Comerciais": "Despesas com Vendas",
+  "DESPESAS COMERCIAIS": "Despesas com Vendas",
+  "DESPESAS COM TRANSPORTES": "Despesas com Vendas",
+  "DESPESAS DE VENDAS": "Despesas com Vendas",
 
-  "Lucro Operacional": "Resultado Operacional",
-  "EBIT": "Resultado Operacional",
-  "Resultado Operacional Líquido": "Resultado Operacional",
+  "Lucro Operacional": "EBIT",
+  "EBIT": "EBIT",
+  "Resultado Operacional Líquido": "EBIT",
 
   "OUTRAS RECEITAS OPERACIONAIS": "Outras Receitas Operacionais",
   "OUTRAS RECEITAS": "Outras Receitas Operacionais",
   "OUTRAS DESPESAS OPERACIONAIS": "Outras Despesas Operacionais",
   "IMPOSTOS E TAXAS": "Outras Despesas Operacionais",
 
-  "Equivalência Patrimonial": "Resultado da Equivalência Patrimonial",
+  "Equivalência Patrimonial": "Equivalência Patrimonial",
   "Resultado Financeiro Líquido": "Resultado Financeiro",
   "RECEITAS FINANCEIRAS": "Receitas Financeiras",
   "DESPESAS FINANCEIRAS": "Despesas Financeiras",
 
-  "LAIR": "Resultado Antes Tributação/Participações",
-  "Lucro Antes do IR": "Resultado Antes Tributação/Participações",
-  "Resultado Antes dos Tributos": "Resultado Antes Tributação/Participações",
-  "RESULTADO ANTES DO IRPJ E CSLL": "Resultado Antes Tributação/Participações",
-  "LUCRO ANTES DOS TRIBUTOS": "Resultado Antes Tributação/Participações",
+  "LAIR": "Resultado Antes do IR e CSLL",
+  "Lucro Antes do IR": "Resultado Antes do IR e CSLL",
+  "Resultado Antes dos Tributos": "Resultado Antes do IR e CSLL",
+  "RESULTADO ANTES DO IRPJ E CSLL": "Resultado Antes do IR e CSLL",
+  "LUCRO ANTES DOS TRIBUTOS": "Resultado Antes do IR e CSLL",
 
-  "IR e CSLL": "Provisão para IR e Contribuição Social",
-  "Imposto de Renda": "Provisão para IR e Contribuição Social",
-  "IRPJ e CSLL": "Provisão para IR e Contribuição Social",
-  "PROVISÃO PARA IRPJ": "Provisão para IR e Contribuição Social",
-  "IMPOSTOS SOBRE O LUCRO": "Provisão para IR e Contribuição Social",
+  "IR e CSLL": "IR e CSLL",
+  "Imposto de Renda": "IR e CSLL",
+  "IRPJ e CSLL": "IR e CSLL",
+  "PROVISÃO PARA IRPJ": "IR e CSLL",
+  "IMPOSTOS SOBRE O LUCRO": "IR e CSLL",
 
-  "Lucro Líquido": "Lucro ou Prejuízo do Período",
-  "Prejuízo do Período": "Lucro ou Prejuízo do Período",
-  "Resultado Líquido": "Lucro ou Prejuízo do Período",
-  "RESULTADO LIQUIDO DO EXERCICIO": "Lucro ou Prejuízo do Período",
-  "Lucro/Prejuízo": "Lucro ou Prejuízo do Período",
-  "Lucro do Exercício": "Lucro ou Prejuízo do Período",
-  "Resultado do Exercício": "Lucro ou Prejuízo do Período",
-  "LUCRO LIQUIDO": "Lucro ou Prejuízo do Período",
-  "LUCRO LÍQUIDO": "Lucro ou Prejuízo do Período",
-  "RESULTADO DO PERIODO": "Lucro ou Prejuízo do Período",
-  "RESULTADO DO PERÍODO": "Lucro ou Prejuízo do Período",
-  "Lucro/Prejuízo do Exercício": "Lucro ou Prejuízo do Período",
+  "Lucro Líquido": "Lucro Líquido",
+  "Prejuízo do Período": "Lucro Líquido",
+  "Resultado Líquido": "Lucro Líquido",
+  "RESULTADO LIQUIDO DO EXERCICIO": "Lucro Líquido",
+  "Lucro/Prejuízo": "Lucro Líquido",
+  "Lucro do Exercício": "Lucro Líquido",
+  "Resultado do Exercício": "Lucro Líquido",
+  "LUCRO LIQUIDO": "Lucro Líquido",
+  "LUCRO LÍQUIDO": "Lucro Líquido",
+  "RESULTADO DO PERIODO": "Lucro Líquido",
+  "RESULTADO DO PERÍODO": "Lucro Líquido",
+  "Lucro/Prejuízo do Exercício": "Lucro Líquido",
 
-  "DESPESAS NÃO OPERACIONAIS": "Resultado Não Operacional",
+  "DESPESAS NÃO OPERACIONAIS": "Outras Despesas Não Operacionais",
 
   "CUSTO PRODUTOS MERCADORIAS E SERVIÇOS": "Custo Operacional",
   "CUSTO DAS MERCADORIAS REVENDIDAS": "Custo Operacional",
 
   "DEDUÇÕES DA RECEITA BRUTA": "Deduções da Receita Bruta",
 
-  "PROV P IMPOSTO DE RENDA E CONTRIBUIÇÃO SOCIAL": "Provisão para IR e Contribuição Social",
+  "PROV P IMPOSTO DE RENDA E CONTRIBUIÇÃO SOCIAL": "IR e CSLL",
+
+  // ── Linhas novas do DRE padrão gerencial (Modelo_DRE.xlsx) ──
+  "Impostos s/ Faturamento": "Impostos s/ Faturamento",
+  "Impostos sobre Faturamento": "Impostos s/ Faturamento",
+  "IMPOSTOS S/FATURAMENTO": "Impostos s/ Faturamento",
+  "IMPOSTOS S/ FATURAMENTO": "Impostos s/ Faturamento",
+  "Simples Nacional": "Impostos s/ Faturamento",
+  "SIMPLES NACIONAL": "Impostos s/ Faturamento",
+
+  "Despesas com Marketing": "Despesas com Marketing",
+  "Despesas de Marketing": "Despesas com Marketing",
+  "DESPESAS COM MARKETING": "Despesas com Marketing",
+  "Marketing": "Despesas com Marketing",
+  "Publicidade e Propaganda": "Despesas com Marketing",
+  "PUBLICIDADE E PROPAGANDA": "Despesas com Marketing",
+
+  "Despesas com P&D": "Despesas com P&D",
+  "Despesas com Pesquisa e Desenvolvimento": "Despesas com P&D",
+  "DESPESAS COM P&D": "Despesas com P&D",
+  "Pesquisa e Desenvolvimento": "Despesas com P&D",
+  "PESQUISA E DESENVOLVIMENTO": "Despesas com P&D",
+  "P&D": "Despesas com P&D",
+
+  "EBITDA": "EBITDA",
+  "LAJIDA": "EBITDA",
+  "Geração de Caixa Operacional": "EBITDA",
+
+  "Depreciação e Amortização": "Depreciação e Amortização",
+  "Depreciação": "Depreciação e Amortização",
+  "DEPRECIAÇÃO": "Depreciação e Amortização",
+  "Amortização": "Depreciação e Amortização",
+  "AMORTIZAÇÃO": "Depreciação e Amortização",
+  "Depreciações e Amortizações": "Depreciação e Amortização",
+  "(-) Depreciação e Amortização": "Depreciação e Amortização",
+
+  "Resultado da Equivalência Patrimonial": "Equivalência Patrimonial",
+  "EQUIVALÊNCIA PATRIMONIAL": "Equivalência Patrimonial",
+
+  "Outras Receitas Não Operacionais": "Outras Receitas Não Operacionais",
+  "OUTRAS RECEITAS NÃO OPERACIONAIS": "Outras Receitas Não Operacionais",
+  "Receitas Não Operacionais": "Outras Receitas Não Operacionais",
+  "Outras Despesas Não Operacionais": "Outras Despesas Não Operacionais",
+  "OUTRAS DESPESAS NÃO OPERACIONAIS": "Outras Despesas Não Operacionais",
+  "Despesas Não Operacionais": "Outras Despesas Não Operacionais",
 };

@@ -1,0 +1,6674 @@
+[
+  {
+    "nomeOriginal": "Total do Ativo",
+    "contaDestino": "Ativo Total",
+    "grupoConta": "Ativo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total Geral do Ativo",
+    "contaDestino": "Ativo Total",
+    "grupoConta": "Ativo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Circulante",
+    "contaDestino": "Ativo Circulante",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Circulante Total",
+    "contaDestino": "Ativo Circulante",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total do Ativo Circulante",
+    "contaDestino": "Ativo Circulante",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Circulante",
+    "contaDestino": "Ativo Circulante",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Circulante Liquido",
+    "contaDestino": "Ativo Circulante",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Disponibilidades",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Disponibilidade",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Caixa e Equivalentes de Caixa",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Caixa e Bancos",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Disponivel",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Disponível",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Caixa",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Caixa Matriz",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bancos c/ Movimento",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas Bancárias",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depósitos Bancários",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco Caixa Economica Federal",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco Conta Movimento",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco do Brasil S/A",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco Itau S/A",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cheques em Cobrança",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bancos",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bradesco Ag.0049 C/C 0329707-1",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Caixa Economica Federal",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicação Bradesco Cdb",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicacao Bradesco Fic Fi Rf",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicação C.E.F",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fundo de Aplicação Financeira",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicações de Liquidez Imediata",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Investimentos Financeiros de Curto Prazo",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicação de Liquidez Imediata",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco Conta Aplicação",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativos Financeiros",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicações Financeiras",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Instrumentos Financeiros",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outros Investimentos Líquido",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Créditos a Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Receber de Clientes",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Duplicatas a Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Creditos A Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Clientes A Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Faturas a Receber Líquidas",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Creditos",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Clientes",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Estoques - Almoxarifado",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Estoques",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Inventário",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Estoque Geral",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativos Biológicos",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Créditos Tributários",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos a Recuperar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tributos a Compensar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pis A Compensar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cofins A Compensar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Imposto Pago Em Duplic",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Irrf A Compensar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Saldo Negativo Csll",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Saldo Negativo Irpj",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Créditos Diversos a Receber",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outros Créditos a Receber",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outros Créditos",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Créditos em Circulação",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamentos Concedidos",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Despesas Antecipadas",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamentos a Terceiros",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamentos a Empregados",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamentos E Empréstimos",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamentos",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento De Salário",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento De Férias",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamentos A Fornecedores",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento A Fornecedores",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bens e Valores em Circulação",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Produtos em Transito",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Produtos em Trânsito",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Despesas do Exercicio Seguinte",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Valores Pendentes a Curto Prazo",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Não Circulante",
+    "contaDestino": "Ativo Não Circulante",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Não Circulante Total",
+    "contaDestino": "Ativo Não Circulante",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total do Ativo Não Circulante",
+    "contaDestino": "Ativo Não Circulante",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Não Circulante",
+    "contaDestino": "Ativo Não Circulante",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Não - Circulante",
+    "contaDestino": "Ativo Não Circulante",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Realizável a Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Realizável a Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Realizavel a Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Créditos Realizáveis a Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Receber de Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depósitos Realizáveis a Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depósitos Judiciais de Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depósitos para Garantia de Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Investimentos",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outros Investimentos",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Participação Em Outras Empresas",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Imobilizado",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Imobilizado",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Propriedade para Investimento",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bens Imóveis",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Edifícios e Terrenos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bens Móveis",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Máquinas e Equipamentos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Veículos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Computadores e Perifericos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Instalacoes",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Maquinas e Equipamentos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Moveis e Utensilios",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Instalaçoes",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bens e Direitos em Uso",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Projetos e Softwares",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Softwares e Licenças",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Marcas e Patentes",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Intangivel",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Intangível",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Intangível",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativos Intangiveis",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bens a Alienar",
+    "contaDestino": "Bens a Alienar",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativos Mantidos para Venda",
+    "contaDestino": "Bens a Alienar",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Amortização Acumulada",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Depreciações/Amortizações Acumuladadas",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Deprec. S/ Comput. Perifericos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Deprec. S/ Instalacoes",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Deprec. S/ Maquinas E Equiptos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Deprec. S/ Moveis E Utensilios",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depreciacao Acumulada",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Depreciaçoes Acumuladas",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Computadores E Perifericos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Moveis E Utensilios",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Dep. Acum. Instalaçoes",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depósitos Judiciais",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depósitos para Garantia",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Diferido",
+    "contaDestino": "Ativo Diferido",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Diferido",
+    "contaDestino": "Ativo Diferido",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total do Passivo",
+    "contaDestino": "Passivo Total",
+    "grupoConta": "Passivo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total Geral do Passivo",
+    "contaDestino": "Passivo Total",
+    "grupoConta": "Passivo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivo Total",
+    "contaDestino": "Passivo Total",
+    "grupoConta": "Passivo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Circulante",
+    "contaDestino": "Passivo Circulante",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivo Circulante Total",
+    "contaDestino": "Passivo Circulante",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total do Passivo Circulante",
+    "contaDestino": "Passivo Circulante",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivo Circulante",
+    "contaDestino": "Passivo Circulante",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Pagar a Fornecedores",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas A Pagar",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações a Pagar",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores Nacionais",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pessoal a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Salários e Encargos a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ferias A Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigacoes Trabalhistas",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Salarios E Ordenados A Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão P/Despesas C/ Pessoal",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisões",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Férias",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para Férias",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pensao Alimenticia A Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pessoal / Encargos",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pensão Alimentícia",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Licença-Prêmio",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Plano de Previdência Complementar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisões para Previdência",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Plano de Previdência e Assist. Médica",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Benefícios a Empregados",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisões Trabalhistas e Cíveis",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisões para Contingências",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações Trabalhistas",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Salários A Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pro Labore A Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Retençoes Trabalhistas",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Irrf Retido S/ Folha A Recolher",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisões Trabalhistas",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão De Ferias",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão De Inss S/ Ferias",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão Fgts S/ Ferias",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações Tributárias",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos Parcelados a Longo Prazo",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ISS",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tributos e Encargos Sociais",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos e Contribuições a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações Sociais e Tributárias",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cofins A Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Csll A Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Encargos Sociais A Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos E Contrib. S/ Lucro",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos E Contrib. S/ Receita",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Inss A Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Irpj A Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Irrf A Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Iss A Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigacoes Tributarias",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Parcelamento De Icms",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para IRPJ",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para CSLL",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fgts A Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pis A Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tributos A Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações Fiscais",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos, Taxas, Contribuições",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pis A Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cofins A Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Iss A Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Retenções Fiscais",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Iss Retido A Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ir Retido/Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ret Pis/Cofins/Csll A Rec",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos a Terceiros",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos Bancarios",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos de Terceiros",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos e Financiamentos",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Limite de Saque c/ Vinc. Pgto.",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos Bndes",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pronampe - Cp",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Juros Pronampe - Cp",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos Lp",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pronampe - Lp",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Juros Pronampe - Lp",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivos com Partes Relacionadas",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dividendos e JCP a Pagar",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento Recebido",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento De Clientes",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outras Obrigações",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outras Contas a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações em Circulação",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Valores Pendentes a Curto Prazo",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivo Exigivel A Longo Prazo",
+    "contaDestino": "Passivo Não Circulante",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "NÃO CIRCULANTE",
+    "contaDestino": "Passivo Não Circulante",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivo Não Circulante Total",
+    "contaDestino": "Passivo Não Circulante",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total do Passivo Não Circulante",
+    "contaDestino": "Passivo Não Circulante",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivo Não Circulante",
+    "contaDestino": "Passivo Não Circulante",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos a Terceiros",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos Bancarios",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos de Terceiros",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos e Financiamentos",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Limite de Saque c/ Vinc. Pgto.",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos Bndes",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pronampe - Cp",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Juros Pronampe - Cp",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprestimos Lp",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pronampe - Lp",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Juros Pronampe - Lp",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivos com Partes Relacionadas",
+    "contaDestino": "Passivos com Partes Relacionadas - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tributos Diferidos",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento para Futuro Aumento Capital",
+    "contaDestino": "Adiantamento para Futuro Aumento Capital - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Participação nos Lucros ou Resultados",
+    "contaDestino": "Participação nos Lucros ou Resultados",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "PLR a Pagar",
+    "contaDestino": "Participação nos Lucros ou Resultados",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dividendos e Juros sobre o Capital Próprio",
+    "contaDestino": "Dividendos e Juros sobre o Capital Próprio",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dividendos a Pagar",
+    "contaDestino": "Dividendos e Juros sobre o Capital Próprio",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total do Patrimônio Líquido",
+    "contaDestino": "Patrimônio Líquido",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Patrimonio Liquido",
+    "contaDestino": "Patrimônio Líquido",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Patrimonio Líquido",
+    "contaDestino": "Patrimônio Líquido",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital Social Subscrito",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital Social",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital Realizado",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital Integralizado",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital Registrado",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital Social Integralizado",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reservas de Capital",
+    "contaDestino": "Reservas de Capital",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reservas de Reavaliação",
+    "contaDestino": "Reservas de Reavaliação",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reservas",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reservas de Lucros",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva Legal",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reservas Estatutárias",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Retenção do Lucro",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva Especial de Dividendos",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucros Ou Prejuizos",
+    "contaDestino": "Lucros/Prejuízos Acumulados",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucros Ou Prejuizos Acumulados",
+    "contaDestino": "Lucros/Prejuízos Acumulados",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Resultados Acumulados",
+    "contaDestino": "Lucros/Prejuízos Acumulados",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucros Acumulados",
+    "contaDestino": "Lucros/Prejuízos Acumulados",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Resultado Do Exercicio",
+    "contaDestino": "Resultado do Exercício",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ajustes de Avaliação Patrimonial",
+    "contaDestino": "Ajustes de Avaliação Patrimonial",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento para Futuro Aumento Capital",
+    "contaDestino": "Adiantamento para Futuro Aumento Capital - PL",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativos Totais",
+    "contaDestino": "Ativo Total",
+    "grupoConta": "Ativo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total Geral dos Ativos",
+    "contaDestino": "Ativo Total",
+    "grupoConta": "Ativo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Soma do Ativo",
+    "contaDestino": "Ativo Total",
+    "grupoConta": "Ativo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativos Circulantes",
+    "contaDestino": "Ativo Circulante",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo de Curto Prazo",
+    "contaDestino": "Ativo Circulante",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total Ativo Circulante",
+    "contaDestino": "Ativo Circulante",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Caixa e Equivalente de Caixa",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Caixa e Equivalentes",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Equivalentes de Caixa",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Numerário Disponível",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fundo Fixo de Caixa",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fundo Fixo",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Caixa Geral",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bancos Conta Movimento",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco Conta Corrente",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bancos Conta Corrente",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Conta Corrente Bancária",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bancos no País",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bancos no Exterior",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicações Financeiras de Liquidez Imediata",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Títulos e Valores Mobiliários",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicações em Fundos de Investimento",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Certificado de Depósito Bancário - CDB",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Conta Poupança",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicações em Renda Fixa",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco Santander S/A",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco Sicredi",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco Sicoob",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Moeda Estrangeira",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Clientes Nacionais",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Clientes Mercado Interno",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Clientes Mercado Externo",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Títulos a Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Recebíveis",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cartões a Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cartões de Crédito a Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Vendas a Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Notas a Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Duplicatas Descontadas",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Provisão para Créditos de Liquidação Duvidosa",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) PCLD",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Provisão para Devedores Duvidosos",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) PDD",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Produtos Acabados",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Estoque de Produtos Acabados",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Mercadorias",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Mercadorias para Revenda",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Matérias-Primas",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Matéria-Prima",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Estoque de Insumos",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Produtos em Elaboração",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Produtos em Processo",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Almoxarifado",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Materiais de Embalagem",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Embalagens",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Materiais de Consumo",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Mercadorias em Trânsito",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Estoque em Poder de Terceiros",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Provisão para Perdas em Estoques",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Biológico",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Rebanho",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Gado Leiteiro",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Plantel",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Semoventes",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ICMS a Recuperar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ICMS a Compensar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Créditos de ICMS",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IPI a Recuperar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "PIS a Recuperar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "COFINS a Recuperar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IRRF a Recuperar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IRRF sobre Aplicações Financeiras",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "INSS a Recuperar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IRPJ a Recuperar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "CSLL a Recuperar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Antecipação de IRPJ",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Salário Família a Compensar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outras Contas a Receber",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Valores a Receber Diversos",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos a Sócios",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Conta Corrente com Sócios",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento a Sócios",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dividendos a Receber",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Juros a Receber",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Devedores Diversos",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Despesas Antecipadas - Circulante",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Seguros a Vencer",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Prêmios de Seguros a Apropriar",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Seguros a Apropriar",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Encargos Financeiros a Apropriar",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento de 13º Salário",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento para Viagens",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamentos Diversos",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outros Ativos",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outros Valores e Bens",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Valores a Apropriar",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Importações em Andamento",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativos Não Circulantes",
+    "contaDestino": "Ativo Não Circulante",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo de Longo Prazo",
+    "contaDestino": "Ativo Não Circulante",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Realizável a Longo Prazo - RLP",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Clientes - Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tributos a Recuperar - Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos a Recuperar - Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Créditos com Partes Relacionadas - Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos a Sócios - Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicações Financeiras - Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Títulos a Receber - Longo Prazo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Participações Societárias",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Participações em Coligadas",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Participações em Controladas",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Investimentos em Coligadas e Controladas",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ágio",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ágio por Expectativa de Rentabilidade Futura",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Investimentos Permanentes",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Participações em Outras Sociedades",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Investimentos Avaliados pelo MEP",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obras de Arte",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Imobilizado Líquido",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Imobilizações",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Terrenos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Edificações",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Edifícios",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Prédios e Construções",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Construções em Andamento",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Imóveis",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Benfeitorias em Imóveis de Terceiros",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Máquinas, Aparelhos e Equipamentos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Equipamentos de Informática",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ferramentas",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Veículos e Reboques",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Caminhões",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Frota de Veículos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Instalações Industriais",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Equipamentos Industriais",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Imobilizado em Andamento",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Imobilizado em Curso",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento para Aquisição de Imobilizado",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tanques de Resfriamento",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Equipamentos de Laticínio",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Software",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Licenças de Uso",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Direitos de Uso",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fundo de Comércio",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ponto Comercial",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Goodwill",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Gastos com Desenvolvimento",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Direitos de Concessão",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Carteira de Clientes",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Não Circulante Mantido para Venda",
+    "contaDestino": "Bens a Alienar",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bens Destinados à Venda",
+    "contaDestino": "Bens a Alienar",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Depreciação Acumulada",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Depreciações Acumuladas",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Depreciação Acumulada - Veículos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Depreciação Acumulada - Edificações",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Depreciação Acumulada - Máquinas e Equipamentos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Exaustão Acumulada",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Amortização Acumulada - Intangível",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Despesas Pré-Operacionais",
+    "contaDestino": "Ativo Diferido",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Gastos Pré-Operacionais",
+    "contaDestino": "Ativo Diferido",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total do Passivo e Patrimônio Líquido",
+    "contaDestino": "Passivo Total",
+    "grupoConta": "Passivo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivo e Patrimônio Líquido",
+    "contaDestino": "Passivo Total",
+    "grupoConta": "Passivo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivos Totais",
+    "contaDestino": "Passivo Total",
+    "grupoConta": "Passivo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Soma do Passivo",
+    "contaDestino": "Passivo Total",
+    "grupoConta": "Passivo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivos Circulantes",
+    "contaDestino": "Passivo Circulante",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivo de Curto Prazo",
+    "contaDestino": "Passivo Circulante",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total Passivo Circulante",
+    "contaDestino": "Passivo Circulante",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores a Pagar",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores Estrangeiros",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores do Exterior",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores de Matéria-Prima",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores de Materiais e Serviços",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Duplicatas a Pagar",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Títulos a Pagar",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores Diversos",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Folha de Pagamento a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "13º Salário a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para 13º Salário",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para Férias e Encargos",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Rescisões a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Comissões a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Vale Transporte a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Plano de Saúde a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Gratificações a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contribuição Sindical a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Remunerações a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Honorários a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ICMS a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ICMS a Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IPI a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Simples Nacional a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "DAS a Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos a Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tributos a Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Parcelamento de Tributos",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "REFIS a Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "DIFAL a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos Retidos a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contribuições a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "INSS a Pagar",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamentos a Pagar",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos Bancários - Circulante",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Instituições Financeiras",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital de Giro",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cédula de Crédito Bancário",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamento de Veículos",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Arrendamento Mercantil - Curto Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Leasing a Pagar",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Debêntures - Curto Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamento FINAME",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Juros a Pagar sobre Empréstimos",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamento BNDES - Curto Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Pagar a Partes Relacionadas",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos de Sócios",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Mútuo com Partes Relacionadas - Curto Prazo",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento de Sócios",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dividendos Propostos",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Juros sobre Capital Próprio a Pagar",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "JCP a Pagar",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dividendos Obrigatórios a Pagar",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamentos de Clientes",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Faturamento Antecipado",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Receitas Antecipadas",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Receitas a Apropriar",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Sinal de Clientes",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outros Passivos",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Credores Diversos",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisões Diversas",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aluguéis a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Energia Elétrica a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Serviços de Terceiros a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fretes a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas de Consumo a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Valores a Repassar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivos Não Circulantes",
+    "contaDestino": "Passivo Não Circulante",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Exigível a Longo Prazo",
+    "contaDestino": "Passivo Não Circulante",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivo de Longo Prazo",
+    "contaDestino": "Passivo Não Circulante",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamentos - Longo Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos Bancários - Não Circulante",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamento BNDES - Longo Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "FINAME - Longo Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Arrendamento Mercantil - Longo Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Debêntures - Longo Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital de Giro - Longo Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamento de Imobilizado",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Mútuo com Partes Relacionadas - Longo Prazo",
+    "contaDestino": "Passivos com Partes Relacionadas - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos de Sócios - Longo Prazo",
+    "contaDestino": "Passivos com Partes Relacionadas - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Conta Corrente com Controladora",
+    "contaDestino": "Passivos com Partes Relacionadas - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos Diferidos",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IR e CSLL Diferidos",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para IR Diferido",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tributos Parcelados - Longo Prazo",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Parcelamento de Tributos - Longo Prazo",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "REFIS - Longo Prazo",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "AFAC - Longo Prazo",
+    "contaDestino": "Adiantamento para Futuro Aumento Capital - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento para Aumento de Capital",
+    "contaDestino": "Adiantamento para Futuro Aumento Capital - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Participação nos Resultados a Pagar",
+    "contaDestino": "Participação nos Lucros ou Resultados",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para Participação nos Lucros",
+    "contaDestino": "Participação nos Lucros ou Resultados",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dividendos a Pagar - Longo Prazo",
+    "contaDestino": "Dividendos e Juros sobre o Capital Próprio",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "JCP a Pagar - Longo Prazo",
+    "contaDestino": "Dividendos e Juros sobre o Capital Próprio",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Patrimônio Líquido Total",
+    "contaDestino": "Patrimônio Líquido",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Patrimônio Social",
+    "contaDestino": "Patrimônio Líquido",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital Subscrito",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Capital a Integralizar",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital Social Realizado",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Quotas de Capital",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital Subscrito e Integralizado",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Capital",
+    "contaDestino": "Reservas de Capital",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ágio na Emissão de Ações",
+    "contaDestino": "Reservas de Capital",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Subvenções para Investimento",
+    "contaDestino": "Reservas de Capital",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Subvenções",
+    "contaDestino": "Reservas de Capital",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Reavaliação",
+    "contaDestino": "Reservas de Reavaliação",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Lucros a Realizar",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva para Contingências",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Incentivos Fiscais",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Expansão",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Investimentos",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Prejuízos Acumulados",
+    "contaDestino": "Lucros/Prejuízos Acumulados",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Prejuízos Acumulados",
+    "contaDestino": "Lucros/Prejuízos Acumulados",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucros Retidos",
+    "contaDestino": "Lucros/Prejuízos Acumulados",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Resultado de Exercícios Anteriores",
+    "contaDestino": "Lucros/Prejuízos Acumulados",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucro Líquido do Exercício",
+    "contaDestino": "Resultado do Exercício",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Resultado Líquido do Exercício",
+    "contaDestino": "Resultado do Exercício",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucro do Exercício",
+    "contaDestino": "Resultado do Exercício",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Prejuízo do Exercício",
+    "contaDestino": "Resultado do Exercício",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ajuste de Avaliação Patrimonial",
+    "contaDestino": "Ajustes de Avaliação Patrimonial",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outros Resultados Abrangentes",
+    "contaDestino": "Ajustes de Avaliação Patrimonial",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "AFAC - Patrimônio Líquido",
+    "contaDestino": "Adiantamento para Futuro Aumento Capital - PL",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento para Aumento de Capital - PL",
+    "contaDestino": "Adiantamento para Futuro Aumento Capital - PL",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo",
+    "contaDestino": "Ativo Total",
+    "grupoConta": "Ativo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativos",
+    "contaDestino": "Ativo Total",
+    "grupoConta": "Ativo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total Ativo",
+    "contaDestino": "Ativo Total",
+    "grupoConta": "Ativo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações de Curto Prazo do Ativo",
+    "contaDestino": "Ativo Circulante",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Circulante (AC)",
+    "contaDestino": "Ativo Circulante",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Disponível e Realizável a Curto Prazo",
+    "contaDestino": "Ativo Circulante",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Disponibilidades Financeiras",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Valores Disponíveis",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Caixa/Bancos",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depósitos à Vista",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depósitos Bancários à Vista",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Numerário",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fundo de Troco",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco Itaú",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco do Brasil",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco Bradesco",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Banco Inter",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Conta Digital",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicação Automática",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Operações Compromissadas",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tesouro Direto",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Caixa e Disponibilidades",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Saldo em Conta Corrente",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Receber - Clientes",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Duplicatas a Receber de Clientes",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Valores a Receber de Clientes",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Carteira de Recebíveis",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cheques a Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cheques Pré-datados",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Boletos a Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Faturas a Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Receber Comerciais",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Recebíveis Comerciais",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Receber de Exportação",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Exportação a Receber",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Ajuste a Valor Presente",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Devedores por Vendas",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Vendas a Prazo",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Estoque",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Estoque de Produtos",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Produtos em Estoque",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Insumos",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Insumos de Produção",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Materiais Auxiliares",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Materiais de Manutenção",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Peças e Acessórios",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Produtos Agrícolas",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obras em Andamento",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Importações em Curso",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Provisão para Obsolescência",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Estoque de Leite",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Leite in Natura",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Queijos em Maturação",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Produtos Lácteos",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativo Biológico - Circulante",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Vacas Leiteiras",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Gado de Leite",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bovinos",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Animais em Crescimento",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Animais para Produção",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lavouras",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cultura em Formação",
+    "contaDestino": "Ativos Biológicos",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ICMS sobre Ativo Imobilizado",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ICMS Antecipado",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Crédito de PIS",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Crédito de COFINS",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Créditos de PIS/COFINS",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "PIS/COFINS a Recuperar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Crédito de IPI",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IPI a Compensar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tributos Antecipados",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IRPJ Antecipado",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "CSLL Antecipada",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Retenções na Fonte a Compensar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "INSS a Compensar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ICMS-ST a Recuperar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Substituição Tributária a Recuperar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento a Funcionários",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento a Empregados",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento de Salários",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Vales a Funcionários",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos a Funcionários",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Mútuo Ativo",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Receber de Coligadas",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Créditos com Diretores",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Indenizações a Receber",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Seguros a Receber",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Sinistros a Receber",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bloqueios Judiciais a Receber",
+    "contaDestino": "Outros Créditos a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Custos Antecipados",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aluguéis a Apropriar",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Assinaturas a Apropriar",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Anuidades a Apropriar",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IPTU a Apropriar",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IPVA a Apropriar",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Licenças a Apropriar",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Comissões a Apropriar",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Juros a Apropriar",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Publicidade Antecipada",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outros Bens e Direitos",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bens de Terceiros",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Valores em Cobrança",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Títulos em Cobrança",
+    "contaDestino": "Outros Ativos Circulantes",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depósitos Judiciais e Recursais",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depósitos Compulsórios",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depósitos em Garantia",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cauções",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Valores Caucionados",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Incentivos Fiscais a Receber",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Créditos com Controladas - LP",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Investimentos em Controladas",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Investimentos em Coligadas",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Participações Permanentes",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Investimentos por Equivalência Patrimonial",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicações em Incentivos Fiscais",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Títulos Patrimoniais",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ações de Outras Empresas",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Quotas de Outras Empresas",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Propriedades para Investimento",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Imóveis para Renda",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bens do Imobilizado",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Imobilizado Bruto",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Equipamentos e Instalações",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Equipamentos de Escritório",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Computadores",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Automóveis",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Motocicletas",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empilhadeiras",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tratores",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Implementos Agrícolas",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reformas em Andamento",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Galpões",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Barracões",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Câmaras Frias",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Equipamentos de Refrigeração",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Linha de Produção",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Imobilizado em Formação",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento a Fornecedores - Imobilizado",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bens Intangíveis",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Sistemas",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Sistema ERP",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Programas de Computador",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicativos",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Marcas",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Patentes",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Marca Registrada",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Registro de Marca",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Sites e Domínios",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Franquia",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Direitos de Franquia",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Chave do Ponto",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Luvas",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Direitos Contratuais",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Custos de Desenvolvimento",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ágio na Aquisição",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bens Não de Uso",
+    "contaDestino": "Bens a Alienar",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bens Recebidos em Dação",
+    "contaDestino": "Bens a Alienar",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Imóveis Não de Uso",
+    "contaDestino": "Bens a Alienar",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativos Disponíveis para Venda",
+    "contaDestino": "Bens a Alienar",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ativos em Descontinuação",
+    "contaDestino": "Bens a Alienar",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Despesas Diferidas",
+    "contaDestino": "Ativo Diferido",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Encargos Diferidos",
+    "contaDestino": "Ativo Diferido",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Custos Diferidos",
+    "contaDestino": "Ativo Diferido",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Gastos de Implantação",
+    "contaDestino": "Ativo Diferido",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Total do Passivo e PL",
+    "contaDestino": "Passivo Total",
+    "grupoConta": "Passivo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivo",
+    "contaDestino": "Passivo Total",
+    "grupoConta": "Passivo Total",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações de Curto Prazo",
+    "contaDestino": "Passivo Circulante",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Exigível a Curto Prazo",
+    "contaDestino": "Passivo Circulante",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivo Exigível a Curto Prazo",
+    "contaDestino": "Passivo Circulante",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores Exterior",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores de Serviços",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores Comerciais",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Credores por Fornecimento",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores Matéria-Prima",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Faturas a Pagar",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Salários",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Salários e Encargos",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ordenados e Salários",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações Sociais",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações com Empregados",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Verbas Rescisórias",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Pró-labore a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Benefícios a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Vale Refeição a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Vale Alimentação a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para Rescisões",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tributos e Contribuições a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ISSQN a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ICMS Substituição Tributária",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ICMS-ST a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para IRPJ e CSLL",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IRRF a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IRRF sobre Salários",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contribuições Previdenciárias",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Parcelamentos de Impostos",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Parcelamento PERT",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Parcelamento Simples Nacional",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamentos",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamento Bancário",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos a Pagar",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bancos - Empréstimos",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dívidas Bancárias - Curto Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Conta Garantida",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cheque Especial",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Desconto de Duplicatas",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Desconto de Títulos",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Antecipação de Recebíveis",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cédula de Produto Rural",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "CPR a Pagar",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Custeio Agrícola",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamento Agrícola - Curto Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Partes Relacionadas",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Pagar - Partes Relacionadas",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Mútuos a Pagar",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos de Coligadas",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos de Controladora",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Débitos com Sócios",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Débitos com Partes Relacionadas - CP",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dividendos",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dividendos a Distribuir",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucros a Distribuir",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dividendos Mínimos Obrigatórios",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "JCP",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Juros sobre Capital Próprio",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "JSCP a Pagar",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Clientes - Adiantamentos",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamentos sobre Contratos",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Faturamento para Entrega Futura",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Vendas para Entrega Futura",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Receita Diferida",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Receitas Diferidas",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Sinais Recebidos",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para Contingências - Circulante",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Arrendamentos a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Seguros a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Despesas a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas de Consumo",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tarifas a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fretes e Carretos a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Royalties a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Juros a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Encargos a Pagar",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Valores a Restituir",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cauções e Depósitos Recebidos",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações de Longo Prazo",
+    "contaDestino": "Passivo Não Circulante",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos - Longo Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamentos a Pagar - LP",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos e Financiamentos - LP",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dívidas Bancárias - Longo Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamento BNDES",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "BNDES a Pagar",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "FINAME a Pagar",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamento Agrícola - Longo Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Cédula de Produto Rural - LP",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Debêntures",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Debêntures a Pagar",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Passivo de Arrendamento - LP",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Financiamento de Máquinas",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Partes Relacionadas - LP",
+    "contaDestino": "Passivos com Partes Relacionadas - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Mútuos a Pagar - LP",
+    "contaDestino": "Passivos com Partes Relacionadas - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos de Coligadas - LP",
+    "contaDestino": "Passivos com Partes Relacionadas - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Pagar a Controladora - LP",
+    "contaDestino": "Passivos com Partes Relacionadas - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Débitos com Sócios - LP",
+    "contaDestino": "Passivos com Partes Relacionadas - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IR Diferido",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "CSLL Diferida",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "IRPJ/CSLL Diferidos",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para IR e CSLL Diferidos",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ICMS Diferido",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos Parcelados - LP",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Parcelamentos - Longo Prazo",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "PERT - Longo Prazo",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Parcelamento Simples - LP",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "AFAC",
+    "contaDestino": "Adiantamento para Futuro Aumento Capital - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento para Futuro Aumento de Capital",
+    "contaDestino": "Adiantamento para Futuro Aumento Capital - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento p/ Futuro Aumento de Capital",
+    "contaDestino": "Adiantamento para Futuro Aumento Capital - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Participações a Pagar",
+    "contaDestino": "Participação nos Lucros ou Resultados",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Participação de Empregados",
+    "contaDestino": "Participação nos Lucros ou Resultados",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Participação Estatutária",
+    "contaDestino": "Participação nos Lucros ou Resultados",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Participação dos Administradores",
+    "contaDestino": "Participação nos Lucros ou Resultados",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Dividendos a Pagar - LP",
+    "contaDestino": "Dividendos e Juros sobre o Capital Próprio",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "JCP a Pagar - LP",
+    "contaDestino": "Dividendos e Juros sobre o Capital Próprio",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Patrimônio Líquido Consolidado",
+    "contaDestino": "Patrimônio Líquido",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Patrimônio dos Acionistas",
+    "contaDestino": "Patrimônio Líquido",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Patrimônio dos Sócios",
+    "contaDestino": "Patrimônio Líquido",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital em Dinheiro",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital Nacional",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital de Sócios",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Quotas de Capital Social",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "(-) Capital Social a Integralizar",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Capital a Realizar",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Ágio",
+    "contaDestino": "Reservas de Capital",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Subvenções para Investimento",
+    "contaDestino": "Reservas de Capital",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reservas de Subvenção",
+    "contaDestino": "Reservas de Capital",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Doações e Subvenções",
+    "contaDestino": "Reservas de Capital",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva Especial",
+    "contaDestino": "Reservas de Capital",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reavaliação de Bens",
+    "contaDestino": "Reservas de Reavaliação",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Reavaliação de Imóveis",
+    "contaDestino": "Reservas de Reavaliação",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Retenção de Lucros",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva de Contingência",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Reserva Orçamentária",
+    "contaDestino": "Reservas de Lucros",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Resultado a Distribuir",
+    "contaDestino": "Lucros/Prejuízos Acumulados",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Saldo de Lucros",
+    "contaDestino": "Lucros/Prejuízos Acumulados",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucro/Prejuízo do Exercício",
+    "contaDestino": "Resultado do Exercício",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Resultado Líquido",
+    "contaDestino": "Resultado do Exercício",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucro Líquido do Período",
+    "contaDestino": "Resultado do Exercício",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucro Líquido",
+    "contaDestino": "Resultado do Exercício",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "AAP",
+    "contaDestino": "Ajustes de Avaliação Patrimonial",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ajuste de Instrumentos Financeiros",
+    "contaDestino": "Ajustes de Avaliação Patrimonial",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ajuste Acumulado de Conversão",
+    "contaDestino": "Ajustes de Avaliação Patrimonial",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Variação Cambial sobre Investimentos",
+    "contaDestino": "Ajustes de Avaliação Patrimonial",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "AFAC - PL",
+    "contaDestino": "Adiantamento para Futuro Aumento Capital - PL",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamento para Futuro Aumento de Capital - PL",
+    "contaDestino": "Adiantamento para Futuro Aumento Capital - PL",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Faturamento Bruto",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Gross Revenue",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Gross Sales",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Net Revenue (Gross)",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Bruta",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Bruta de Mercadorias",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Bruta de Mercadorias e Serviços",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Bruta de Produtos e Serviços",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Bruta de Serviços",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Bruta de Serviços Prestados",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Bruta de Vendas",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Bruta de Vendas de Mercadorias",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Bruta de Vendas de Produtos",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Bruta de Vendas e Serviços",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Bruta Operacional",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Bruta Total",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita de Vendas Brutas",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Operacional Bruta",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Operacional Bruta de Vendas",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "(-) Deduções da Receita Bruta",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Cancelamentos e Devoluções",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Deductions from Gross Revenue",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Deduções da Receita",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Deduções da Receita Bruta",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Deduções da Receita de Vendas",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Deduções e Abatimentos",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Deduções sobre Vendas",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Devoluções de Vendas",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Devoluções e Abatimentos",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Devoluções, Abatimentos e Descontos",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "(-) Impostos Incidentes sobre Vendas",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "COFINS",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "ICMS sobre Vendas",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Impostos sobre Vendas",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "ISS sobre Serviços",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "PIS",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "PIS e COFINS",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "PIS, COFINS e Outros Tributos sobre Vendas",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Tributos sobre Receita",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Tributos sobre Vendas",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Faturamento Líquido",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Net Revenue",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Net Sales",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita de Vendas Líquidas",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Líquida",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Líquida de Mercadorias",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Líquida de Produtos e Serviços",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Líquida de Serviços",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Líquida de Vendas",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Líquida de Vendas e Serviços",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Líquida Total",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita Operacional Líquida",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Revenue",
+    "contaDestino": "Receita Líquida",
+    "grupoConta": "Receita Líquida",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "(-) Custo das Mercadorias Vendidas",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "(-) Custo dos Produtos Vendidos",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "(-) Custo dos Serviços Prestados",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "CMV",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "COGS",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Cost of Goods Sold",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Cost of Revenue",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Cost of Services",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "CPV",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo da Receita",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo das Mercadorias e Serviços Vendidos",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo das Mercadorias Vendidas",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo das Vendas",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo de Produção",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo Direto de Produção",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo dos Produtos e Mercadorias Vendidos",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo dos Produtos e Serviços Vendidos",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo dos Produtos Vendidos",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo dos Serviços",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo dos Serviços Prestados",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo Operacional",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Gross Margin",
+    "contaDestino": "Lucro Bruto",
+    "grupoConta": "Lucro Bruto",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Gross Profit",
+    "contaDestino": "Lucro Bruto",
+    "grupoConta": "Lucro Bruto",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Bruto",
+    "contaDestino": "Lucro Bruto",
+    "grupoConta": "Lucro Bruto",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Bruto de Vendas",
+    "contaDestino": "Lucro Bruto",
+    "grupoConta": "Lucro Bruto",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Margem Bruta",
+    "contaDestino": "Lucro Bruto",
+    "grupoConta": "Lucro Bruto",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Bruto",
+    "contaDestino": "Lucro Bruto",
+    "grupoConta": "Lucro Bruto",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custos Gerais e Administrativos",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas Administrativas",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Pessoal",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas de Pessoal e Administrativas",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas Gerais e Administrativas",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas Gerais e Administrativas (DGA)",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "DGA",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "G&A Expenses",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Gastos Gerais e Administrativos",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "General and Administrative Expenses",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "SG&A",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custos Comerciais",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custos de Vendas",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Comercialização",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Vendas",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas Comerciais",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas de Comercialização",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas de Marketing e Vendas",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas de Vendas",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Gastos com Vendas",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Sales Expenses",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Selling Expenses",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Marketing",
+    "contaDestino": "Despesas com Marketing",
+    "grupoConta": "Despesas com Marketing",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Propaganda",
+    "contaDestino": "Despesas com Marketing",
+    "grupoConta": "Despesas com Marketing",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Publicidade e Propaganda",
+    "contaDestino": "Despesas com Marketing",
+    "grupoConta": "Despesas com Marketing",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas de Marketing",
+    "contaDestino": "Despesas com Marketing",
+    "grupoConta": "Despesas com Marketing",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas de Publicidade",
+    "contaDestino": "Despesas com Marketing",
+    "grupoConta": "Despesas com Marketing",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Gastos com Marketing",
+    "contaDestino": "Despesas com Marketing",
+    "grupoConta": "Despesas com Marketing",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Marketing and Advertising Expenses",
+    "contaDestino": "Despesas com Marketing",
+    "grupoConta": "Despesas com Marketing",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Pesquisa e Desenvolvimento",
+    "contaDestino": "Despesas com P&D",
+    "grupoConta": "Despesas com P&D",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas de P&D",
+    "contaDestino": "Despesas com P&D",
+    "grupoConta": "Despesas com P&D",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Gastos com P&D",
+    "contaDestino": "Despesas com P&D",
+    "grupoConta": "Despesas com P&D",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "P&D",
+    "contaDestino": "Despesas com P&D",
+    "grupoConta": "Despesas com P&D",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "R&D Expenses",
+    "contaDestino": "Despesas com P&D",
+    "grupoConta": "Despesas com P&D",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Research and Development",
+    "contaDestino": "Despesas com P&D",
+    "grupoConta": "Despesas com P&D",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Ganhos Operacionais",
+    "contaDestino": "Outras Receitas Operacionais",
+    "grupoConta": "Outras Receitas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Other Income",
+    "contaDestino": "Outras Receitas Operacionais",
+    "grupoConta": "Outras Receitas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Other Operating Income",
+    "contaDestino": "Outras Receitas Operacionais",
+    "grupoConta": "Outras Receitas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Outras Receitas",
+    "contaDestino": "Outras Receitas Operacionais",
+    "grupoConta": "Outras Receitas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Outras Receitas e Ganhos",
+    "contaDestino": "Outras Receitas Operacionais",
+    "grupoConta": "Outras Receitas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Outras Receitas Operacionais",
+    "contaDestino": "Outras Receitas Operacionais",
+    "grupoConta": "Outras Receitas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Outros Resultados Operacionais",
+    "contaDestino": "Outras Receitas Operacionais",
+    "grupoConta": "Outras Receitas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Other Expenses",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Other Operating Expenses",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Outras Despesas",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Outras Despesas e Perdas",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Outras Despesas Operacionais",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Outros Gastos Operacionais",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Perdas Operacionais",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Provisões Operacionais",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Earnings Before Interest, Taxes, Depreciation and Amortization",
+    "contaDestino": "EBITDA",
+    "grupoConta": "EBITDA",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Ebitda",
+    "contaDestino": "EBITDA",
+    "grupoConta": "EBITDA",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Antes dos Juros, Impostos, Depreciação e Amortização",
+    "contaDestino": "EBITDA",
+    "grupoConta": "EBITDA",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Operacional antes de D&A",
+    "contaDestino": "EBITDA",
+    "grupoConta": "EBITDA",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Amortização",
+    "contaDestino": "Depreciação e Amortização",
+    "grupoConta": "Depreciação e Amortização",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "D&A",
+    "contaDestino": "Depreciação e Amortização",
+    "grupoConta": "Depreciação e Amortização",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Depreciation & Amortization",
+    "contaDestino": "Depreciação e Amortização",
+    "grupoConta": "Depreciação e Amortização",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Depreciation and Amortization",
+    "contaDestino": "Depreciação e Amortização",
+    "grupoConta": "Depreciação e Amortização",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Depreciação",
+    "contaDestino": "Depreciação e Amortização",
+    "grupoConta": "Depreciação e Amortização",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Depreciação e Amortização",
+    "contaDestino": "Depreciação e Amortização",
+    "grupoConta": "Despesas com P&D",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Depreciação e Amortização de Ativos",
+    "contaDestino": "Depreciação e Amortização",
+    "grupoConta": "Depreciação e Amortização",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Depreciação e Exaustão",
+    "contaDestino": "Depreciação e Amortização",
+    "grupoConta": "Depreciação e Amortização",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Depreciação, Amortização e Exaustão",
+    "contaDestino": "Depreciação e Amortização",
+    "grupoConta": "Depreciação e Amortização",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Equity in Earnings of Subsidiaries",
+    "contaDestino": "Equivalência Patrimonial",
+    "grupoConta": "Equivalência Patrimonial",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Equity Pickup",
+    "contaDestino": "Equivalência Patrimonial",
+    "grupoConta": "Equivalência Patrimonial",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Equivalência Patrimonial",
+    "contaDestino": "Equivalência Patrimonial",
+    "grupoConta": "Equivalência Patrimonial",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Participações em Resultados de Controladas",
+    "contaDestino": "Equivalência Patrimonial",
+    "grupoConta": "Equivalência Patrimonial",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado da Equivalência Patrimonial",
+    "contaDestino": "Equivalência Patrimonial",
+    "grupoConta": "Equivalência Patrimonial",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado de Equivalência Patrimonial",
+    "contaDestino": "Equivalência Patrimonial",
+    "grupoConta": "Equivalência Patrimonial",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado de Participações em Coligadas",
+    "contaDestino": "Equivalência Patrimonial",
+    "grupoConta": "Equivalência Patrimonial",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado de Participações Societárias",
+    "contaDestino": "Equivalência Patrimonial",
+    "grupoConta": "Equivalência Patrimonial",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Earnings Before Interest and Taxes",
+    "contaDestino": "EBIT",
+    "grupoConta": "EBIT",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "EBIT",
+    "contaDestino": "EBIT",
+    "grupoConta": "EBIT",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Antes das Despesas Financeiras e IR",
+    "contaDestino": "EBIT",
+    "grupoConta": "EBIT",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Antes do Imposto sobre a Renda e Resultado Financeiro",
+    "contaDestino": "EBIT",
+    "grupoConta": "EBIT",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Antes do Resultado Financeiro",
+    "contaDestino": "EBIT",
+    "grupoConta": "EBIT",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Antes das Receitas e Despesas Financeiras",
+    "contaDestino": "EBIT",
+    "grupoConta": "EBIT",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Antes do Resultado Financeiro",
+    "contaDestino": "EBIT",
+    "grupoConta": "EBIT",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Financial Result",
+    "contaDestino": "Resultado Financeiro",
+    "grupoConta": "Resultado Financeiro",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Net Financial Income (Expense)",
+    "contaDestino": "Resultado Financeiro",
+    "grupoConta": "Resultado Financeiro",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receitas (Despesas) Financeiras",
+    "contaDestino": "Resultado Financeiro",
+    "grupoConta": "Resultado Financeiro",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receitas e Despesas Financeiras",
+    "contaDestino": "Resultado Financeiro",
+    "grupoConta": "Resultado Financeiro",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Financeiro",
+    "contaDestino": "Resultado Financeiro",
+    "grupoConta": "Resultado Financeiro",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Financeiro Líquido",
+    "contaDestino": "Resultado Financeiro",
+    "grupoConta": "Resultado Financeiro",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Financial Income",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Ganhos Cambiais",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Ganhos com Instrumentos Financeiros",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Interest Income",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Juros Ativos",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Juros Recebidos",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receitas com Juros",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receitas Financeiras",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Renda Financeira",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Rendimentos Financeiros",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Variação Cambial Ativa",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas Bancárias",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Juros",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas Financeiras",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Encargos Financeiros",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Financial Expenses",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Interest Expense",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Juros Pagos",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Juros Passivos",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Juros sobre Arrendamentos (IFRS 16)",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Juros sobre Empréstimos e Financiamentos",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Perdas Cambiais",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Perdas com Instrumentos Financeiros",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Variação Cambial Passiva",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Não Operacional",
+    "contaDestino": "Resultado Não Operacional",
+    "grupoConta": "Resultado Não Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receitas Não Operacionais",
+    "contaDestino": "Outras Receitas Não Operacionais",
+    "grupoConta": "Outras Receitas Não Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas Não Operacionais",
+    "contaDestino": "Outras Despesas Não Operacionais",
+    "grupoConta": "Outras Despesas Não Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Earnings Before Taxes",
+    "contaDestino": "Resultado Antes do IR e CSLL",
+    "grupoConta": "Resultado Antes do IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "EBT",
+    "contaDestino": "Resultado Antes do IR e CSLL",
+    "grupoConta": "Resultado Antes do IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Antes do Imposto de Renda",
+    "contaDestino": "Resultado Antes do IR e CSLL",
+    "grupoConta": "Resultado Antes do IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Antes do IR e CSLL",
+    "contaDestino": "Resultado Antes do IR e CSLL",
+    "grupoConta": "Resultado Antes do IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Pre-Tax Income",
+    "contaDestino": "Resultado Antes do IR e CSLL",
+    "grupoConta": "Resultado Antes do IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Profit Before Tax",
+    "contaDestino": "Resultado Antes do IR e CSLL",
+    "grupoConta": "Resultado Antes do IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Antes do Imposto de Renda",
+    "contaDestino": "Resultado Antes do IR e CSLL",
+    "grupoConta": "Resultado Antes do IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Antes do IR e CSLL",
+    "contaDestino": "Resultado Antes do IR e CSLL",
+    "grupoConta": "Resultado Antes do IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Antes dos Tributos sobre o Lucro",
+    "contaDestino": "Resultado Antes do IR e CSLL",
+    "grupoConta": "Resultado Antes do IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "(-) IR e CSLL",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "CSLL Corrente e Diferido",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Imposto de Renda e Contribuição Social",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Imposto de Renda e Contribuição Social sobre o Lucro Líquido",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Imposto de Renda sobre o Lucro",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Income Tax",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Income Tax Expense",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "IR Corrente e Diferido",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "IR e CSLL",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "IRPJ e CSLL",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Tax Expense",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Tributos sobre o Lucro",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Bottom Line",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro (Prejuízo) Líquido",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro (Prejuízo) Líquido do Exercício",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Atribuível a Acionistas Minoritários",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Líquido",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Líquido Atribuível aos Acionistas Controladores",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Líquido do Exercício",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Líquido do Período",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Lucro Líquido dos Acionistas da Controladora",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Net Earnings",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Net Income",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Net Income Attributable to Parent",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Net Profit",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Net Result",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Participação de Minoritários",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Participação dos Não Controladores",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Atribuível aos Não Controladores",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Atribuível aos Proprietários da Entidade",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado do Exercício",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado do Período",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Líquido",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Resultado Líquido do Exercício",
+    "contaDestino": "Lucro Líquido",
+    "grupoConta": "Lucro Líquido",
+    "tipo": "DRE"
+  }
+]

@@ -7,7 +7,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { generateAnalysis } from "../services/claude";
-import { mapExtractedToBP, mapExtractedToDRE, detectPeriodos, normalizePeriods } from "../services/account-mapper";
+import { mapExtractedToBP, mapExtractedToDRE, recomputeDRESubtotals, detectPeriodos, normalizePeriods } from "../services/account-mapper";
 import { calculateIndicators } from "../services/indicator-calculator";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
@@ -403,6 +403,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         }
       }
     }
+
+    // Recalcula os subtotais do DRE padrão em cascata a partir das linhas de input
+    recomputeDRESubtotals(structuredDRE, allPeriodos);
 
     const indicadores = calculateIndicators(structuredBP, structuredDRE, allPeriodos);
 

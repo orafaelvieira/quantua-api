@@ -129,7 +129,7 @@ export function validateFinancialData(
 
     // ===== 4. DRE: Verificação de sinal =====
     // Receita Bruta deve ser positiva
-    const recBruta = dreVal(dre, "Receita Bruta de Vendas e/ou Serviços", periodo);
+    const recBruta = dreVal(dre, "Receita Bruta", periodo);
     if (recBruta < 0) {
       alertas.push({
         tipo: "aviso",
@@ -158,29 +158,30 @@ export function validateFinancialData(
       });
     }
 
-    // ===== 5. DRE: Receita Líquida = Receita Bruta + Deduções =====
+    // ===== 5. DRE: Receita Líquida = Receita Bruta + Deduções + Impostos s/ Faturamento =====
+    const impostosFat = dreVal(dre, "Impostos s/ Faturamento", periodo);
     const recLiquida = dreVal(dre, "Receita Líquida", periodo);
-    if (recBruta !== 0 && deducoes !== 0 && recLiquida !== 0) {
-      const expected = recBruta + deducoes;
+    if (recBruta !== 0 && (deducoes !== 0 || impostosFat !== 0) && recLiquida !== 0) {
+      const expected = recBruta + deducoes + impostosFat;
       if (!approxEqual(recLiquida, expected, 2)) {
         alertas.push({
           tipo: "aviso",
           area: "DRE Consistência",
-          mensagem: `Receita Líquida (${fmtBRL(recLiquida)}) ≠ Receita Bruta (${fmtBRL(recBruta)}) + Deduções (${fmtBRL(deducoes)}) em ${periodo}`,
+          mensagem: `Receita Líquida (${fmtBRL(recLiquida)}) ≠ Receita Bruta (${fmtBRL(recBruta)}) + Deduções (${fmtBRL(deducoes)}) + Impostos s/ Faturamento (${fmtBRL(impostosFat)}) em ${periodo}`,
           detalhes: `Esperado: ${fmtBRL(expected)}`,
         });
       }
     }
 
-    // ===== 6. Resultado Bruto = Receita Líquida + Custo Operacional =====
-    const resBruto = dreVal(dre, "Resultado Bruto", periodo);
-    if (recLiquida !== 0 && custoOp !== 0 && resBruto !== 0) {
+    // ===== 6. Lucro Bruto = Receita Líquida + Custo Operacional =====
+    const lucroBruto = dreVal(dre, "Lucro Bruto", periodo);
+    if (recLiquida !== 0 && custoOp !== 0 && lucroBruto !== 0) {
       const expected = recLiquida + custoOp;
-      if (!approxEqual(resBruto, expected, 2)) {
+      if (!approxEqual(lucroBruto, expected, 2)) {
         alertas.push({
           tipo: "aviso",
           area: "DRE Consistência",
-          mensagem: `Resultado Bruto (${fmtBRL(resBruto)}) ≠ Receita Líquida + CMV em ${periodo}`,
+          mensagem: `Lucro Bruto (${fmtBRL(lucroBruto)}) ≠ Receita Líquida + Custo Operacional em ${periodo}`,
           detalhes: `Esperado: ${fmtBRL(expected)}`,
         });
       }
@@ -192,8 +193,8 @@ export function validateFinancialData(
   const hasPassivoTotal = bp.some(b => b.conta === "Passivo Total" && Object.values(b.valores).some(v => v !== 0));
   const hasPC = bp.some(b => b.conta === "Passivo Circulante" && Object.values(b.valores).some(v => v !== 0));
   const hasPL = bp.some(b => b.conta === "Patrimônio Líquido" && Object.values(b.valores).some(v => v !== 0));
-  const hasRecBruta = dre.some(d => d.conta === "Receita Bruta de Vendas e/ou Serviços" && Object.values(d.valores).some(v => v !== 0));
-  const hasLucroLiq = dre.some(d => d.conta === "Lucro ou Prejuízo do Período" && Object.values(d.valores).some(v => v !== 0));
+  const hasRecBruta = dre.some(d => d.conta === "Receita Bruta" && Object.values(d.valores).some(v => v !== 0));
+  const hasLucroLiq = dre.some(d => d.conta === "Lucro Líquido" && Object.values(d.valores).some(v => v !== 0));
 
   if (!hasAtivoTotal) {
     alertas.push({ tipo: "aviso", area: "Completude BP", mensagem: "Ativo Total não encontrado ou zerado no BP" });

@@ -334,6 +334,77 @@ export function mapExtractedToDRE(
 }
 
 /**
+ * Recalcula os subtotais do DRE padrão (modelo gerencial — Modelo_DRE.xlsx) em
+ * cascata, a partir das linhas de input, para cada período. Convenção de sinais:
+ * receitas positivas; deduções/custos/despesas/IR negativos (mesma do resto do
+ * sistema). Se uma linha de subtotal não tiver nenhum componente (todos zero),
+ * preserva o valor já presente (ex.: documento que só trouxe o total líquido).
+ *
+ * Cascata:
+ *   Receita Líquida           = Receita Bruta + Deduções + Impostos s/ Faturamento
+ *   Lucro Bruto               = Receita Líquida + Custo Operacional
+ *   EBITDA                    = Lucro Bruto + G&A + Vendas + Marketing + P&D + Outras Rec/Desp Op
+ *   EBIT                      = EBITDA + Depreciação e Amortização + Equivalência Patrimonial
+ *   Resultado Financeiro      = Receitas Financeiras + Despesas Financeiras
+ *   Resultado Não Operacional = Outras Receitas Não Op + Outras Despesas Não Op
+ *   Resultado Antes do IR     = EBIT + Resultado Financeiro + Resultado Não Operacional
+ *   Lucro Líquido             = Resultado Antes do IR e CSLL + IR e CSLL
+ */
+export function recomputeDRESubtotals(dre: DRELineItem[], periodos: string[]): void {
+  const get = (conta: string, p: string): number =>
+    dre.find(d => d.conta === conta)?.valores[p] ?? 0;
+  const set = (conta: string, p: string, val: number): void => {
+    const item = dre.find(d => d.conta === conta);
+    if (item) item.valores[p] = val;
+  };
+  // Mantém subtotal extraído se não houver componentes (soma === 0)
+  const resolve = (comp: number, conta: string, p: string): number =>
+    comp !== 0 ? comp : get(conta, p);
+
+  for (const p of periodos) {
+    const receitaLiquida = resolve(
+      get("Receita Bruta", p) + get("Deduções da Receita Bruta", p) + get("Impostos s/ Faturamento", p),
+      "Receita Líquida", p
+    );
+    set("Receita Líquida", p, receitaLiquida);
+
+    const lucroBruto = resolve(receitaLiquida + get("Custo Operacional", p), "Lucro Bruto", p);
+    set("Lucro Bruto", p, lucroBruto);
+
+    const ebitda = resolve(
+      lucroBruto + get("Despesas Gerais e Administrativas", p) + get("Despesas com Vendas", p) +
+        get("Despesas com Marketing", p) + get("Despesas com P&D", p) +
+        get("Outras Receitas Operacionais", p) + get("Outras Despesas Operacionais", p),
+      "EBITDA", p
+    );
+    set("EBITDA", p, ebitda);
+
+    const ebit = resolve(ebitda + get("Depreciação e Amortização", p) + get("Equivalência Patrimonial", p), "EBIT", p);
+    set("EBIT", p, ebit);
+
+    const resultadoFinanceiro = resolve(
+      get("Receitas Financeiras", p) + get("Despesas Financeiras", p),
+      "Resultado Financeiro", p
+    );
+    set("Resultado Financeiro", p, resultadoFinanceiro);
+
+    const resultadoNaoOp = resolve(
+      get("Outras Receitas Não Operacionais", p) + get("Outras Despesas Não Operacionais", p),
+      "Resultado Não Operacional", p
+    );
+    set("Resultado Não Operacional", p, resultadoNaoOp);
+
+    const resultadoAntesIR = resolve(
+      ebit + resultadoFinanceiro + resultadoNaoOp,
+      "Resultado Antes do IR e CSLL", p
+    );
+    set("Resultado Antes do IR e CSLL", p, resultadoAntesIR);
+
+    set("Lucro Líquido", p, resolve(resultadoAntesIR + get("IR e CSLL", p), "Lucro Líquido", p));
+  }
+}
+
+/**
  * Extract year from a period string.
  * "31/12/2023" → "2023", "2023" → "2023", "Jan/2024" → "2024"
  */

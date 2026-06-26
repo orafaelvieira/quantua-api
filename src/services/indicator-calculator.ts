@@ -90,41 +90,53 @@ function computeIndicator(
   const ativoOperacional = bpByClass(bp, "AO", periodo);
   const passivoOperacional = Math.abs(bpByClass(bp, "PO", periodo));
 
-  // DRE raw values
-  const recBruta = dreVal(dre, "Receita Bruta de Vendas e/ou Serviços", periodo);
+  // DRE raw values (modelo gerencial — Modelo_DRE.xlsx)
+  const recBruta = dreVal(dre, "Receita Bruta", periodo);
   const deducoes = dreVal(dre, "Deduções da Receita Bruta", periodo);
+  const impostosFat = dreVal(dre, "Impostos s/ Faturamento", periodo);
   const custoOp = dreVal(dre, "Custo Operacional", periodo);
   const despGerais = dreVal(dre, "Despesas Gerais e Administrativas", periodo);
-  const despVendas = dreVal(dre, "Despesas Com Vendas", periodo);
-  const perdasNaoRecup = dreVal(dre, "Perdas pela Não Recuperabilidade de Ativos", periodo);
+  const despVendas = dreVal(dre, "Despesas com Vendas", periodo);
+  const despMkt = dreVal(dre, "Despesas com Marketing", periodo);
+  const despPD = dreVal(dre, "Despesas com P&D", periodo);
   const outrasRecOp = dreVal(dre, "Outras Receitas Operacionais", periodo);
   const outrasDespOp = dreVal(dre, "Outras Despesas Operacionais", periodo);
-  const despesasFinanceiras = dreVal(dre, "Despesas Financeiras", periodo);
+  const deprecAmort = dreVal(dre, "Depreciação e Amortização", periodo);
+  const equivPat = dreVal(dre, "Equivalência Patrimonial", periodo);
   const receitasFinanceiras = dreVal(dre, "Receitas Financeiras", periodo);
-  const resNaoOp = dreVal(dre, "Resultado Não Operacional", periodo);
-  const provisaoIR = dreVal(dre, "Provisão para IR e Contribuição Social", periodo);
-  const lucroPrejuizo = dreVal(dre, "Lucro ou Prejuízo do Período", periodo);
+  const despesasFinanceiras = dreVal(dre, "Despesas Financeiras", periodo);
+  const outrasRecNaoOp = dreVal(dre, "Outras Receitas Não Operacionais", periodo);
+  const outrasDespNaoOp = dreVal(dre, "Outras Despesas Não Operacionais", periodo);
+  const irCsll = dreVal(dre, "IR e CSLL", periodo);
 
-  // DRE computed subtotals (use extracted value if available, otherwise compute)
-  const receitaLiquida = dreVal(dre, "Receita Líquida", periodo) || (recBruta + deducoes);
-  const resultadoBruto = dreVal(dre, "Resultado Bruto", periodo) || (receitaLiquida + custoOp);
-  const resultadoOperacional = dreVal(dre, "Resultado Operacional", periodo) ||
-    (resultadoBruto + despGerais + despVendas + perdasNaoRecup + outrasRecOp + outrasDespOp);
+  // DRE computed subtotals (use o subtotal já presente no DRE; se ausente, calcula em cascata)
+  const receitaLiquida = dreVal(dre, "Receita Líquida", periodo) || (recBruta + deducoes + impostosFat);
+  const lucroBruto = dreVal(dre, "Lucro Bruto", periodo) || (receitaLiquida + custoOp);
+  const ebitda = dreVal(dre, "EBITDA", periodo) ||
+    (lucroBruto + despGerais + despVendas + despMkt + despPD + outrasRecOp + outrasDespOp);
+  const ebit = dreVal(dre, "EBIT", periodo) || (ebitda + deprecAmort + equivPat);
+  const resultadoFinanceiro = dreVal(dre, "Resultado Financeiro", periodo) || (receitasFinanceiras + despesasFinanceiras);
+  const resultadoNaoOp = dreVal(dre, "Resultado Não Operacional", periodo) || (outrasRecNaoOp + outrasDespNaoOp);
+  const resultadoAntesIR = dreVal(dre, "Resultado Antes do IR e CSLL", periodo) ||
+    (ebit + resultadoFinanceiro + resultadoNaoOp);
+  const lucroLiquido = dreVal(dre, "Lucro Líquido", periodo) || (resultadoAntesIR + irCsll);
   const custoOperacional = Math.abs(custoOp);
 
   // Computed intermediate values
   const capitalTerceiros = empFinCP + passPartRelCP + empFinLP + passPartRelLP;
   const caixaEquivalentes = caixa;
   const dividaLiquida = capitalTerceiros - caixaEquivalentes;
-  const nopat = resultadoOperacional * (1 - 0.34);
+  const nopat = ebit * (1 - 0.34);
   const cdg = ativoCirculante - passivoCirculante;
   const ncg = ativoOperacional - passivoOperacional;
 
   // Store computed values for cross-reference
   computed["Receita Líquida"] = receitaLiquida;
-  computed["Lucro Bruto"] = resultadoBruto;
-  computed["Lucro Operacional"] = resultadoOperacional;
-  computed["Lucro Líquido"] = lucroPrejuizo;
+  computed["Lucro Bruto"] = lucroBruto;
+  computed["EBITDA"] = ebitda;
+  computed["EBIT"] = ebit;
+  computed["Lucro Operacional"] = ebit;
+  computed["Lucro Líquido"] = lucroLiquido;
   computed["NOPAT"] = nopat;
   computed["Caixa e Equivalentes"] = caixaEquivalentes;
   computed["Capital de Terceiros"] = capitalTerceiros;
@@ -135,15 +147,15 @@ function computeIndicator(
   switch (nome) {
     // Operacionais
     case "Receita Líquida": return receitaLiquida;
-    case "Lucro Bruto": return resultadoBruto;
-    case "Lucro Operacional": return resultadoOperacional;
-    case "Lucro Líquido": return lucroPrejuizo;
+    case "Lucro Bruto": return lucroBruto;
+    case "Lucro Operacional": return ebit;
+    case "Lucro Líquido": return lucroLiquido;
     case "NOPAT": return nopat;
 
     // Margens
-    case "Margem Bruta": return div(resultadoBruto, receitaLiquida);
-    case "Margem Operacional": return div(resultadoOperacional, receitaLiquida);
-    case "Margem Líquida": return div(lucroPrejuizo, receitaLiquida);
+    case "Margem Bruta": return div(lucroBruto, receitaLiquida);
+    case "Margem Operacional": return div(ebitda, receitaLiquida);
+    case "Margem Líquida": return div(lucroLiquido, receitaLiquida);
 
     // Liquidez
     case "Liquidez Imediata": return div(caixa, passivoCirculante);
@@ -186,19 +198,19 @@ function computeIndicator(
     case "Endividamento de Curto Prazo": return div(passivoCirculante, passivoTotal);
     case "Patrimônio Líquido": return patrimonioLiquido;
     case "Capital Terceiros s/ PL": return div(capitalTerceiros, patrimonioLiquido);
-    case "Dívida Líquida/Lucro Operacional": return div(dividaLiquida, resultadoOperacional);
+    case "Dívida Líquida/Lucro Operacional": return div(dividaLiquida, ebitda);
     case "Índice de Cobertura de Juros":
-      return despesasFinanceiras !== 0 ? div(resultadoOperacional, Math.abs(despesasFinanceiras)) : null;
+      return despesasFinanceiras !== 0 ? div(ebitda, Math.abs(despesasFinanceiras)) : null;
     case "Despesa Financeira / Rec. Líquida":
       return div(Math.abs(despesasFinanceiras), receitaLiquida);
 
     // Rentabilidade
-    case "ROA (Retorno sobre Ativos)": return div(lucroPrejuizo, ativoTotal);
+    case "ROA (Retorno sobre Ativos)": return div(lucroLiquido, ativoTotal);
     case "ROIC (Retorno sobre Capital Investido)":
       return div(nopat, patrimonioLiquido + capitalTerceiros);
 
     // DuPont
-    case "ROE (Retorno sobre Patrimônio Líquido)": return div(lucroPrejuizo, patrimonioLiquido);
+    case "ROE (Retorno sobre Patrimônio Líquido)": return div(lucroLiquido, patrimonioLiquido);
     case "Giro do Ativo": return div(receitaLiquida, ativoTotal);
     case "Alavancagem": return div(passivoTotal, patrimonioLiquido);
 

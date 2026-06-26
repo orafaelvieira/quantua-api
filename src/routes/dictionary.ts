@@ -37,20 +37,41 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   res.json(entries);
 });
 
-// GET /dictionary/template — list all BP template accounts (for dropdowns)
-router.get("/template", async (_req: AuthRequest, res: Response): Promise<void> => {
-  // Import BP_TEMPLATE from financial-templates
-  const { BP_TEMPLATE } = require("../services/financial-templates");
-  // Group by parent account
+// GET /dictionary/template — contas-destino disponíveis para os dropdowns,
+// agrupadas por grupo. Combina o template canônico de BP com TODOS os pares
+// (grupoConta → contaDestino) já presentes no dicionário acessível (global +
+// workspace). Assim cobre BP e DRE, e garante que qualquer entrada existente
+// seja re-selecionável ao ser editada (o valor sempre está entre as opções).
+router.get("/template", async (req: AuthRequest, res: Response): Promise<void> => {
+  const { BP_TEMPLATE, DRE_TEMPLATE } = require("../services/financial-templates");
+
   const grouped: Record<string, string[]> = {};
+  const add = (grupo: string, conta: string): void => {
+    if (!grupo || !conta) return;
+    if (!grouped[grupo]) grouped[grupo] = [];
+    if (!grouped[grupo].includes(conta)) grouped[grupo].push(conta);
+  };
+
+  // 1) Contas canônicas do template de BP (agrupadas pelo grupo-pai)
   for (const item of BP_TEMPLATE) {
-    const parent = getParentGroup(item);
-    if (!grouped[parent]) grouped[parent] = [];
-    if (!grouped[parent].includes(item.conta)) {
-      grouped[parent].push(item.conta);
-    }
+    add(getParentGroup(item), item.conta);
   }
-  res.json({ template: BP_TEMPLATE, grouped });
+
+  // 2) Contas-destino efetivamente usadas no dicionário (mantém o dropdown em
+  //    sincronia com os dados — inclui DRE e quaisquer destinos importados que
+  //    não existam no template estático)
+  const used = await prisma.accountDictionary.findMany({
+    where: {
+      OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }],
+    },
+    select: { grupoConta: true, contaDestino: true },
+    distinct: ["grupoConta", "contaDestino"],
+  });
+  for (const u of used) {
+    add(u.grupoConta, u.contaDestino);
+  }
+
+  res.json({ template: BP_TEMPLATE, dreTemplate: DRE_TEMPLATE, grouped });
 });
 
 // Helper to determine parent group based on classificacao
