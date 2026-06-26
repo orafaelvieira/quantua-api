@@ -800,4 +800,11 @@ export const ACCOUNT_ALIASES: Record<string, string> = {
   "Outras Despesas Não Operacionais": "Outras Despesas Não Operacionais",
   "OUTRAS DESPESAS NÃO OPERACIONAIS": "Outras Despesas Não Operacionais",
   "Despesas Não Operacionais": "Outras Despesas Não Operacionais",
+
+  // ── Totais de seção de DRE (níveis) — captura o total quando o detalhe não é
+  //    capturado pelo parser. O mapper usa keep-first, então não dupla-conta. ──
+  "Custos": "Custo Operacional",
+  "Provisões Tributárias (CSLL/IRPJ)": "IR e CSLL",
+  "Provisões Tributárias": "IR e CSLL",
+  "Provisão IRPJ e CSLL": "IR e CSLL",
 };
