@@ -215,6 +215,21 @@ function classificacaoFromCode(code: string): string {
   return "0";
 }
 
+const BP_TEMPLATE_NAMES = BP_TEMPLATE.map(t => t.conta);
+
+/**
+ * Mapeia uma conta (nome original) para a conta padrão do BP, com contexto de
+ * grupo (AC, ANC, PC, PNC, PL) para desambiguar CP/LP. Reutiliza o dicionário +
+ * aliases + fuzzy do sistema. Usado pelo "fold" da árvore N3 (ai-extraction).
+ */
+export function mapAccountToBPGroup(
+  nome: string,
+  grupoCode?: string,
+  dictionaryEntries?: DictionaryEntry[]
+): string | null {
+  return findBestMatch(nome, BP_TEMPLATE_NAMES, dictionaryEntries, grupoCode);
+}
+
 export function mapExtractedToBP(
   linhas: ExtractedRow[],
   dictionaryEntries?: DictionaryEntry[]

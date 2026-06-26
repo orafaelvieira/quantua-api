@@ -7078,5 +7078,71 @@
     "contaDestino": "Outras Despesas Não Operacionais",
     "grupoConta": "Outras Despesas Não Operacionais",
     "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Partic. Permanentes Outras Sociedades",
+    "contaDestino": "Investimentos",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Emprest Financ C.Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Parcel Tribut a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "I.R.P.J. e C.S.L.L. a Recolher",
+    "contaDestino": "Obrigações Tributárias",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações Trabalhistas a Pagar",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações Trabalhistas e Previdenciárias",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamentos Diversos",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos Instituições Financeiras",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações a Longo Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Pagar Longo Prazo",
+    "contaDestino": "Empréstimos e Financiamentos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações Tributárias",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
   }
 ]

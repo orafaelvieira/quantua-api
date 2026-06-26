@@ -619,7 +619,14 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
       docs.map(async (d) => ({ buffer: await downloadFile(d.storagePath!), tipo: d.tipo }))
     );
 
-    const { bp, dre, periodos, declarados } = await extractFinancialsWithAI(buffers, periodosAlvo);
+    // Dicionário (global + workspace) para o fold da árvore N3
+    const dictRows = await prisma.accountDictionary.findMany({
+      where: { OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }], tipo: "BP" },
+      select: { nomeOriginal: true, contaDestino: true, grupoConta: true },
+    });
+
+    const { bp, dre, periodos, declarados, arvoreOriginalBP, naoMapeados } =
+      await extractFinancialsWithAI(buffers, periodosAlvo, dictRows);
     const indicadores = calculateIndicators(bp, dre, periodos);
 
     // Reconciliação: subtotal computado vs DECLARADO no PDF (vindo da própria IA)
@@ -635,7 +642,7 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
         return { conta, declarado, computado, ok };
       });
 
-    res.json({ bp, dre, indicadores, periodos, reconciliacao });
+    res.json({ bp, dre, indicadores, periodos, reconciliacao, arvoreOriginalBP, naoMapeados });
   } catch (err: any) {
     console.error("[reconcile-ai] erro:", err?.message ?? err);
     res.status(500).json({ error: "Falha ao reconciliar com IA: " + (err?.message ?? "erro desconhecido") });
