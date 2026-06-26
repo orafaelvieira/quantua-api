@@ -333,6 +333,53 @@ export function mapExtractedToDRE(
   };
 }
 
+// Linhas de input do DRE de natureza REDUTORA (devem ser negativas no modelo).
+const DRE_LINHAS_REDUTORAS = new Set<string>([
+  "Deduções da Receita Bruta",
+  "Impostos s/ Faturamento",
+  "Custo Operacional",
+  "Despesas Gerais e Administrativas",
+  "Despesas com Vendas",
+  "Despesas com Marketing",
+  "Despesas com P&D",
+  "Outras Despesas Operacionais",
+  "Depreciação e Amortização",
+  "Despesas Financeiras",
+  "Outras Despesas Não Operacionais",
+  "IR e CSLL",
+]);
+
+// Linhas de input do DRE de natureza RECEITA (devem ser positivas no modelo).
+const DRE_LINHAS_RECEITAS = new Set<string>([
+  "Receita Bruta",
+  "Outras Receitas Operacionais",
+  "Receitas Financeiras",
+  "Outras Receitas Não Operacionais",
+]);
+// "Equivalência Patrimonial" é bidirecional (lucro ou prejuízo) — preserva o sinal extraído.
+
+/**
+ * Normaliza os sinais das linhas de input do DRE pela NATUREZA da conta, antes da
+ * cascata de subtotais. Muitos documentos trazem deduções/custos/despesas como
+ * valores POSITIVOS (sem parênteses); sem isto a cascata somaria onde deveria
+ * subtrair. Redutoras → −|valor|; receitas → +|valor|. Idempotente (não altera
+ * sinais já corretos) e robusto a valor positivo, negativo ou entre parênteses.
+ * Não toca subtotais (recalculados depois) nem linhas editadas manualmente.
+ */
+export function normalizeDRESigns(dre: DRELineItem[], periodos: string[]): void {
+  for (const item of dre) {
+    if (item.subtotal || item.editado) continue;
+    const redutora = DRE_LINHAS_REDUTORAS.has(item.conta);
+    const receita = DRE_LINHAS_RECEITAS.has(item.conta);
+    if (!redutora && !receita) continue;
+    for (const p of periodos) {
+      const v = item.valores[p];
+      if (v === undefined || v === 0) continue;
+      item.valores[p] = redutora ? -Math.abs(v) : Math.abs(v);
+    }
+  }
+}
+
 /**
  * Recalcula os subtotais do DRE padrão (modelo gerencial — Modelo_DRE.xlsx) em
  * cascata, a partir das linhas de input, para cada período. Convenção de sinais:
