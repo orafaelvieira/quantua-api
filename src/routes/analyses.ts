@@ -9,6 +9,7 @@ import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocum
 import { generateAnalysis } from "../services/claude";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods } from "../services/account-mapper";
 import { calculateIndicators } from "../services/indicator-calculator";
+import { extractFinancialsWithAI } from "../services/ai-extraction";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
@@ -590,6 +591,71 @@ router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Respons
     data: { dadosEstruturados: dados as any },
   });
   res.json(dados);
+});
+
+// Reconciliação por IA (fallback acionado pelo analista) — reextrai os
+// documentos via Claude (visão/PDF), recalcula e retorna a PROPOSTA para
+// pré-visualização. NÃO salva — o analista aplica via PUT /dados-estruturados.
+router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: { in: req.scopeUserIds! } },
+    include: { documents: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const docs = analysis.documents.filter((d) => d.storagePath);
+  if (docs.length === 0) { res.status(400).json({ error: "Nenhum documento disponível" }); return; }
+
+  // Períodos autoritativos: os já usados na análise (para o resultado da IA alinhar
+  // com o display). Se ainda não houver, deduz do parser heurístico mais abaixo.
+  const periodosExistentes: string[] = ((analysis.dadosEstruturados as any)?.periodos as string[]) ?? [];
+
+  // Subtotais declarados nos PDFs (oráculo de reconciliação) — via parser heurístico
+  const declarados: Record<string, number> = {};
+  const declPats: Array<[RegExp, string]> = [
+    [/^receita liquida|^receita operacional liquida/, "Receita Líquida"],
+    [/^lucro bruto|^resultado bruto/, "Lucro Bruto"],
+    [/^lucro liquido|^resultado liquido/, "Lucro Líquido"],
+  ];
+  const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+
+  try {
+    const buffers: Array<{ buffer: Buffer; tipo: string }> = [];
+    const periodosHint = new Set<string>();
+    for (const d of docs) {
+      const buffer = await downloadFile(d.storagePath!);
+      buffers.push({ buffer, tipo: d.tipo });
+      try {
+        const parsed = await parseDocument(buffer, d.nome, d.tipo);
+        for (const p of parsed.periodos) periodosHint.add(p);
+        const p0 = parsed.periodos[0];
+        if (p0) for (const l of parsed.linhas) {
+          const n = norm(l.conta);
+          for (const [re, key] of declPats) {
+            if (re.test(n) && declarados[key] === undefined && l.valores[p0]) declarados[key] = l.valores[p0];
+          }
+        }
+      } catch { /* ignora parse heurístico falho */ }
+    }
+
+    const periodosAlvo = periodosExistentes.length ? periodosExistentes : Array.from(periodosHint);
+    const { bp, dre, periodos } = await extractFinancialsWithAI(buffers, periodosAlvo);
+    const indicadores = calculateIndicators(bp, dre, periodos);
+
+    // Reconciliação: subtotal computado pela IA vs declarado no PDF
+    const p0 = periodos[0];
+    const comp = (c: string) => dre.find((d) => d.conta === c)?.valores[p0] ?? 0;
+    const reconciliacao = Object.entries(declarados).map(([conta, declarado]) => {
+      const computado = comp(conta);
+      const ok = Math.abs(Math.abs(computado) - Math.abs(declarado)) < Math.max(Math.abs(declarado) * 0.01, 1000);
+      return { conta, declarado, computado, ok };
+    });
+
+    res.json({ bp, dre, indicadores, periodos, reconciliacao });
+  } catch (err: any) {
+    console.error("[reconcile-ai] erro:", err?.message ?? err);
+    res.status(500).json({ error: "Falha ao reconciliar com IA: " + (err?.message ?? "erro desconhecido") });
+  }
 });
 
 // Validation endpoint — run validation on current structured data
