@@ -6670,5 +6670,413 @@
     "contaDestino": "Lucro Líquido",
     "grupoConta": "Lucro Líquido",
     "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Clientes Diversos",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Contas a Receber de Clientes Nacionais",
+    "contaDestino": "Contas a Receber",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tributos a Recuperar/Compensar",
+    "contaDestino": "Tributos a Recuperar",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Estoque de Matéria Prima",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Numerário em Trânsito",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Direito de Uso",
+    "contaDestino": "Intangível",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Partes Relacionadas - Ativo",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Fornecedores de Mercadorias",
+    "contaDestino": "Fornecedores",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão de 13º Salário",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Encargos Sociais a Recolher",
+    "contaDestino": "Obrigações Trabalhistas",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Empréstimos Bancários a Pagar",
+    "contaDestino": "Empréstimos e Financiamentos - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Receita de Serviços",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Serviços Prestados",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Receita com Vendas de Produtos",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Vendas Canceladas",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Vendas Canceladas e Devoluções",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Descontos Incondicionais Concedidos",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "PIS sobre Faturamento",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "COFINS sobre Faturamento",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Simples Nacional sobre Faturamento",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Impostos Incidentes sobre Serviços",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custos de Produção",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Salários e Ordenados",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Pró-labore",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Honorários Contábeis",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Cartório",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Aluguéis e Condomínios",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Energia Elétrica",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Material de Escritório",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Comissões sobre Vendas",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Fretes e Carretos",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Frete",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Propaganda e Publicidade",
+    "contaDestino": "Despesas com Marketing",
+    "grupoConta": "Despesas com Marketing",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas Tributárias",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Cartório e Tabelionato",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Juros e Descontos Obtidos",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Rendimentos de Aplicações Financeiras",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Descontos Financeiros Obtidos",
+    "contaDestino": "Receitas Financeiras",
+    "grupoConta": "Receitas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Juros sobre Empréstimos",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Juros de Mora",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Descontos Concedidos",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Tarifas Bancárias",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "IOF",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Contribuição Social sobre o Lucro",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Estoque de Produtos em Processo",
+    "contaDestino": "Estoques",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Caixinha",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Valores em Trânsito",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aparelhos e Equipamentos",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Créditos com Pessoas Ligadas",
+    "contaDestino": "Realizável a Longo Prazo",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Conta Corrente de Sócios",
+    "contaDestino": "Passivos com Partes Relacionadas - Curto Prazo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para Contingências",
+    "contaDestino": "Tributos Diferidos - Longo Prazo",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Faturamento de Serviços",
+    "contaDestino": "Receita Bruta",
+    "grupoConta": "Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Bonificações Concedidas",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Abatimentos sobre Vendas",
+    "contaDestino": "Deduções da Receita Bruta",
+    "grupoConta": "Deduções da Receita Bruta",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Viagens e Estadias",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Combustíveis",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Manutenção e Reparos",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Telefone e Internet",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Serviços de Terceiros - Pessoa Jurídica",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Serviços de Terceiros - Pessoa Física",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Seguros",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Treinamento",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Despesas com Brindes",
+    "contaDestino": "Despesas com Marketing",
+    "grupoConta": "Despesas com Marketing",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Patrocínios",
+    "contaDestino": "Despesas com Marketing",
+    "grupoConta": "Despesas com Marketing",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Multas e Juros Fiscais",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Doações e Contribuições",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Ganho na Venda de Imobilizado",
+    "contaDestino": "Outras Receitas Não Operacionais",
+    "grupoConta": "Outras Receitas Não Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Perda na Venda de Imobilizado",
+    "contaDestino": "Outras Despesas Não Operacionais",
+    "grupoConta": "Outras Despesas Não Operacionais",
+    "tipo": "DRE"
   }
 ]
