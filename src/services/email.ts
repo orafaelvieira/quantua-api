@@ -64,30 +64,33 @@ async function sendSafe(opts: SendOpts): Promise<{ ok: boolean; error?: string }
   }
 }
 
-// ─── Design system (identidade visual Quantua, editorial, sem cantos) ────────
-// Paleta paper/ink/rust espelhando src/styles/theme.css do frontend. E-mail usa
+// ─── Design system (identidade visual Quantua, marca navy/gold) ──────────────
+// Paleta navy/gold espelhando src/styles/theme.css do frontend. E-mail usa
 // layout table-based (robusto em Outlook/Gmail) e fontes com fallback porque
 // webfonts não carregam na maioria dos clientes.
 const C = {
-  paper: "#F5F2EC",
-  paper2: "#EDE8DE",
-  paper3: "#E3DDD0",
-  ink: "#161513",
-  ink2: "#2A2824",
-  ink3: "#5A554C",
-  ink4: "#8A8478",
-  accent: "#B8531C",
-  accentPaper: "#F4E4D0",
+  paper: "#F6F7F9",
+  paper2: "#EEF1F5",
+  paper3: "#E3E8EF",
+  ink: "#0C2642",
+  ink2: "#1E3A57",
+  ink3: "#55606E",
+  ink4: "#8A93A1",
+  accent: "#BC9544",
+  accentPaper: "#FBF6EC",
   green: "#3D6B47",
   red: "#A8351E",
   amber: "#B07A1B",
-  rule: "#1614130F",
-  rule2: "#16141322",
+  rule: "#0C26420F",
+  rule2: "#0C264222",
 };
-const FONT_DISPLAY = `'Inter Tight', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif`;
+const FONT_DISPLAY = `'Sora', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif`;
 const FONT_MONO = `'JetBrains Mono', 'SFMono-Regular', Consolas, monospace`;
-const FONT_SERIF = `'Source Serif Pro', Georgia, 'Times New Roman', serif`;
+const FONT_BODY = `'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif`;
 const DEFAULT_FOOTER = "Quantua Serviços de Análise Ltda. · IBR em 10 dias úteis";
+// Logo da marca hospedada no front (servida em produção). Imagem PNG porque
+// clientes de email bloqueiam SVG e data-URIs; `alt` cobre imagens bloqueadas.
+const LOGO_URL = "https://quantua.com.br/email-logo.png";
 
 /**
  * Envelope visual padrão Quantua: canvas → card centralizado com barra de
@@ -105,8 +108,8 @@ function renderShell(o: { eyebrow: string; body: string; footer?: string; accent
           <td style="padding:32px 40px 0;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
               <tr>
-                <td style="font-family:${FONT_MONO}; font-size:15px; letter-spacing:0.30em; font-weight:700; color:${C.ink}; text-transform:uppercase;">QUANTUA</td>
-                <td align="right" style="font-family:${FONT_MONO}; font-size:9px; letter-spacing:0.14em; color:${C.ink4}; text-transform:uppercase;">IBR · 10 dias úteis</td>
+                <td style="vertical-align:middle;"><img src="${LOGO_URL}" alt="Quantua" width="103" height="30" style="display:block; border:0; height:30px; width:103px;"></td>
+                <td align="right" style="vertical-align:middle; font-family:${FONT_MONO}; font-size:9px; letter-spacing:0.14em; color:${C.ink4}; text-transform:uppercase;">IBR · 10 dias úteis</td>
               </tr>
             </table>
             <div style="margin-top:26px;">
@@ -131,7 +134,7 @@ function renderHeading(text: string): string {
 }
 
 function renderLede(html: string): string {
-  return `<p style="margin:0 0 6px; font-family:${FONT_SERIF}; font-size:15px; line-height:1.65; color:${C.ink2};">${html}</p>`;
+  return `<p style="margin:0 0 6px; font-family:${FONT_BODY}; font-size:15px; line-height:1.65; color:${C.ink2};">${html}</p>`;
 }
 
 function renderButton(href: string, label: string): string {
@@ -156,7 +159,7 @@ function renderDataRows(rows: Array<[string, string | null | undefined]>): strin
       const bg = i % 2 === 0 ? C.paper2 : C.paper;
       return `<tr>
       <td style="background:${bg}; font-family:${FONT_MONO}; font-size:10px; letter-spacing:0.10em; text-transform:uppercase; color:${C.ink3}; padding:11px 14px; vertical-align:top; white-space:nowrap; border-bottom:1px solid ${C.rule};">${label}</td>
-      <td style="background:${bg}; font-family:${FONT_SERIF}; font-size:14px; line-height:1.5; color:${C.ink}; padding:11px 16px; border-bottom:1px solid ${C.rule};">${value}</td>
+      <td style="background:${bg}; font-family:${FONT_BODY}; font-size:14px; line-height:1.5; color:${C.ink}; padding:11px 16px; border-bottom:1px solid ${C.rule};">${value}</td>
     </tr>`;
     })
     .join("");
