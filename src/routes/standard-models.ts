@@ -120,4 +120,34 @@ router.post("/:tipo/versions", async (req: AuthRequest, res: Response): Promise<
   res.json({ ok: true, versao: criado.versao, totalLinhas: criado.linhas.length });
 });
 
+// GET /standard-models/:tipo/versions — histórico (todas as versões, mais nova primeiro).
+router.get("/:tipo/versions", async (req: AuthRequest, res: Response): Promise<void> => {
+  const tipo = String(req.params.tipo).toUpperCase();
+  if (tipo !== "BP" && tipo !== "DRE") { res.status(400).json({ error: "Tipo inválido" }); return; }
+  const versoes = await prisma.standardModel.findMany({
+    where: { tipo },
+    orderBy: { versao: "desc" },
+    select: { versao: true, ativo: true, nota: true, criadoPor: true, createdAt: true, _count: { select: { linhas: true } } },
+  });
+  res.json(versoes.map((v) => ({
+    versao: v.versao, ativo: v.ativo, nota: v.nota, criadoPor: v.criadoPor,
+    criadoEm: v.createdAt, totalLinhas: v._count.linhas,
+  })));
+});
+
+// GET /standard-models/:tipo/versions/:versao — estrutura completa de UMA versão (histórica ou vigente).
+router.get("/:tipo/versions/:versao", async (req: AuthRequest, res: Response): Promise<void> => {
+  const tipo = String(req.params.tipo).toUpperCase();
+  const versao = parseInt(String(req.params.versao), 10);
+  if ((tipo !== "BP" && tipo !== "DRE") || !Number.isFinite(versao)) { res.status(400).json({ error: "Parâmetros inválidos" }); return; }
+  const m = await prisma.standardModel.findFirst({
+    where: { tipo, versao }, include: { linhas: { orderBy: { ordem: "asc" } } },
+  });
+  if (!m) { res.status(404).json({ error: "Versão não encontrada" }); return; }
+  res.json({
+    id: m.id, tipo: m.tipo, versao: m.versao, ativo: m.ativo, nota: m.nota, criadoEm: m.createdAt,
+    linhas: m.linhas.map((l) => ({ codigo: l.codigo, nome: l.nome, grupo: l.grupo, ordem: l.ordem, tipo: l.tipo, nivel: l.nivel, sinal: l.sinal })),
+  });
+});
+
 export default router;
