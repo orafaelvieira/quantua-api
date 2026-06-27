@@ -91,8 +91,13 @@ const DRE_SUBTOTAIS = new Set([
   "resultado operacional", "lucro operacional", "prejuizo operacional",
   "resultado antes do resultado financeiro", "lucro antes do resultado financeiro",
 ].map(normNome));
-/** destinos da cascata que indicam que já há despesa operacional detalhada (filhos). */
-const isDespOpDest = (d?: string) => !!d && /Despesas|Outras Despesas Operacionais|Resultado Financeiro|Despesas Financeiras|Receitas Financeiras/.test(d);
+/** destinos que compõem o bloco operacional/financeiro — candidatos a "filhos" de um
+ *  subtotal "Despesas Operacionais". Usados para decidir POR VALOR se o pai é redundante. */
+const DESP_OP_DESTINOS = new Set([
+  "Despesas com Vendas", "Despesas Gerais e Administrativas", "Despesas com Marketing",
+  "Despesas com P&D", "Outras Despesas Operacionais", "Outras Receitas Operacionais",
+  "Receitas Financeiras", "Despesas Financeiras",
+]);
 
 export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: DictionaryEntry[]): { dre: DRELineItem[]; naoMapeados: NaoMapeado[] } {
   const acc: Record<string, Record<string, number>> = {};
@@ -111,13 +116,18 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       it.destino = dest;
       (acc[dest] ??= {})[p] = (acc[dest][p] ?? 0) + it.valor;
     }
-    // Subtotais estruturais (pais): só entram se NÃO houver filhos cobrindo o segmento.
-    // Se já há despesa operacional detalhada nos inputs, o pai é redundante → descarta
-    // (evita a dupla contagem que inflava "Outras Despesas Operacionais").
-    const temFilhosDespOp = inputs.some((it) => isDespOpDest(it.destino));
+    // Subtotais estruturais (pais) — descarte POR VALOR, não por nome: só é pai se os
+    // filhos capturados (bloco operacional/financeiro) SOMAREM ≈ o valor dele. Senão é
+    // um INPUT real (ex.: Fibracabos "Despesas Operacionais" 1.434.351 ≠ filhos 822.330)
+    // e precisa entrar na cascata — descartá-lo perderia o valor e quebraria o Lucro Líquido.
+    const childSum = inputs
+      .filter((it) => it.destino && DESP_OP_DESTINOS.has(it.destino))
+      .reduce((s, it) => s + (it.valor || 0), 0);
     for (const st of subtotais) {
       if (typeof st.valor !== "number" || st.valor === 0) { st.destino = "(subtotal)"; continue; }
-      if (temFilhosDespOp) { st.destino = "(subtotal — filhos já contabilizados)"; continue; }
+      const cobre = Math.abs(childSum) > 1 &&
+        Math.abs(Math.abs(childSum) - Math.abs(st.valor)) / Math.abs(st.valor) < 0.12;
+      if (cobre) { st.destino = "(subtotal — filhos já contabilizados)"; continue; }
       const dest = st.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
       st.destino = dest;
       naoMapeados.push({ nome: st.nome, grupo: "DRE", destino: dest, valor: st.valor, periodo: p });
