@@ -582,6 +582,9 @@ router.put("/:id/dados-estruturados/arvore", async (req: AuthRequest, res: Respo
   dados.arvoreOriginalBP = req.body.arvoreOriginalBP ?? null;
   dados.arvoreOriginalDRE = req.body.arvoreOriginalDRE ?? null;
   dados.naoMapeados = req.body.naoMapeados ?? [];
+  // A extração por IA (árvore + fold) substitui o resultado do parser heurístico:
+  // limpa a lista antiga de "não classificadas" (o que sobrar está em naoMapeados/Outros).
+  dados.unmatchedAccounts = [];
 
   await prisma.analysis.update({ where: { id }, data: { dadosEstruturados: dados } });
   res.json({ ok: true });
