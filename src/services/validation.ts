@@ -19,6 +19,9 @@ export interface ValidationResult {
   detalheCompleto: boolean;
   /** grupos do BP com detalhe incompleto (subtotal ≠ soma das contas) */
   gruposIncompletos: string[];
+  /** Reconciliação da DRE contra os subtotais DECLARADOS no documento.
+   *  verificada=false → não havia declarados para conferir (não dá para afirmar integridade). */
+  reconciliacaoDRE: { verificada: boolean; ok: boolean };
 }
 
 /**
@@ -71,7 +74,8 @@ function fmtBRL(val: number): string {
 export function validateFinancialData(
   bp: BPLineItem[],
   dre: DRELineItem[],
-  periodos: string[]
+  periodos: string[],
+  declarados?: Record<string, Record<string, number>>
 ): ValidationResult {
   const alertas: ValidationAlert[] = [];
   let equacaoPatrimonial = true;
@@ -282,9 +286,45 @@ export function validateFinancialData(
     }
   }
 
+  // ===== 7.7 RECONCILIAÇÃO DA DRE (computado vs DECLARADO no documento) =====
+  // INTEGRIDADE: a cascata da DRE sempre fecha consigo mesma (é recalculada), então
+  // checagens internas NUNCA pegam dupla contagem nas ENTRADAS. A única prova real é
+  // comparar os subtotais calculados com os valores que o próprio documento informa
+  // (Receita Líquida, Lucro Bruto, Lucro Líquido). Se não baterem, a DRE NÃO é
+  // confiável (dupla contagem, conta faltando, sinal). Sem declarados → não dá para
+  // afirmar integridade (verificada=false → o banner mostra "não verificado", não verde).
+  let reconVerificada = false;
+  let reconOk = true;
+  const CONTAS_RECON = ["Receita Líquida", "Lucro Bruto", "Lucro Líquido"];
+  if (declarados) {
+    for (const periodo of periodos) {
+      const decl = declarados[periodo];
+      if (!decl) continue;
+      for (const conta of CONTAS_RECON) {
+        const d = decl[conta];
+        if (typeof d !== "number" || Math.abs(d) < 1) continue;
+        const c = dreVal(dre, conta, periodo);
+        if (Math.abs(c) < 1) continue;
+        reconVerificada = true;
+        // compara magnitudes (a dupla contagem é um erro de magnitude; sinal é checado à parte)
+        if (!approxEqual(Math.abs(c), Math.abs(d), 2)) {
+          reconOk = false;
+          alertas.push({
+            tipo: "erro",
+            area: "Reconciliação DRE",
+            mensagem: `${conta} calculado (${fmtBRL(c)}) ≠ declarado no documento (${fmtBRL(d)}) em ${periodo}`,
+            detalhes: `Diferença de ${fmtBRL(Math.abs(Math.abs(c) - Math.abs(d)))}. A DRE não reconcilia com o resultado informado no documento — possível dupla contagem (subtotal somado com os filhos) ou conta faltando. Use "Conciliar com IA" para reconciliar.`,
+          });
+        }
+      }
+    }
+  }
+  const reconciliacaoDRE = { verificada: reconVerificada, ok: reconOk };
+
   // ===== 8. Calculate overall confidence score =====
   let confiancaGeral = 100;
   if (!detalheCompleto) confiancaGeral -= 15 + gruposIncompletos.length * 5;
+  if (reconVerificada && !reconOk) confiancaGeral -= 30;
 
   // Deduct for missing critical items
   if (!hasAtivoTotal) confiancaGeral -= 15;
@@ -324,6 +364,7 @@ export function validateFinancialData(
     composicaoPassivo,
     detalheCompleto,
     gruposIncompletos,
+    reconciliacaoDRE,
   };
 }
 

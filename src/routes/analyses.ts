@@ -405,6 +405,16 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       }
     }
 
+    // Captura os subtotais DECLARADOS no documento ANTES do recompute sobrescrever —
+    // base da trava de reconciliação (computado vs declarado).
+    const declaradosDRE: Record<string, Record<string, number>> = {};
+    for (const p of allPeriodos) {
+      for (const conta of ["Receita Líquida", "Lucro Bruto", "Lucro Líquido"]) {
+        const v = structuredDRE.find((d) => d.conta === conta)?.valores[p] ?? 0;
+        if (Math.abs(v) > 0.5) (declaradosDRE[p] ??= {})[conta] = v;
+      }
+    }
+
     // Normaliza sinais (deduções/custos/despesas → negativos) e recalcula os
     // subtotais do DRE padrão em cascata a partir das linhas de input
     normalizeDRESigns(structuredDRE, allPeriodos);
@@ -413,7 +423,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const indicadores = calculateIndicators(structuredBP, structuredDRE, allPeriodos);
 
     // Run validation checks on structured data
-    const validacao = validateFinancialData(structuredBP, structuredDRE, allPeriodos);
+    const validacao = validateFinancialData(structuredBP, structuredDRE, allPeriodos, declaradosDRE);
     console.log(`[process] Validação: confiança=${validacao.confiancaGeral}%, equação=${validacao.equacaoPatrimonial}, alertas=${validacao.alertas.length}`);
     for (const alerta of validacao.alertas) {
       console.log(`[process]   [${alerta.tipo}] ${alerta.area}: ${alerta.mensagem}`);
@@ -443,8 +453,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       indicadores,
       periodos: allPeriodos,
       unmatchedAccounts,
+      declarados: declaradosDRE,
       version: 2,
-    };
+    } as DadosEstruturados;
 
     // Calculate document-level confidence from validation
     const docConfianca = validacao.confiancaGeral;
@@ -582,6 +593,7 @@ router.put("/:id/dados-estruturados/arvore", async (req: AuthRequest, res: Respo
   dados.arvoreOriginalBP = req.body.arvoreOriginalBP ?? null;
   dados.arvoreOriginalDRE = req.body.arvoreOriginalDRE ?? null;
   dados.naoMapeados = req.body.naoMapeados ?? [];
+  if (req.body.declarados) dados.declarados = req.body.declarados; // base da trava de reconciliação após aplicar a IA
   // A extração por IA (árvore + fold) substitui o resultado do parser heurístico:
   // limpa a lista antiga de "não classificadas" (o que sobrar está em naoMapeados/Outros).
   dados.unmatchedAccounts = [];
@@ -692,7 +704,7 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
         return { conta, declarado, computado, ok };
       });
 
-    res.json({ bp, dre, indicadores, periodos, reconciliacao, arvoreOriginalBP, arvoreOriginalDRE, naoMapeados });
+    res.json({ bp, dre, indicadores, periodos, reconciliacao, declarados, arvoreOriginalBP, arvoreOriginalDRE, naoMapeados });
   } catch (err: any) {
     console.error("[reconcile-ai] erro:", err?.message ?? err);
     res.status(500).json({ error: "Falha ao reconciliar com IA: " + (err?.message ?? "erro desconhecido") });
@@ -710,7 +722,7 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
   if (!analysis.dadosEstruturados) { res.status(400).json({ error: "Sem dados estruturados" }); return; }
 
   const dados = analysis.dadosEstruturados as any as DadosEstruturados;
-  const validacao = validateFinancialData(dados.bp, dados.dre, dados.periodos);
+  const validacao = validateFinancialData(dados.bp, dados.dre, dados.periodos, (dados as any).declarados);
 
   // Also run Benford's Law
   const allValues: number[] = [];
