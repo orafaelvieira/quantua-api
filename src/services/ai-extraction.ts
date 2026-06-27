@@ -37,7 +37,11 @@ const yearOf = (p: string): string | null => (p.match(/(20[0-3]\d)/) || [])[1] ?
 function canonicalPeriod(returned: string, canonicos: string[]): string {
   if (canonicos.includes(returned)) return returned;
   const y = yearOf(returned);
-  if (y) { const m = canonicos.find((c) => yearOf(c) === y); if (m) return m; }
+  if (y) {
+    const m = canonicos.find((c) => yearOf(c) === y);
+    if (m) return m;
+    return y; // sem canônico → colapsa para o ANO, alinhando BP ("31/12/2022") e DRE ("2022") do mesmo ano
+  }
   return returned;
 }
 function periodKeyInstruction(periodos: string[]): string {
