@@ -135,6 +135,42 @@ model AccountDictionary {
   @@map("account_dictionaries")
 }
 
+// Modelos padrão (BP/DRE) como DADO versionado — substituem os templates hardcoded.
+// Globais (sem userId): um modelo BP e um DRE vigentes por vez (ativo=true). Versões
+// anteriores ficam preservadas para auditoria e pinagem das análises.
+model StandardModel {
+  id        String   @id @default(uuid())
+  tipo      String // "BP" | "DRE"
+  versao    Int
+  ativo     Boolean  @default(false)
+  nota      String? // changelog da versão
+  criadoPor String?  @map("criado_por")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  linhas StandardModelLine[]
+
+  @@unique([tipo, versao])
+  @@index([tipo, ativo])
+  @@map("standard_models")
+}
+
+model StandardModelLine {
+  id      String  @id @default(uuid())
+  modelId String  @map("model_id")
+  codigo  String // chave ESTÁVEL (cascata/indicadores referenciam por código, não nome)
+  nome    String
+  grupo   String  @default("") // classificacao do BP (AT/AC/AF/AO/ANC/PT/PC/PF/PNC/PL); "" na DRE
+  ordem   Int
+  tipo    String  @default("input") // "input" | "subtotal" | "total"
+  nivel   Int     @default(2)
+  sinal   Int? // convenção de sinal para inputs (+1/-1); null = neutro/subtotal
+
+  model StandardModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@index([modelId])
+  @@map("standard_model_lines")
+}
+
 model Company {
   id           String   @id @default(uuid())
   userId       String   @map("user_id")
