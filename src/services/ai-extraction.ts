@@ -2,11 +2,15 @@ import Anthropic from "@anthropic-ai/sdk";
 import { env } from "../config/env";
 import { BP_TEMPLATE, DRE_TEMPLATE } from "./financial-templates";
 import type { BPLineItem, DRELineItem } from "../types/financial";
-import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, type DictionaryEntry } from "./account-mapper";
+import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, type DictionaryEntry } from "./account-mapper";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
 const AI_MODEL = "claude-sonnet-4-6";
 const dreInputs = DRE_TEMPLATE.filter((t) => !t.subtotal).map((t) => t.conta);
+const dreInputsSet = new Set(dreInputs);
+
+export interface DRESecaoItem { nome: string; valor: number; destino?: string }
+export type ArvoreOriginalDRE = Record<string, DRESecaoItem[]>;
 
 // ── Tipos da árvore N3 do BP ──
 export interface BPN3Item { nome: string; valor: number; destino?: string }
@@ -23,7 +27,9 @@ export interface AIExtractionResult {
   declarados: Record<string, Record<string, number>>;
   /** árvore original do BP (nível 3) — fiel ao documento, para auditoria */
   arvoreOriginalBP: ArvoreOriginalBP;
-  /** contas N3 que o de-para não reconheceu (foram p/ "Outros" ou sinalizadas) */
+  /** seções originais da DRE — fiel ao documento, para auditoria */
+  arvoreOriginalDRE: ArvoreOriginalDRE;
+  /** contas N3/seções que o de-para não reconheceu (foram p/ "Outros" ou sinalizadas) */
   naoMapeados: NaoMapeado[];
 }
 
@@ -52,15 +58,38 @@ async function ask(buffer: Buffer, prompt: string): Promise<any> {
   try { return JSON.parse(txt); } catch { return {}; }
 }
 
-// ───────────────────────── DRE (mantém abordagem por inputs) ─────────────────────────
-function drePrompt(periodos: string[]): string {
-  return `Você é especialista em contabilidade brasileira. Extraia a DRE deste PDF e mapeie para o MODELO PADRÃO.
-- HIERARQUIA: contas indentadas são FILHAS de um total; use os TOTAIS de cada seção e NÃO some pai+filhos.
+// ───────────────────────── DRE (captura de seções = árvore original) ─────────────────────────
+function dreSecoesPrompt(periodos: string[]): string {
+  return `Você é especialista em contabilidade brasileira. Extraia a DRE deste PDF até as SEÇÕES DE INPUT (primeira quebra real), com o NOME ORIGINAL EXATO + VALOR LÍQUIDO.
+- Para o bloco de DESPESAS OPERACIONAIS, retorne suas SUBCATEGORIAS (ex.: De Vendas, Administrativas, Com Veículos, Despesas Financeiras, Receitas Financeiras, Despesas Tributárias) — NÃO as folhas (salários, fgts, etc.).
+- Para Receita/Deduções/Custos, o total da seção basta (ou subseções como "Impostos Incidentes sobre Vendas").
+- NÃO retorne subtotais calculados (Receita Líquida, Lucro Bruto, EBITDA, EBIT, Resultado/Lucro/Prejuízo Líquido).
 - Sinais: RECEITAS positivas; DEDUÇÕES, CUSTOS, DESPESAS e IR/CSLL NEGATIVOS.
 - ${periodKeyInstruction(periodos)}
-Contas de input (subtotais NÃO):
-${dreInputs.map((c) => "- " + c).join("\n")}
-Retorne APENAS JSON: { "inputs": { "<periodo>": { "<conta>": <num> } }, "declarados": { "<periodo>": { "Receita Líquida": <exibido>, "Lucro Bruto": <exibido>, "Lucro Líquido": <exibido> } } }`;
+Retorne APENAS JSON: { "secoes": { "<periodo>": [ {"nome":"<original>","valor":<n>} ] }, "declarados": { "<periodo>": { "Receita Líquida": <exibido>, "Lucro Bruto": <exibido>, "Lucro Líquido": <exibido> } } }`;
+}
+
+export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: DictionaryEntry[]): { dre: DRELineItem[]; naoMapeados: NaoMapeado[] } {
+  const acc: Record<string, Record<string, number>> = {};
+  const naoMapeados: NaoMapeado[] = [];
+  for (const p of periodos) {
+    for (const it of arvore[p] ?? []) {
+      if (typeof it.valor !== "number" || it.valor === 0) continue;
+      let dest = mapAccountToDRE(it.nome, dict);
+      if (!dest || !dreInputsSet.has(dest)) {
+        dest = it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
+        naoMapeados.push({ nome: it.nome, grupo: "DRE", destino: dest, valor: it.valor, periodo: p });
+      }
+      it.destino = dest;
+      (acc[dest] ??= {})[p] = (acc[dest][p] ?? 0) + it.valor;
+    }
+  }
+  const dre: DRELineItem[] = DRE_TEMPLATE.map((t) => ({
+    conta: t.conta, valores: t.subtotal ? {} : (acc[t.conta] ?? {}), subtotal: t.subtotal, editado: false,
+  }));
+  normalizeDRESigns(dre, periodos);
+  recomputeDRESubtotals(dre, periodos);
+  return { dre, naoMapeados };
 }
 
 // ───────────────────────── BP (captura N3 = árvore original) ─────────────────────────
@@ -125,14 +154,6 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
   return { bp, naoMapeados };
 }
 
-const store = (acc: Record<string, Record<string, number>>, raw: any, periodos: string[], periodSet: Set<string>) => {
-  for (const [pRaw, contas] of Object.entries(raw ?? {})) {
-    if (!contas || typeof contas !== "object") continue;
-    const p = canonicalPeriod(pRaw, periodos); periodSet.add(p);
-    for (const [conta, valor] of Object.entries(contas as any)) if (typeof valor === "number" && valor !== 0) (acc[conta] ??= {})[p] = valor;
-  }
-};
-
 export async function extractFinancialsWithAI(
   docs: Array<{ buffer: Buffer; tipo: string }>,
   periodos: string[],
@@ -143,15 +164,15 @@ export async function extractFinancialsWithAI(
     const isDRE = /dre|resultado|demonstra/.test(t);
     const isBP = /balan|patrimonial|\bbp\b/.test(t);
     const out: Array<Promise<{ kind: "dre" | "bp"; data: any }>> = [];
-    if (isDRE || !isBP) out.push(ask(doc.buffer, drePrompt(periodos)).then((data) => ({ kind: "dre" as const, data })));
+    if (isDRE || !isBP) out.push(ask(doc.buffer, dreSecoesPrompt(periodos)).then((data) => ({ kind: "dre" as const, data })));
     if (isBP || (!isDRE && !isBP)) out.push(ask(doc.buffer, bpN3Prompt(periodos)).then((data) => ({ kind: "bp" as const, data })));
     return out;
   });
   const results = await Promise.all(tasks);
 
-  const dreAcc: Record<string, Record<string, number>> = {};
   const declarados: Record<string, Record<string, number>> = {};
   const arvoreOriginalBP: ArvoreOriginalBP = {};
+  const arvoreOriginalDRE: ArvoreOriginalDRE = {};
   const periodSet = new Set<string>(periodos);
 
   const setDecl = (p: string, conta: string, valor: unknown) => { if (typeof valor === "number" && valor !== 0) (declarados[p] ??= {})[conta] = valor; };
@@ -176,19 +197,27 @@ export async function extractFinancialsWithAI(
     }
   };
 
+  // merge DRE captures (seções originais), canonicalizando períodos
+  const mergeDRE = (raw: any) => {
+    for (const [pRaw, secoes] of Object.entries(raw?.secoes ?? {})) {
+      if (!Array.isArray(secoes)) continue;
+      const p = canonicalPeriod(pRaw, periodos); periodSet.add(p);
+      (arvoreOriginalDRE[p] ??= []).push(...(secoes as DRESecaoItem[]));
+    }
+  };
+
   for (const r of results) {
     if (r.kind === "bp") mergeBP(r.data);
-    else { store(dreAcc, r.data?.inputs, periodos, periodSet); storeDeclarados(r.data?.declarados); }
+    else { mergeDRE(r.data); storeDeclarados(r.data?.declarados); }
   }
 
   const allPeriodos = Array.from(periodSet);
-  const { bp, naoMapeados } = foldBP(arvoreOriginalBP, allPeriodos, dict);
+  const { bp, naoMapeados: naoMapBP } = foldBP(arvoreOriginalBP, allPeriodos, dict);
+  const { dre, naoMapeados: naoMapDRE } = foldDRE(arvoreOriginalDRE, allPeriodos, dict);
 
-  const dre: DRELineItem[] = DRE_TEMPLATE.map((t) => ({
-    conta: t.conta, valores: t.subtotal ? {} : (dreAcc[t.conta] ?? {}), subtotal: t.subtotal, editado: false,
-  }));
-  normalizeDRESigns(dre, allPeriodos);
-  recomputeDRESubtotals(dre, allPeriodos);
-
-  return { bp, dre, periodos: allPeriodos, declarados, arvoreOriginalBP, naoMapeados };
+  return {
+    bp, dre, periodos: allPeriodos, declarados,
+    arvoreOriginalBP, arvoreOriginalDRE,
+    naoMapeados: [...naoMapBP, ...naoMapDRE],
+  };
 }

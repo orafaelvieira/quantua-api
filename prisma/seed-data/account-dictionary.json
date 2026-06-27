@@ -7144,5 +7144,41 @@
     "contaDestino": "Tributos Diferidos - Longo Prazo",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Custo dos Produtos/Mercadorias/Serviços",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Custo dos Produtos, Mercadorias e Serviços",
+    "contaDestino": "Custo Operacional",
+    "grupoConta": "Custo Operacional",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "De Vendas",
+    "contaDestino": "Despesas com Vendas",
+    "grupoConta": "Despesas com Vendas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Com Veículos",
+    "contaDestino": "Outras Despesas Operacionais",
+    "grupoConta": "Outras Despesas Operacionais",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Administrativas",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Impostos Incidentes sobre Vendas",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
   }
 ]

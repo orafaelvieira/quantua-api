@@ -230,6 +230,13 @@ export function mapAccountToBPGroup(
   return findBestMatch(nome, BP_TEMPLATE_NAMES, dictionaryEntries, grupoCode);
 }
 
+const DRE_TEMPLATE_NAMES = DRE_TEMPLATE.map(t => t.conta);
+
+/** Mapeia uma seção original da DRE para uma conta do DRE padrão (input ou subtotal). */
+export function mapAccountToDRE(nome: string, dictionaryEntries?: DictionaryEntry[]): string | null {
+  return findBestMatch(nome, DRE_TEMPLATE_NAMES, dictionaryEntries);
+}
+
 export function mapExtractedToBP(
   linhas: ExtractedRow[],
   dictionaryEntries?: DictionaryEntry[]

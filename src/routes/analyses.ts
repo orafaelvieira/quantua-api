@@ -9,7 +9,7 @@ import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocum
 import { generateAnalysis } from "../services/claude";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods } from "../services/account-mapper";
 import { calculateIndicators } from "../services/indicator-calculator";
-import { extractFinancialsWithAI, foldBP } from "../services/ai-extraction";
+import { extractFinancialsWithAI, foldBP, foldDRE } from "../services/ai-extraction";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
@@ -550,20 +550,20 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const dados = analysis.dadosEstruturados as any;
-  const arvore = dados?.arvoreOriginalBP;
-  if (!arvore) { res.status(400).json({ error: "Sem árvore original — rode 'Conciliar com IA' primeiro" }); return; }
+  const arvoreBP = dados?.arvoreOriginalBP;
+  const arvoreDRE = dados?.arvoreOriginalDRE;
+  if (!arvoreBP && !arvoreDRE) { res.status(400).json({ error: "Sem árvore original — rode 'Conciliar com IA' primeiro" }); return; }
 
   const dictRows = await prisma.accountDictionary.findMany({
-    where: { OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }], tipo: "BP" },
+    where: { OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }] },
     select: { nomeOriginal: true, contaDestino: true, grupoConta: true },
   });
-  const periodos: string[] = dados.periodos ?? Object.keys(arvore);
-  const { bp, naoMapeados } = foldBP(arvore, periodos, dictRows);
-
-  dados.bp = bp;
+  const periodos: string[] = dados.periodos ?? Object.keys(arvoreBP ?? arvoreDRE ?? {});
+  const naoMapeados: any[] = [];
+  if (arvoreBP) { const r = foldBP(arvoreBP, periodos, dictRows); dados.bp = r.bp; dados.arvoreOriginalBP = arvoreBP; naoMapeados.push(...r.naoMapeados); }
+  if (arvoreDRE) { const r = foldDRE(arvoreDRE, periodos, dictRows); dados.dre = r.dre; dados.arvoreOriginalDRE = arvoreDRE; naoMapeados.push(...r.naoMapeados); }
   dados.naoMapeados = naoMapeados;
-  dados.arvoreOriginalBP = arvore; // re-anotado pelo foldBP (destinos atualizados)
-  dados.indicadores = calculateIndicators(bp, dados.dre ?? [], periodos);
+  dados.indicadores = calculateIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
 
   await prisma.analysis.update({ where: { id }, data: { dadosEstruturados: dados } });
   res.json({ ok: true, naoMapeados: naoMapeados.length });
@@ -580,6 +580,7 @@ router.put("/:id/dados-estruturados/arvore", async (req: AuthRequest, res: Respo
 
   const dados = (analysis.dadosEstruturados as any) || { bp: [], dre: [], indicadores: [], periodos: [], version: 1 };
   dados.arvoreOriginalBP = req.body.arvoreOriginalBP ?? null;
+  dados.arvoreOriginalDRE = req.body.arvoreOriginalDRE ?? null;
   dados.naoMapeados = req.body.naoMapeados ?? [];
 
   await prisma.analysis.update({ where: { id }, data: { dadosEstruturados: dados } });
@@ -665,13 +666,13 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
       docs.map(async (d) => ({ buffer: await downloadFile(d.storagePath!), tipo: d.tipo }))
     );
 
-    // Dicionário (global + workspace) para o fold da árvore N3
+    // Dicionário (global + workspace) para o fold das árvores BP e DRE
     const dictRows = await prisma.accountDictionary.findMany({
-      where: { OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }], tipo: "BP" },
+      where: { OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }] },
       select: { nomeOriginal: true, contaDestino: true, grupoConta: true },
     });
 
-    const { bp, dre, periodos, declarados, arvoreOriginalBP, naoMapeados } =
+    const { bp, dre, periodos, declarados, arvoreOriginalBP, arvoreOriginalDRE, naoMapeados } =
       await extractFinancialsWithAI(buffers, periodosAlvo, dictRows);
     const indicadores = calculateIndicators(bp, dre, periodos);
 
@@ -688,7 +689,7 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
         return { conta, declarado, computado, ok };
       });
 
-    res.json({ bp, dre, indicadores, periodos, reconciliacao, arvoreOriginalBP, naoMapeados });
+    res.json({ bp, dre, indicadores, periodos, reconciliacao, arvoreOriginalBP, arvoreOriginalDRE, naoMapeados });
   } catch (err: any) {
     console.error("[reconcile-ai] erro:", err?.message ?? err);
     res.status(500).json({ error: "Falha ao reconciliar com IA: " + (err?.message ?? "erro desconhecido") });
