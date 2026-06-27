@@ -167,7 +167,8 @@ const GRP: Record<string, string> = {
 const isCompensacao = (nome: string): boolean => /compensa[çc][aã]o/i.test(nome);
 const OUTROS_GRUPO: Record<string, string | null> = {
   AC: "Outros Ativos Circulantes", PC: "Outros Passivos Circulantes",
-  ANC: null, PNC: null, PL: null, // sem balde limpo → vira gap sinalizado (integridade)
+  ANC: "Outros Ativos Não Circulantes", PNC: "Outros Passivos não Circulantes",
+  PL: null, // PL sem balde limpo → vira gap sinalizado (integridade)
 };
 
 export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryEntry[], model: BPModel = DEFAULT_BP_MODEL): { bp: BPLineItem[]; naoMapeados: NaoMapeado[] } {

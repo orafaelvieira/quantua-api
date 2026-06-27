@@ -128,9 +128,10 @@ function findBestMatch(
         }
       }
     }
-    // Third pass: name-only match ignoring grupo (last resort for dictionary)
+    // Third pass: name-only match — ainda RESPEITA o grupo (nunca cruza Ativo/Passivo
+    // nem CP/LP). Sem grupo (DRE) isGrupoCompatible é sempre true.
     for (const entry of dictionaryEntries) {
-      if (normalize(entry.nomeOriginal) === norm && candidates.includes(entry.contaDestino)) {
+      if (normalize(entry.nomeOriginal) === norm && candidates.includes(entry.contaDestino) && isGrupoCompatible(entry.contaDestino)) {
         return entry.contaDestino;
       }
     }
@@ -140,10 +141,7 @@ function findBestMatch(
   for (const c of candidates) {
     if (normalize(c) === norm && isGrupoCompatible(c)) return c;
   }
-  // Fallback exact match ignoring grupo
-  for (const c of candidates) {
-    if (normalize(c) === norm) return c;
-  }
+  // (sem fallback que ignore grupo: cruzar Ativo/Passivo ou CP/LP é proibido)
 
   // 2. Alias match — try both original and cleaned name, prefer grupo-compatible
   for (const name of [conta, cleaned, conta.trim()]) {
@@ -153,14 +151,7 @@ function findBestMatch(
   for (const [alias, canonical] of Object.entries(ACCOUNT_ALIASES)) {
     if (normalize(alias) === norm && candidates.includes(canonical) && isGrupoCompatible(canonical)) return canonical;
   }
-  // Alias fallback without grupo
-  for (const name of [conta, cleaned, conta.trim()]) {
-    const aliased = ACCOUNT_ALIASES[name];
-    if (aliased && candidates.includes(aliased)) return aliased;
-  }
-  for (const [alias, canonical] of Object.entries(ACCOUNT_ALIASES)) {
-    if (normalize(alias) === norm && candidates.includes(canonical)) return canonical;
-  }
+  // (sem fallback de alias que ignore grupo)
 
   // 3. Contains match — prefer grupo-compatible
   for (const c of candidates) {
@@ -169,19 +160,14 @@ function findBestMatch(
       if ((norm.includes(normC) || normC.includes(norm)) && isGrupoCompatible(c)) return c;
     }
   }
-  // Contains fallback
-  for (const c of candidates) {
-    const normC = normalize(c);
-    if (normC.length >= 4 && norm.length >= 4) {
-      if (norm.includes(normC) || normC.includes(norm)) return c;
-    }
-  }
+  // (sem fallback de contains que ignore grupo)
 
-  // 4. Keyword match — prefer grupo-compatible candidates
+  // 4. Keyword match — só candidatos compatíveis com o grupo
   const normWords = norm.split(/\s+/).filter(w => w.length > 2);
   let bestScore = 0;
   let bestCandidate: string | null = null;
   for (const c of candidates) {
+    if (!isGrupoCompatible(c)) continue; // nunca pontua candidato de outro grupo
     const cWords = normalize(c).split(/\s+/).filter(w => w.length > 2);
     if (cWords.length === 0) continue;
     const overlap = normWords.filter(w => cWords.includes(w)).length;
