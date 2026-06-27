@@ -171,20 +171,36 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
 
   for (const p of periodos) {
     const cap = arvore[p]; if (!cap) continue;
+
+    // Detecta a convenção CRÉDITO-NEGATIVO (SPED): Ativo positivo, Passivo+PL negativos
+    // (somam zero). Só vira o sinal do lado do Passivo quando o TOTAL dele é negativo —
+    // assim PL negativo por prejuízo acumulado (com Passivo Total positivo) NÃO é afetado.
+    let ativoRaw = 0, passivoRaw = 0;
     for (const [grupoNome, itens] of Object.entries(cap.grupos ?? {})) {
       const g = GRP[grupoNome]; if (!g) continue;
       for (const it of itens) {
         if (typeof it.valor !== "number") continue;
-        add(subtotal, g, p, it.valor);
+        if (g === "AC" || g === "ANC") ativoRaw += it.valor; else passivoRaw += it.valor;
+      }
+    }
+    const flipPassivo = passivoRaw < 0 && ativoRaw > 0;
+
+    for (const [grupoNome, itens] of Object.entries(cap.grupos ?? {})) {
+      const g = GRP[grupoNome]; if (!g) continue;
+      const fator = flipPassivo && (g === "PC" || g === "PNC" || g === "PL") ? -1 : 1;
+      for (const it of itens) {
+        if (typeof it.valor !== "number") continue;
+        const v = it.valor * fator;
+        add(subtotal, g, p, v);
         const dest = mapAccountToBPGroup(it.nome, g, dict, model);
         if (dest) {
-          add(detalhe, dest, p, it.valor);
+          add(detalhe, dest, p, v);
           it.destino = dest; // anota a trilha original → padrão
         } else {
           const balde = OUTROS_GRUPO[g];
-          if (balde) add(detalhe, balde, p, it.valor);
+          if (balde) add(detalhe, balde, p, v);
           it.destino = balde ?? "(não classificado)";
-          naoMapeados.push({ nome: it.nome, grupo: grupoNome, destino: it.destino, valor: it.valor, periodo: p });
+          naoMapeados.push({ nome: it.nome, grupo: grupoNome, destino: it.destino, valor: v, periodo: p });
         }
       }
     }
