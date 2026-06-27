@@ -691,18 +691,20 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
       await extractFinancialsWithAI(buffers, periodosAlvo, dictRows);
     const indicadores = calculateIndicators(bp, dre, periodos);
 
-    // Reconciliação: subtotal computado vs DECLARADO no PDF (vindo da própria IA)
-    const p0 = periodos[0];
-    const decl = declarados[p0] ?? {};
-    const comp = (c: string) => dre.find((d) => d.conta === c)?.valores[p0] ?? 0;
-    const reconciliacao = ["Receita Líquida", "Lucro Bruto", "Lucro Líquido"]
-      .filter((c) => typeof decl[c] === "number" && decl[c] !== 0)
-      .map((conta) => {
-        const declarado = decl[conta];
-        const computado = comp(conta);
-        const ok = Math.abs(Math.abs(computado) - Math.abs(declarado)) < Math.max(Math.abs(declarado) * 0.01, 1000);
-        return { conta, declarado, computado, ok };
-      });
+    // Reconciliação: subtotal computado vs DECLARADO no PDF (vindo da própria IA),
+    // para TODOS os períodos (não só o primeiro).
+    const reconciliacao = periodos.flatMap((p) => {
+      const decl = declarados[p] ?? {};
+      const comp = (c: string) => dre.find((d) => d.conta === c)?.valores[p] ?? 0;
+      return ["Receita Líquida", "Lucro Bruto", "Lucro Líquido"]
+        .filter((c) => typeof decl[c] === "number" && decl[c] !== 0)
+        .map((conta) => {
+          const declarado = decl[conta];
+          const computado = comp(conta);
+          const ok = Math.abs(Math.abs(computado) - Math.abs(declarado)) < Math.max(Math.abs(declarado) * 0.01, 1000);
+          return { periodo: p, conta, declarado, computado, ok };
+        });
+    });
 
     res.json({ bp, dre, indicadores, periodos, reconciliacao, declarados, arvoreOriginalBP, arvoreOriginalDRE, naoMapeados });
   } catch (err: any) {
