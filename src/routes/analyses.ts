@@ -10,6 +10,7 @@ import { generateAnalysis } from "../services/claude";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods } from "../services/account-mapper";
 import { calculateIndicators } from "../services/indicator-calculator";
 import { extractFinancialsWithAI, foldBP, foldDRE } from "../services/ai-extraction";
+import { getActiveModelVersions } from "../services/model-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
@@ -447,6 +448,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       });
     }
 
+    const modeloVersoes = await getActiveModelVersions();
     const dadosEstruturados: DadosEstruturados = {
       bp: structuredBP,
       dre: structuredDRE,
@@ -454,6 +456,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       periodos: allPeriodos,
       unmatchedAccounts,
       declarados: declaradosDRE,
+      modeloVersaoBP: modeloVersoes.bp,
+      modeloVersaoDRE: modeloVersoes.dre,
       version: 2,
     } as DadosEstruturados;
 
@@ -594,6 +598,9 @@ router.put("/:id/dados-estruturados/arvore", async (req: AuthRequest, res: Respo
   dados.arvoreOriginalDRE = req.body.arvoreOriginalDRE ?? null;
   dados.naoMapeados = req.body.naoMapeados ?? [];
   if (req.body.declarados) dados.declarados = req.body.declarados; // base da trava de reconciliação após aplicar a IA
+  const mv = await getActiveModelVersions(); // carimba a versão de modelo usada (pinagem)
+  dados.modeloVersaoBP = mv.bp;
+  dados.modeloVersaoDRE = mv.dre;
   // A extração por IA (árvore + fold) substitui o resultado do parser heurístico:
   // limpa a lista antiga de "não classificadas" (o que sobrar está em naoMapeados/Outros).
   dados.unmatchedAccounts = [];
