@@ -45,14 +45,26 @@ function periodKeyInstruction(periodos: string[]): string {
   return `Use EXATAMENTE estas chaves de período: ${JSON.stringify(periodos)} (mapeie pelo ano).`;
 }
 
-async function ask(buffer: Buffer, prompt: string): Promise<any> {
-  const msg = await client.messages.create({
-    model: AI_MODEL, max_tokens: 4000,
-    messages: [{ role: "user", content: [
-      { type: "document", source: { type: "base64", media_type: "application/pdf", data: buffer.toString("base64") } } as any,
-      { type: "text", text: prompt },
-    ] }],
-  });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function ask(buffer: Buffer, prompt: string, attempt = 0): Promise<any> {
+  let msg;
+  try {
+    msg = await client.messages.create({
+      model: AI_MODEL, max_tokens: 4000,
+      messages: [{ role: "user", content: [
+        { type: "document", source: { type: "base64", media_type: "application/pdf", data: buffer.toString("base64") } } as any,
+        { type: "text", text: prompt },
+      ] }],
+    });
+  } catch (e: any) {
+    // 429 (rate limit) ou 529 (overloaded): espera e tenta de novo (uploads multi-doc)
+    if ((e?.status === 429 || e?.status === 529) && attempt < 4) {
+      await sleep(7000 * (attempt + 1));
+      return ask(buffer, prompt, attempt + 1);
+    }
+    throw e;
+  }
   let txt = msg.content[0]?.type === "text" ? msg.content[0].text.trim() : "";
   if (txt.startsWith("```")) txt = txt.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
   try { return JSON.parse(txt); } catch { return {}; }
@@ -69,11 +81,27 @@ function dreSecoesPrompt(periodos: string[]): string {
 Retorne APENAS JSON: { "secoes": { "<periodo>": [ {"nome":"<original>","valor":<n>} ] }, "declarados": { "<periodo>": { "Receita Líquida": <exibido>, "Lucro Bruto": <exibido>, "Lucro Líquido": <exibido> } } }`;
 }
 
+const normNome = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+/** Seções que são SUBTOTAIS/pais na DRE. Se vierem na captura, seus filhos também
+ *  vêm — então NÃO podem ser somadas na cascata (dupla contagem). */
+const DRE_SUBTOTAIS = new Set([
+  "despesas operacionais", "receitas e despesas operacionais", "despesas e receitas operacionais",
+  "despesas operacionais liquidas", "total das despesas operacionais", "total despesas operacionais",
+  "despesas e receitas operacionais liquidas", "outras receitas e despesas operacionais",
+  "resultado operacional", "lucro operacional", "prejuizo operacional",
+  "resultado antes do resultado financeiro", "lucro antes do resultado financeiro",
+].map(normNome));
+/** destinos da cascata que indicam que já há despesa operacional detalhada (filhos). */
+const isDespOpDest = (d?: string) => !!d && /Despesas|Outras Despesas Operacionais|Resultado Financeiro|Despesas Financeiras|Receitas Financeiras/.test(d);
+
 export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: DictionaryEntry[]): { dre: DRELineItem[]; naoMapeados: NaoMapeado[] } {
   const acc: Record<string, Record<string, number>> = {};
   const naoMapeados: NaoMapeado[] = [];
   for (const p of periodos) {
-    for (const it of arvore[p] ?? []) {
+    const secoes = arvore[p] ?? [];
+    const subtotais = secoes.filter((it) => DRE_SUBTOTAIS.has(normNome(it.nome)));
+    const inputs = secoes.filter((it) => !DRE_SUBTOTAIS.has(normNome(it.nome)));
+    for (const it of inputs) {
       if (typeof it.valor !== "number" || it.valor === 0) continue;
       let dest = mapAccountToDRE(it.nome, dict);
       if (!dest || !dreInputsSet.has(dest)) {
@@ -82,6 +110,18 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       }
       it.destino = dest;
       (acc[dest] ??= {})[p] = (acc[dest][p] ?? 0) + it.valor;
+    }
+    // Subtotais estruturais (pais): só entram se NÃO houver filhos cobrindo o segmento.
+    // Se já há despesa operacional detalhada nos inputs, o pai é redundante → descarta
+    // (evita a dupla contagem que inflava "Outras Despesas Operacionais").
+    const temFilhosDespOp = inputs.some((it) => isDespOpDest(it.destino));
+    for (const st of subtotais) {
+      if (typeof st.valor !== "number" || st.valor === 0) { st.destino = "(subtotal)"; continue; }
+      if (temFilhosDespOp) { st.destino = "(subtotal — filhos já contabilizados)"; continue; }
+      const dest = st.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
+      st.destino = dest;
+      naoMapeados.push({ nome: st.nome, grupo: "DRE", destino: dest, valor: st.valor, periodo: p });
+      (acc[dest] ??= {})[p] = (acc[dest][p] ?? 0) + st.valor;
     }
   }
   const dre: DRELineItem[] = DRE_TEMPLATE.map((t) => ({
@@ -159,16 +199,18 @@ export async function extractFinancialsWithAI(
   periodos: string[],
   dict?: DictionaryEntry[]
 ): Promise<AIExtractionResult> {
-  const tasks = docs.flatMap((doc) => {
+  const taskThunks = docs.flatMap((doc) => {
     const t = doc.tipo.toLowerCase();
     const isDRE = /dre|resultado|demonstra/.test(t);
     const isBP = /balan|patrimonial|\bbp\b/.test(t);
-    const out: Array<Promise<{ kind: "dre" | "bp"; data: any }>> = [];
-    if (isDRE || !isBP) out.push(ask(doc.buffer, dreSecoesPrompt(periodos)).then((data) => ({ kind: "dre" as const, data })));
-    if (isBP || (!isDRE && !isBP)) out.push(ask(doc.buffer, bpN3Prompt(periodos)).then((data) => ({ kind: "bp" as const, data })));
+    const out: Array<() => Promise<{ kind: "dre" | "bp"; data: any }>> = [];
+    if (isDRE || !isBP) out.push(() => ask(doc.buffer, dreSecoesPrompt(periodos)).then((data) => ({ kind: "dre" as const, data })));
+    if (isBP || (!isDRE && !isBP)) out.push(() => ask(doc.buffer, bpN3Prompt(periodos)).then((data) => ({ kind: "bp" as const, data })));
     return out;
   });
-  const results = await Promise.all(tasks);
+  // Sequencial (não paralelo) para respeitar o rate limit da API em uploads multi-documento.
+  const results: Array<{ kind: "dre" | "bp"; data: any }> = [];
+  for (const thunk of taskThunks) results.push(await thunk());
 
   const declarados: Record<string, Record<string, number>> = {};
   const arvoreOriginalBP: ArvoreOriginalBP = {};
