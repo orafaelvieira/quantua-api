@@ -21,12 +21,12 @@ const FIXTURE = {
     periodos: ["2024", "2025"],
     bp: [
       { conta: "Caixa e Equivalentes de Caixa", valores: { "2024": 500_000, "2025": 600_000 } },
-      { conta: "Contas a Receber", valores: { "2024": 800_000, "2025": 850_000 } },
-      { conta: "Estoques", valores: { "2024": 1_200_000, "2025": 1_300_000 } },
+      { conta: "Contas a Receber - CP", valores: { "2024": 800_000, "2025": 850_000 } },
+      { conta: "Estoques - CP", valores: { "2024": 1_200_000, "2025": 1_300_000 } },
       { conta: "Ativo Total", valores: { "2024": 5_000_000, "2025": 5_500_000 } },
-      { conta: "Fornecedores", valores: { "2024": 700_000, "2025": 750_000 } },
-      { conta: "Empréstimos - Curto Prazo", valores: { "2024": 400_000, "2025": 350_000 } },
-      { conta: "Empréstimos - Longo Prazo", valores: { "2024": 1_200_000, "2025": 1_100_000 } },
+      { conta: "Fornecedores - CP", valores: { "2024": 700_000, "2025": 750_000 } },
+      { conta: "Empréstimos e Financiamentos - CP", valores: { "2024": 400_000, "2025": 350_000 } },
+      { conta: "Empréstimos e Financiamentos - LP", valores: { "2024": 1_200_000, "2025": 1_100_000 } },
       { conta: "Patrimônio Líquido", valores: { "2024": 2_500_000, "2025": 2_900_000 } },
     ],
     dre: [

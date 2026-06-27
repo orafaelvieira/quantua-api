@@ -71,19 +71,19 @@ function computeIndicator(
   const ativoTotal = bpVal(bp, "Ativo Total", periodo);
   const ativoCirculante = bpVal(bp, "Ativo Circulante", periodo);
   const caixa = bpVal(bp, "Caixa e Equivalentes de Caixa", periodo);
-  const contasReceber = bpVal(bp, "Contas a Receber", periodo);
-  const estoques = bpVal(bp, "Estoques", periodo);
+  const contasReceber = bpVal(bp, "Contas a Receber - CP", periodo);
+  const estoques = bpVal(bp, "Estoques - CP", periodo);
   const realizavelLP = bpVal(bp, "Realizável a Longo Prazo", periodo);
 
   // BP values — Passivo e PL: normalize signs (some accounting systems store these as negative)
   const passivoTotal = Math.abs(bpVal(bp, "Passivo Total", periodo));
   const passivoCirculante = Math.abs(bpVal(bp, "Passivo Circulante", periodo));
   const passivoNaoCirculante = Math.abs(bpVal(bp, "Passivo Não Circulante", periodo));
-  const fornecedores = Math.abs(bpVal(bp, "Fornecedores", periodo));
-  const empFinCP = Math.abs(bpVal(bp, "Empréstimos e Financiamentos - Curto Prazo", periodo));
-  const passPartRelCP = Math.abs(bpVal(bp, "Passivos com Partes Relacionadas - Curto Prazo", periodo));
-  const empFinLP = Math.abs(bpVal(bp, "Empréstimos e Financiamentos - Longo Prazo", periodo));
-  const passPartRelLP = Math.abs(bpVal(bp, "Passivos com Partes Relacionadas - Longo Prazo", periodo));
+  const fornecedores = Math.abs(bpVal(bp, "Fornecedores - CP", periodo));
+  const empFinCP = Math.abs(bpVal(bp, "Empréstimos e Financiamentos - CP", periodo));
+  const passPartRelCP = Math.abs(bpVal(bp, "Passivos com Partes Relacionadas - CP", periodo));
+  const empFinLP = Math.abs(bpVal(bp, "Empréstimos e Financiamentos - LP", periodo));
+  const passPartRelLP = Math.abs(bpVal(bp, "Passivos com Partes Relacionadas - LP", periodo));
   const patrimonioLiquido = Math.abs(bpVal(bp, "Patrimônio Líquido", periodo));
 
   // Aggregated by classification (abs for Passivo side)

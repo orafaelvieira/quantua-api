@@ -162,6 +162,9 @@ const GRP: Record<string, string> = {
   "Ativo Circulante": "AC", "Ativo Não Circulante": "ANC",
   "Passivo Circulante": "PC", "Passivo Não Circulante": "PNC", "Patrimônio Líquido": "PL",
 };
+// Contas de COMPENSAÇÃO (memorando): aparecem dos dois lados com o mesmo valor para se
+// anular — não são bens/dívidas reais. Excluídas do BP para não inflar Ativo e Passivo.
+const isCompensacao = (nome: string): boolean => /compensa[çc][aã]o/i.test(nome);
 const OUTROS_GRUPO: Record<string, string | null> = {
   AC: "Outros Ativos Circulantes", PC: "Outros Passivos Circulantes",
   ANC: null, PNC: null, PL: null, // sem balde limpo → vira gap sinalizado (integridade)
@@ -183,7 +186,7 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
     for (const [grupoNome, itens] of Object.entries(cap.grupos ?? {})) {
       const g = GRP[grupoNome]; if (!g) continue;
       for (const it of itens) {
-        if (typeof it.valor !== "number") continue;
+        if (typeof it.valor !== "number" || isCompensacao(it.nome)) continue;
         if (g === "AC" || g === "ANC") ativoRaw += it.valor; else passivoRaw += it.valor;
       }
     }
@@ -194,6 +197,7 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
       const fator = flipPassivo && (g === "PC" || g === "PNC" || g === "PL") ? -1 : 1;
       for (const it of itens) {
         if (typeof it.valor !== "number") continue;
+        if (isCompensacao(it.nome)) { it.destino = "(compensação — excluída)"; continue; }
         const v = it.valor * fator;
         add(subtotal, g, p, v);
         const dest = mapAccountToBPGroup(it.nome, g, dict, model);

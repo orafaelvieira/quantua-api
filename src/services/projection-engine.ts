@@ -130,10 +130,10 @@ export function computeProjections(input: ProjectionInput): ProjectionMonth[] {
   const opexMensalHist = Math.abs(lastValueOf(findLine(dreLines, "Despesas Operacionais")?.valores, periodos)) / 12;
   const depMensalHist = Math.abs(lastValueOf(findLine(dreLines, "Depreciação")?.valores, periodos)) / 12;
 
-  const dividaCPInicial = lastValueOf(findLine(bpLines, "Curto Prazo")?.valores, periodos);
-  const dividaLPInicial = lastValueOf(findLine(bpLines, "Longo Prazo")?.valores, periodos);
-  const fornInicial = lastValueOf(findLine(bpLines, "Fornecedores")?.valores, periodos);
-  const estoquesInicial = lastValueOf(findLine(bpLines, "Estoques")?.valores, periodos);
+  const dividaCPInicial = lastValueOf(findLine(bpLines, "Empréstimos e Financiamentos - CP")?.valores, periodos);
+  const dividaLPInicial = lastValueOf(findLine(bpLines, "Empréstimos e Financiamentos - LP")?.valores, periodos);
+  const fornInicial = lastValueOf(findLine(bpLines, "Fornecedores - CP")?.valores, periodos);
+  const estoquesInicial = lastValueOf(findLine(bpLines, "Estoques - CP")?.valores, periodos);
   const ativoTotalInicial = lastValueOf(findLine(bpLines, "Ativo Total")?.valores, periodos);
   const plInicial = lastValueOf(findLine(bpLines, "Patrimônio Líquido")?.valores, periodos);
 
