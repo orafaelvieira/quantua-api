@@ -59,11 +59,27 @@ for (const item of BP_TEMPLATE) {
   templateClassifMap.set(item.conta, item.classificacao);
 }
 
+/**
+ * Modelo de BP resolvido (estrutura + nomes + mapa de classificação) que o fold,
+ * o heurístico e o mapeamento usam. O default deriva do BP_TEMPLATE (código);
+ * uma versão carregada do banco substitui sem mudar a lógica — é o "bridge".
+ */
+export interface BPModelLine { classificacao: string; conta: string; nivel: number; tipo: "input" | "subtotal" | "total"; }
+export interface BPModel { lines: BPModelLine[]; names: string[]; classifMap: Map<string, string>; }
+const tipoFromNivel = (n: number): BPModelLine["tipo"] => (n === 0 ? "total" : n === 1 ? "subtotal" : "input");
+export function buildBPModel(lines: BPModelLine[]): BPModel {
+  return { lines, names: lines.map((l) => l.conta), classifMap: new Map(lines.map((l) => [l.conta, l.classificacao])) };
+}
+export const DEFAULT_BP_MODEL: BPModel = buildBPModel(
+  BP_TEMPLATE.map((t) => ({ classificacao: t.classificacao, conta: t.conta, nivel: t.nivel, tipo: tipoFromNivel(t.nivel) }))
+);
+
 function findBestMatch(
   conta: string,
   candidates: string[],
   dictionaryEntries?: DictionaryEntry[],
-  grupo?: string
+  grupo?: string,
+  classifMap: Map<string, string> = templateClassifMap
 ): string | null {
   const cleaned = cleanAccountName(conta);
   const norm = normalize(cleaned);
@@ -73,7 +89,7 @@ function findBestMatch(
   // Helper: check if a candidate is compatible with the extracted grupo
   const isGrupoCompatible = (candidate: string): boolean => {
     if (!grupo) return true; // no grupo info → everything is compatible
-    const classif = templateClassifMap.get(candidate);
+    const classif = classifMap.get(candidate);
     if (!classif) return true; // candidate not in template → allow
     return grupoMatchesClassificacao(grupo, classif);
   };
@@ -215,8 +231,6 @@ function classificacaoFromCode(code: string): string {
   return "0";
 }
 
-const BP_TEMPLATE_NAMES = BP_TEMPLATE.map(t => t.conta);
-
 /**
  * Mapeia uma conta (nome original) para a conta padrão do BP, com contexto de
  * grupo (AC, ANC, PC, PNC, PL) para desambiguar CP/LP. Reutiliza o dicionário +
@@ -225,9 +239,10 @@ const BP_TEMPLATE_NAMES = BP_TEMPLATE.map(t => t.conta);
 export function mapAccountToBPGroup(
   nome: string,
   grupoCode?: string,
-  dictionaryEntries?: DictionaryEntry[]
+  dictionaryEntries?: DictionaryEntry[],
+  model: BPModel = DEFAULT_BP_MODEL
 ): string | null {
-  return findBestMatch(nome, BP_TEMPLATE_NAMES, dictionaryEntries, grupoCode);
+  return findBestMatch(nome, model.names, dictionaryEntries, grupoCode, model.classifMap);
 }
 
 const DRE_TEMPLATE_NAMES = DRE_TEMPLATE.map(t => t.conta);
@@ -239,10 +254,11 @@ export function mapAccountToDRE(nome: string, dictionaryEntries?: DictionaryEntr
 
 export function mapExtractedToBP(
   linhas: ExtractedRow[],
-  dictionaryEntries?: DictionaryEntry[]
+  dictionaryEntries?: DictionaryEntry[],
+  model: BPModel = DEFAULT_BP_MODEL
 ): BPMapResult {
-  const templateNames = BP_TEMPLATE.map(t => t.conta);
-  const result: BPLineItem[] = BP_TEMPLATE.map(t => ({
+  const templateNames = model.names;
+  const result: BPLineItem[] = model.lines.map(t => ({
     classificacao: t.classificacao,
     conta: t.conta,
     valores: {},
@@ -265,7 +281,7 @@ export function mapExtractedToBP(
 
     // Pass extracted grupo to findBestMatch for group-aware disambiguation
     const extractedGrupo = linha.grupo || (linha.code ? grupoFromExtractedCode(linha.code) : undefined);
-    const match = findBestMatch(linha.conta, templateNames, dictionaryEntries, extractedGrupo);
+    const match = findBestMatch(linha.conta, templateNames, dictionaryEntries, extractedGrupo, model.classifMap);
     if (match) {
       const idx = result.findIndex(r => r.conta === match);
       if (idx >= 0) {

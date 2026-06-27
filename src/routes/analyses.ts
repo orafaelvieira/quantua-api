@@ -10,7 +10,7 @@ import { generateAnalysis } from "../services/claude";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods } from "../services/account-mapper";
 import { calculateIndicators } from "../services/indicator-calculator";
 import { extractFinancialsWithAI, foldBP, foldDRE } from "../services/ai-extraction";
-import { getActiveModelVersions } from "../services/model-version";
+import { getActiveModelVersions, loadActiveBPModel } from "../services/model-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
@@ -282,6 +282,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     };
     const dictForBP = buildDictForType("BP");
     const dictForDRE = buildDictForType("DRE");
+    const bpModel = await loadActiveBPModel(); // bridge: BP padrão vem do banco (editável), não do template do código
 
     // Auto-detect document type — content-first, tipo as fallback
     function detectDocType(doc: ParsedDocument): "BP" | "DRE" | "BOTH" | "UNKNOWN" {
@@ -359,7 +360,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       console.log(`[process] Doc "${doc.tipo}" detected as ${docType}, linhas: ${doc.linhas.length}, raw length: ${doc.raw.length}`);
 
       if (docType === "BP" || docType === "BOTH") {
-        const bpResult = mapExtractedToBP(doc.linhas, dictForBP);
+        const bpResult = mapExtractedToBP(doc.linhas, dictForBP, bpModel);
         if (structuredBP.length === 0) {
           structuredBP = bpResult.items;
         } else {
@@ -395,7 +396,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           unmatchedAccounts.push(...dreResult.unmatched);
         } else if (tipoNorm.includes("balan") || tipoNorm.includes("balancete")) {
           console.log(`[process] Fallback: treating UNKNOWN doc as BP based on tipo="${doc.tipo}"`);
-          const bpResult = mapExtractedToBP(doc.linhas, dictForBP);
+          const bpResult = mapExtractedToBP(doc.linhas, dictForBP, bpModel);
           if (structuredBP.length === 0) {
             structuredBP = bpResult.items;
           } else {
@@ -575,7 +576,8 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   });
   const periodos: string[] = dados.periodos ?? Object.keys(arvoreBP ?? arvoreDRE ?? {});
   const naoMapeados: any[] = [];
-  if (arvoreBP) { const r = foldBP(arvoreBP, periodos, dictRows); dados.bp = r.bp; dados.arvoreOriginalBP = arvoreBP; naoMapeados.push(...r.naoMapeados); }
+  const bpModelRefold = await loadActiveBPModel(); // bridge: re-dobra com o modelo de BP vigente do banco
+  if (arvoreBP) { const r = foldBP(arvoreBP, periodos, dictRows, bpModelRefold); dados.bp = r.bp; dados.arvoreOriginalBP = arvoreBP; naoMapeados.push(...r.naoMapeados); }
   if (arvoreDRE) { const r = foldDRE(arvoreDRE, periodos, dictRows); dados.dre = r.dre; dados.arvoreOriginalDRE = arvoreDRE; naoMapeados.push(...r.naoMapeados); }
   dados.naoMapeados = naoMapeados;
   dados.indicadores = calculateIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
@@ -694,8 +696,9 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
       select: { nomeOriginal: true, contaDestino: true, grupoConta: true },
     });
 
+    const bpModel = await loadActiveBPModel(); // bridge: usa o modelo de BP vigente do banco
     const { bp, dre, periodos, declarados, arvoreOriginalBP, arvoreOriginalDRE, naoMapeados } =
-      await extractFinancialsWithAI(buffers, periodosAlvo, dictRows);
+      await extractFinancialsWithAI(buffers, periodosAlvo, dictRows, bpModel);
     const indicadores = calculateIndicators(bp, dre, periodos);
 
     // Reconciliação: subtotal computado vs DECLARADO no PDF (vindo da própria IA),

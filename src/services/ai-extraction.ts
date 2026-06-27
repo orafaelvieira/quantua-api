@@ -1,8 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { env } from "../config/env";
-import { BP_TEMPLATE, DRE_TEMPLATE } from "./financial-templates";
+import { DRE_TEMPLATE } from "./financial-templates";
 import type { BPLineItem, DRELineItem } from "../types/financial";
-import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, type DictionaryEntry } from "./account-mapper";
+import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, DEFAULT_BP_MODEL, type BPModel, type DictionaryEntry } from "./account-mapper";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
 const AI_MODEL = "claude-sonnet-4-6";
@@ -158,16 +158,12 @@ const GRP: Record<string, string> = {
   "Ativo Circulante": "AC", "Ativo Não Circulante": "ANC",
   "Passivo Circulante": "PC", "Passivo Não Circulante": "PNC", "Patrimônio Líquido": "PL",
 };
-const SUBTOTAL_CONTA: Record<string, string> = {
-  AC: "Ativo Circulante", ANC: "Ativo Não Circulante",
-  PC: "Passivo Circulante", PNC: "Passivo Não Circulante", PL: "Patrimônio Líquido",
-};
 const OUTROS_GRUPO: Record<string, string | null> = {
   AC: "Outros Ativos Circulantes", PC: "Outros Passivos Circulantes",
   ANC: null, PNC: null, PL: null, // sem balde limpo → vira gap sinalizado (integridade)
 };
 
-export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryEntry[]): { bp: BPLineItem[]; naoMapeados: NaoMapeado[] } {
+export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryEntry[], model: BPModel = DEFAULT_BP_MODEL): { bp: BPLineItem[]; naoMapeados: NaoMapeado[] } {
   const detalhe: Record<string, Record<string, number>> = {}; // conta → periodo → valor
   const subtotal: Record<string, Record<string, number>> = {}; // grupoCode → periodo → valor
   const naoMapeados: NaoMapeado[] = [];
@@ -180,7 +176,7 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
       for (const it of itens) {
         if (typeof it.valor !== "number") continue;
         add(subtotal, g, p, it.valor);
-        const dest = mapAccountToBPGroup(it.nome, g, dict);
+        const dest = mapAccountToBPGroup(it.nome, g, dict, model);
         if (dest) {
           add(detalhe, dest, p, it.valor);
           it.destino = dest; // anota a trilha original → padrão
@@ -194,11 +190,18 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
     }
   }
 
-  const bp: BPLineItem[] = BP_TEMPLATE.map((t) => {
+  // Estrutura por TIPO + CLASSIFICAÇÃO (códigos estáveis), não por nome — robusto a
+  // renomeação do modelo. Subtotal = soma do grupo; total = soma dos subtotais.
+  const bp: BPLineItem[] = model.lines.map((t) => {
     let valores: Record<string, number> = {};
-    if (t.conta === "Ativo Total") for (const p of periodos) valores[p] = (subtotal.AC?.[p] ?? 0) + (subtotal.ANC?.[p] ?? 0);
-    else if (t.conta === "Passivo Total") for (const p of periodos) valores[p] = (subtotal.PC?.[p] ?? 0) + (subtotal.PNC?.[p] ?? 0) + (subtotal.PL?.[p] ?? 0);
-    else { const g = Object.entries(SUBTOTAL_CONTA).find(([, c]) => c === t.conta)?.[0]; valores = g ? (subtotal[g] ?? {}) : (detalhe[t.conta] ?? {}); }
+    if (t.tipo === "total") {
+      if (t.classificacao === "AT") for (const p of periodos) valores[p] = (subtotal.AC?.[p] ?? 0) + (subtotal.ANC?.[p] ?? 0);
+      else if (t.classificacao === "PT") for (const p of periodos) valores[p] = (subtotal.PC?.[p] ?? 0) + (subtotal.PNC?.[p] ?? 0) + (subtotal.PL?.[p] ?? 0);
+    } else if (t.tipo === "subtotal") {
+      valores = subtotal[t.classificacao] ?? {};
+    } else {
+      valores = detalhe[t.conta] ?? {};
+    }
     return { classificacao: t.classificacao, conta: t.conta, valores, nivel: t.nivel, editado: false };
   });
   return { bp, naoMapeados };
@@ -207,7 +210,8 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
 export async function extractFinancialsWithAI(
   docs: Array<{ buffer: Buffer; tipo: string }>,
   periodos: string[],
-  dict?: DictionaryEntry[]
+  dict?: DictionaryEntry[],
+  bpModel: BPModel = DEFAULT_BP_MODEL
 ): Promise<AIExtractionResult> {
   const taskThunks = docs.flatMap((doc) => {
     const t = doc.tipo.toLowerCase();
@@ -264,7 +268,7 @@ export async function extractFinancialsWithAI(
   }
 
   const allPeriodos = Array.from(periodSet);
-  const { bp, naoMapeados: naoMapBP } = foldBP(arvoreOriginalBP, allPeriodos, dict);
+  const { bp, naoMapeados: naoMapBP } = foldBP(arvoreOriginalBP, allPeriodos, dict, bpModel);
   const { dre, naoMapeados: naoMapDRE } = foldDRE(arvoreOriginalDRE, allPeriodos, dict);
 
   return {
