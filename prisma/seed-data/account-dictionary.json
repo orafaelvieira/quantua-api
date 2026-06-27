@@ -7576,5 +7576,41 @@
     "contaDestino": "Outras Receitas Operacionais",
     "grupoConta": "Outras Receitas Operacionais",
     "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Obrigações Trabalhistas e Previdenciárias",
+    "contaDestino": "Obrigações Trabalhistas - CP",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações Trabalhistas e Prividenciárias",
+    "contaDestino": "Obrigações Trabalhistas - CP",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucros e Prejuízos Acumulados",
+    "contaDestino": "Lucros/Prejuízos Acumulados",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outras Obrigações a Longo Prazo",
+    "contaDestino": "Outros Passivos não Circulantes",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Impostos Incidentes sobre Vendas",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Administrativas",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
+    "tipo": "DRE"
   }
 ]
