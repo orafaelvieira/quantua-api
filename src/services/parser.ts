@@ -502,7 +502,7 @@ REGRAS CRÍTICAS:
   return message.content[0].type === "text" ? message.content[0].text : "";
 }
 
-export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocument> {
+export async function parsePDF(buffer: Buffer, tipo: string, filename?: string): Promise<ParsedDocument> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const pdfParse = require("pdf-parse");
 
@@ -622,8 +622,8 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
     }
   }
 
-  // Detect periods from text
-  const periodos = detectPeriodsFromPDF(text);
+  // Detect periods from text (com o nome do arquivo como dica autoritativa no fallback)
+  const periodos = detectPeriodsFromPDF(text, filename);
 
   // --- Extraction pipeline ---
   // Try structured extraction first (multi-column PDF with separated names/values)
@@ -685,8 +685,20 @@ export async function parsePDF(buffer: Buffer, tipo: string): Promise<ParsedDocu
  * Prioritizes authoritative patterns ("Encerrado em", "Saldo período")
  * and excludes print/generation dates ("Data:", "Hora:").
  */
-function detectPeriodsFromPDF(text: string): string[] {
+/** Ano do nome do arquivo (ex.: "B&You_DRE_2018.pdf" → "2018"), só quando inequívoco
+ *  (exatamente um ano plausível). É o sinal mais confiável quando o texto não traz
+ *  uma data autoritativa — DREs/PDFs combinados costumam não declarar o período. */
+export function yearFromFilename(filename?: string): string | null {
+  if (!filename) return null;
+  const base = filename.replace(/\.[^.]+$/, "");
+  const distinct = [...new Set([...base.matchAll(/(?:19|20)\d{2}/g)].map((m) => m[0]))]
+    .filter((y) => { const n = parseInt(y); return n >= 2000 && n <= 2035; });
+  return distinct.length === 1 ? distinct[0] : null;
+}
+
+export function detectPeriodsFromPDF(text: string, filename?: string): string[] {
   const periods = new Set<string>();
+  const fy = yearFromFilename(filename);
 
   // 1. Priority: "Encerrado em DD/MM/YYYY" — authoritative period marker
   const encerradoMatches = text.matchAll(/[Ee]ncerrad[oa]\s+em[:\s]+(\d{2}\/\d{2}\/\d{4})/g);
@@ -723,54 +735,42 @@ function detectPeriodsFromPDF(text: string): string[] {
     return sortPeriods(periods);
   }
 
-  // 3. Collect all DD/MM/YYYY dates, but exclude print/generation dates
-  const allDates = text.matchAll(/(\d{2}\/\d{2}\/(20\d{2}))/g);
+  // 3. Fallback FRACO: datas/anos soltos. Aqui o texto é pouco confiável (datas de
+  //    leis/parcelamentos/print confundem), então o ANO DO NOME DO ARQUIVO, quando
+  //    existir, é autoritativo NESTE nível — nunca sobre "Encerrado em"/"Saldo período"
+  //    (que retornaram acima). Resolve DRE/PDF combinado sem período declarado.
   const candidates: string[] = [];
-  for (const m of allDates) {
-    candidates.push(m[1]);
-  }
+  for (const m of text.matchAll(/(\d{2}\/\d{2}\/(20\d{2}))/g)) candidates.push(m[1]);
 
-  // Filter out dates preceded by "Data:", "Gerado", "Impresso", "Hora"
-  const printDatePattern = /(?:Data|Gerado|Impresso|Hora)[:\s]*\d{2}\/\d{2}\/\d{4}/gi;
+  // Exclui datas de impressão/geração (Data:, Gerado, Impresso, Hora)
   const printDates = new Set<string>();
-  const printMatches = text.matchAll(printDatePattern);
-  for (const m of printMatches) {
-    const dateInMatch = m[0].match(/(\d{2}\/\d{2}\/\d{4})/);
-    if (dateInMatch) printDates.add(dateInMatch[1]);
+  for (const m of text.matchAll(/(?:Data|Gerado|Impresso|Hora)[:\s]*\d{2}\/\d{2}\/\d{4}/gi)) {
+    const d = m[0].match(/(\d{2}\/\d{2}\/\d{4})/);
+    if (d) printDates.add(d[1]);
+  }
+  for (const d of candidates) if (!printDates.has(d)) periods.add(d);
+
+  // Sem data cheia → anos soltos. Faixa 2000-2039 (antes 20[2-3]\d ignorava 2016-2019).
+  if (periods.size === 0) {
+    for (const m of text.matchAll(/\b(20[0-3]\d)\b/g)) periods.add(m[1]);
   }
 
-  for (const d of candidates) {
-    if (!printDates.has(d)) {
-      periods.add(d);
-    }
+  const yearOfPeriod = (p: string) => (p.match(/(20\d{2})/) || [])[1] ?? null;
+
+  // Ano do nome do arquivo manda no fallback: alinha às datas do texto que batem com
+  // ele; se nenhuma bate (ou o texto está vazio), o nome vence o ano espúrio.
+  if (fy) {
+    const matchFy = [...periods].filter((p) => yearOfPeriod(p) === fy);
+    if (matchFy.length) return sortPeriods(new Set(matchFy));
+    return [fy];
   }
 
-  // If still multiple dates, prefer fiscal year-end dates (DD/12/YYYY)
+  // Sem filename: prefere fim de ano quando há ambiguidade
   if (periods.size > 1) {
-    const yearEnd = new Set<string>();
-    for (const p of periods) {
-      if (p.startsWith("31/12/") || p.startsWith("30/12/")) {
-        yearEnd.add(p);
-      }
-    }
-    if (yearEnd.size >= 1) {
-      return sortPeriods(yearEnd);
-    }
+    const yearEnd = new Set([...periods].filter((p) => p.startsWith("31/12/") || p.startsWith("30/12/")));
+    if (yearEnd.size >= 1) return sortPeriods(yearEnd);
   }
-
-  if (periods.size >= 1) {
-    return sortPeriods(periods);
-  }
-
-  // 4. Fallback: standalone years
-  const yearMatches = text.matchAll(/\b(20[2-3]\d)\b/g);
-  const years = new Set<string>();
-  for (const m of yearMatches) years.add(m[1]);
-  if (years.size >= 1) {
-    return Array.from(years).sort();
-  }
-
-  return [];
+  return periods.size ? sortPeriods(periods) : [];
 }
 
 function sortPeriods(periods: Set<string>): string[] {
@@ -1224,6 +1224,6 @@ export async function parseDocument(
   tipo: string
 ): Promise<ParsedDocument> {
   const ext = filename.split(".").pop()?.toLowerCase();
-  if (ext === "pdf") return parsePDF(buffer, tipo);
+  if (ext === "pdf") return parsePDF(buffer, tipo, filename);
   return parseExcel(buffer, tipo);
 }

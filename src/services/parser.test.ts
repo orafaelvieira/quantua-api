@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseBRNumber } from "./parser";
+import { parseBRNumber, yearFromFilename, detectPeriodsFromPDF } from "./parser";
 
 describe("parseBRNumber — sinal contábil (parênteses = negativo)", () => {
   it("positivo simples", () => {
@@ -26,5 +26,35 @@ describe("parseBRNumber — sinal contábil (parênteses = negativo)", () => {
   it("vazio/inválido → null", () => {
     expect(parseBRNumber("")).toBeNull();
     expect(parseBRNumber("   ")).toBeNull();
+  });
+});
+
+describe("yearFromFilename — ano do nome do arquivo", () => {
+  it("extrai ano único", () => {
+    expect(yearFromFilename("B&You_DRE_2018.pdf")).toBe("2018");
+    expect(yearFromFilename("Wolk_2019_Demonstração do Resultado.pdf")).toBe("2019");
+    expect(yearFromFilename("16. OHNE - Balanço Patrimonial e DRE 06.2018.pdf")).toBe("2018");
+    expect(yearFromFilename("2024-Balanco_2024_Edunext.pdf")).toBe("2024"); // repetido = 1 distinto
+  });
+  it("ambíguo ou ausente → null", () => {
+    expect(yearFromFilename("relatorio_2022_vs_2023.pdf")).toBeNull(); // 2 distintos
+    expect(yearFromFilename("balancete.pdf")).toBeNull();
+    expect(yearFromFilename(undefined)).toBeNull();
+  });
+});
+
+describe("detectPeriodsFromPDF — filename como dica no fallback", () => {
+  it("texto sem data declarada → usa o ano do nome", () => {
+    expect(detectPeriodsFromPDF("DRE\nReceita 1.000,00\nLucro 100,00", "X_DRE_2018.pdf")).toEqual(["2018"]);
+  });
+  // Regressão dos casos B&You/Wolk: ano espúrio no texto perdia pro nome do arquivo.
+  it("ano espúrio no texto perde pro nome do arquivo", () => {
+    expect(detectPeriodsFromPDF("Conforme Lei 2020 ... Receita 1.000,00", "X_DRE_2019.pdf")).toEqual(["2019"]);
+  });
+  it("NÃO sobrepõe data autoritativa do documento (Encerrado em)", () => {
+    expect(detectPeriodsFromPDF("Encerrado em 31/12/2017\nReceita 1.000,00", "X_2019.pdf")).toEqual(["31/12/2017"]);
+  });
+  it("sem filename: anos 2016-2019 voltam a ser detectados (faixa alargada)", () => {
+    expect(detectPeriodsFromPDF("Exercício de 2018\nReceita 1.000,00")).toEqual(["2018"]);
   });
 });
