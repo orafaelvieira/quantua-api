@@ -64,11 +64,13 @@ export const env = {
   adminTriggerToken: process.env.ADMIN_TRIGGER_TOKEN ?? "",
   /**
    * Pipeline híbrido do IBR no /process (parser → IA Haiku nível 3 → fold).
-   * Default false = heurístico (estável, totais corretos). Setar HIBRIDO_ATIVO=true
-   * SÓ após validar multi-ano no corpus (Ativo=Passivo por ano, RL/LB/LL vs declarado).
-   * O fix de período por-documento (pin) já está aplicado. Ver estado-atual-roadmap.
+   * LIGADO por padrão (opt-out): para desligar e voltar ao heurístico, setar
+   * HIBRIDO_ATIVO=false. Mudado de opt-in→opt-out em jun/2026 porque o ambiente de
+   * prod (DigitalOcean) não é acessível ao time p/ setar a env. Se a IA falhar/sem
+   * crédito, o /process cai no heurístico (fallback do try/catch). A trava de
+   * integridade protege (nunca mostra número errado como certo). Ver estado-atual-roadmap.
    */
   ibr: {
-    hibridoAtivo: process.env.HIBRIDO_ATIVO === "true",
+    hibridoAtivo: process.env.HIBRIDO_ATIVO !== "false",
   },
 };
