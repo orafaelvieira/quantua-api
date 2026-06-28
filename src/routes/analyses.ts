@@ -363,11 +363,17 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     let hibridoNaoMapeados: unknown[] = [];
     let hibridoDeclarados: Record<string, Record<string, number>> | null = null;
     let usouHibrido = false;
+    // DESABILITADO (jun/2026): o híbrido por TEXTO é instável em multi-documento —
+    // perde um ano (ex.: BP 2021 zera, não-determinístico, Haiku e Sonnet). A trava
+    // pega (Ativo≠Passivo), mas o default volta ao heurístico (totais corretos). O
+    // caminho por VISÃO (Conciliar com IA) segue confiável p/ multi-doc. Reativar após
+    // fix de período por-documento. Ver memória estado-atual-roadmap.
+    const HIBRIDO_ATIVO = false;
     try {
       const linhasToText = (linhas: ExtractedRow[]) =>
         linhas.map((l) => `${l.contexto ? l.contexto + " > " : ""}${l.conta} = ${JSON.stringify(l.valores)}`).join("\n");
       const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), tipo: d.tipo }));
-      if (aiDocs.length > 0) {
+      if (HIBRIDO_ATIVO && aiDocs.length > 0) {
         // Passa [] (sem período-alvo): cada documento tem 1 período; a IA usa o natural e
         // canonizamos por ANO. Forçar datas cheias como alvo confundia a IA em multi-ano
         // (o BP de um ano caía na chave errada). Usamos os períodos que o híbrido retorna.
