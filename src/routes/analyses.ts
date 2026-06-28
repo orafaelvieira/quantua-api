@@ -10,7 +10,7 @@ import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocum
 import { generateAnalysis } from "../services/claude";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods } from "../services/account-mapper";
 import { calculateIndicators } from "../services/indicator-calculator";
-import { extractFinancialsWithAI, foldBP, foldDRE } from "../services/ai-extraction";
+import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { getActiveModelVersions, loadActiveBPModel } from "../services/model-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
@@ -497,13 +497,30 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       });
     }
 
+    // No HÍBRIDO, a tela de classificação manual é alimentada pelos N3 NÃO mapeados —
+    // o nível de captura do bpN3Prompt (primeira quebra real). NUNCA folhas N4+, porque a
+    // soma das folhas já está no N3 → classificá-las daria DUPLA CONTAGEM. Transforma
+    // {nome,grupo,valor,periodo} → {conta,valores,contexto} (shape da tela), agrupando por
+    // conta e só BP (a tela classifica no dicionário de BP). O heurístico segue como antes.
+    const unmatchedHibrido: UnmatchedAccount[] = (() => {
+      if (!usouHibrido) return [];
+      const byConta = new Map<string, UnmatchedAccount>();
+      for (const nm of hibridoNaoMapeados as NaoMapeado[]) {
+        if (nm?.tipo !== "BP") continue; // DRE não vai p/ esta tela (template é de BP)
+        const cur = byConta.get(nm.nome) ?? { conta: nm.nome, valores: {}, contexto: nm.grupo };
+        cur.valores[nm.periodo] = (cur.valores[nm.periodo] ?? 0) + nm.valor;
+        byConta.set(nm.nome, cur);
+      }
+      return [...byConta.values()];
+    })();
+
     const modeloVersoes = await getActiveModelVersions();
     const dadosEstruturados: DadosEstruturados = {
       bp: structuredBP,
       dre: structuredDRE,
       indicadores,
       periodos: allPeriodos,
-      unmatchedAccounts: usouHibrido ? [] : unmatchedAccounts,
+      unmatchedAccounts: usouHibrido ? unmatchedHibrido : unmatchedAccounts,
       declarados: declaradosDRE,
       arvoreOriginalBP: usouHibrido ? arvoreOriginalBP : null,
       arvoreOriginalDRE: usouHibrido ? arvoreOriginalDRE : null,

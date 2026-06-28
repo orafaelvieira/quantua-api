@@ -19,7 +19,7 @@ export interface BPN3Periodo { grupos: Record<string, BPN3Item[]>; totais?: Reco
 /** Árvore original do BP até o nível 3, por período (auditoria). */
 export type ArvoreOriginalBP = Record<string, BPN3Periodo>;
 
-export interface NaoMapeado { nome: string; grupo: string; destino: string; valor: number; periodo: string }
+export interface NaoMapeado { nome: string; grupo: string; destino: string; valor: number; periodo: string; tipo: "BP" | "DRE" }
 
 export interface AIExtractionResult {
   bp: BPLineItem[];
@@ -117,7 +117,7 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       let dest = mapAccountToDRE(it.nome, dict);
       if (!dest || !dreInputsSet.has(dest)) {
         dest = it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
-        naoMapeados.push({ nome: it.nome, grupo: "DRE", destino: dest, valor: it.valor, periodo: p });
+        naoMapeados.push({ nome: it.nome, grupo: "DRE", destino: dest, valor: it.valor, periodo: p, tipo: "DRE" });
       }
       it.destino = dest;
       (acc[dest] ??= {})[p] = (acc[dest][p] ?? 0) + it.valor;
@@ -136,7 +136,7 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       if (cobre) { st.destino = "(subtotal — filhos já contabilizados)"; continue; }
       const dest = st.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
       st.destino = dest;
-      naoMapeados.push({ nome: st.nome, grupo: "DRE", destino: dest, valor: st.valor, periodo: p });
+      naoMapeados.push({ nome: st.nome, grupo: "DRE", destino: dest, valor: st.valor, periodo: p, tipo: "DRE" });
       (acc[dest] ??= {})[p] = (acc[dest][p] ?? 0) + st.valor;
     }
   }
@@ -211,7 +211,7 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
           const balde = OUTROS_GRUPO[g];
           if (balde) add(detalhe, balde, p, v);
           it.destino = balde ?? "(não classificado)";
-          naoMapeados.push({ nome: it.nome, grupo: grupoNome, destino: it.destino, valor: v, periodo: p });
+          naoMapeados.push({ nome: it.nome, grupo: grupoNome, destino: it.destino, valor: v, periodo: p, tipo: "BP" });
         }
       }
     }
