@@ -246,7 +246,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
 
     // 2.5 Normalize periods across documents (e.g., "31/12/2023" + "2023" → "31/12/2023")
     normalizePeriods(parsedDocs);
-    const allPeriodos = detectPeriodos(parsedDocs);
+    let allPeriodos = detectPeriodos(parsedDocs);
     let structuredBP: BPLineItem[] = [];
     let structuredDRE: DRELineItem[] = [];
     const unmatchedAccounts: UnmatchedAccount[] = [];
@@ -368,9 +368,13 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         linhas.map((l) => `${l.contexto ? l.contexto + " > " : ""}${l.conta} = ${JSON.stringify(l.valores)}`).join("\n");
       const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), tipo: d.tipo }));
       if (aiDocs.length > 0) {
-        const r = await extractFinancialsWithAI(aiDocs, allPeriodos, dictAll, bpModel); // raw → Haiku (auto)
+        // Passa [] (sem período-alvo): cada documento tem 1 período; a IA usa o natural e
+        // canonizamos por ANO. Forçar datas cheias como alvo confundia a IA em multi-ano
+        // (o BP de um ano caía na chave errada). Usamos os períodos que o híbrido retorna.
+        const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel); // raw → Haiku (auto)
         const temDados = r.bp.some((b) => Object.values(b.valores).some((v) => v)) || r.dre.some((d) => Object.values(d.valores).some((v) => v));
         if (temDados) {
+          allPeriodos = r.periodos; // chaves canônicas (ano) — alinha tabela, indicadores e árvore
           structuredBP = r.bp;
           structuredDRE = r.dre;
           arvoreOriginalBP = r.arvoreOriginalBP;
