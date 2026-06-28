@@ -365,7 +365,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       linhas.map((l) => `${l.contexto ? l.contexto + " > " : ""}${l.conta} = ${JSON.stringify(l.valores)}`).join("\n");
 
     interface Candidato {
-      fonte: "heuristico" | "hibrido";
+      fonte: "heuristico" | "hibrido" | "visao";
       bp: BPLineItem[]; dre: DRELineItem[]; periodos: string[];
       declarados: Record<string, Record<string, number>>;
       unmatched: UnmatchedAccount[];              // N3 p/ tela manual (só do híbrido; heurístico = [])
@@ -420,22 +420,44 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       return avalia({ fonte: "heuristico", bp, dre, periodos, declarados, unmatched: [], arvoreBP: null, arvoreDRE: null, naoMapeados: [], custoUsd: 0 });
     };
 
-    // Nível 2 — HÍBRIDO (parser → IA Haiku → fold N3). Período por-doc (pin). Custo medido.
-    const rodaHibrido = async (): Promise<Candidato | null> => {
-      const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), tipo: d.tipo, periodos: d.periodos }));
-      if (!aiDocs.length) return null;
-      const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel);
-      const temDados = r.bp.some((b) => Object.values(b.valores).some((v) => v)) || r.dre.some((d) => Object.values(d.valores).some((v) => v));
-      if (!temDados) return null;
-      // N3 de BP não mapeados → tela manual (NUNCA N4+; soma das folhas já está no N3).
+    // N3 de BP não mapeados → tela manual (NUNCA N4+; a soma das folhas já está no N3).
+    const n3ParaTela = (naoMapeados: NaoMapeado[]): UnmatchedAccount[] => {
       const byConta = new Map<string, UnmatchedAccount>();
-      for (const nm of r.naoMapeados as NaoMapeado[]) {
+      for (const nm of naoMapeados) {
         if (nm?.tipo !== "BP") continue;
         const cur = byConta.get(nm.nome) ?? { conta: nm.nome, valores: {}, contexto: nm.grupo };
         cur.valores[nm.periodo] = (cur.valores[nm.periodo] ?? 0) + nm.valor;
         byConta.set(nm.nome, cur);
       }
-      return avalia({ fonte: "hibrido", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: [...byConta.values()], arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, custoUsd: r.custo.usd });
+      return [...byConta.values()];
+    };
+    const temDadosIA = (r: { bp: BPLineItem[]; dre: DRELineItem[] }) =>
+      r.bp.some((b) => Object.values(b.valores).some((v) => v)) || r.dre.some((d) => Object.values(d.valores).some((v) => v));
+
+    // Nível 2 — HÍBRIDO (parser → IA Haiku texto → fold N3). Período por-doc (pin). Custo medido.
+    const rodaHibrido = async (): Promise<Candidato | null> => {
+      const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), tipo: d.tipo, periodos: d.periodos }));
+      if (!aiDocs.length) return null;
+      const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel);
+      if (!temDadosIA(r)) return null;
+      return avalia({ fonte: "hibrido", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: n3ParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, custoUsd: r.custo.usd });
+    };
+
+    // Nível 3 — VISÃO (Sonnet lê o PDF original). Caro: só como ÚLTIMO recurso. Re-baixa os
+    // buffers sob demanda (não retém na memória). Pula docs editados manualmente. Usa o
+    // período conhecido pelo parser (pin) p/ alinhar com o que o parser/híbrido já viram.
+    const rodaVisao = async (): Promise<Candidato | null> => {
+      const visDocs: Array<{ buffer: Buffer; tipo: string; periodos: string[] }> = [];
+      for (let i = 0; i < analysis.documents.length; i++) {
+        const doc = analysis.documents[i];
+        if (doc.editadoManualmente || !doc.storagePath) continue;
+        const buffer = await downloadFile(doc.storagePath);
+        visDocs.push({ buffer, tipo: doc.tipo, periodos: parsedDocs[i]?.periodos ?? [] });
+      }
+      if (!visDocs.length) return null;
+      const r = await extractFinancialsWithAI(visDocs, [], dictAll, bpModel); // buffer → Sonnet visão
+      if (!temDadosIA(r)) return null;
+      return avalia({ fonte: "visao", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: n3ParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, custoUsd: r.custo.usd });
     };
 
     const custos: Array<{ fonte: string; usd: number }> = [];
@@ -447,16 +469,24 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         if (hib) { custos.push({ fonte: "hibrido", usd: hib.custoUsd }); if (hib.fecha || hib.score > escolhido.score) escolhido = hib; }
       } catch (e: any) { console.error("[process] híbrido falhou:", e?.message ?? e); }
     }
+    // Nível 3 — VISÃO (Sonnet), só se ainda NÃO fechou (último recurso, caro).
+    if (!escolhido.fecha && HIBRIDO_ATIVO) {
+      try {
+        const vis = await rodaVisao();
+        if (vis) { custos.push({ fonte: "visao", usd: vis.custoUsd }); if (vis.fecha || vis.score > escolhido.score) escolhido = vis; }
+      } catch (e: any) { console.error("[process] visão falhou:", e?.message ?? e); }
+    }
     const custoTotalUsd = custos.reduce((s, c) => s + c.usd, 0);
     console.log(`[process] cascata: venceu=${escolhido.fonte} fecha=${escolhido.fecha} score=${escolhido.score}/5 | ${custos.map((c) => `${c.fonte}:$${c.usd.toFixed(4)}`).join(" ")} | total=$${custoTotalUsd.toFixed(4)}`);
 
-    // Materializa o vencedor nas variáveis usadas adiante no handler.
+    // Materializa o vencedor. Árvore/N3 vêm direto do candidato (heurístico = null/[]; IA
+    // texto OU visão = a captura N3) — NÃO gatear por "híbrido" senão a visão perde a árvore.
     structuredBP = escolhido.bp;
     structuredDRE = escolhido.dre;
     allPeriodos = escolhido.periodos;
-    const usouHibrido = escolhido.fonte === "hibrido";
-    const arvoreOriginalBP = usouHibrido ? escolhido.arvoreBP : null;
-    const arvoreOriginalDRE = usouHibrido ? escolhido.arvoreDRE : null;
+    const usouIA = escolhido.fonte !== "heuristico";
+    const arvoreOriginalBP = escolhido.arvoreBP;
+    const arvoreOriginalDRE = escolhido.arvoreDRE;
     const hibridoNaoMapeados = escolhido.naoMapeados;
     const declaradosDRE = escolhido.declarados;
     const validacao = escolhido.validacao;
@@ -499,7 +529,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       declarados: declaradosDRE,
       arvoreOriginalBP: arvoreOriginalBP,
       arvoreOriginalDRE: arvoreOriginalDRE,
-      naoMapeados: usouHibrido ? hibridoNaoMapeados : [],
+      naoMapeados: usouIA ? hibridoNaoMapeados : [],
       modeloVersaoBP: modeloVersoes.bp,
       modeloVersaoDRE: modeloVersoes.dre,
       version: 2,
