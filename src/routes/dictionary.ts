@@ -57,26 +57,31 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
     add(getParentGroup(item), item.conta);
   }
 
-  // 2) Contas-destino efetivamente usadas no dicionário (mantém o dropdown em
-  //    sincronia com os dados — inclui DRE e quaisquer destinos importados que
-  //    não existam no template estático)
-  const used = await prisma.accountDictionary.findMany({
-    where: {
-      OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }],
-    },
-    select: { grupoConta: true, contaDestino: true },
-    distinct: ["grupoConta", "contaDestino"],
-  });
-  for (const u of used) {
-    add(u.grupoConta, u.contaDestino);
-  }
-
   // Dropdown da DRE: contas de INPUT do template (não-subtotais) — alvos válidos para
   // reclassificar uma linha da DRE (ex.: custo que caiu em "Outras Despesas" → "Custo
   // Operacional"). Agrupado sob "Resultado (DRE)" para o <optgroup>.
   const dreGrouped: Record<string, string[]> = {
     "Resultado (DRE)": DRE_TEMPLATE.filter((t: { subtotal?: boolean }) => !t.subtotal).map((t: { conta: string }) => t.conta),
   };
+  const addDRE = (conta: string): void => {
+    if (!conta) return;
+    if (!dreGrouped["Resultado (DRE)"].includes(conta)) dreGrouped["Resultado (DRE)"].push(conta);
+  };
+
+  // 2) Contas-destino efetivamente usadas no dicionário (mantém o dropdown em sincronia
+  //    com os dados). Roteia por TIPO: entradas de BP vão p/ `grouped`, de DRE p/ `dreGrouped`
+  //    — assim o dropdown de BP nunca mostra conta de DRE e vice-versa.
+  const used = await prisma.accountDictionary.findMany({
+    where: {
+      OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }],
+    },
+    select: { grupoConta: true, contaDestino: true, tipo: true },
+    distinct: ["tipo", "grupoConta", "contaDestino"],
+  });
+  for (const u of used) {
+    if (u.tipo === "DRE") addDRE(u.contaDestino);
+    else add(u.grupoConta, u.contaDestino);
+  }
 
   res.json({ template: BP_TEMPLATE, dreTemplate: DRE_TEMPLATE, grouped, dreGrouped });
 });

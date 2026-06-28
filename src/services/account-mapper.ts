@@ -191,6 +191,30 @@ function findBestMatch(
 }
 
 /**
+ * SUGESTÃO para a tela de classificação manual: melhor candidato por sobreposição de
+ * palavras, SEM o threshold do de-para (o de-para já falhou → aqui é só um palpite para
+ * agilizar o analista, que confirma). Determinístico, sem custo. `candidatos` deve ser do
+ * MESMO tipo da conta (BP→contas de BP, DRE→contas de DRE) para nunca cruzar.
+ */
+export function sugerirConta(nome: string, candidatos: string[], minScore = 0.34): string | null {
+  const norm = normalize(cleanAccountName(nome));
+  if (!norm || norm.length < 2) return null;
+  for (const c of candidatos) if (normalize(c) === norm) return c; // exato
+  const normWords = norm.split(/\s+/).filter((w) => w.length > 2);
+  if (!normWords.length) return null;
+  let best: string | null = null, bestScore = 0;
+  for (const c of candidatos) {
+    const cWords = normalize(c).split(/\s+/).filter((w) => w.length > 2);
+    if (!cWords.length) continue;
+    const overlap = normWords.filter((w) => cWords.includes(w)).length;
+    if (overlap === 0) continue;
+    const score = (overlap / cWords.length + overlap / normWords.length) / 2;
+    if (score > bestScore) { bestScore = score; best = c; }
+  }
+  return bestScore >= minScore ? best : null; // abaixo do limiar: melhor não sugerir que sugerir errado
+}
+
+/**
  * Derive high-level grupo (AC, ANC, PC, PNC, PL) from hierarchical account code.
  * Used to pass to findBestMatch for group-aware disambiguation.
  */

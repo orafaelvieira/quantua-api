@@ -28,6 +28,7 @@ export interface UnmatchedAccount {
   valores: Record<string, number>;
   contexto?: string; // Hierarquia de linhas-pai (ex: "ATIVO > CIRCULANTE")
   tipo?: "BP" | "DRE"; // qual dicionário/dropdown usar na tela de classificação
+  sugestao?: string;   // conta sugerida pelo sistema (analista confirma/troca)
 }
 
 export interface DadosEstruturados {

@@ -8,7 +8,8 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { generateAnalysis } from "../services/claude";
-import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods } from "../services/account-mapper";
+import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta } from "../services/account-mapper";
+import { DRE_TEMPLATE } from "../services/financial-templates";
 import { calculateIndicators } from "../services/indicator-calculator";
 import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { getActiveModelVersions, loadActiveBPModel } from "../services/model-version";
@@ -421,6 +422,16 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     };
 
     // N3 de BP não mapeados → tela manual (NUNCA N4+; a soma das folhas já está no N3).
+    // Candidatos de sugestão. DRE: inputs do template. BP: filtrado POR LADO do grupo
+    // (Ativo/Passivo/PL) — a sugestão NUNCA cruza Ativo↔Passivo (mesma regra do de-para).
+    const candidatosDRE = DRE_TEMPLATE.filter((t) => !t.subtotal).map((t) => t.conta);
+    const candidatosBPdoGrupo = (grupo: string): string[] => {
+      const lado = grupo.startsWith("Ativo") ? "A" : grupo.startsWith("Passivo") ? "P" : grupo.startsWith("Patrim") ? "PL" : null;
+      if (!lado) return bpModel.names;
+      return bpModel.lines
+        .filter((l) => l.tipo === "input" && (lado === "PL" ? l.classificacao === "PL" : lado === "P" ? (l.classificacao[0] === "P" && l.classificacao !== "PL") : l.classificacao[0] === "A"))
+        .map((l) => l.conta);
+    };
     const naoMapeadosParaTela = (naoMapeados: NaoMapeado[]): UnmatchedAccount[] => {
       // BP: nível N3 (primeira quebra). DRE: nível de seção-input. NUNCA folhas profundas
       // (sem dupla contagem). Reclassificar MOVE o valor (de "Outros" p/ a conta certa).
@@ -429,7 +440,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         if (nm?.tipo !== "BP" && nm?.tipo !== "DRE") continue;
         const key = `${nm.tipo}|${nm.nome}`;
         const contexto = nm.tipo === "BP" ? nm.grupo : `Hoje em: ${nm.destino}`;
-        const cur = byKey.get(key) ?? { conta: nm.nome, valores: {}, contexto, tipo: nm.tipo };
+        const sugestao = sugerirConta(nm.nome, nm.tipo === "BP" ? candidatosBPdoGrupo(nm.grupo) : candidatosDRE) ?? undefined;
+        const cur = byKey.get(key) ?? { conta: nm.nome, valores: {}, contexto, tipo: nm.tipo, sugestao };
         cur.valores[nm.periodo] = (cur.valores[nm.periodo] ?? 0) + nm.valor;
         byKey.set(key, cur);
       }
