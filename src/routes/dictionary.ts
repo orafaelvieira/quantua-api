@@ -71,7 +71,14 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
     add(u.grupoConta, u.contaDestino);
   }
 
-  res.json({ template: BP_TEMPLATE, dreTemplate: DRE_TEMPLATE, grouped });
+  // Dropdown da DRE: contas de INPUT do template (não-subtotais) — alvos válidos para
+  // reclassificar uma linha da DRE (ex.: custo que caiu em "Outras Despesas" → "Custo
+  // Operacional"). Agrupado sob "Resultado (DRE)" para o <optgroup>.
+  const dreGrouped: Record<string, string[]> = {
+    "Resultado (DRE)": DRE_TEMPLATE.filter((t: { subtotal?: boolean }) => !t.subtotal).map((t: { conta: string }) => t.conta),
+  };
+
+  res.json({ template: BP_TEMPLATE, dreTemplate: DRE_TEMPLATE, grouped, dreGrouped });
 });
 
 // Helper to determine parent group based on classificacao

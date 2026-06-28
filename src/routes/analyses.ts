@@ -421,15 +421,19 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     };
 
     // N3 de BP não mapeados → tela manual (NUNCA N4+; a soma das folhas já está no N3).
-    const n3ParaTela = (naoMapeados: NaoMapeado[]): UnmatchedAccount[] => {
-      const byConta = new Map<string, UnmatchedAccount>();
+    const naoMapeadosParaTela = (naoMapeados: NaoMapeado[]): UnmatchedAccount[] => {
+      // BP: nível N3 (primeira quebra). DRE: nível de seção-input. NUNCA folhas profundas
+      // (sem dupla contagem). Reclassificar MOVE o valor (de "Outros" p/ a conta certa).
+      const byKey = new Map<string, UnmatchedAccount>();
       for (const nm of naoMapeados) {
-        if (nm?.tipo !== "BP") continue;
-        const cur = byConta.get(nm.nome) ?? { conta: nm.nome, valores: {}, contexto: nm.grupo };
+        if (nm?.tipo !== "BP" && nm?.tipo !== "DRE") continue;
+        const key = `${nm.tipo}|${nm.nome}`;
+        const contexto = nm.tipo === "BP" ? nm.grupo : `Hoje em: ${nm.destino}`;
+        const cur = byKey.get(key) ?? { conta: nm.nome, valores: {}, contexto, tipo: nm.tipo };
         cur.valores[nm.periodo] = (cur.valores[nm.periodo] ?? 0) + nm.valor;
-        byConta.set(nm.nome, cur);
+        byKey.set(key, cur);
       }
-      return [...byConta.values()];
+      return [...byKey.values()];
     };
     const temDadosIA = (r: { bp: BPLineItem[]; dre: DRELineItem[] }) =>
       r.bp.some((b) => Object.values(b.valores).some((v) => v)) || r.dre.some((d) => Object.values(d.valores).some((v) => v));
@@ -440,7 +444,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       if (!aiDocs.length) return null;
       const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel);
       if (!temDadosIA(r)) return null;
-      return avalia({ fonte: "hibrido", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: n3ParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, custoUsd: r.custo.usd });
+      return avalia({ fonte: "hibrido", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: naoMapeadosParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, custoUsd: r.custo.usd });
     };
 
     // Nível 3 — VISÃO (Sonnet lê o PDF original). Caro: só como ÚLTIMO recurso. Re-baixa os
@@ -457,7 +461,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       if (!visDocs.length) return null;
       const r = await extractFinancialsWithAI(visDocs, [], dictAll, bpModel); // buffer → Sonnet visão
       if (!temDadosIA(r)) return null;
-      return avalia({ fonte: "visao", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: n3ParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, custoUsd: r.custo.usd });
+      return avalia({ fonte: "visao", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: naoMapeadosParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, custoUsd: r.custo.usd });
     };
 
     const custos: Array<{ fonte: string; usd: number }> = [];
