@@ -250,7 +250,6 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     let allPeriodos = detectPeriodos(parsedDocs);
     let structuredBP: BPLineItem[] = [];
     let structuredDRE: DRELineItem[] = [];
-    const unmatchedAccounts: UnmatchedAccount[] = [];
 
     // Pre-fetch dictionary entries for this user (BP + DRE)
     const dictEntries = await prisma.accountDictionary.findMany({
@@ -356,124 +355,115 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       }
     }
 
-    // ── HÍBRIDO (padrão): o parser já extraiu → IA (Haiku) estrutura em nível 3 → fold ──
-    // Barato (texto, não visão ~R$0,02/doc) e limpo: evita o "monte de não classificadas"
-    // do heurístico. O loop heurístico abaixo vira FALLBACK (se a IA falhar ou vier vazia).
+    // ── CASCATA cheapest-first: parser (grátis) → híbrido (IA Haiku) → [visão: passo 2] ──
+    // Pega o 1º nível que FECHA no gate de integridade (Ativo=Passivo + composição AC+ANC /
+    // PC+PNC+PL + detalhe completo + DRE reconciliando vs declarado). Se nenhum fecha, usa o
+    // de maior score (a trava mostra vermelho). Mede o custo de IA de cada nível.
     const dictAll = [...dictForBP, ...dictForDRE];
-    let arvoreOriginalBP: unknown = null, arvoreOriginalDRE: unknown = null;
-    let hibridoNaoMapeados: unknown[] = [];
-    let hibridoDeclarados: Record<string, Record<string, number>> | null = null;
-    let usouHibrido = false;
-    // FIX APLICADO (jun/2026): a instabilidade multi-documento (BP de um ano zerava,
-    // não-determinístico) vinha da IA adivinhando o ano no batch. Agora passamos o período
-    // CONHECIDO pelo parser por-documento (pin) — ver extractFinancialsWithAI. Default ainda
-    // OFF (env HIBRIDO_ATIVO, default false) até validar no corpus local (Maniacs +
-    // DCTOS_TESTE_SISTEMA): Ativo=Passivo e RL/LB/LL vs declarado. Ver estado-atual-roadmap.
     const HIBRIDO_ATIVO = env.ibr.hibridoAtivo;
-    try {
-      const linhasToText = (linhas: ExtractedRow[]) =>
-        linhas.map((l) => `${l.contexto ? l.contexto + " > " : ""}${l.conta} = ${JSON.stringify(l.valores)}`).join("\n");
-      // Período POR-DOCUMENTO: o parser já detectou d.periodos de cada doc. Passamos esse
-      // período conhecido junto — extractFinancialsWithAI fixa (pin) a chave quando o doc tem
-      // 1 período, em vez de deixar a IA adivinhar o ano no batch (causa do BP de um ano zerar).
-      const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), tipo: d.tipo, periodos: d.periodos }));
-      if (HIBRIDO_ATIVO && aiDocs.length > 0) {
-        // Período-alvo global vazio: cada doc carrega o seu (acima). O resultado canoniza por
-        // ANO e usamos os períodos que o híbrido retorna (union dos períodos pinados).
-        const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel); // raw → Haiku (auto)
-        const temDados = r.bp.some((b) => Object.values(b.valores).some((v) => v)) || r.dre.some((d) => Object.values(d.valores).some((v) => v));
-        if (temDados) {
-          allPeriodos = r.periodos; // chaves canônicas (ano) — alinha tabela, indicadores e árvore
-          structuredBP = r.bp;
-          structuredDRE = r.dre;
-          arvoreOriginalBP = r.arvoreOriginalBP;
-          arvoreOriginalDRE = r.arvoreOriginalDRE;
-          hibridoDeclarados = r.declarados;
-          hibridoNaoMapeados = r.naoMapeados;
-          usouHibrido = true;
-          console.log(`[process] híbrido OK: BP ${structuredBP.length}, DRE ${structuredDRE.length}, não-map ${hibridoNaoMapeados.length}`);
-        }
-      }
-    } catch (e: any) {
-      console.error("[process] híbrido falhou → fallback heurístico:", e?.message ?? e);
+    const linhasToText = (linhas: ExtractedRow[]) =>
+      linhas.map((l) => `${l.contexto ? l.contexto + " > " : ""}${l.conta} = ${JSON.stringify(l.valores)}`).join("\n");
+
+    interface Candidato {
+      fonte: "heuristico" | "hibrido";
+      bp: BPLineItem[]; dre: DRELineItem[]; periodos: string[];
+      declarados: Record<string, Record<string, number>>;
+      unmatched: UnmatchedAccount[];              // N3 p/ tela manual (só do híbrido; heurístico = [])
+      arvoreBP: unknown; arvoreDRE: unknown; naoMapeados: unknown[];
+      custoUsd: number;
+      validacao: ReturnType<typeof validateFinancialData>;
+      score: number; fecha: boolean;
     }
-
-    if (!usouHibrido)
-    for (const doc of parsedDocs) {
-      const docType = detectDocType(doc);
-      console.log(`[process] Doc "${doc.tipo}" detected as ${docType}, linhas: ${doc.linhas.length}, raw length: ${doc.raw.length}`);
-
-      if (docType === "BP" || docType === "BOTH") {
-        const bpResult = mapExtractedToBP(doc.linhas, dictForBP, bpModel);
-        if (structuredBP.length === 0) {
-          structuredBP = bpResult.items;
-        } else {
-          // Merge new periods into existing BP structure
-          console.log(`[process] Merging additional BP document into existing (${Object.keys(bpResult.items[0]?.valores || {}).join(", ")})`);
-          mergeBPItems(structuredBP, bpResult.items);
-        }
-        unmatchedAccounts.push(...bpResult.unmatched);
+    const scoreDe = (v: ReturnType<typeof validateFinancialData>) => {
+      const dreOk = !v.reconciliacaoDRE.verificada || v.reconciliacaoDRE.ok;
+      return (v.equacaoPatrimonial ? 1 : 0) + (v.composicaoAtivo ? 1 : 0) + (v.composicaoPassivo ? 1 : 0) + (v.detalheCompleto ? 1 : 0) + (dreOk ? 1 : 0);
+    };
+    const totalBP = (bp: BPLineItem[], conta: string, p: string) => bp.find((b) => b.conta === conta)?.valores[p] ?? 0;
+    // Normaliza/recalcula a DRE do candidato e roda a trava — base da decisão da cascata.
+    // IMPORTANTE: exige DADOS REAIS (Ativo e Passivo não-zero em algum período). Sem isso,
+    // validateFinancialData marca equação=true VACUAMENTE (pula a checagem com totais 0) —
+    // um resultado VAZIO não pode "fechar" nem vencer um parcial. Vazio → score 0.
+    const avalia = (c: Omit<Candidato, "validacao" | "score" | "fecha">): Candidato => {
+      normalizeDRESigns(c.dre, c.periodos);
+      recomputeDRESubtotals(c.dre, c.periodos);
+      const v = validateFinancialData(c.bp, c.dre, c.periodos, c.declarados);
+      const temDados = c.periodos.some((p) => totalBP(c.bp, "Ativo Total", p) !== 0 && totalBP(c.bp, "Passivo Total", p) !== 0);
+      const score = temDados ? scoreDe(v) : 0;
+      return { ...c, validacao: v, score, fecha: temDados && score === 5 };
+    };
+    const declaradosDe = (dre: DRELineItem[], periodos: string[]) => {
+      const decl: Record<string, Record<string, number>> = {};
+      for (const p of periodos) for (const conta of ["Receita Líquida", "Lucro Bruto", "Lucro Líquido"]) {
+        const v = dre.find((d) => d.conta === conta)?.valores[p] ?? 0;
+        if (Math.abs(v) > 0.5) (decl[p] ??= {})[conta] = v;
       }
-      if (docType === "DRE" || docType === "BOTH") {
-        const dreResult = mapExtractedToDRE(doc.linhas, dictForDRE);
-        if (structuredDRE.length === 0) {
-          structuredDRE = dreResult.items;
-        } else {
-          // Merge new periods into existing DRE structure
-          console.log(`[process] Merging additional DRE document into existing (${Object.keys(dreResult.items[0]?.valores || {}).join(", ")})`);
-          mergeDREItems(structuredDRE, dreResult.items);
-        }
-        unmatchedAccounts.push(...dreResult.unmatched);
-      }
+      return decl;
+    };
 
-      // Fallback: if docType is UNKNOWN but user said it's DRE/BP, try anyway
-      if (docType === "UNKNOWN" && doc.linhas.length > 0) {
+    // Nível 1 — PARSER determinístico (heurístico, grátis).
+    const rodaHeuristico = (): Candidato => {
+      let bp: BPLineItem[] = [], dre: DRELineItem[] = [];
+      const unm: UnmatchedAccount[] = [];
+      for (const doc of parsedDocs) {
+        const docType = detectDocType(doc);
         const tipoNorm = doc.tipo.toLowerCase();
-        if (tipoNorm.includes("dre") || tipoNorm.includes("resultado")) {
-          console.log(`[process] Fallback: treating UNKNOWN doc as DRE based on tipo="${doc.tipo}"`);
-          const dreResult = mapExtractedToDRE(doc.linhas, dictForDRE);
-          if (structuredDRE.length === 0) {
-            structuredDRE = dreResult.items;
-          } else {
-            mergeDREItems(structuredDRE, dreResult.items);
-          }
-          unmatchedAccounts.push(...dreResult.unmatched);
-        } else if (tipoNorm.includes("balan") || tipoNorm.includes("balancete")) {
-          console.log(`[process] Fallback: treating UNKNOWN doc as BP based on tipo="${doc.tipo}"`);
-          const bpResult = mapExtractedToBP(doc.linhas, dictForBP, bpModel);
-          if (structuredBP.length === 0) {
-            structuredBP = bpResult.items;
-          } else {
-            mergeBPItems(structuredBP, bpResult.items);
-          }
-          unmatchedAccounts.push(...bpResult.unmatched);
-        }
+        const querBP = docType === "BP" || docType === "BOTH" || (docType === "UNKNOWN" && doc.linhas.length > 0 && (tipoNorm.includes("balan") || tipoNorm.includes("balancete")));
+        const querDRE = docType === "DRE" || docType === "BOTH" || (docType === "UNKNOWN" && doc.linhas.length > 0 && (tipoNorm.includes("dre") || tipoNorm.includes("resultado")));
+        if (querBP) { const r = mapExtractedToBP(doc.linhas, dictForBP, bpModel); if (!bp.length) bp = r.items; else mergeBPItems(bp, r.items); unm.push(...r.unmatched); }
+        if (querDRE) { const r = mapExtractedToDRE(doc.linhas, dictForDRE); if (!dre.length) dre = r.items; else mergeDREItems(dre, r.items); unm.push(...r.unmatched); }
       }
-    }
+      const periodos = detectPeriodos(parsedDocs);
+      // declarados capturados ANTES do recompute (avalia() recompõe a cascata depois)
+      const declarados = declaradosDe(dre, periodos);
+      // unmatched do heurístico é folha profunda (N4+) → NUNCA vai p/ a tela (dupla contagem).
+      // Guardamos só p/ telemetria; a tela manual é N3-only (alimentada pelo híbrido).
+      return avalia({ fonte: "heuristico", bp, dre, periodos, declarados, unmatched: [], arvoreBP: null, arvoreDRE: null, naoMapeados: [], custoUsd: 0 });
+    };
 
-    // Declarados (base da trava de reconciliação): no híbrido, vêm da IA (capturados do
-    // documento). No heurístico, captura dos subtotais ANTES do recompute sobrescrever.
-    let declaradosDRE: Record<string, Record<string, number>> = {};
-    if (usouHibrido && hibridoDeclarados) {
-      declaradosDRE = hibridoDeclarados;
-    } else {
-      for (const p of allPeriodos) {
-        for (const conta of ["Receita Líquida", "Lucro Bruto", "Lucro Líquido"]) {
-          const v = structuredDRE.find((d) => d.conta === conta)?.valores[p] ?? 0;
-          if (Math.abs(v) > 0.5) (declaradosDRE[p] ??= {})[conta] = v;
-        }
+    // Nível 2 — HÍBRIDO (parser → IA Haiku → fold N3). Período por-doc (pin). Custo medido.
+    const rodaHibrido = async (): Promise<Candidato | null> => {
+      const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), tipo: d.tipo, periodos: d.periodos }));
+      if (!aiDocs.length) return null;
+      const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel);
+      const temDados = r.bp.some((b) => Object.values(b.valores).some((v) => v)) || r.dre.some((d) => Object.values(d.valores).some((v) => v));
+      if (!temDados) return null;
+      // N3 de BP não mapeados → tela manual (NUNCA N4+; soma das folhas já está no N3).
+      const byConta = new Map<string, UnmatchedAccount>();
+      for (const nm of r.naoMapeados as NaoMapeado[]) {
+        if (nm?.tipo !== "BP") continue;
+        const cur = byConta.get(nm.nome) ?? { conta: nm.nome, valores: {}, contexto: nm.grupo };
+        cur.valores[nm.periodo] = (cur.valores[nm.periodo] ?? 0) + nm.valor;
+        byConta.set(nm.nome, cur);
       }
+      return avalia({ fonte: "hibrido", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: [...byConta.values()], arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, custoUsd: r.custo.usd });
+    };
+
+    const custos: Array<{ fonte: string; usd: number }> = [];
+    let escolhido = rodaHeuristico();
+    custos.push({ fonte: "parser", usd: 0 });
+    if (!escolhido.fecha && HIBRIDO_ATIVO) {
+      try {
+        const hib = await rodaHibrido();
+        if (hib) { custos.push({ fonte: "hibrido", usd: hib.custoUsd }); if (hib.fecha || hib.score > escolhido.score) escolhido = hib; }
+      } catch (e: any) { console.error("[process] híbrido falhou:", e?.message ?? e); }
     }
+    const custoTotalUsd = custos.reduce((s, c) => s + c.usd, 0);
+    console.log(`[process] cascata: venceu=${escolhido.fonte} fecha=${escolhido.fecha} score=${escolhido.score}/5 | ${custos.map((c) => `${c.fonte}:$${c.usd.toFixed(4)}`).join(" ")} | total=$${custoTotalUsd.toFixed(4)}`);
 
-    // Normaliza sinais (deduções/custos/despesas → negativos) e recalcula os
-    // subtotais do DRE padrão em cascata a partir das linhas de input
-    normalizeDRESigns(structuredDRE, allPeriodos);
-    recomputeDRESubtotals(structuredDRE, allPeriodos);
+    // Materializa o vencedor nas variáveis usadas adiante no handler.
+    structuredBP = escolhido.bp;
+    structuredDRE = escolhido.dre;
+    allPeriodos = escolhido.periodos;
+    const usouHibrido = escolhido.fonte === "hibrido";
+    const arvoreOriginalBP = usouHibrido ? escolhido.arvoreBP : null;
+    const arvoreOriginalDRE = usouHibrido ? escolhido.arvoreDRE : null;
+    const hibridoNaoMapeados = escolhido.naoMapeados;
+    const declaradosDRE = escolhido.declarados;
+    const validacao = escolhido.validacao;
+    const custoExtracaoUsd = custoTotalUsd;
 
+    // DRE já normalizada/recalculada e validada na cascata (avalia) → só os indicadores.
     const indicadores = calculateIndicators(structuredBP, structuredDRE, allPeriodos);
-
-    // Run validation checks on structured data
-    const validacao = validateFinancialData(structuredBP, structuredDRE, allPeriodos, declaradosDRE);
     console.log(`[process] Validação: confiança=${validacao.confiancaGeral}%, equação=${validacao.equacaoPatrimonial}, alertas=${validacao.alertas.length}`);
     for (const alerta of validacao.alertas) {
       console.log(`[process]   [${alerta.tipo}] ${alerta.area}: ${alerta.mensagem}`);
@@ -497,37 +487,23 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       });
     }
 
-    // No HÍBRIDO, a tela de classificação manual é alimentada pelos N3 NÃO mapeados —
-    // o nível de captura do bpN3Prompt (primeira quebra real). NUNCA folhas N4+, porque a
-    // soma das folhas já está no N3 → classificá-las daria DUPLA CONTAGEM. Transforma
-    // {nome,grupo,valor,periodo} → {conta,valores,contexto} (shape da tela), agrupando por
-    // conta e só BP (a tela classifica no dicionário de BP). O heurístico segue como antes.
-    const unmatchedHibrido: UnmatchedAccount[] = (() => {
-      if (!usouHibrido) return [];
-      const byConta = new Map<string, UnmatchedAccount>();
-      for (const nm of hibridoNaoMapeados as NaoMapeado[]) {
-        if (nm?.tipo !== "BP") continue; // DRE não vai p/ esta tela (template é de BP)
-        const cur = byConta.get(nm.nome) ?? { conta: nm.nome, valores: {}, contexto: nm.grupo };
-        cur.valores[nm.periodo] = (cur.valores[nm.periodo] ?? 0) + nm.valor;
-        byConta.set(nm.nome, cur);
-      }
-      return [...byConta.values()];
-    })();
-
+    // Tela de classificação manual = N3 não-mapeados do vencedor (já é N3-only por
+    // construção: heurístico entrega []; híbrido entrega os N3 de BP). NUNCA folhas N4+.
     const modeloVersoes = await getActiveModelVersions();
     const dadosEstruturados: DadosEstruturados = {
       bp: structuredBP,
       dre: structuredDRE,
       indicadores,
       periodos: allPeriodos,
-      unmatchedAccounts: usouHibrido ? unmatchedHibrido : unmatchedAccounts,
+      unmatchedAccounts: escolhido.unmatched,
       declarados: declaradosDRE,
-      arvoreOriginalBP: usouHibrido ? arvoreOriginalBP : null,
-      arvoreOriginalDRE: usouHibrido ? arvoreOriginalDRE : null,
+      arvoreOriginalBP: arvoreOriginalBP,
+      arvoreOriginalDRE: arvoreOriginalDRE,
       naoMapeados: usouHibrido ? hibridoNaoMapeados : [],
       modeloVersaoBP: modeloVersoes.bp,
       modeloVersaoDRE: modeloVersoes.dre,
       version: 2,
+      custoExtracao: { usd: custoExtracaoUsd, fonte: escolhido.fonte, fecha: escolhido.fecha, niveis: custos },
     } as DadosEstruturados;
 
     // Calculate document-level confidence from validation
