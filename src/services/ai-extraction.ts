@@ -32,6 +32,8 @@ export interface AIExtractionResult {
   arvoreOriginalDRE: ArvoreOriginalDRE;
   /** contas N3/seções que o de-para não reconheceu (foram p/ "Outros" ou sinalizadas) */
   naoMapeados: NaoMapeado[];
+  /** custo da chamada de IA (tokens + USD) — para medir o custo por processo */
+  custo: CustoIA;
 }
 
 const yearOf = (p: string): string | null => (p.match(/(20[0-3]\d)/) || [])[1] ?? null;
@@ -53,7 +55,9 @@ function periodKeyInstruction(periodos: string[]): string {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // input: ou um PDF (visão, caro) ou texto já extraído pelo parser (barato).
-async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, model: string = AI_MODEL, attempt = 0): Promise<any> {
+// Devolve os dados + os tokens consumidos (para medir custo por processo).
+interface AskResult { data: any; inTok: number; outTok: number }
+async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, model: string = AI_MODEL, attempt = 0): Promise<AskResult> {
   const content: any[] = input.text
     ? [{ type: "text", text: `${prompt}\n\nCONTEÚDO EXTRAÍDO DO DOCUMENTO:\n${input.text}` }]
     : [
@@ -73,7 +77,23 @@ async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, mo
   }
   let txt = msg.content[0]?.type === "text" ? msg.content[0].text.trim() : "";
   if (txt.startsWith("```")) txt = txt.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
-  try { return JSON.parse(txt); } catch { return {}; }
+  const inTok = msg.usage?.input_tokens ?? 0;
+  const outTok = msg.usage?.output_tokens ?? 0;
+  let data: any = {};
+  try { data = JSON.parse(txt); } catch { data = {}; }
+  return { data, inTok, outTok };
+}
+
+/** Preço por TOKEN em USD (tabela Anthropic — atualizar se mudar). Haiku 4.5 = $1/$5 por
+ *  Mtok; Sonnet 4.6 = $3/$15 por Mtok. */
+const PRECO_USD: Record<string, { in: number; out: number }> = {
+  [AI_MODEL_FAST]: { in: 1 / 1e6, out: 5 / 1e6 },
+  [AI_MODEL]: { in: 3 / 1e6, out: 15 / 1e6 },
+};
+export interface CustoIA { modelo: string; inputTokens: number; outputTokens: number; usd: number }
+function calcCusto(modelo: string, inTok: number, outTok: number): CustoIA {
+  const p = PRECO_USD[modelo] ?? { in: 0, out: 0 };
+  return { modelo, inputTokens: inTok, outputTokens: outTok, usd: inTok * p.in + outTok * p.out };
 }
 
 // ───────────────────────── DRE (captura de seções = árvore original) ─────────────────────────
@@ -256,14 +276,15 @@ export async function extractFinancialsWithAI(
     const docPeriodos = doc.periodos?.length ? doc.periodos : periodos;
     const ctx: DocCtx = { pin: docPeriodos.length === 1 ? docPeriodos[0] : null, docPeriodos };
     const promptPeriodos = docPeriodos.length ? docPeriodos : periodos;
-    const out: Array<() => Promise<{ kind: "dre" | "bp"; data: any; ctx: DocCtx }>> = [];
-    if (isDRE || !isBP) out.push(() => ask(input, dreSecoesPrompt(promptPeriodos), model).then((data) => ({ kind: "dre" as const, data, ctx })));
-    if (isBP || (!isDRE && !isBP)) out.push(() => ask(input, bpN3Prompt(promptPeriodos), model).then((data) => ({ kind: "bp" as const, data, ctx })));
+    const out: Array<() => Promise<{ kind: "dre" | "bp"; data: any; ctx: DocCtx; inTok: number; outTok: number }>> = [];
+    if (isDRE || !isBP) out.push(() => ask(input, dreSecoesPrompt(promptPeriodos), model).then((r) => ({ kind: "dre" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
+    if (isBP || (!isDRE && !isBP)) out.push(() => ask(input, bpN3Prompt(promptPeriodos), model).then((r) => ({ kind: "bp" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
     return out;
   });
   // Sequencial (não paralelo) para respeitar o rate limit da API em uploads multi-documento.
-  const results: Array<{ kind: "dre" | "bp"; data: any; ctx: DocCtx }> = [];
+  const results: Array<{ kind: "dre" | "bp"; data: any; ctx: DocCtx; inTok: number; outTok: number }> = [];
   for (const thunk of taskThunks) results.push(await thunk());
+  const custo = calcCusto(model, results.reduce((s, r) => s + r.inTok, 0), results.reduce((s, r) => s + r.outTok, 0));
 
   const declarados: Record<string, Record<string, number>> = {};
   const arvoreOriginalBP: ArvoreOriginalBP = {};
@@ -319,5 +340,6 @@ export async function extractFinancialsWithAI(
     bp, dre, periodos: allPeriodos, declarados,
     arvoreOriginalBP, arvoreOriginalDRE,
     naoMapeados: [...naoMapBP, ...naoMapDRE],
+    custo,
   };
 }
