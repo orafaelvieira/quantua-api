@@ -103,6 +103,7 @@ function dreSecoesPrompt(periodos: string[]): string {
 - Para Receita/Deduções/Custos, o total da seção basta (ou subseções como "Impostos Incidentes sobre Vendas").
 - NÃO retorne subtotais calculados (Receita Líquida, Lucro Bruto, EBITDA, EBIT, Resultado/Lucro/Prejuízo Líquido).
 - Sinais: RECEITAS positivas; DEDUÇÕES, CUSTOS, DESPESAS e IR/CSLL NEGATIVOS.
+- COLUNAS: se houver "do mês"/"no período" e "acumulado"/"até a data", use o ACUMULADO do exercício (fechamento), nunca o mensal.
 - ${periodKeyInstruction(periodos)}
 Retorne APENAS JSON: { "secoes": { "<periodo>": [ {"nome":"<original>","valor":<n>} ] }, "declarados": { "<periodo>": { "Receita Líquida": <exibido>, "Lucro Bruto": <exibido>, "Lucro Líquido": <exibido> } } }`;
 }
@@ -175,6 +176,7 @@ Para cada um dos 5 grupos, liste as contas da PRIMEIRA QUEBRA REAL (ex.: Fornece
 - PULE wrappers redundantes (valor = subtotal do grupo, ex.: "Exigível a Curto Prazo").
 - NÃO desça para contas individuais (bancos, empréstimos específicos, parcelamentos).
 - Negativos negativos.
+- COLUNAS: se o documento (ex.: ECF/ECD/SPED, "Período da Escrituração DD/MM a DD/MM") trouxer "Saldo Inicial" e "Saldo Final" do MESMO período, use SEMPRE o Saldo FINAL (fechamento) — nunca o inicial. (Não confundir com colunas de ANOS diferentes, que são períodos distintos e cada um vale.)
 - ${periodKeyInstruction(periodos)}
 Grupos: "Ativo Circulante", "Ativo Não Circulante", "Passivo Circulante", "Passivo Não Circulante", "Patrimônio Líquido".
 Retorne APENAS JSON: { "<periodo>": { "grupos": { "Ativo Circulante": [ {"nome":"<original>","valor":<n>} ], ... }, "totais": { "Ativo Total": <n>, "Passivo Total": <n> } } }`;
