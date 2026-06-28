@@ -135,12 +135,17 @@ function buildContextFromSectionHeaders(linhas: ExtractedRow[]): void {
 function cleanValue(val: unknown): number | null {
   if (val === null || val === undefined || val === "") return null;
   if (typeof val === "number") return val;
-  const str = String(val)
+  const raw = String(val).trim();
+  // Negativo contábil entre parênteses: "(1.234,56)" / "(1.234,56 )" (células de
+  // balancete/Excel). Detecta antes de remover os parênteses na limpeza abaixo.
+  const isNeg = raw.startsWith("(") || raw.endsWith(")");
+  const str = raw
     .replace(/\./g, "")   // remove separador de milhar BR
     .replace(",", ".")    // converte decimal BR
     .replace(/[^0-9.\-]/g, "");
   const num = parseFloat(str);
-  return isNaN(num) ? null : num;
+  if (isNaN(num)) return null;
+  return isNeg ? -Math.abs(num) : num;
 }
 
 export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
@@ -780,12 +785,14 @@ function sortPeriods(periods: Set<string>): string[] {
 /**
  * Parse Brazilian number format: "1.234.567,89" or "(1.234.567,89)" for negative
  */
-function parseBRNumber(s: string): number | null {
+export function parseBRNumber(s: string): number | null {
   const trimmed = s.trim();
   if (!trimmed) return null;
 
-  // Check for negative in parentheses: (1.234,56)
-  const isNeg = trimmed.startsWith("(") && trimmed.endsWith(")");
+  // Negativo entre parênteses: "(1.234,56)" ou "(1.234,56 )". Basta UM parêntese
+  // (abertura OU fechamento) — convenção contábil. Robusto a captura imperfeita quando
+  // há espaço interno, evitando ler um valor negativo (ex.: PL/prejuízos) como positivo.
+  const isNeg = trimmed.startsWith("(") || trimmed.endsWith(")");
   const clean = trimmed
     .replace(/[()]/g, "")
     .replace(/\./g, "")
@@ -959,8 +966,11 @@ function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
   // Skip patterns
   const skipPatterns = /^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CRC|ADMINISTRADOR|TÉCNICO|ANTONIO|JOSE CARLOS|ROBERTO|MARCO|Diretor|Contador|INSCR|LACTOBOM|DEMONSTRATIVO|BALANCO|Conta\d|ContaSaldo)/i;
 
-  // BR number pattern: optional parens/negative, digits with dots, comma, 2 decimals
-  const brNumPattern = /\(?-?[\d.]+,\d{2}\)?/g;
+  // BR number pattern: optional parens/negative, digits with dots, comma, 2 decimals.
+  // `\s*` antes do `\)?` porque alguns balancetes escrevem o negativo como "(1.234,56 )"
+  // — com espaço antes do parêntese de fechamento. Sem isso o ")" não era capturado e
+  // o valor (ex.: PL negativo) era lido como POSITIVO (ver parseBRNumber).
+  const brNumPattern = /\(?-?[\d.]+,\d{2}\s*\)?/g;
 
   for (const line of lines) {
     const trimmed = line.trim();
