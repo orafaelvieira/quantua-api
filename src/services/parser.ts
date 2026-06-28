@@ -676,8 +676,11 @@ export async function parsePDF(buffer: Buffer, tipo: string, filename?: string):
   // Gera raw text — sempre inclui o texto original para o Claude
   const raw = `${tipo}\n${text.slice(0, 8000)}`;
 
+  // Colapsa abertura+fechamento (ECF/ECD/SPED) para o saldo de FECHAMENTO.
+  const periodosFinal = collapseOpeningClosing(periodos, linhas);
+
   buildHierarchyContext(linhas);
-  return { tipo, linhas, periodos, raw };
+  return { tipo, linhas, periodos: periodosFinal, raw };
 }
 
 /**
@@ -780,6 +783,34 @@ function sortPeriods(periods: Set<string>): string[] {
     if (ya !== yb) return ya - yb;
     return a.localeCompare(b);
   });
+}
+
+/**
+ * Saldo de ABERTURA + FECHAMENTO (ECF/ECD/SPED): docs com "Período da Escrituração
+ * 01/01/AAAA a 31/12/AAAA" trazem 2 colunas (Saldo Inicial | Saldo Final) e o parser
+ * detecta 2 períodos do MESMO ano. A análise usa o FECHAMENTO (data maior):
+ * - BP: valor nas 2 colunas → preferimos o fechamento (saldo final real);
+ * - DRE: o resultado do ano vem só na 1ª chave (abertura) → movemos pro fechamento.
+ * Colapsa os 2 períodos em 1 (o de data maior). Gate: exatamente 2 datas cheias, mesmo
+ * ano, e a menor com dia "01" (início de período) — evita colapsar comparativo real
+ * (ex.: 30/06 vs 31/12) ou anos diferentes (31/12/2021 vs 31/12/2022).
+ */
+export function collapseOpeningClosing(periodos: string[], linhas: ExtractedRow[]): string[] {
+  if (periodos.length !== 2) return periodos;
+  const isFullDate = (p: string) => /^\d{2}\/\d{2}\/\d{4}$/.test(p);
+  if (!periodos.every(isFullDate)) return periodos;
+  if (periodos[0].slice(-4) !== periodos[1].slice(-4)) return periodos; // anos diferentes = comparativo
+  const toNum = (p: string) => { const [d, m, y] = p.split("/"); return +`${y}${m}${d}`; };
+  const [opening, closing] = [...periodos].sort((a, b) => toNum(a) - toNum(b));
+  if (opening === closing || opening.slice(0, 2) !== "01") return periodos; // abertura = início de período
+  for (const l of linhas) {
+    const v = l.valores[closing] !== undefined ? l.valores[closing] : l.valores[opening];
+    const novo: Record<string, number> = {};
+    for (const [k, val] of Object.entries(l.valores)) if (k !== opening && k !== closing) novo[k] = val;
+    if (v !== undefined) novo[closing] = v;
+    l.valores = novo;
+  }
+  return [closing];
 }
 
 /**
