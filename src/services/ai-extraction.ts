@@ -235,7 +235,7 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
 }
 
 export async function extractFinancialsWithAI(
-  docs: Array<{ buffer?: Buffer; raw?: string; tipo: string }>,
+  docs: Array<{ buffer?: Buffer; raw?: string; tipo: string; periodos?: string[] }>,
   periodos: string[],
   dict?: DictionaryEntry[],
   bpModel: BPModel = DEFAULT_BP_MODEL,
@@ -243,18 +243,26 @@ export async function extractFinancialsWithAI(
 ): Promise<AIExtractionResult> {
   // Texto do parser → Haiku (barato); PDF → Sonnet visão (caro). Default: visão.
   const model = opts.model ?? (docs.some((d) => d.raw) ? AI_MODEL_FAST : AI_MODEL);
+  // Período POR-DOCUMENTO (fix multi-ano): o parser já conhece o(s) período(s) de cada doc
+  // (doc.periodos). Quando o doc tem 1 só, fixamos (pin) — ignoramos o ano que a IA devolver,
+  // que era a fonte da instabilidade (BP de um ano caía na chave de outro no batch de N docs).
+  // Com 2+ períodos no mesmo doc, escopamos o canonicalPeriod aos períodos conhecidos do doc.
+  type DocCtx = { pin: string | null; docPeriodos: string[] };
   const taskThunks = docs.flatMap((doc) => {
     const t = doc.tipo.toLowerCase();
     const isDRE = /dre|resultado|demonstra/.test(t);
     const isBP = /balan|patrimonial|\bbp\b/.test(t);
     const input = { buffer: doc.buffer, text: doc.raw };
-    const out: Array<() => Promise<{ kind: "dre" | "bp"; data: any }>> = [];
-    if (isDRE || !isBP) out.push(() => ask(input, dreSecoesPrompt(periodos), model).then((data) => ({ kind: "dre" as const, data })));
-    if (isBP || (!isDRE && !isBP)) out.push(() => ask(input, bpN3Prompt(periodos), model).then((data) => ({ kind: "bp" as const, data })));
+    const docPeriodos = doc.periodos?.length ? doc.periodos : periodos;
+    const ctx: DocCtx = { pin: docPeriodos.length === 1 ? docPeriodos[0] : null, docPeriodos };
+    const promptPeriodos = docPeriodos.length ? docPeriodos : periodos;
+    const out: Array<() => Promise<{ kind: "dre" | "bp"; data: any; ctx: DocCtx }>> = [];
+    if (isDRE || !isBP) out.push(() => ask(input, dreSecoesPrompt(promptPeriodos), model).then((data) => ({ kind: "dre" as const, data, ctx })));
+    if (isBP || (!isDRE && !isBP)) out.push(() => ask(input, bpN3Prompt(promptPeriodos), model).then((data) => ({ kind: "bp" as const, data, ctx })));
     return out;
   });
   // Sequencial (não paralelo) para respeitar o rate limit da API em uploads multi-documento.
-  const results: Array<{ kind: "dre" | "bp"; data: any }> = [];
+  const results: Array<{ kind: "dre" | "bp"; data: any; ctx: DocCtx }> = [];
   for (const thunk of taskThunks) results.push(await thunk());
 
   const declarados: Record<string, Record<string, number>> = {};
@@ -262,21 +270,26 @@ export async function extractFinancialsWithAI(
   const arvoreOriginalDRE: ArvoreOriginalDRE = {};
   const periodSet = new Set<string>(periodos);
 
+  // Resolve a chave de período de uma captura: pin (1 período conhecido no doc) tem prioridade
+  // absoluta sobre o que a IA devolveu; senão canonicaliza escopado aos períodos do doc.
+  const resolvePeriod = (pRaw: string, ctx: DocCtx) =>
+    ctx.pin ?? canonicalPeriod(pRaw, ctx.docPeriodos.length ? ctx.docPeriodos : periodos);
+
   const setDecl = (p: string, conta: string, valor: unknown) => { if (typeof valor === "number" && valor !== 0) (declarados[p] ??= {})[conta] = valor; };
-  const storeDeclarados = (raw: any) => {
+  const storeDeclarados = (raw: any, ctx: DocCtx) => {
     if (!raw || typeof raw !== "object") return;
     const aninhado = Object.values(raw).some((v) => v && typeof v === "object");
     if (aninhado) for (const [pRaw, contas] of Object.entries(raw)) {
       if (!contas || typeof contas !== "object") continue;
-      const p = canonicalPeriod(pRaw, periodos); periodSet.add(p);
+      const p = resolvePeriod(pRaw, ctx); periodSet.add(p);
       for (const [c, v] of Object.entries(contas as any)) setDecl(p, c, v);
-    } else { const p = periodos[0] ?? Array.from(periodSet)[0] ?? "0"; for (const [c, v] of Object.entries(raw)) setDecl(p, c, v); }
+    } else { const p = ctx.pin ?? periodos[0] ?? Array.from(periodSet)[0] ?? "0"; for (const [c, v] of Object.entries(raw)) setDecl(p, c, v); }
   };
   // merge BP captures (árvore original), canonicalizando períodos
-  const mergeBP = (raw: any) => {
+  const mergeBP = (raw: any, ctx: DocCtx) => {
     for (const [pRaw, cap] of Object.entries(raw ?? {})) {
       if (!cap || typeof cap !== "object") continue;
-      const p = canonicalPeriod(pRaw, periodos); periodSet.add(p);
+      const p = resolvePeriod(pRaw, ctx); periodSet.add(p);
       const c = cap as BPN3Periodo;
       const dest = (arvoreOriginalBP[p] ??= { grupos: {}, totais: {} });
       for (const [g, itens] of Object.entries(c.grupos ?? {})) (dest.grupos[g] ??= []).push(...(itens as BPN3Item[]));
@@ -285,17 +298,17 @@ export async function extractFinancialsWithAI(
   };
 
   // merge DRE captures (seções originais), canonicalizando períodos
-  const mergeDRE = (raw: any) => {
+  const mergeDRE = (raw: any, ctx: DocCtx) => {
     for (const [pRaw, secoes] of Object.entries(raw?.secoes ?? {})) {
       if (!Array.isArray(secoes)) continue;
-      const p = canonicalPeriod(pRaw, periodos); periodSet.add(p);
+      const p = resolvePeriod(pRaw, ctx); periodSet.add(p);
       (arvoreOriginalDRE[p] ??= []).push(...(secoes as DRESecaoItem[]));
     }
   };
 
   for (const r of results) {
-    if (r.kind === "bp") mergeBP(r.data);
-    else { mergeDRE(r.data); storeDeclarados(r.data?.declarados); }
+    if (r.kind === "bp") mergeBP(r.data, r.ctx);
+    else { mergeDRE(r.data, r.ctx); storeDeclarados(r.data?.declarados, r.ctx); }
   }
 
   const allPeriodos = Array.from(periodSet);

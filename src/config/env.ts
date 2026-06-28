@@ -62,4 +62,13 @@ export const env = {
    * Default vazio = endpoint admin desabilitado. Setar via env em prod.
    */
   adminTriggerToken: process.env.ADMIN_TRIGGER_TOKEN ?? "",
+  /**
+   * Pipeline híbrido do IBR no /process (parser → IA Haiku nível 3 → fold).
+   * Default false = heurístico (estável, totais corretos). Setar HIBRIDO_ATIVO=true
+   * SÓ após validar multi-ano no corpus (Ativo=Passivo por ano, RL/LB/LL vs declarado).
+   * O fix de período por-documento (pin) já está aplicado. Ver estado-atual-roadmap.
+   */
+  ibr: {
+    hibridoAtivo: process.env.HIBRIDO_ATIVO === "true",
+  },
 };

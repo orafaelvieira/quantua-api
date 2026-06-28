@@ -3,6 +3,7 @@ import { z } from "zod";
 import crypto from "crypto";
 import multer from "multer";
 import { prisma } from "../db/client";
+import { env } from "../config/env";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocument } from "../services/parser";
@@ -363,20 +364,22 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     let hibridoNaoMapeados: unknown[] = [];
     let hibridoDeclarados: Record<string, Record<string, number>> | null = null;
     let usouHibrido = false;
-    // DESABILITADO (jun/2026): o híbrido por TEXTO é instável em multi-documento —
-    // perde um ano (ex.: BP 2021 zera, não-determinístico, Haiku e Sonnet). A trava
-    // pega (Ativo≠Passivo), mas o default volta ao heurístico (totais corretos). O
-    // caminho por VISÃO (Conciliar com IA) segue confiável p/ multi-doc. Reativar após
-    // fix de período por-documento. Ver memória estado-atual-roadmap.
-    const HIBRIDO_ATIVO = false;
+    // FIX APLICADO (jun/2026): a instabilidade multi-documento (BP de um ano zerava,
+    // não-determinístico) vinha da IA adivinhando o ano no batch. Agora passamos o período
+    // CONHECIDO pelo parser por-documento (pin) — ver extractFinancialsWithAI. Default ainda
+    // OFF (env HIBRIDO_ATIVO, default false) até validar no corpus local (Maniacs +
+    // DCTOS_TESTE_SISTEMA): Ativo=Passivo e RL/LB/LL vs declarado. Ver estado-atual-roadmap.
+    const HIBRIDO_ATIVO = env.ibr.hibridoAtivo;
     try {
       const linhasToText = (linhas: ExtractedRow[]) =>
         linhas.map((l) => `${l.contexto ? l.contexto + " > " : ""}${l.conta} = ${JSON.stringify(l.valores)}`).join("\n");
-      const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), tipo: d.tipo }));
+      // Período POR-DOCUMENTO: o parser já detectou d.periodos de cada doc. Passamos esse
+      // período conhecido junto — extractFinancialsWithAI fixa (pin) a chave quando o doc tem
+      // 1 período, em vez de deixar a IA adivinhar o ano no batch (causa do BP de um ano zerar).
+      const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), tipo: d.tipo, periodos: d.periodos }));
       if (HIBRIDO_ATIVO && aiDocs.length > 0) {
-        // Passa [] (sem período-alvo): cada documento tem 1 período; a IA usa o natural e
-        // canonizamos por ANO. Forçar datas cheias como alvo confundia a IA em multi-ano
-        // (o BP de um ano caía na chave errada). Usamos os períodos que o híbrido retorna.
+        // Período-alvo global vazio: cada doc carrega o seu (acima). O resultado canoniza por
+        // ANO e usamos os períodos que o híbrido retorna (union dos períodos pinados).
         const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel); // raw → Haiku (auto)
         const temDados = r.bp.some((b) => Object.values(b.valores).some((v) => v)) || r.dre.some((d) => Object.values(d.valores).some((v) => v));
         if (temDados) {
