@@ -355,6 +355,37 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       }
     }
 
+    // ── HÍBRIDO (padrão): o parser já extraiu → IA (Haiku) estrutura em nível 3 → fold ──
+    // Barato (texto, não visão ~R$0,02/doc) e limpo: evita o "monte de não classificadas"
+    // do heurístico. O loop heurístico abaixo vira FALLBACK (se a IA falhar ou vier vazia).
+    const dictAll = [...dictForBP, ...dictForDRE];
+    let arvoreOriginalBP: unknown = null, arvoreOriginalDRE: unknown = null;
+    let hibridoNaoMapeados: unknown[] = [];
+    let hibridoDeclarados: Record<string, Record<string, number>> | null = null;
+    let usouHibrido = false;
+    try {
+      const linhasToText = (linhas: ExtractedRow[]) =>
+        linhas.map((l) => `${l.contexto ? l.contexto + " > " : ""}${l.conta} = ${JSON.stringify(l.valores)}`).join("\n");
+      const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), tipo: d.tipo }));
+      if (aiDocs.length > 0) {
+        const r = await extractFinancialsWithAI(aiDocs, allPeriodos, dictAll, bpModel); // raw → Haiku (auto)
+        const temDados = r.bp.some((b) => Object.values(b.valores).some((v) => v)) || r.dre.some((d) => Object.values(d.valores).some((v) => v));
+        if (temDados) {
+          structuredBP = r.bp;
+          structuredDRE = r.dre;
+          arvoreOriginalBP = r.arvoreOriginalBP;
+          arvoreOriginalDRE = r.arvoreOriginalDRE;
+          hibridoDeclarados = r.declarados;
+          hibridoNaoMapeados = r.naoMapeados;
+          usouHibrido = true;
+          console.log(`[process] híbrido OK: BP ${structuredBP.length}, DRE ${structuredDRE.length}, não-map ${hibridoNaoMapeados.length}`);
+        }
+      }
+    } catch (e: any) {
+      console.error("[process] híbrido falhou → fallback heurístico:", e?.message ?? e);
+    }
+
+    if (!usouHibrido)
     for (const doc of parsedDocs) {
       const docType = detectDocType(doc);
       console.log(`[process] Doc "${doc.tipo}" detected as ${docType}, linhas: ${doc.linhas.length}, raw length: ${doc.raw.length}`);
@@ -407,13 +438,17 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       }
     }
 
-    // Captura os subtotais DECLARADOS no documento ANTES do recompute sobrescrever —
-    // base da trava de reconciliação (computado vs declarado).
-    const declaradosDRE: Record<string, Record<string, number>> = {};
-    for (const p of allPeriodos) {
-      for (const conta of ["Receita Líquida", "Lucro Bruto", "Lucro Líquido"]) {
-        const v = structuredDRE.find((d) => d.conta === conta)?.valores[p] ?? 0;
-        if (Math.abs(v) > 0.5) (declaradosDRE[p] ??= {})[conta] = v;
+    // Declarados (base da trava de reconciliação): no híbrido, vêm da IA (capturados do
+    // documento). No heurístico, captura dos subtotais ANTES do recompute sobrescrever.
+    let declaradosDRE: Record<string, Record<string, number>> = {};
+    if (usouHibrido && hibridoDeclarados) {
+      declaradosDRE = hibridoDeclarados;
+    } else {
+      for (const p of allPeriodos) {
+        for (const conta of ["Receita Líquida", "Lucro Bruto", "Lucro Líquido"]) {
+          const v = structuredDRE.find((d) => d.conta === conta)?.valores[p] ?? 0;
+          if (Math.abs(v) > 0.5) (declaradosDRE[p] ??= {})[conta] = v;
+        }
       }
     }
 
@@ -455,8 +490,11 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       dre: structuredDRE,
       indicadores,
       periodos: allPeriodos,
-      unmatchedAccounts,
+      unmatchedAccounts: usouHibrido ? [] : unmatchedAccounts,
       declarados: declaradosDRE,
+      arvoreOriginalBP: usouHibrido ? arvoreOriginalBP : null,
+      arvoreOriginalDRE: usouHibrido ? arvoreOriginalDRE : null,
+      naoMapeados: usouHibrido ? hibridoNaoMapeados : [],
       modeloVersaoBP: modeloVersoes.bp,
       modeloVersaoDRE: modeloVersoes.dre,
       version: 2,

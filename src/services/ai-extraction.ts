@@ -5,7 +5,8 @@ import type { BPLineItem, DRELineItem } from "../types/financial";
 import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, DEFAULT_BP_MODEL, type BPModel, type DictionaryEntry } from "./account-mapper";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
-const AI_MODEL = "claude-sonnet-4-6";
+const AI_MODEL = "claude-sonnet-4-6";        // visão (lê o PDF) — caro
+const AI_MODEL_FAST = "claude-haiku-4-5-20251001"; // estrutura texto do parser — barato
 const dreInputs = DRE_TEMPLATE.filter((t) => !t.subtotal).map((t) => t.conta);
 const dreInputsSet = new Set(dreInputs);
 
@@ -51,21 +52,22 @@ function periodKeyInstruction(periodos: string[]): string {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function ask(buffer: Buffer, prompt: string, attempt = 0): Promise<any> {
+// input: ou um PDF (visão, caro) ou texto já extraído pelo parser (barato).
+async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, model: string = AI_MODEL, attempt = 0): Promise<any> {
+  const content: any[] = input.text
+    ? [{ type: "text", text: `${prompt}\n\nCONTEÚDO EXTRAÍDO DO DOCUMENTO:\n${input.text}` }]
+    : [
+        { type: "document", source: { type: "base64", media_type: "application/pdf", data: input.buffer!.toString("base64") } },
+        { type: "text", text: prompt },
+      ];
   let msg;
   try {
-    msg = await client.messages.create({
-      model: AI_MODEL, max_tokens: 4000,
-      messages: [{ role: "user", content: [
-        { type: "document", source: { type: "base64", media_type: "application/pdf", data: buffer.toString("base64") } } as any,
-        { type: "text", text: prompt },
-      ] }],
-    });
+    msg = await client.messages.create({ model, max_tokens: 4000, messages: [{ role: "user", content }] });
   } catch (e: any) {
     // 429 (rate limit) ou 529 (overloaded): espera e tenta de novo (uploads multi-doc)
     if ((e?.status === 429 || e?.status === 529) && attempt < 4) {
       await sleep(7000 * (attempt + 1));
-      return ask(buffer, prompt, attempt + 1);
+      return ask(input, prompt, model, attempt + 1);
     }
     throw e;
   }
@@ -233,18 +235,22 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
 }
 
 export async function extractFinancialsWithAI(
-  docs: Array<{ buffer: Buffer; tipo: string }>,
+  docs: Array<{ buffer?: Buffer; raw?: string; tipo: string }>,
   periodos: string[],
   dict?: DictionaryEntry[],
-  bpModel: BPModel = DEFAULT_BP_MODEL
+  bpModel: BPModel = DEFAULT_BP_MODEL,
+  opts: { model?: string } = {}
 ): Promise<AIExtractionResult> {
+  // Texto do parser → Haiku (barato); PDF → Sonnet visão (caro). Default: visão.
+  const model = opts.model ?? (docs.some((d) => d.raw) ? AI_MODEL_FAST : AI_MODEL);
   const taskThunks = docs.flatMap((doc) => {
     const t = doc.tipo.toLowerCase();
     const isDRE = /dre|resultado|demonstra/.test(t);
     const isBP = /balan|patrimonial|\bbp\b/.test(t);
+    const input = { buffer: doc.buffer, text: doc.raw };
     const out: Array<() => Promise<{ kind: "dre" | "bp"; data: any }>> = [];
-    if (isDRE || !isBP) out.push(() => ask(doc.buffer, dreSecoesPrompt(periodos)).then((data) => ({ kind: "dre" as const, data })));
-    if (isBP || (!isDRE && !isBP)) out.push(() => ask(doc.buffer, bpN3Prompt(periodos)).then((data) => ({ kind: "bp" as const, data })));
+    if (isDRE || !isBP) out.push(() => ask(input, dreSecoesPrompt(periodos), model).then((data) => ({ kind: "dre" as const, data })));
+    if (isBP || (!isDRE && !isBP)) out.push(() => ask(input, bpN3Prompt(periodos), model).then((data) => ({ kind: "bp" as const, data })));
     return out;
   });
   // Sequencial (não paralelo) para respeitar o rate limit da API em uploads multi-documento.
