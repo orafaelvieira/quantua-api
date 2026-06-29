@@ -13,6 +13,7 @@ import { DRE_TEMPLATE } from "../services/financial-templates";
 import { calculateIndicators } from "../services/indicator-calculator";
 import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { getActiveModelVersions, loadActiveBPModel } from "../services/model-version";
+import { getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
@@ -629,6 +630,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // Tela de classificação manual = N3 não-mapeados do vencedor (já é N3-only por
     // construção: heurístico entrega []; híbrido entrega os N3 de BP). NUNCA folhas N4+.
     const modeloVersoes = await getActiveModelVersions();
+    const dicionarioVersao = await getCurrentDictionaryVersion(); // carimba a versão do dicionário usada no fold (pinagem interna)
     const dadosEstruturados: DadosEstruturados = {
       bp: structuredBP,
       dre: structuredDRE,
@@ -641,6 +643,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       naoMapeados: usouIA ? hibridoNaoMapeados : [],
       modeloVersaoBP: modeloVersoes.bp,
       modeloVersaoDRE: modeloVersoes.dre,
+      dicionarioVersao,
       version: 2,
       custoExtracao: { usd: custoExtracaoUsd, fonte: escolhido.fonte, fecha: escolhido.fecha, niveis: custos },
     } as DadosEstruturados;
@@ -812,6 +815,7 @@ router.put("/:id/dados-estruturados/arvore", async (req: AuthRequest, res: Respo
   const mv = await getActiveModelVersions(); // carimba a versão de modelo usada (pinagem)
   dados.modeloVersaoBP = mv.bp;
   dados.modeloVersaoDRE = mv.dre;
+  dados.dicionarioVersao = await getCurrentDictionaryVersion(); // versão do dicionário no re-fold
   // A extração por IA (árvore + fold) substitui o resultado do parser heurístico:
   // limpa a lista antiga de "não classificadas" (o que sobrar está em naoMapeados/Outros).
   dados.unmatchedAccounts = [];

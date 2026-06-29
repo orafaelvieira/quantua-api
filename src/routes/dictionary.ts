@@ -1,9 +1,33 @@
 import { Router, Response } from "express";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
+import { bumpDictionaryVersion, getCurrentDictionaryVersion } from "../services/dictionary-version";
 
 const router = Router();
 router.use(requireAuth);
+
+// Nome de exibição do usuário para o changelog (controle interno).
+async function nomeUsuario(userId?: string): Promise<string | null> {
+  if (!userId) return null;
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+  return u?.name ?? null;
+}
+
+// GET /dictionary/version — versão vigente do dicionário (controle interno).
+router.get("/version", async (_req: AuthRequest, res: Response): Promise<void> => {
+  res.json({ versao: await getCurrentDictionaryVersion() });
+});
+
+// GET /dictionary/versions — changelog (uma linha por mudança), mais recente primeiro.
+router.get("/versions", async (req: AuthRequest, res: Response): Promise<void> => {
+  const limit = Math.min(parseInt(String(req.query.limit ?? "100")) || 100, 500);
+  const offset = parseInt(String(req.query.offset ?? "0")) || 0;
+  const [items, total] = await Promise.all([
+    prisma.dictionaryVersion.findMany({ orderBy: { versao: "desc" }, take: limit, skip: offset }),
+    prisma.dictionaryVersion.count(),
+  ]);
+  res.json({ items, total, atual: await getCurrentDictionaryVersion() });
+});
 
 // GET /dictionary — list all entries for current user (global + user-specific)
 // Query params: ?search=, ?tipo=BP|DRE, ?grupo=
@@ -118,6 +142,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       userId: req.userId!,
     },
   });
+  await bumpDictionaryVersion({ acao: "add", fonte: "manual", nomeOriginal, contaDestino, grupoConta, tipo: tipo || "BP", criadoPor: await nomeUsuario(req.userId) });
   res.status(201).json(entry);
 });
 
@@ -152,6 +177,7 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
         userId: req.userId!,
       },
     });
+    await bumpDictionaryVersion({ acao: "edit", fonte: "manual", nomeOriginal: override.nomeOriginal, contaDestino: override.contaDestino, grupoConta: override.grupoConta, tipo: override.tipo, criadoPor: await nomeUsuario(req.userId) });
     res.json(override);
     return;
   }
@@ -164,6 +190,7 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
       ...(grupoConta && { grupoConta }),
     },
   });
+  await bumpDictionaryVersion({ acao: "edit", fonte: "manual", nomeOriginal: updated.nomeOriginal, contaDestino: updated.contaDestino, grupoConta: updated.grupoConta, tipo: updated.tipo, criadoPor: await nomeUsuario(req.userId) });
   res.json(updated);
 });
 
@@ -190,6 +217,7 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
   }
 
   await prisma.accountDictionary.delete({ where: { id } });
+  await bumpDictionaryVersion({ acao: "delete", fonte: "manual", nomeOriginal: existing.nomeOriginal, contaDestino: existing.contaDestino, grupoConta: existing.grupoConta, tipo: existing.tipo, criadoPor: await nomeUsuario(req.userId) });
   res.status(204).send();
 });
 
@@ -204,31 +232,35 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
   }
 
   const created = [];
+  const autor = await nomeUsuario(req.userId);
   for (const entry of entries) {
     if (!entry.nomeOriginal || !entry.contaDestino || !entry.grupoConta) continue;
+    const tipoE = entry.tipo || "BP";
 
     try {
+      const chave = { nomeOriginal: entry.nomeOriginal, tipo: tipoE, grupoConta: entry.grupoConta, userId: req.userId! };
+      const antes = await prisma.accountDictionary.findUnique({ where: { nomeOriginal_tipo_grupoConta_userId: chave } });
       const result = await prisma.accountDictionary.upsert({
-        where: {
-          nomeOriginal_tipo_grupoConta_userId: {
-            nomeOriginal: entry.nomeOriginal,
-            tipo: entry.tipo || "BP",
-            grupoConta: entry.grupoConta,
-            userId: req.userId!,
-          },
-        },
-        update: {
-          contaDestino: entry.contaDestino,
-        },
+        where: { nomeOriginal_tipo_grupoConta_userId: chave },
+        update: { contaDestino: entry.contaDestino },
         create: {
           nomeOriginal: entry.nomeOriginal,
           contaDestino: entry.contaDestino,
           grupoConta: entry.grupoConta,
-          tipo: entry.tipo || "BP",
+          tipo: tipoE,
           userId: req.userId!,
         },
       });
       created.push(result);
+      // Autofeed: bumpa a versão SÓ quando a entrada é nova ou a conta-destino mudou
+      // (re-classificar igual não infla a versão). Registra o IBR de origem.
+      if (!antes || antes.contaDestino !== entry.contaDestino) {
+        await bumpDictionaryVersion({
+          acao: "classify", fonte: "autofeed",
+          nomeOriginal: entry.nomeOriginal, contaDestino: entry.contaDestino, grupoConta: entry.grupoConta, tipo: tipoE,
+          criadoPor: autor, analysisId: typeof analysisId === "string" ? analysisId : null,
+        });
+      }
     } catch (err) {
       // skip duplicates
       console.error("Error classifying entry:", entry.nomeOriginal, err);

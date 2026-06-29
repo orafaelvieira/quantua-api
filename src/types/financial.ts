@@ -37,5 +37,8 @@ export interface DadosEstruturados {
   indicadores: Indicador[];
   periodos: string[];
   unmatchedAccounts?: UnmatchedAccount[];
+  modeloVersaoBP?: number | null;
+  modeloVersaoDRE?: number | null;
+  dicionarioVersao?: number; // versão do dicionário usada no fold (pinagem interna)
   version: number;
 }

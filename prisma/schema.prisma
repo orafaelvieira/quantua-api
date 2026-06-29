@@ -155,6 +155,27 @@ model StandardModel {
   @@map("standard_models")
 }
 
+// Versionamento do dicionário (controle INTERNO — não aparece em relatórios). O dicionário
+// é uma tabela viva/autoalimentada, não um template; então "versão" = contador monotônico
+// global + changelog (cada mudança = uma linha). A análise carimba a versão usada no fold.
+model DictionaryVersion {
+  id           String   @id @default(uuid())
+  versao       Int      @unique // monotônico global
+  acao         String // "add" | "edit" | "delete" | "classify"
+  fonte        String   @default("manual") // "manual" | "autofeed"
+  nomeOriginal String?  @map("nome_original")
+  contaDestino String?  @map("conta_destino")
+  grupoConta   String?  @map("grupo_conta")
+  tipo         String?
+  criadoPor    String?  @map("criado_por")
+  analysisId   String?  @map("analysis_id") // IBR que originou (autofeed via /classify)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([versao])
+  @@index([createdAt])
+  @@map("dictionary_versions")
+}
+
 model StandardModelLine {
   id      String  @id @default(uuid())
   modelId String  @map("model_id")
