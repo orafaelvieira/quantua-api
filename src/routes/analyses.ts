@@ -145,6 +145,20 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
   res.status(204).send();
 });
 
+// Cancela um processamento em andamento. Marca "Cancelada" SÓ se ainda está processando.
+// O job em background (assíncrono) checa o status nos pontos de transição e aborta — então
+// um cancelamento durante a EXTRAÇÃO evita até a chamada de análise da IA (economiza crédito).
+router.post("/:id/cancel", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const existing = await prisma.analysis.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
+  if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const r = await prisma.analysis.updateMany({
+    where: { id, status: { in: ["Extraindo", "Gerando diagnóstico"] } },
+    data: { status: "Cancelada" },
+  });
+  res.json({ cancelled: r.count > 0, status: r.count > 0 ? "Cancelada" : existing.status });
+});
+
 /**
  * Adia a próxima revisão recorrente em N dias (default 7). Usado pelo RT
  * quando vê o item "due_review" no Inbox mas ainda não tem documentos
@@ -574,8 +588,14 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       },
     });
 
-    // 3. Atualiza status para "Gerando diagnóstico"
-    await prisma.analysis.update({ where: { id: analysis.id }, data: { status: "Gerando diagnóstico" } });
+    // 3. Atualiza status para "Gerando diagnóstico" — CONDICIONAL: só se ainda está "Extraindo".
+    //    Se o usuário cancelou durante a extração, o status já é "Cancelada" → aborta AQUI,
+    //    antes de chamar a IA (economiza o crédito da análise).
+    const segueAnalise = await prisma.analysis.updateMany({
+      where: { id: analysis.id, status: "Extraindo" },
+      data: { status: "Gerando diagnóstico" },
+    });
+    if (segueAnalise.count === 0) { console.log(`[process] análise ${analysis.id} cancelada — abortado antes da IA`); return; }
 
     // 4. Análise interpretativa (IA) — recebe os indicadores DETERMINÍSTICOS (NÃO recalcula
     //    número nenhum) e roda no modelo escolhido no workspace (default sonnet). Custo medido.
@@ -607,8 +627,10 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       ? opcoesIA.map((o) => ({ id: crypto.randomUUID(), ...o }))
       : null;
 
-    await prisma.analysis.update({
-      where: { id: analysis.id },
+    // CONDICIONAL: só salva "Concluída" se ainda está "Gerando diagnóstico". Se o usuário
+    // cancelou durante a análise, o status é "Cancelada" → descarta o resultado (não ressuscita).
+    const salvo = await prisma.analysis.updateMany({
+      where: { id: analysis.id, status: "Gerando diagnóstico" },
       data: {
         status: "Concluída",
         resultado: resultado as object,
@@ -616,6 +638,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         ...(optionsSeed ? { options: optionsSeed as object } : {}),
       },
     });
+    if (salvo.count === 0) { console.log(`[process] análise ${analysis.id} cancelada durante a IA — resultado descartado`); return; }
     console.log(`[process] análise ${analysis.id} CONCLUÍDA`);
     // resposta (202) já foi enviada — frontend acompanha por polling do status.
   } catch (err) {
