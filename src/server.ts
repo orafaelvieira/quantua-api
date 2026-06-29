@@ -22,6 +22,7 @@ import teamRouter from "./routes/team";
 import sectorsRouter from "./routes/sectors";
 import adminRouter from "./routes/admin";
 import { startJobs } from "./jobs";
+import { prisma } from "./db/client";
 
 const app = express();
 
@@ -74,4 +75,15 @@ app.use("/admin", adminRouter);
 app.listen(env.port, () => {
   console.log(`Server running on port ${env.port}`);
   startJobs();
+  // Recuperação de jobs órfãos: o /process é assíncrono (fire-and-forget). Se um restart/
+  // deploy mata o servidor no meio do processamento, a análise ficaria presa em "Extraindo"/
+  // "Gerando diagnóstico" girando o spinner pra sempre. No boot, marcamos essas como "Erro"
+  // → o usuário vê o erro e pode reprocessar.
+  prisma.analysis
+    .updateMany({
+      where: { status: { in: ["Extraindo", "Gerando diagnóstico"] } },
+      data: { status: "Erro" },
+    })
+    .then((r) => { if (r.count > 0) console.log(`[boot] ${r.count} análise(s) presa(s) em processamento → "Erro" (reprocessável)`); })
+    .catch((e) => console.error("[boot] recuperação de jobs órfãos falhou:", e?.message ?? e));
 });
