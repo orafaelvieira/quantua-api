@@ -196,6 +196,74 @@ router.post("/:id/snooze-review", async (req: AuthRequest, res: Response): Promi
 });
 
 // Endpoint principal: dispara extração dos documentos + geração da análise com Claude
+/**
+ * ÚNICA passada de IA do IBR (camada interpretativa) — lê os dados JÁ extraídos/persistidos
+ * (indicadores determinísticos; NÃO recalcula número) e PERSISTE o resultado nos campos do IBR.
+ * Transiciona o status p/ "Gerando diagnóstico" (só de um estado válido — não ressuscita
+ * "Cancelada") e, ao fim, "Concluída" (condicional, respeita cancelamento). Erro → "Erro".
+ * Reutilizada pelo /process (auto, quando a extração fecha limpa) e pelo /generate (manual).
+ */
+async function runAnalysisBackground(analysisId: string, modelKey?: string | null): Promise<void> {
+  const iniciou = await prisma.analysis.updateMany({
+    where: { id: analysisId, status: { in: ["Extraindo", "Pronta para gerar", "Revisão necessária", "Concluída"] } },
+    data: { status: "Gerando diagnóstico" },
+  });
+  if (iniciou.count === 0) { console.log(`[generate] ${analysisId}: estado não permite gerar (cancelado/corrida) — abortado`); return; }
+
+  try {
+    const analysis = await prisma.analysis.findUnique({ where: { id: analysisId }, include: { company: true } });
+    if (!analysis) return;
+    const dados = analysis.dadosEstruturados as any;
+    const indicadores = dados?.indicadores ?? [];
+    const periodos: string[] = dados?.periodos ?? [];
+    if (indicadores.length === 0) {
+      await prisma.analysis.updateMany({ where: { id: analysisId, status: "Gerando diagnóstico" }, data: { status: "Erro" } });
+      console.log(`[generate] ${analysisId}: sem indicadores — Erro`);
+      return;
+    }
+
+    const analise = await generateAnalysis(
+      indicadores,
+      periodos,
+      {
+        razaoSocial: analysis.company.razaoSocial,
+        setor: analysis.company.setor ?? "Não informado",
+        porte: analysis.company.porte ?? "Não informado",
+      },
+      analysis.periodo ?? "Período não informado",
+      modelKey,
+    );
+    const resultado = { ...analise.result, custoAnalise: analise.custo };
+    console.log(`[generate] ${analysisId} análise: modelo=${analise.custo.modelo} custo=$${analise.custo.usd.toFixed(4)} (${analise.custo.inputTokens}+${analise.custo.outputTokens} tk)`);
+
+    const docConfianca = typeof dados?.validacao?.confiancaGeral === "number" ? dados.validacao.confiancaGeral : analise.result.confianca;
+    const finalConfianca = Math.round((analise.result.confianca + docConfianca) / 2);
+
+    // Semeia opções estratégicas só se vazio (nunca sobrescreve o analista).
+    const opcoesIA = analise.result.opcoesEstrategicas ?? [];
+    const opcoesAtuais = (analysis.options as unknown[] | null) ?? [];
+    const optionsSeed = opcoesAtuais.length === 0 && opcoesIA.length > 0
+      ? opcoesIA.map((o) => ({ id: crypto.randomUUID(), ...o }))
+      : null;
+
+    // CONDICIONAL: só "Concluída" se ainda está "Gerando diagnóstico" (cancelamento descarta).
+    const salvo = await prisma.analysis.updateMany({
+      where: { id: analysisId, status: "Gerando diagnóstico" },
+      data: {
+        status: "Concluída",
+        resultado: resultado as object,
+        confianca: finalConfianca,
+        ...(optionsSeed ? { options: optionsSeed as object } : {}),
+      },
+    });
+    if (salvo.count === 0) { console.log(`[generate] ${analysisId} cancelada durante a IA — resultado descartado`); return; }
+    console.log(`[generate] ${analysisId} CONCLUÍDA`);
+  } catch (err) {
+    await prisma.analysis.updateMany({ where: { id: analysisId, status: "Gerando diagnóstico" }, data: { status: "Erro" } });
+    console.error(`[generate] ${analysisId} erro:`, err);
+  }
+}
+
 router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
@@ -577,9 +645,6 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       custoExtracao: { usd: custoExtracaoUsd, fonte: escolhido.fonte, fecha: escolhido.fecha, niveis: custos },
     } as DadosEstruturados;
 
-    // Calculate document-level confidence from validation
-    const docConfianca = validacao.confiancaGeral;
-
     await prisma.analysis.update({
       where: { id: analysis.id },
       data: {
@@ -588,64 +653,52 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       },
     });
 
-    // 3. Atualiza status para "Gerando diagnóstico" — CONDICIONAL: só se ainda está "Extraindo".
-    //    Se o usuário cancelou durante a extração, o status já é "Cancelada" → aborta AQUI,
-    //    antes de chamar a IA (economiza o crédito da análise).
-    const segueAnalise = await prisma.analysis.updateMany({
-      where: { id: analysis.id, status: "Extraindo" },
-      data: { status: "Gerando diagnóstico" },
-    });
-    if (segueAnalise.count === 0) { console.log(`[process] análise ${analysis.id} cancelada — abortado antes da IA`); return; }
+    // 3. GATE: só dispara a IA se a extração FECHOU (5/5) E está 100% classificada (sem N3
+    //    órfã com valor). Senão para em "Revisão necessária" — o analista classifica a conta
+    //    (alimenta o dicionário) e dispara a análise via POST /:id/generate. Evita gastar
+    //    crédito de IA em DF incompleto. (Se virou "Cancelada", o updateMany não casa
+    //    "Extraindo" → no-op, e a IA não roda.)
+    const naoClassMateriais = ((usouIA ? hibridoNaoMapeados : (escolhido.unmatched ?? [])) as any[])
+      .filter((n) => Object.values(n?.valores ?? {}).some((v) => typeof v === "number" && v !== 0)).length;
+    const extracaoLimpa = escolhido.fecha === true && naoClassMateriais === 0;
 
-    // 4. Análise interpretativa (IA) — recebe os indicadores DETERMINÍSTICOS (NÃO recalcula
-    //    número nenhum) e roda no modelo escolhido no workspace (default sonnet). Custo medido.
+    if (!extracaoLimpa) {
+      await prisma.analysis.updateMany({
+        where: { id: analysis.id, status: "Extraindo" },
+        data: { status: "Revisão necessária" },
+      });
+      console.log(`[process] ${analysis.id}: extração não-limpa (fecha=${escolhido.fecha}, naoClassificadas=${naoClassMateriais}) → "Revisão necessária" — IA NÃO disparada`);
+      return;
+    }
+
+    // 4. Extração limpa → roda a ÚNICA passada de IA automaticamente (preenche o IBR).
     const ws = await prisma.workspace.findFirst({ where: { members: { some: { id: req.userId! } } }, select: { aiAnalysisModel: true } });
-    const analise = await generateAnalysis(
-      indicadores,
-      allPeriodos,
-      {
-        razaoSocial: analysis.company.razaoSocial,
-        setor: analysis.company.setor ?? "Não informado",
-        porte: analysis.company.porte ?? "Não informado",
-      },
-      analysis.periodo ?? "Período não informado",
-      ws?.aiAnalysisModel,
-    );
-    const resultado = { ...analise.result, custoAnalise: analise.custo };
-    console.log(`[process] análise: modelo=${analise.custo.modelo} custo=$${analise.custo.usd.toFixed(4)} (${analise.custo.inputTokens}+${analise.custo.outputTokens} tk)`);
-
-    // 5. Salva resultado e marca como concluída
-    // Combine Claude's confidence with validation confidence for final score
-    const finalConfianca = Math.round((analise.result.confianca + docConfianca) / 2);
-
-    // Semeia as opções estratégicas (4 pilares) geradas pela IA — SÓ se ainda não há
-    // opções (nunca sobrescreve o que o analista adicionou/editou). Analista pode editar
-    // e excluir depois (CRUD em /options).
-    const opcoesIA = analise.result.opcoesEstrategicas ?? [];
-    const opcoesAtuais = (analysis.options as unknown[] | null) ?? [];
-    const optionsSeed = opcoesAtuais.length === 0 && opcoesIA.length > 0
-      ? opcoesIA.map((o) => ({ id: crypto.randomUUID(), ...o }))
-      : null;
-
-    // CONDICIONAL: só salva "Concluída" se ainda está "Gerando diagnóstico". Se o usuário
-    // cancelou durante a análise, o status é "Cancelada" → descarta o resultado (não ressuscita).
-    const salvo = await prisma.analysis.updateMany({
-      where: { id: analysis.id, status: "Gerando diagnóstico" },
-      data: {
-        status: "Concluída",
-        resultado: resultado as object,
-        confianca: finalConfianca,
-        ...(optionsSeed ? { options: optionsSeed as object } : {}),
-      },
-    });
-    if (salvo.count === 0) { console.log(`[process] análise ${analysis.id} cancelada durante a IA — resultado descartado`); return; }
-    console.log(`[process] análise ${analysis.id} CONCLUÍDA`);
+    await runAnalysisBackground(analysis.id, ws?.aiAnalysisModel);
     // resposta (202) já foi enviada — frontend acompanha por polling do status.
   } catch (err) {
     await prisma.analysis.update({ where: { id: analysis.id }, data: { status: "Erro" } });
     console.error("Erro ao processar análise:", err);
     // resposta (202) já foi enviada — o status "Erro" é entregue pelo polling.
   }
+});
+
+// Dispara a ÚNICA passada de IA manualmente (botão "Gerar análise"). Usado quando a extração
+// parou em "Revisão necessária" (após o analista classificar as contas) ou "Pronta para gerar";
+// também serve de "Regerar". Assíncrono (202 + polling), igual ao /process.
+router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: { in: req.scopeUserIds! } },
+    select: { id: true, dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const dados = analysis.dadosEstruturados as any;
+  if (!dados?.indicadores?.length) { res.status(400).json({ error: "Extraia os documentos primeiro (sem indicadores)" }); return; }
+
+  const ws = await prisma.workspace.findFirst({ where: { members: { some: { id: req.userId! } } }, select: { aiAnalysisModel: true } });
+  res.status(202).json({ id, status: "Gerando diagnóstico" });
+  // fire-and-forget: runAnalysisBackground faz a transição de status e persiste; o boot-recovery cobre órfãos.
+  void runAnalysisBackground(id, ws?.aiAnalysisModel);
 });
 
 // === Structured Financial Data Endpoints ===
