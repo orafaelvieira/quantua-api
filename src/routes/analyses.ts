@@ -194,9 +194,14 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     return;
   }
 
+  // ASSÍNCRONO: marca "Extraindo" e RESPONDE JÁ (202). O processamento pesado (cascata de
+  // extração + análise por IA) roda em background e pode levar minutos em IBR multi-ano — o
+  // frontend acompanha por polling do status. Evita o timeout do proxy/LB (que aparecia como
+  // "Erro de conexão" mesmo com o backend ainda processando).
+  await prisma.analysis.update({ where: { id: analysis.id }, data: { status: "Extraindo" } });
+  res.status(202).json({ id: analysis.id, status: "Extraindo" });
+
   try {
-    // 1. Atualiza status para "Extraindo"
-    await prisma.analysis.update({ where: { id: analysis.id }, data: { status: "Extraindo" } });
 
     // 2. Baixa e parseia cada documento (ou usa dados editados manualmente)
     const parsedDocs: ParsedDocument[] = await Promise.all(
@@ -596,7 +601,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       ? opcoesIA.map((o) => ({ id: crypto.randomUUID(), ...o }))
       : null;
 
-    const updated = await prisma.analysis.update({
+    await prisma.analysis.update({
       where: { id: analysis.id },
       data: {
         status: "Concluída",
@@ -605,12 +610,12 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         ...(optionsSeed ? { options: optionsSeed as object } : {}),
       },
     });
-
-    res.json(updated);
+    console.log(`[process] análise ${analysis.id} CONCLUÍDA`);
+    // resposta (202) já foi enviada — frontend acompanha por polling do status.
   } catch (err) {
     await prisma.analysis.update({ where: { id: analysis.id }, data: { status: "Erro" } });
     console.error("Erro ao processar análise:", err);
-    res.status(500).json({ error: "Erro ao processar análise", detail: String(err) });
+    // resposta (202) já foi enviada — o status "Erro" é entregue pelo polling.
   }
 });
 
