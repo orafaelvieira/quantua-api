@@ -586,12 +586,23 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // 5. Salva resultado e marca como concluída
     // Combine Claude's confidence with validation confidence for final score
     const finalConfianca = Math.round((analise.result.confianca + docConfianca) / 2);
+
+    // Semeia as opções estratégicas (4 pilares) geradas pela IA — SÓ se ainda não há
+    // opções (nunca sobrescreve o que o analista adicionou/editou). Analista pode editar
+    // e excluir depois (CRUD em /options).
+    const opcoesIA = analise.result.opcoesEstrategicas ?? [];
+    const opcoesAtuais = (analysis.options as unknown[] | null) ?? [];
+    const optionsSeed = opcoesAtuais.length === 0 && opcoesIA.length > 0
+      ? opcoesIA.map((o) => ({ id: crypto.randomUUID(), ...o }))
+      : null;
+
     const updated = await prisma.analysis.update({
       where: { id: analysis.id },
       data: {
         status: "Concluída",
         resultado: resultado as object,
         confianca: finalConfianca,
+        ...(optionsSeed ? { options: optionsSeed as object } : {}),
       },
     });
 

@@ -26,6 +26,17 @@ export interface AnalysisResult {
   swot: { forcas: string[]; fraquezas: string[]; oportunidades: string[]; riscos: string[] };
   confianca: number;
   destaques: string[];
+  /** Opções estratégicas já classificadas nos 4 pilares (Oliver Wyman). Semeiam a aba
+   *  "Opções estratégicas"; o analista pode adicionar/editar/excluir depois. */
+  opcoesEstrategicas?: Array<{
+    pillar: "strategic_repositioning" | "value_focused_business_model" | "operational_excellence" | "financial_restructuring";
+    title: string;
+    description: string;
+    estimatedImpactBRL?: number;
+    horizonMonths?: number;
+    effort: "low" | "medium" | "high";
+    priority: "p0" | "p1" | "p2";
+  }>;
 }
 
 interface IndicadorLite {
@@ -134,12 +145,21 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
   "swot": { "forcas": ["<3 itens>"], "fraquezas": ["<3>"], "oportunidades": ["<3>"], "riscos": ["<3>"] },
   "recomendacoes": [ { "titulo": "<ação concreta>", "prioridade": "Alta|Média|Baixa", "impacto": "Alto|Médio|Baixo", "esforco": "Alto|Médio|Baixo", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<detalhe prático>" } ],
   "destaques": ["<insight 1>", "<insight 2>", "<insight 3>", "<insight 4>"],
-  "confianca": <0-100>
+  "confianca": <0-100>,
+  "opcoesEstrategicas": [
+    { "pillar": "strategic_repositioning|value_focused_business_model|operational_excellence|financial_restructuring",
+      "title": "<opção concreta>", "description": "<como executar / racional>",
+      "estimatedImpactBRL": <impacto_em_reais_ou_omita>, "horizonMonths": <meses_ou_omita>,
+      "effort": "low|medium|high", "priority": "p0|p1|p2" }
+  ]
 }
+
+Pilares das opções (Oliver Wyman): strategic_repositioning = Reposicionamento Estratégico (onde competir/como vencer) · value_focused_business_model = Modelo de Negócio orientado a Valor (proposta e captura de valor) · operational_excellence = Excelência Operacional (custos/processos/eficiência) · financial_restructuring = Reestruturação Financeira (capital/dívida/liquidez).
 
 Regras:
 - Baseie-se SOMENTE nos indicadores fornecidos. NÃO invente nem recalcule números.
 - semaforo: cite o valor numérico relevante na descrição. recomendações: 3 a 6, práticas e específicas para a empresa. destaques: frases curtas (≤15 palavras).
+- opcoesEstrategicas: 4 a 8 no total, distribuídas pelos pilares conforme o diagnóstico (nem todo pilar precisa ter opção). priority p0=urgente, p1=importante, p2=oportuno. Específicas e acionáveis.
 - confianca: maior quando há 2+ períodos e indicadores completos.
 - Responda APENAS com o JSON.`;
 
@@ -163,6 +183,7 @@ Regras:
     swot: ai.swot ?? { forcas: [], fraquezas: [], oportunidades: [], riscos: [] },
     confianca: typeof ai.confianca === "number" ? ai.confianca : 60,
     destaques: Array.isArray(ai.destaques) ? ai.destaques : [],
+    opcoesEstrategicas: Array.isArray(ai.opcoesEstrategicas) ? ai.opcoesEstrategicas : [],
   };
   return { result, custo };
 }
