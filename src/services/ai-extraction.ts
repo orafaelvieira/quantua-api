@@ -7,6 +7,14 @@ import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccou
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
 const AI_MODEL = "claude-sonnet-4-6";        // visão (lê o PDF) — caro
 const AI_MODEL_FAST = "claude-haiku-4-5-20251001"; // estrutura texto do parser — barato
+const AI_MODEL_OPUS = "claude-opus-4-8";     // análise premium (julgamento/recomendação)
+
+/** Mapa friendly-key → model id usado pela ANÁLISE (generateAnalysis). Default sonnet. */
+export function modeloAnaliseId(key?: string | null): string {
+  if (key === "haiku") return AI_MODEL_FAST;
+  if (key === "opus") return AI_MODEL_OPUS;
+  return AI_MODEL; // "sonnet" (default)
+}
 const dreInputs = DRE_TEMPLATE.filter((t) => !t.subtotal).map((t) => t.conta);
 const dreInputsSet = new Set(dreInputs);
 
@@ -89,9 +97,10 @@ async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, mo
 const PRECO_USD: Record<string, { in: number; out: number }> = {
   [AI_MODEL_FAST]: { in: 1 / 1e6, out: 5 / 1e6 },
   [AI_MODEL]: { in: 3 / 1e6, out: 15 / 1e6 },
+  [AI_MODEL_OPUS]: { in: 15 / 1e6, out: 75 / 1e6 },
 };
 export interface CustoIA { modelo: string; inputTokens: number; outputTokens: number; usd: number }
-function calcCusto(modelo: string, inTok: number, outTok: number): CustoIA {
+export function calcCusto(modelo: string, inTok: number, outTok: number): CustoIA {
   const p = PRECO_USD[modelo] ?? { in: 0, out: 0 };
   return { modelo, inputTokens: inTok, outputTokens: outTok, usd: inTok * p.in + outTok * p.out };
 }

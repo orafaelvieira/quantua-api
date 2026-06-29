@@ -566,20 +566,26 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // 3. Atualiza status para "Gerando diagnóstico"
     await prisma.analysis.update({ where: { id: analysis.id }, data: { status: "Gerando diagnóstico" } });
 
-    // 4. Chama Claude para gerar a análise
-    const resultado = await generateAnalysis(
-      parsedDocs,
+    // 4. Análise interpretativa (IA) — recebe os indicadores DETERMINÍSTICOS (NÃO recalcula
+    //    número nenhum) e roda no modelo escolhido no workspace (default sonnet). Custo medido.
+    const ws = await prisma.workspace.findFirst({ where: { members: { some: { id: req.userId! } } }, select: { aiAnalysisModel: true } });
+    const analise = await generateAnalysis(
+      indicadores,
+      allPeriodos,
       {
         razaoSocial: analysis.company.razaoSocial,
         setor: analysis.company.setor ?? "Não informado",
         porte: analysis.company.porte ?? "Não informado",
       },
-      analysis.periodo ?? "Período não informado"
+      analysis.periodo ?? "Período não informado",
+      ws?.aiAnalysisModel,
     );
+    const resultado = { ...analise.result, custoAnalise: analise.custo };
+    console.log(`[process] análise: modelo=${analise.custo.modelo} custo=$${analise.custo.usd.toFixed(4)} (${analise.custo.inputTokens}+${analise.custo.outputTokens} tk)`);
 
     // 5. Salva resultado e marca como concluída
     // Combine Claude's confidence with validation confidence for final score
-    const finalConfianca = Math.round((resultado.confianca + docConfianca) / 2);
+    const finalConfianca = Math.round((analise.result.confianca + docConfianca) / 2);
     const updated = await prisma.analysis.update({
       where: { id: analysis.id },
       data: {

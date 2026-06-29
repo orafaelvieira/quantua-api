@@ -88,6 +88,7 @@ model Workspace {
   defaultCurrency String       @default("BRL") @map("default_currency")
   fiscalYearStart String       @default("january") @map("fiscal_year_start") // january | april | july
   auditLogsOn     Boolean      @default(true) @map("audit_logs_on")
+  aiAnalysisModel String       @default("sonnet") @map("ai_analysis_model") // haiku | sonnet | opus — modelo de IA da análise (generateAnalysis)
   createdAt       DateTime     @default(now()) @map("created_at")
   updatedAt       DateTime     @updatedAt @map("updated_at")
 

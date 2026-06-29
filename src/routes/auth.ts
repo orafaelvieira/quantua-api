@@ -143,6 +143,7 @@ router.get("/me", requireAuth, async (req: AuthRequest, res: Response): Promise<
           defaultCurrency: true,
           fiscalYearStart: true,
           auditLogsOn: true,
+          aiAnalysisModel: true,
         },
       },
     },

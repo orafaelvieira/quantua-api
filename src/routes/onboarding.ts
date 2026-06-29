@@ -25,6 +25,7 @@ const workspacePrefsSchema = z.object({
   defaultCurrency: z.enum(["BRL", "USD", "EUR"]).optional(),
   fiscalYearStart: z.enum(["january", "april", "july"]).optional(),
   auditLogsOn: z.boolean().optional(),
+  aiAnalysisModel: z.enum(["haiku", "sonnet", "opus"]).optional(),
 });
 
 const profileSchema = z.object({
@@ -134,6 +135,7 @@ router.patch("/workspace/:id", requireAuth, async (req: AuthRequest, res: Respon
       defaultCurrency: parsed.data.defaultCurrency,
       fiscalYearStart: parsed.data.fiscalYearStart,
       auditLogsOn: parsed.data.auditLogsOn,
+      aiAnalysisModel: parsed.data.aiAnalysisModel,
     },
   });
   res.json({ workspace });

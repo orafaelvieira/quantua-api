@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { env } from "../config/env";
-import { ParsedDocument } from "./parser";
+import { calcCusto, modeloAnaliseId, type CustoIA } from "./ai-extraction";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
 
@@ -20,137 +20,149 @@ export interface AnalysisResult {
   margemLiquida?: number;
   divLiqEbitda?: number;
   coberturaJuros?: number;
-  dreData: Array<{
-    mes: string;
-    receita: number;
-    custos: number;
-    bruto: number;
-    operacional: number;
-    liquido: number;
-  }>;
+  dreData: Array<{ mes: string; receita: number; custos: number; bruto: number; operacional: number; liquido: number }>;
   semaforo: Array<{ area: string; status: "ok" | "atencao" | "critico"; descricao: string }>;
-  recomendacoes: Array<{
-    titulo: string;
-    prioridade: "Alta" | "Média" | "Baixa";
-    impacto: string;
-    esforco: string;
-    horizonte: string;
-    descricao: string;
-  }>;
-  swot: {
-    forcas: string[];
-    fraquezas: string[];
-    oportunidades: string[];
-    riscos: string[];
-  };
+  recomendacoes: Array<{ titulo: string; prioridade: "Alta" | "Média" | "Baixa"; impacto: string; esforco: string; horizonte: string; descricao: string }>;
+  swot: { forcas: string[]; fraquezas: string[]; oportunidades: string[]; riscos: string[] };
   confianca: number;
   destaques: string[];
 }
 
+interface IndicadorLite {
+  nome: string;
+  valores: Record<string, number | string | null>;
+  status?: Record<string, "ok" | "atencao" | "critico" | null>;
+}
+
+const numOf = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/** Monta os 8 KPIs + métricas secundárias a partir dos indicadores DETERMINÍSTICOS (a IA
+ *  NÃO recalcula). Razão→pontos percentuais nos KPIs de %; EBITDA = Margem Operacional ×
+ *  Receita Líquida (ambos indicadores); variação = mudança relativa vs período anterior. */
+/** Ordena períodos cronologicamente: "31/12/2022" ou "2022" → chave numérica. */
+function ordPeriodo(p: string): number {
+  const m = p.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return Number(`${m[3]}${m[2]}${m[1]}`);
+  const y = p.match(/\d{4}/);
+  return y ? Number(`${y[0]}0000`) : 0;
+}
+
+function kpisDeterministicos(indicadores: IndicadorLite[], periodos: string[]) {
+  const ord = [...periodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b)); // mais recente por último
+  const ult = ord[ord.length - 1], ant = ord[ord.length - 2];
+  const ind = (nome: string) => indicadores.find((i) => i.nome === nome);
+  const raw = (nome: string, p?: string) => { const i = ind(nome); return i && p ? numOf(i.valores[p]) : null; };
+  const stat = (nome: string): "ok" | "atencao" | "critico" => { const i = ind(nome); return (i && ult ? i.status?.[ult] : null) ?? "atencao"; };
+  const variOf = (a: number | null, b: number | null) => (a != null && b != null && b !== 0 ? ((a - b) / Math.abs(b)) * 100 : 0);
+  const ebitdaDe = (p?: string) => { const rec = raw("Receita Líquida", p), mop = raw("Margem Operacional", p); return rec != null && mop != null ? mop * rec : null; };
+
+  const MAP: Record<string, { nome: string; pct: boolean }> = {
+    receita: { nome: "Receita Líquida", pct: false },
+    margemBruta: { nome: "Margem Bruta", pct: true },
+    margemEbitda: { nome: "Margem Operacional", pct: true },
+    liquidezCorrente: { nome: "Liquidez Corrente", pct: false },
+    endividamento: { nome: "Endividamento Geral", pct: false },
+    roe: { nome: "ROE (Retorno sobre Patrimônio Líquido)", pct: true },
+    roa: { nome: "ROA (Retorno sobre Ativos)", pct: true },
+  };
+  const mk = (key: string) => {
+    const m = MAP[key];
+    const r = raw(m.nome, ult);
+    const valor = r == null ? 0 : (m.pct ? r * 100 : r);
+    return { valor, variacao: variOf(raw(m.nome, ult), raw(m.nome, ant)) || 0, status: stat(m.nome) };
+  };
+  const ebitda = (() => {
+    const e = ebitdaDe(ult);
+    return { valor: e ?? 0, variacao: variOf(e, ebitdaDe(ant)) || 0, status: stat("Margem Operacional") };
+  })();
+
+  const kpis = {
+    receita: mk("receita"), margemBruta: mk("margemBruta"), ebitda,
+    margemEbitda: mk("margemEbitda"), liquidezCorrente: mk("liquidezCorrente"),
+    endividamento: mk("endividamento"), roe: mk("roe"), roa: mk("roa"),
+  };
+  const margemLiq = raw("Margem Líquida", ult);
+  const sec = {
+    capitalDeGiro: raw("Capital de Giro", ult) ?? undefined,
+    liquidezSeca: raw("Liquidez Seca", ult) ?? undefined,
+    margemLiquida: margemLiq == null ? undefined : margemLiq * 100,
+    divLiqEbitda: raw("Dívida Líquida / EBITDA", ult) ?? raw("Dívida Líquida/EBITDA", ult) ?? undefined,
+    coberturaJuros: raw("Índice de Cobertura de Juros", ult) ?? raw("Cobertura de Juros", ult) ?? undefined,
+  };
+  // Tabela de fatos para o prompt (só indicadores com algum valor numérico).
+  const tabela = indicadores
+    .filter((i) => periodos.some((p) => numOf(i.valores[p]) != null))
+    .map((i) => `${i.nome}: ${periodos.map((p) => `${p}=${typeof i.valores[p] === "number" ? (i.valores[p] as number).toFixed(4) : "-"}`).join(" · ")}`)
+    .join("\n");
+  return { kpis, ...sec, tabela };
+}
+
+/**
+ * Camada INTERPRETATIVA do IBR. Recebe os indicadores JÁ CALCULADOS (determinísticos) — a IA
+ * não recalcula número nenhum, só interpreta. Roda no modelo escolhido (Workspace.aiAnalysisModel,
+ * default sonnet) e devolve o custo da chamada.
+ */
 export async function generateAnalysis(
-  documents: ParsedDocument[],
+  indicadores: IndicadorLite[],
+  periodos: string[],
   empresa: { razaoSocial: string; setor: string; porte: string },
-  periodo: string
-): Promise<AnalysisResult> {
-  const docsText = documents.map((d) => `\n=== ${d.tipo} ===\n${d.raw}`).join("\n\n");
+  periodo: string,
+  modelKey?: string | null,
+): Promise<{ result: AnalysisResult; custo: CustoIA }> {
+  const model = modeloAnaliseId(modelKey);
+  const det = kpisDeterministicos(indicadores, periodos);
 
-  // Detect which document types are available
-  const tipos = documents.map((d) => d.tipo.toLowerCase());
-  const temDRE = tipos.some((t) => t.includes("dre") || t.includes("demonstra"));
-  const temBP = tipos.some((t) => t.includes("balan"));
-  const temBalancete = tipos.some((t) => t.includes("balancete"));
+  const prompt = `Você é um CFO/consultor financeiro sênior analisando uma empresa brasileira de pequeno/médio porte.
 
-  const prompt = `Você é um especialista em análise financeira de empresas brasileiras.
+Empresa: "${empresa.razaoSocial}" · Setor: ${empresa.setor} · Porte: ${empresa.porte} · Período: ${periodo}
 
-Analise os dados financeiros abaixo da empresa "${empresa.razaoSocial}" (Setor: ${empresa.setor}, Porte: ${empresa.porte}, Período: ${periodo}).
+INDICADORES JÁ CALCULADOS E AUDITADOS (valores por período — NÃO recalcule, apenas INTERPRETE):
+${det.tabela || "(indicadores indisponíveis)"}
 
-DOCUMENTOS DISPONÍVEIS: ${documents.map((d) => d.tipo).join(", ")}
+Produza a CAMADA INTERPRETATIVA (não numérica) de um IBR — leitura de CFO desses indicadores.
 
-${docsText}
-
-IMPORTANTE — Análise com dados parciais:
-- Se APENAS o Balanço Patrimonial estiver disponível (sem DRE), calcule o que for possível: liquidez corrente, endividamento, capital de giro, ROE e ROA (usando lucros/prejuízos acumulados como proxy).
-- Para métricas que PRECISAM da DRE e ela NÃO foi fornecida (receita, margemBruta, ebitda, margemEbitda), use valor=0 e status="critico" — isso indicará ao frontend que o dado não está disponível.
-- Se o Balancete estiver disponível, extraia dados de receita, custos e despesas dele (o balancete contém contas de resultado).
-- dreData: preencha SOMENTE se tiver dados de receita/custos por período. Se não tiver, retorne array vazio [].
-- Faça o MÁXIMO possível com os dados disponíveis. Cada número deve ser calculado, não inventado.
-
-Cálculos esperados a partir do Balanço Patrimonial:
-- Liquidez Corrente = Ativo Circulante / Passivo Circulante (valor absoluto)
-- Endividamento (Dívida/PL) = (Passivo Circulante + Passivo Não Circulante) / |Patrimônio Líquido|
-- Capital de Giro = Ativo Circulante - Passivo Circulante (em R$)
-- ROE = Lucro Líquido (ou Lucros Acumulados do período) / |Patrimônio Líquido| × 100 (%)
-- ROA = Lucro Líquido (ou Lucros Acumulados do período) / Ativo Total × 100 (%)
-- Liquidez Seca = (Ativo Circulante - Estoques) / Passivo Circulante (se não houver estoques, igual à Liquidez Corrente)
-
-ATENÇÃO: Os valores do passivo/PL podem estar com sinal negativo na contabilidade brasileira. Use VALOR ABSOLUTO quando necessário para os cálculos de índices.
-
-Retorne APENAS um JSON válido (sem markdown, sem explicação, sem \`\`\`) com EXATAMENTE esta estrutura:
-
+Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta estrutura:
 {
-  "kpis": {
-    "receita":          { "valor": <receita_liquida_total_em_reais_ou_0>, "variacao": <variacao_pct_ou_0>, "status": "ok|atencao|critico" },
-    "margemBruta":      { "valor": <margem_bruta_percentual_ou_0>, "variacao": <variacao_pp_ou_0>, "status": "ok|atencao|critico" },
-    "ebitda":           { "valor": <ebitda_em_reais_ou_0>, "variacao": <variacao_pct_ou_0>, "status": "ok|atencao|critico" },
-    "margemEbitda":     { "valor": <margem_ebitda_percentual_ou_0>, "variacao": <variacao_pp_ou_0>, "status": "ok|atencao|critico" },
-    "liquidezCorrente": { "valor": <indice_decimal>, "variacao": <variacao_ou_0>, "status": "ok|atencao|critico" },
-    "endividamento":    { "valor": <divida_sobre_pl_decimal>, "variacao": <variacao_ou_0>, "status": "ok|atencao|critico" },
-    "roe":              { "valor": <roe_percentual>, "variacao": <variacao_pp_ou_0>, "status": "ok|atencao|critico" },
-    "roa":              { "valor": <roa_percentual>, "variacao": <variacao_pp_ou_0>, "status": "ok|atencao|critico" }
-  },
-  "capitalDeGiro": <ativo_circulante_menos_passivo_circulante_em_reais_ou_null>,
-  "liquidezSeca": <indice_decimal_ou_null>,
-  "margemLiquida": <percentual_ou_null>,
-  "divLiqEbitda": <indice_decimal_ou_null>,
-  "coberturaJuros": <indice_decimal_ou_null>,
-  "dreData": [
-    { "mes": "Jan", "receita": <R$_mil>, "custos": <R$_mil>, "bruto": <R$_mil>, "operacional": <R$_mil>, "liquido": <R$_mil> }
-  ],
   "semaforo": [
-    { "area": "Receita e Crescimento", "status": "ok|atencao|critico", "descricao": "<resumo_objetivo_uma_frase>" },
-    { "area": "Margens Operacionais", "status": "ok|atencao|critico", "descricao": "<resumo>" },
-    { "area": "Liquidez", "status": "ok|atencao|critico", "descricao": "<resumo_com_valor_calculado>" },
-    { "area": "Endividamento", "status": "ok|atencao|critico", "descricao": "<resumo_com_valor_calculado>" },
-    { "area": "Rentabilidade", "status": "ok|atencao|critico", "descricao": "<resumo_com_valor_calculado>" },
-    { "area": "Capital de Giro", "status": "ok|atencao|critico", "descricao": "<resumo_com_valor_calculado>" }
+    { "area": "Receita e Crescimento", "status": "ok|atencao|critico", "descricao": "<1 frase citando o número relevante>" },
+    { "area": "Margens Operacionais", "status": "ok|atencao|critico", "descricao": "<...>" },
+    { "area": "Liquidez", "status": "ok|atencao|critico", "descricao": "<...>" },
+    { "area": "Endividamento", "status": "ok|atencao|critico", "descricao": "<...>" },
+    { "area": "Rentabilidade", "status": "ok|atencao|critico", "descricao": "<...>" },
+    { "area": "Capital de Giro", "status": "ok|atencao|critico", "descricao": "<...>" }
   ],
-  "recomendacoes": [
-    { "titulo": "<acao_concreta>", "prioridade": "Alta|Média|Baixa", "impacto": "Alto|Médio|Baixo", "esforco": "Alto|Médio|Baixo", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<detalhe_pratico>" }
-  ],
-  "swot": {
-    "forcas":        ["<forca_1>", "<forca_2>", "<forca_3>"],
-    "fraquezas":     ["<fraqueza_1>", "<fraqueza_2>", "<fraqueza_3>"],
-    "oportunidades": ["<oportunidade_1>", "<oportunidade_2>", "<oportunidade_3>"],
-    "riscos":        ["<risco_1>", "<risco_2>", "<risco_3>"]
-  },
-  "confianca": <0_a_100_baseado_na_completude_dos_dados>,
-  "destaques": ["<insight_chave_1>", "<insight_chave_2>", "<insight_chave_3>", "<insight_chave_4>"]
+  "swot": { "forcas": ["<3 itens>"], "fraquezas": ["<3>"], "oportunidades": ["<3>"], "riscos": ["<3>"] },
+  "recomendacoes": [ { "titulo": "<ação concreta>", "prioridade": "Alta|Média|Baixa", "impacto": "Alto|Médio|Baixo", "esforco": "Alto|Médio|Baixo", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<detalhe prático>" } ],
+  "destaques": ["<insight 1>", "<insight 2>", "<insight 3>", "<insight 4>"],
+  "confianca": <0-100>
 }
 
 Regras:
-- Use apenas os dados fornecidos. Se um KPI não pode ser calculado, use valor 0.
-- capitalDeGiro, liquidezSeca, margemLiquida, divLiqEbitda, coberturaJuros: use null se não puder calcular.
-- dreData: valores em R$ mil (divida por 1000). Array vazio se não houver dados de DRE.
-- confianca: 30-50 se só tem Balanço Patrimonial, 50-70 se só tem DRE, 70-100 se tem ambos.
-- Mínimo 3 recomendações, máximo 6. Devem ser práticas e específicas para a empresa.
-- destaques: frases curtas e objetivas (max 15 palavras cada).
-- semaforo descricao: inclua o valor numérico calculado quando possível.
-- Responda APENAS com o JSON, sem markdown.`;
+- Baseie-se SOMENTE nos indicadores fornecidos. NÃO invente nem recalcule números.
+- semaforo: cite o valor numérico relevante na descrição. recomendações: 3 a 6, práticas e específicas para a empresa. destaques: frases curtas (≤15 palavras).
+- confianca: maior quando há 2+ períodos e indicadores completos.
+- Responda APENAS com o JSON.`;
 
-  const message = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 4096,
-    messages: [{ role: "user", content: prompt }],
-  });
+  const message = await client.messages.create({ model, max_tokens: 4096, messages: [{ role: "user", content: prompt }] });
+  let text = message.content[0]?.type === "text" ? message.content[0].text.trim() : "";
+  if (text.startsWith("```")) text = text.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
+  let ai: any = {};
+  try { ai = JSON.parse(text); } catch { ai = {}; }
 
-  let text = message.content[0].type === "text" ? message.content[0].text : "";
-
-  // Strip markdown code fences if present (```json ... ``` or ``` ... ```)
-  text = text.trim();
-  if (text.startsWith("```")) {
-    text = text.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
-  }
-
-  const result: AnalysisResult = JSON.parse(text);
-  return result;
+  const custo = calcCusto(model, message.usage?.input_tokens ?? 0, message.usage?.output_tokens ?? 0);
+  const result: AnalysisResult = {
+    kpis: det.kpis,
+    capitalDeGiro: det.capitalDeGiro,
+    liquidezSeca: det.liquidezSeca,
+    margemLiquida: det.margemLiquida,
+    divLiqEbitda: det.divLiqEbitda,
+    coberturaJuros: det.coberturaJuros,
+    dreData: [],
+    semaforo: Array.isArray(ai.semaforo) ? ai.semaforo : [],
+    recomendacoes: Array.isArray(ai.recomendacoes) ? ai.recomendacoes : [],
+    swot: ai.swot ?? { forcas: [], fraquezas: [], oportunidades: [], riscos: [] },
+    confianca: typeof ai.confianca === "number" ? ai.confianca : 60,
+    destaques: Array.isArray(ai.destaques) ? ai.destaques : [],
+  };
+  return { result, custo };
 }
