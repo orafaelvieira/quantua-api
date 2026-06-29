@@ -292,9 +292,19 @@ export async function extractFinancialsWithAI(
     if (isBP || (!isDRE && !isBP)) out.push(() => ask(input, bpN3Prompt(promptPeriodos), model).then((r) => ({ kind: "bp" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
     return out;
   });
-  // Sequencial (não paralelo) para respeitar o rate limit da API em uploads multi-documento.
-  const results: Array<{ kind: "dre" | "bp"; data: any; ctx: DocCtx; inTok: number; outTok: number }> = [];
-  for (const thunk of taskThunks) results.push(await thunk());
+  // Paralelo com CONCORRÊNCIA LIMITADA (4): muito mais rápido em uploads multi-documento que
+  // o antigo sequencial, sem estourar o rate limit (cada `ask` já tem retry+backoff em
+  // 429/529). Preserva a ordem via índice. Antes (sequencial) 6 docs ~60-90s; agora ~1/4.
+  const CONCORRENCIA = 4;
+  const results: Array<{ kind: "dre" | "bp"; data: any; ctx: DocCtx; inTok: number; outTok: number }> = new Array(taskThunks.length);
+  let proximo = 0;
+  const worker = async () => {
+    while (proximo < taskThunks.length) {
+      const i = proximo++;
+      results[i] = await taskThunks[i]();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCORRENCIA, taskThunks.length) }, worker));
   const custo = calcCusto(model, results.reduce((s, r) => s + r.inTok, 0), results.reduce((s, r) => s + r.outTok, 0));
 
   const declarados: Record<string, Record<string, number>> = {};
