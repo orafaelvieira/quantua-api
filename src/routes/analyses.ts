@@ -660,9 +660,13 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     //    "Extraindo" → no-op, e a IA não roda.)
     const naoClassMateriais = ((usouIA ? hibridoNaoMapeados : (escolhido.unmatched ?? [])) as any[])
       .filter((n) => Object.values(n?.valores ?? {}).some((v) => typeof v === "number" && v !== 0)).length;
-    const extracaoLimpa = escolhido.fecha === true && naoClassMateriais === 0;
+    const bpLimpo = escolhido.fecha === true && naoClassMateriais === 0;
+    // "verde só com prova": a DRE só conta como provada se foi VERIFICADA contra os subtotais
+    // declarados no documento (verificada && ok). DRE não verificável (sem declarados) NÃO prova.
+    const dreProvada = validacao.reconciliacaoDRE.verificada === true && validacao.reconciliacaoDRE.ok === true;
 
-    if (!extracaoLimpa) {
+    if (!bpLimpo) {
+      // Não fecha (faltam contas / desbalanceado) ou há N3 não classificada → precisa corrigir.
       await prisma.analysis.updateMany({
         where: { id: analysis.id, status: "Extraindo" },
         data: { status: "Revisão necessária" },
@@ -670,8 +674,19 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       console.log(`[process] ${analysis.id}: extração não-limpa (fecha=${escolhido.fecha}, naoClassificadas=${naoClassMateriais}) → "Revisão necessária" — IA NÃO disparada`);
       return;
     }
+    if (!dreProvada) {
+      // BP fecha e tudo classificado, MAS a DRE não pôde ser PROVADA por reconciliação
+      // (documento sem subtotais declarados). Não auto-roda — o analista decide via "Gerar análise".
+      await prisma.analysis.updateMany({
+        where: { id: analysis.id, status: "Extraindo" },
+        data: { status: "Pronta para gerar" },
+      });
+      console.log(`[process] ${analysis.id}: BP fecha mas DRE não verificada (sem declarados) → "Pronta para gerar" (analista decide) — IA NÃO disparada`);
+      return;
+    }
 
-    // 4. Extração limpa → roda a ÚNICA passada de IA automaticamente (preenche o IBR).
+    // 4. Prova COMPLETA (BP fecha + 0 não classificadas + DRE verificada) → roda a ÚNICA passada
+    //    de IA automaticamente (preenche o IBR).
     const ws = await prisma.workspace.findFirst({ where: { members: { some: { id: req.userId! } } }, select: { aiAnalysisModel: true } });
     await runAnalysisBackground(analysis.id, ws?.aiAnalysisModel);
     // resposta (202) já foi enviada — frontend acompanha por polling do status.
