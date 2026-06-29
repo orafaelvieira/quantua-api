@@ -72,6 +72,29 @@ const optionSchema = z.object({
   priority: z.enum(["p0", "p1", "p2"]).default("p1"),
 });
 
+// SWOT editável pelo analista (sobrescreve resultado.swot — a IA sugere, o analista refina).
+const swotSchema = z.object({
+  forcas: z.array(z.string()),
+  fraquezas: z.array(z.string()),
+  oportunidades: z.array(z.string()),
+  riscos: z.array(z.string()),
+});
+router.put("/:id/swot", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const parsed = swotSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const clean = {
+    forcas: parsed.data.forcas.map((s) => s.trim()).filter(Boolean),
+    fraquezas: parsed.data.fraquezas.map((s) => s.trim()).filter(Boolean),
+    oportunidades: parsed.data.oportunidades.map((s) => s.trim()).filter(Boolean),
+    riscos: parsed.data.riscos.map((s) => s.trim()).filter(Boolean),
+  };
+  const resultado = (analysis.resultado as Record<string, unknown> | null) ?? {};
+  await prisma.analysis.update({ where: { id: analysis.id }, data: { resultado: { ...resultado, swot: clean } as object } });
+  res.json(clean);
+});
+
 router.get("/:id/options", async (req: AuthRequest, res: Response): Promise<void> => {
   const analysis = await loadAnalysis(req);
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -90,6 +113,31 @@ router.post("/:id/options", async (req: AuthRequest, res: Response): Promise<voi
     data: { options: [...current, created] as unknown as object },
   });
   res.status(201).json(created);
+});
+
+// Editar uma opção estratégica (analista ajusta o que a IA semeou ou o que ele criou).
+router.put("/:id/options/:optionId", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const parsed = optionSchema.partial().safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const current = (analysis.options as Array<{ id: string }> | null) ?? [];
+  const idx = current.findIndex((o) => o.id === req.params.optionId);
+  if (idx === -1) { res.status(404).json({ error: "Opção não encontrada" }); return; }
+  const atualizado = { ...current[idx], ...parsed.data };
+  const novas = [...current]; novas[idx] = atualizado;
+  await prisma.analysis.update({ where: { id: analysis.id }, data: { options: novas as unknown as object } });
+  res.json(atualizado);
+});
+
+// Excluir uma opção estratégica.
+router.delete("/:id/options/:optionId", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const current = (analysis.options as Array<{ id: string }> | null) ?? [];
+  const novas = current.filter((o) => o.id !== req.params.optionId);
+  await prisma.analysis.update({ where: { id: analysis.id }, data: { options: novas as unknown as object } });
+  res.status(204).send();
 });
 
 /* ─────────────  Projeções (12 meses, computadas pelo engine)  ───────────── */
