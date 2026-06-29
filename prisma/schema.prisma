@@ -167,6 +167,7 @@ model DictionaryVersion {
   contaDestino String?  @map("conta_destino")
   grupoConta   String?  @map("grupo_conta")
   tipo         String?
+  nota         String? // resumo (ex.: importação oficial em lote)
   criadoPor    String?  @map("criado_por")
   analysisId   String?  @map("analysis_id") // IBR que originou (autofeed via /classify)
   createdAt    DateTime @default(now()) @map("created_at")

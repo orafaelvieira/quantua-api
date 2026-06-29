@@ -14,12 +14,13 @@ export async function getCurrentDictionaryVersion(): Promise<number> {
 }
 
 export interface DictionaryChange {
-  acao: "add" | "edit" | "delete" | "classify";
+  acao: "add" | "edit" | "delete" | "classify" | "import";
   fonte?: "manual" | "autofeed";
   nomeOriginal?: string | null;
   contaDestino?: string | null;
   grupoConta?: string | null;
   tipo?: string | null;
+  nota?: string | null;
   criadoPor?: string | null;
   analysisId?: string | null;
 }
@@ -42,6 +43,7 @@ export async function bumpDictionaryVersion(change: DictionaryChange): Promise<n
           contaDestino: change.contaDestino ?? null,
           grupoConta: change.grupoConta ?? null,
           tipo: change.tipo ?? null,
+          nota: change.nota ?? null,
           criadoPor: change.criadoPor ?? null,
           analysisId: change.analysisId ?? null,
         },
