@@ -118,19 +118,23 @@ export function validateFinancialData(
     }
 
     // ===== 3. Composição do Passivo: PC + PNC + PL = Passivo Total =====
-    const passivoCirculante = Math.abs(bpVal(bp, "Passivo Circulante", periodo));
-    const passivoNaoCirculante = Math.abs(bpVal(bp, "Passivo Não Circulante", periodo));
-    const patrimonioLiquido = Math.abs(bpVal(bp, "Patrimônio Líquido", periodo));
+    // IMPORTANTE: soma os componentes COM SINAL (não abs). O PL pode ser NEGATIVO (prejuízos
+    // acumulados → patrimônio líquido negativo, comum em empresas distressed — o público do
+    // IBR). Usar abs(PL) inflava a soma e gerava falso-negativo (ex.: Maniacs PC+PNC+PL fecha
+    // 5,47M, mas abs dava 18M). Comparamos as MAGNITUDES da soma e do total.
+    const passivoCirculante = bpVal(bp, "Passivo Circulante", periodo);
+    const passivoNaoCirculante = bpVal(bp, "Passivo Não Circulante", periodo);
+    const patrimonioLiquido = bpVal(bp, "Patrimônio Líquido", periodo);
 
     if (passivoTotal !== 0 && (passivoCirculante !== 0 || passivoNaoCirculante !== 0 || patrimonioLiquido !== 0)) {
       const somaPassivo = passivoCirculante + passivoNaoCirculante + patrimonioLiquido;
-      if (!approxEqual(somaPassivo, passivoTotal, 2)) {
+      if (!approxEqual(Math.abs(somaPassivo), passivoTotal, 2)) {
         composicaoPassivo = false;
         alertas.push({
           tipo: "aviso",
           area: "Composição do Passivo",
           mensagem: `PC (${fmtBRL(passivoCirculante)}) + PNC (${fmtBRL(passivoNaoCirculante)}) + PL (${fmtBRL(patrimonioLiquido)}) ≠ Passivo Total (${fmtBRL(passivoTotal)}) em ${periodo}`,
-          detalhes: `Soma: ${fmtBRL(somaPassivo)}, diferença: ${fmtBRL(Math.abs(somaPassivo - passivoTotal))}`,
+          detalhes: `Soma: ${fmtBRL(somaPassivo)}, diferença: ${fmtBRL(Math.abs(Math.abs(somaPassivo) - passivoTotal))}`,
         });
       }
     }

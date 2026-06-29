@@ -484,13 +484,18 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const custos: Array<{ fonte: string; usd: number }> = [];
     let escolhido = rodaHeuristico();
     custos.push({ fonte: "parser", usd: 0 });
+    // Nível 2 — HÍBRIDO (Haiku, barato): escala se NÃO fechou 5/5 (tenta melhorar inclusive a
+    // reconciliação da DRE, que é barata de tentar no texto).
     if (!escolhido.fecha && HIBRIDO_ATIVO) {
       try {
         const hib = await rodaHibrido();
         if (hib) { custos.push({ fonte: "hibrido", usd: hib.custoUsd }); if (hib.fecha || hib.score > escolhido.score) escolhido = hib; }
       } catch (e: any) { console.error("[process] híbrido falhou:", e?.message ?? e); }
     }
-    // Nível 3 — VISÃO (Sonnet), só se ainda NÃO fechou (último recurso, caro).
+    // Nível 3 — VISÃO (Sonnet), só se ainda NÃO fechou 5/5 (último recurso). Integridade
+    // COMPLETA é o critério: equação + composição (Ativo e Passivo) + detalhe + DRE
+    // reconciliando. Eficiência vem de FECHAR nos níveis baratos (corrigir a extração), não
+    // de relaxar o gate.
     if (!escolhido.fecha && HIBRIDO_ATIVO) {
       try {
         const vis = await rodaVisao();
@@ -498,7 +503,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       } catch (e: any) { console.error("[process] visão falhou:", e?.message ?? e); }
     }
     const custoTotalUsd = custos.reduce((s, c) => s + c.usd, 0);
-    console.log(`[process] cascata: venceu=${escolhido.fonte} fecha=${escolhido.fecha} score=${escolhido.score}/5 | ${custos.map((c) => `${c.fonte}:$${c.usd.toFixed(4)}`).join(" ")} | total=$${custoTotalUsd.toFixed(4)}`);
+    const vv = escolhido.validacao;
+    console.log(`[process] cascata: venceu=${escolhido.fonte} fecha=${escolhido.fecha} score=${escolhido.score}/5 [eq=${vv.equacaoPatrimonial} cA=${vv.composicaoAtivo} cP=${vv.composicaoPassivo} det=${vv.detalheCompleto} dre=${JSON.stringify(vv.reconciliacaoDRE)}] | ${custos.map((c) => `${c.fonte}:$${c.usd.toFixed(4)}`).join(" ")} | total=$${custoTotalUsd.toFixed(4)}`);
 
     // Materializa o vencedor. Árvore/N3 vêm direto do candidato (heurístico = null/[]; IA
     // texto OU visão = a captura N3) — NÃO gatear por "híbrido" senão a visão perde a árvore.
