@@ -9,8 +9,7 @@ import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../s
 import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
-import { PEER_INDICATOR_MAP, PEER_TO_SECTOR_METRIC, higherIsBetter } from "../services/peer-indicator-map";
-import { getSectorBenchmark } from "../services/sector-benchmark";
+import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta } from "../services/account-mapper";
 import { DRE_TEMPLATE } from "../services/financial-templates";
 import { calculateIndicators } from "../services/indicator-calculator";
@@ -223,7 +222,9 @@ export interface PeerComparisonResult {
   coverage: "direta" | "aproximada" | "ausente";
   /** Comparações internas RELEVANTES (descarta nível "mercado", enganoso p/ nicho). */
   rows: PeerComparisonRow[];
-  /** Referência setorial externa (Premissas Setoriais) quando a base interna não cobre. */
+  /** Referência externa (WEB) quando a base interna não cobre o subsetor.
+   *  Preenchido pela pesquisa web (item 3); NÃO usa Premissas Setoriais
+   *  (Damodaran/IBGE), que é base de projeção e não de pares. */
   external: PeerExternalRef[];
 }
 
@@ -271,23 +272,10 @@ async function buildPeerComparison(
     : rows.length > 0 ? "aproximada"
     : "ausente";
 
-  // FALLBACK EXTERNO: quando a cobertura interna não é direta, busca referência
-  // setorial (Premissas Setoriais) pros indicadores com overlap de métrica.
+  // FALLBACK EXTERNO (cobertura não-direta): a referência NÃO vem das Premissas
+  // Setoriais (Damodaran/IBGE = base de PROJEÇÃO, não de pares) — vem da WEB.
+  // Preenchido pelo item 3 (pesquisa web); por ora fica vazio (seam).
   const external: PeerExternalRef[] = [];
-  if (coverage !== "direta") {
-    const bench = await getSectorBenchmark(sectorId);
-    if (bench) {
-      const cobertos = new Set(rows.map((r) => r.indicador));
-      for (const { indicador } of valores) {
-        if (cobertos.has(indicador)) continue; // já tem par interno relevante
-        const metricKey = PEER_TO_SECTOR_METRIC[indicador];
-        if (!metricKey) continue;
-        const ref = bench.metrics[metricKey];
-        if (ref == null) continue;
-        external.push({ indicador, referencia: ref, fonte: `Premissas setoriais (${bench.source})`, higherIsBetter: higherIsBetter(indicador) });
-      }
-    }
-  }
 
   return { year, segment: segLabel, coverage, rows, external };
 }
