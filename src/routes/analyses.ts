@@ -308,21 +308,30 @@ async function runAnalysisBackground(analysisId: string, modelKey?: string | nul
       return;
     }
 
-    // Benchmark Setorial (pares B3): posiciona a empresa vs listadas do subsetor
-    // escolhido no picker. Só leitura de DB (sem IA/tokens). Entra no prompt p/
-    // tornar o semáforo relativo ao setor e fica persistido p/ a UI/PDF.
-    const peer = await buildPeerComparison(analysis.sectorId, indicadores, periodos);
+    // Benchmark Setorial (pares B3): posiciona a empresa vs listadas do subsetor.
+    // Só leitura de DB. BEST-EFFORT — uma falha de query aqui NÃO pode derrubar o IBR.
+    let peer: Awaited<ReturnType<typeof buildPeerComparison>> = null;
+    try {
+      peer = await buildPeerComparison(analysis.sectorId, indicadores, periodos);
+    } catch (e: any) {
+      console.error(`[generate] ${analysisId} peer falhou (segue sem):`, e?.message ?? e);
+    }
 
     // Input 3: pesquisa web (notícias/mercado/contexto setorial). Best-effort —
     // se falhar, a análise segue sem. Custo vinculado ao IBR ([[registrar-custo-ia]]).
-    const web = await researchCompanyWeb(
-      {
-        razaoSocial: analysis.company.razaoSocial,
-        setor: analysis.sectorCustom ?? analysis.company.setor ?? null,
-        site: (analysis.company as { site?: string | null }).site ?? null,
-      },
-      modelKey,
-    );
+    let web: Awaited<ReturnType<typeof researchCompanyWeb>> = null;
+    try {
+      web = await researchCompanyWeb(
+        {
+          razaoSocial: analysis.company.razaoSocial,
+          setor: analysis.sectorCustom ?? analysis.company.setor ?? null,
+          site: (analysis.company as { site?: string | null }).site ?? null,
+        },
+        modelKey,
+      );
+    } catch (e: any) {
+      console.error(`[generate] ${analysisId} web falhou (segue sem):`, e?.message ?? e);
+    }
     if (web) console.log(`[generate] ${analysisId} web: ${web.custo.buscas} buscas, $${web.custo.usd.toFixed(4)}, ${web.fontes.length} fontes`);
 
     const analise = await generateAnalysis(
