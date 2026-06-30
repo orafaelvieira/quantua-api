@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { env } from "../config/env";
-import { calcCusto, modeloAnaliseId, type CustoIA } from "./ai-extraction";
+import { calcCusto, modeloAnaliseId, createWithRetry, type CustoIA } from "./ai-extraction";
 import type { PeerComparisonRow } from "./peer-benchmark";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
@@ -227,7 +227,7 @@ Regras:
 - confianca: maior quando há 2+ períodos e indicadores completos.
 - Responda APENAS com o JSON.`;
 
-  const message = await client.messages.create({ model, max_tokens: 4096, messages: [{ role: "user", content: prompt }] });
+  const message = await createWithRetry({ model, max_tokens: 4096, messages: [{ role: "user", content: prompt }] });
   let text = message.content[0]?.type === "text" ? message.content[0].text.trim() : "";
   if (text.startsWith("```")) text = text.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
   let ai: any = {};

@@ -93,16 +93,34 @@ async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, mo
 }
 
 /** Preço por TOKEN em USD (tabela Anthropic — atualizar se mudar). Haiku 4.5 = $1/$5 por
- *  Mtok; Sonnet 4.6 = $3/$15 por Mtok. */
+ *  Mtok; Sonnet 4.6 = $3/$15 por Mtok; Opus 4.8 = $5/$25 por Mtok. */
 const PRECO_USD: Record<string, { in: number; out: number }> = {
   [AI_MODEL_FAST]: { in: 1 / 1e6, out: 5 / 1e6 },
   [AI_MODEL]: { in: 3 / 1e6, out: 15 / 1e6 },
-  [AI_MODEL_OPUS]: { in: 15 / 1e6, out: 75 / 1e6 },
+  [AI_MODEL_OPUS]: { in: 5 / 1e6, out: 25 / 1e6 },
 };
 export interface CustoIA { modelo: string; inputTokens: number; outputTokens: number; usd: number }
 export function calcCusto(modelo: string, inTok: number, outTok: number): CustoIA {
   const p = PRECO_USD[modelo] ?? { in: 0, out: 0 };
   return { modelo, inputTokens: inTok, outputTokens: outTok, usd: inTok * p.in + outTok * p.out };
+}
+
+/**
+ * `messages.create` com retry/backoff em 429 (rate limit) e 529 (overloaded) —
+ * espelha o que o `ask()` faz na extração. Picos transitórios da API NÃO podem
+ * derrubar a geração da análise nem a pesquisa web (causa do "Erro ao processar"
+ * intermitente). Erros não-transitórios (400/401/...) sobem na hora.
+ */
+export async function createWithRetry(params: any, attempt = 0): Promise<any> {
+  try {
+    return await client.messages.create(params);
+  } catch (e: any) {
+    if ((e?.status === 429 || e?.status === 529) && attempt < 4) {
+      await sleep(7000 * (attempt + 1));
+      return createWithRetry(params, attempt + 1);
+    }
+    throw e;
+  }
 }
 
 // ───────────────────────── DRE (captura de seções = árvore original) ─────────────────────────

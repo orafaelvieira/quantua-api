@@ -14,11 +14,7 @@
  * (A `_20260209` exige Opus/Sonnet 4.6+ e quebraria se o modelo configurado for Haiku.)
  */
 
-import Anthropic from "@anthropic-ai/sdk";
-import { env } from "../config/env";
-import { modeloAnaliseId, calcCusto, type CustoIA } from "./ai-extraction";
-
-const client = new Anthropic({ apiKey: env.anthropicApiKey });
+import { modeloAnaliseId, calcCusto, createWithRetry, type CustoIA } from "./ai-extraction";
 
 /** Preço da ferramenta web_search da Anthropic: US$10 por 1.000 buscas. */
 const WEB_SEARCH_USD_POR_BUSCA = 10 / 1000;
@@ -63,12 +59,12 @@ export async function researchCompanyWeb(
 
   let msg: any;
   try {
-    msg = await client.messages.create({
+    msg = await createWithRetry({
       model,
       max_tokens: 3000,
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_BUSCAS } as any],
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_BUSCAS }],
       messages: [{ role: "user", content: prompt(empresa) }],
-    } as any);
+    });
   } catch (e: any) {
     console.warn(`[web-research] falhou (${empresa.razaoSocial}): ${e?.message ?? e}`);
     return null;
