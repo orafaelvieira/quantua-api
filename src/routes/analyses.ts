@@ -10,6 +10,7 @@ import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocum
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
+import { researchCompanyWeb } from "../services/web-research";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta } from "../services/account-mapper";
 import { DRE_TEMPLATE } from "../services/financial-templates";
 import { calculateIndicators } from "../services/indicator-calculator";
@@ -312,6 +313,18 @@ async function runAnalysisBackground(analysisId: string, modelKey?: string | nul
     // tornar o semáforo relativo ao setor e fica persistido p/ a UI/PDF.
     const peer = await buildPeerComparison(analysis.sectorId, indicadores, periodos);
 
+    // Input 3: pesquisa web (notícias/mercado/contexto setorial). Best-effort —
+    // se falhar, a análise segue sem. Custo vinculado ao IBR ([[registrar-custo-ia]]).
+    const web = await researchCompanyWeb(
+      {
+        razaoSocial: analysis.company.razaoSocial,
+        setor: analysis.sectorCustom ?? analysis.company.setor ?? null,
+        site: (analysis.company as { site?: string | null }).site ?? null,
+      },
+      modelKey,
+    );
+    if (web) console.log(`[generate] ${analysisId} web: ${web.custo.buscas} buscas, $${web.custo.usd.toFixed(4)}, ${web.fontes.length} fontes`);
+
     const analise = await generateAnalysis(
       indicadores,
       periodos,
@@ -323,8 +336,15 @@ async function runAnalysisBackground(analysisId: string, modelKey?: string | nul
       analysis.periodo ?? "Período não informado",
       modelKey,
       peer,
+      web ? { resumo: web.resumo, fontes: web.fontes } : null,
     );
-    const resultado = { ...analise.result, custoAnalise: analise.custo, peerComparison: peer };
+    const resultado = {
+      ...analise.result,
+      custoAnalise: analise.custo,
+      peerComparison: peer,
+      webResearch: web ? { resumo: web.resumo, fontes: web.fontes } : null,
+      custoWebResearch: web?.custo ?? null,
+    };
     console.log(`[generate] ${analysisId} análise: modelo=${analise.custo.modelo} custo=$${analise.custo.usd.toFixed(4)} (${analise.custo.inputTokens}+${analise.custo.outputTokens} tk)`);
 
     const docConfianca = typeof dados?.validacao?.confiancaGeral === "number" ? dados.validacao.confiancaGeral : analise.result.confianca;

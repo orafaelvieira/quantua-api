@@ -117,6 +117,16 @@ interface PeerBlockInput {
   external: Array<{ indicador: string; referencia: number; fonte: string; higherIsBetter: boolean }>;
 }
 
+/** Formata o bloco de contexto da WEB (Input 3) pro prompt. Vazio se não houver. */
+function buildWebBlock(web?: { resumo: string; fontes: { titulo: string; url: string }[] } | null): string {
+  if (!web || !web.resumo.trim()) return "";
+  const fontes = web.fontes.slice(0, 8).map((f) => `- ${f.titulo}: ${f.url}`).join("\n");
+  return `
+CONTEXTO DA WEB (pesquisa de notícias/mercado sobre a empresa — use para SWOT, posicionamento e opções; NÃO extrapole além do que está aqui):
+${web.resumo}
+${fontes ? "Fontes:\n" + fontes + "\n" : ""}`;
+}
+
 /** Formata o bloco "Posicionamento vs Pares" (Benchmark Setorial B3) pro prompt.
  *  Inclui nota de cobertura e, quando a base interna não cobre, a referência
  *  setorial externa. Vazio quando não há nada comparável. */
@@ -168,10 +178,12 @@ export async function generateAnalysis(
   periodo: string,
   modelKey?: string | null,
   peer?: PeerBlockInput | null,
+  web?: { resumo: string; fontes: { titulo: string; url: string }[] } | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
   const model = modeloAnaliseId(modelKey);
   const det = kpisDeterministicos(indicadores, periodos);
   const peerBlock = buildPeerBlock(peer);
+  const webBlock = buildWebBlock(web);
 
   const prompt = `Você é um CFO/consultor financeiro sênior analisando uma empresa brasileira de pequeno/médio porte.
 
@@ -179,7 +191,7 @@ Empresa: "${empresa.razaoSocial}" · Setor: ${empresa.setor} · Porte: ${empresa
 
 INDICADORES JÁ CALCULADOS E AUDITADOS (valores por período — NÃO recalcule, apenas INTERPRETE):
 ${det.tabela || "(indicadores indisponíveis)"}
-${peerBlock}
+${peerBlock}${webBlock}
 
 Produza a CAMADA INTERPRETATIVA (não numérica) de um IBR — leitura de CFO desses indicadores.
 
