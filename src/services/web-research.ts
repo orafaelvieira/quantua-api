@@ -38,18 +38,19 @@ function prompt(empresa: { razaoSocial: string; setor?: string | null; site?: st
 
 Empresa: "${empresa.razaoSocial}".${setor}${site}
 
-Organize o resultado EXATAMENTE nestas seções (use os títulos abaixo):
-- Dados cadastrais e estrutura societária
-- Fatos relevantes e movimentos recentes
-- Posicionamento de mercado
-- Contexto setorial — referências e tendências
-- Alertas para o IBR
+Organize o resultado EXATAMENTE nestas 6 seções NUMERADAS, nesta ordem:
+1) Dados cadastrais e estrutura societária
+2) Fatos relevantes e movimentos recentes
+3) Posicionamento de mercado
+4) Concorrentes
+5) Contexto setorial — referências e tendências
+6) Alertas para o IBR
 
 FORMATAÇÃO (siga à risca):
-- Cada título de seção em NEGRITO, no formato **Título da seção** (markdown). NÃO use # nem ## em hipótese alguma.
-- Sob cada título, use bullets com "- " (um item por linha). Frases curtas e objetivas.
-- NO MÁXIMO uma linha em branco entre seções; nada de pular várias linhas.
-- Texto total ≤ 350 palavras. Cite fonte/data quando relevante.
+- Cada título de seção em NEGRITO com o número, no formato **1) Título da seção** (markdown). NÃO use # nem ## em hipótese alguma.
+- Sob cada título, escreva os pontos como bullets começando com "- " SEGUIDO do texto NA MESMA LINHA (ex.: "- Razão social: ..."). NUNCA deixe uma linha contendo só "-" ou só um marcador sem texto.
+- Frases curtas e objetivas. NO MÁXIMO uma linha em branco entre seções; nunca pule várias linhas seguidas.
+- Texto total ≤ 380 palavras. Cite fonte/data quando relevante.
 
 REGRAS DE CONTEÚDO:
 - Se NÃO encontrar informação confiável sobre a empresa específica, diga isso na seção correspondente e foque no contexto setorial.
