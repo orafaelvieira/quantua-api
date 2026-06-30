@@ -11,6 +11,7 @@ import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
 import { researchCompanyWeb } from "../services/web-research";
+import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-context";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta } from "../services/account-mapper";
 import { DRE_TEMPLATE } from "../services/financial-templates";
 import { calculateIndicators } from "../services/indicator-calculator";
@@ -356,6 +357,15 @@ async function runAnalysisBackground(analysisId: string, modelKey?: string | nul
     }
     if (web) console.log(`[generate] ${analysisId} web: ${web.custo.buscas} buscas, $${web.custo.usd.toFixed(4)}, ${web.fontes.length} fontes`);
 
+    // Input 4: materiais complementares (notas/apresentações) resumidos pela IA.
+    let materiais: Awaited<ReturnType<typeof buildMateriaisContext>> = null;
+    try {
+      materiais = await buildMateriaisContext(analysisId, modelKey);
+    } catch (e: any) {
+      console.error(`[generate] ${analysisId} materiais falhou (segue sem):`, e?.message ?? e);
+    }
+    if (materiais) console.log(`[generate] ${analysisId} materiais: ${materiais.blocos.length} resumos, $${(materiais.custo?.usd ?? 0).toFixed(4)}`);
+
     const analise = await generateAnalysis(
       indicadores,
       periodos,
@@ -368,6 +378,7 @@ async function runAnalysisBackground(analysisId: string, modelKey?: string | nul
       modelKey,
       peer,
       web ? { resumo: web.resumo, fontes: web.fontes } : null,
+      materiais ? materiais.blocos : null,
     );
     const resultado = {
       ...analise.result,
@@ -375,6 +386,8 @@ async function runAnalysisBackground(analysisId: string, modelKey?: string | nul
       peerComparison: peer,
       webResearch: web ? { resumo: web.resumo, fontes: web.fontes } : null,
       custoWebResearch: web?.custo ?? null,
+      materiaisContexto: materiais ? { blocos: materiais.blocos } : null,
+      custoMateriais: materiais?.custo ?? null,
     };
     console.log(`[generate] ${analysisId} análise: modelo=${analise.custo.modelo} custo=$${analise.custo.usd.toFixed(4)} (${analise.custo.inputTokens}+${analise.custo.outputTokens} tk)`);
 
@@ -417,8 +430,11 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     include: { company: true, documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
-  if (analysis.documents.length === 0) {
-    res.status(400).json({ error: "Nenhum documento enviado para esta análise" });
+  // Materiais complementares (notas/apresentações) NÃO entram na extração financeira —
+  // são resumidos depois, na geração da análise (buildMateriaisContext).
+  const financialDocs = analysis.documents.filter((d) => d.tipo !== MATERIAL_TIPO);
+  if (financialDocs.length === 0) {
+    res.status(400).json({ error: "Nenhuma demonstração contábil enviada para esta análise" });
     return;
   }
 
@@ -433,7 +449,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
 
     // 2. Baixa e parseia cada documento (ou usa dados editados manualmente)
     const parsedDocs: ParsedDocument[] = await Promise.all(
-      analysis.documents.map(async (doc) => {
+      financialDocs.map(async (doc) => {
         try {
           // Se o documento foi editado manualmente, usar os dados editados
           if (doc.editadoManualmente && doc.dadosExtraidos) {
@@ -697,8 +713,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // período conhecido pelo parser (pin) p/ alinhar com o que o parser/híbrido já viram.
     const rodaVisao = async (): Promise<Candidato | null> => {
       const visDocs: Array<{ buffer: Buffer; tipo: string; periodos: string[] }> = [];
-      for (let i = 0; i < analysis.documents.length; i++) {
-        const doc = analysis.documents[i];
+      for (let i = 0; i < financialDocs.length; i++) {
+        const doc = financialDocs[i];
         if (doc.editadoManualmente || !doc.storagePath) continue;
         const buffer = await downloadFile(doc.storagePath);
         visDocs.push({ buffer, tipo: doc.tipo, periodos: parsedDocs[i]?.periodos ?? [] });
@@ -1234,12 +1250,18 @@ router.post(
     const url = await uploadFile(req.file.buffer as Buffer, key, req.file.mimetype);
     const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
 
+    // Material complementar (notas/apresentações) vem com tipo explícito do corpo;
+    // demais documentos têm o tipo detectado pelo nome/mimetype.
+    const tipo = req.body?.tipo === MATERIAL_TIPO
+      ? MATERIAL_TIPO
+      : detectDocType(req.file.originalname, req.file.mimetype);
+
     const doc = await prisma.document.create({
       data: {
         analysisId: analysis.id,
         companyId: analysis.companyId,
         nome: req.file.originalname,
-        tipo: detectDocType(req.file.originalname, req.file.mimetype),
+        tipo,
         status: "Pendente",
         storagePath: url,
         hash,

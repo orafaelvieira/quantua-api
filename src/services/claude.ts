@@ -117,6 +117,16 @@ interface PeerBlockInput {
   external: Array<{ indicador: string; referencia: number; fonte: string; higherIsBetter: boolean }>;
 }
 
+/** Formata o bloco dos MATERIAIS COMPLEMENTARES (Input 4) pro prompt — resumos de
+ *  docs não-financeiros (notas de reunião, apresentações). Vazio se não houver. */
+function buildMateriaisBlock(materiais?: Array<{ nome: string; resumo: string }> | null): string {
+  if (!materiais || materiais.length === 0) return "";
+  const blocos = materiais.map((m) => `• ${m.nome}:\n${m.resumo}`).join("\n");
+  return `
+MATERIAIS COMPLEMENTARES (contexto qualitativo enviado pelo analista — notas de reunião, apresentações; use para SWOT, posicionamento, causas e opções; NÃO extrapole além do que está aqui):
+${blocos}`;
+}
+
 /** Formata o bloco de contexto da WEB (Input 3) pro prompt. Vazio se não houver. */
 function buildWebBlock(web?: { resumo: string; fontes: { titulo: string; url: string }[] } | null): string {
   if (!web || !web.resumo.trim()) return "";
@@ -179,11 +189,13 @@ export async function generateAnalysis(
   modelKey?: string | null,
   peer?: PeerBlockInput | null,
   web?: { resumo: string; fontes: { titulo: string; url: string }[] } | null,
+  materiais?: Array<{ nome: string; resumo: string }> | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
   const model = modeloAnaliseId(modelKey);
   const det = kpisDeterministicos(indicadores, periodos);
   const peerBlock = buildPeerBlock(peer);
   const webBlock = buildWebBlock(web);
+  const materiaisBlock = buildMateriaisBlock(materiais);
 
   const prompt = `Você é um CFO/consultor financeiro sênior analisando uma empresa brasileira de pequeno/médio porte.
 
@@ -191,7 +203,7 @@ Empresa: "${empresa.razaoSocial}" · Setor: ${empresa.setor} · Porte: ${empresa
 
 INDICADORES JÁ CALCULADOS E AUDITADOS (valores por período — NÃO recalcule, apenas INTERPRETE):
 ${det.tabela || "(indicadores indisponíveis)"}
-${peerBlock}${webBlock}
+${peerBlock}${webBlock}${materiaisBlock}
 
 Produza a CAMADA INTERPRETATIVA (não numérica) de um IBR — leitura de CFO desses indicadores.
 

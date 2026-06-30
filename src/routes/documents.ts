@@ -33,7 +33,8 @@ const upload = multer({
     const allowed = ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "application/vnd.ms-excel", "application/pdf",
       "text/csv", "application/octet-stream"];
-    const allowedExt = /\.(xlsx|xls|pdf|csv)$/i.test(file.originalname);
+    // Demonstrações: xlsx/xls/pdf/csv. Materiais complementares: + docx/doc/pptx/ppt/txt/md.
+    const allowedExt = /\.(xlsx|xls|pdf|csv|docx|doc|pptx|ppt|txt|md)$/i.test(file.originalname);
     cb(null, allowedExt || allowed.includes(file.mimetype));
   },
 });
@@ -41,7 +42,7 @@ const upload = multer({
 const uploadSchema = z.object({
   analysisId: z.string().uuid(),
   companyId: z.string().uuid(),
-  tipo: z.enum(["DRE", "Balanço Patrimonial", "Balancete", "Outro"]),
+  tipo: z.enum(["DRE", "Balanço Patrimonial", "Balancete", "Outro", "Material complementar"]),
   competencia: z.string().optional(),
   moeda: z.string().default("BRL"),
 });
