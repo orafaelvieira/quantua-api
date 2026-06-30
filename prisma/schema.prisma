@@ -608,3 +608,47 @@ model DamodaranMapping {
   @@index([sectorCode])
   @@map("damodaran_mappings")
 }
+
+/// Base de PARES — empresas listadas na B3 (data-base 31/12/25). Catálogo + linhas
+/// (BP/DRE brutos + indicadores) por ano. Fonte: base_bovespa.xlsx. Usada p/ comparação
+/// setorial (percentil vs pares) e semáforo dinâmico. Taxonomia B3: Classificação › Setor › Subsetor.
+model PeerCompany {
+  papel         String   @id // ticker, ex.: "AERI3"
+  nome          String
+  classificacao String // nível 1 B3 (ex.: "Bens Industriais")
+  setor         String // nível 2 B3 (ex.: "Máquinas e Equipamentos")
+  subsetor      String? // nível 3 B3
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  lines PeerLine[]
+
+  @@index([classificacao])
+  @@index([setor])
+  @@index([subsetor])
+  @@map("peer_companies")
+}
+
+model PeerLine {
+  id        String @id @default(uuid())
+  papel     String
+  documento String // "BP" | "DRE" | "INDICADOR"
+  conta     String // nome da conta/indicador na base B3
+  year      Int
+  value     Float
+
+  company PeerCompany @relation(fields: [papel], references: [papel], onDelete: Cascade)
+
+  @@unique([papel, documento, conta, year])
+  @@index([documento, conta, year])
+  @@map("peer_lines")
+}
+
+/// Marcador genérico de seed idempotente: guarda o hash do arquivo aplicado por chave,
+/// p/ o importador pular o trabalho quando o arquivo não mudou (boot rápido).
+model SeedMarker {
+  key       String   @id
+  hash      String
+  appliedAt DateTime @updatedAt @map("applied_at")
+
+  @@map("seed_markers")
+}
