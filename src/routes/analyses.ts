@@ -303,7 +303,10 @@ async function runAnalysisBackground(analysisId: string, modelKey?: string | nul
     const indicadores = dados?.indicadores ?? [];
     const periodos: string[] = dados?.periodos ?? [];
     if (indicadores.length === 0) {
-      await prisma.analysis.updateMany({ where: { id: analysisId, status: "Gerando diagnóstico" }, data: { status: "Erro" } });
+      await prisma.analysis.updateMany({
+        where: { id: analysisId, status: "Gerando diagnóstico" },
+        data: { status: "Erro", resultado: { erro: "Extração não produziu indicadores — verifique os documentos (formato/captura). A análise não pôde ser gerada." } as object },
+      });
       console.log(`[generate] ${analysisId}: sem indicadores — Erro`);
       return;
     }
@@ -379,7 +382,11 @@ async function runAnalysisBackground(analysisId: string, modelKey?: string | nul
     if (salvo.count === 0) { console.log(`[generate] ${analysisId} cancelada durante a IA — resultado descartado`); return; }
     console.log(`[generate] ${analysisId} CONCLUÍDA`);
   } catch (err) {
-    await prisma.analysis.updateMany({ where: { id: analysisId, status: "Gerando diagnóstico" }, data: { status: "Erro" } });
+    const msg = err instanceof Error ? err.message : String(err);
+    await prisma.analysis.updateMany({
+      where: { id: analysisId, status: "Gerando diagnóstico" },
+      data: { status: "Erro", resultado: { erro: `Geração da análise: ${msg}` } as object },
+    });
     console.error(`[generate] ${analysisId} erro:`, err);
   }
 }
@@ -813,7 +820,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     await runAnalysisBackground(analysis.id, ws?.aiAnalysisModel);
     // resposta (202) já foi enviada — frontend acompanha por polling do status.
   } catch (err) {
-    await prisma.analysis.update({ where: { id: analysis.id }, data: { status: "Erro" } });
+    const msg = err instanceof Error ? err.message : String(err);
+    await prisma.analysis.update({ where: { id: analysis.id }, data: { status: "Erro", resultado: { erro: `Processamento (extração): ${msg}` } as object } });
     console.error("Erro ao processar análise:", err);
     // resposta (202) já foi enviada — o status "Erro" é entregue pelo polling.
   }
