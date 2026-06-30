@@ -27,7 +27,7 @@ export interface AnalysisResult {
   swot: { forcas: string[]; fraquezas: string[]; oportunidades: string[]; riscos: string[] };
   confianca: number;
   destaques: string[];
-  /** Opções estratégicas já classificadas nos 4 pilares (Oliver Wyman). Semeiam a aba
+  /** Opções estratégicas já classificadas nos 4 pilares estratégicos. Semeiam a aba
    *  "Opções estratégicas"; o analista pode adicionar/editar/excluir depois. */
   opcoesEstrategicas?: Array<{
     pillar: "strategic_repositioning" | "value_focused_business_model" | "operational_excellence" | "financial_restructuring";
@@ -217,7 +217,7 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
   ]
 }
 
-Pilares das opções (Oliver Wyman): strategic_repositioning = Reposicionamento Estratégico (onde competir/como vencer) · value_focused_business_model = Modelo de Negócio orientado a Valor (proposta e captura de valor) · operational_excellence = Excelência Operacional (custos/processos/eficiência) · financial_restructuring = Reestruturação Financeira (capital/dívida/liquidez).
+Pilares das opções (quatro frentes de valor): strategic_repositioning = Reposicionamento Estratégico (onde competir/como vencer) · value_focused_business_model = Modelo de Negócio orientado a Valor (proposta e captura de valor) · operational_excellence = Excelência Operacional (custos/processos/eficiência) · financial_restructuring = Reestruturação Financeira (capital/dívida/liquidez).
 
 Regras:
 - Baseie-se SOMENTE nos indicadores fornecidos. NÃO invente nem recalcule números.
