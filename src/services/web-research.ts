@@ -38,14 +38,21 @@ function prompt(empresa: { razaoSocial: string; setor?: string | null; site?: st
 
 Empresa: "${empresa.razaoSocial}".${setor}${site}
 
-Busque e sintetize:
-1. Notícias recentes relevantes (M&A, dívida/reestruturação, troca de gestão, fatos relevantes, processos, expansão/fechamento).
-2. Posicionamento de mercado e principais concorrentes.
-3. Tendências e referências do setor (margens/crescimento típicos) — úteis quando não há pares diretos comparáveis.
+Organize o resultado EXATAMENTE nestas seções (use os títulos abaixo):
+- Dados cadastrais e estrutura societária
+- Fatos relevantes e movimentos recentes
+- Posicionamento de mercado
+- Contexto setorial — referências e tendências
+- Alertas para o IBR
 
-Regras:
-- Resumo objetivo em tópicos, ≤ 400 palavras. Cite a fonte e a data quando relevante.
-- Se NÃO encontrar informação confiável sobre a empresa específica, diga isso explicitamente e foque no contexto setorial.
+FORMATAÇÃO (siga à risca):
+- Cada título de seção em NEGRITO, no formato **Título da seção** (markdown). NÃO use # nem ## em hipótese alguma.
+- Sob cada título, use bullets com "- " (um item por linha). Frases curtas e objetivas.
+- NO MÁXIMO uma linha em branco entre seções; nada de pular várias linhas.
+- Texto total ≤ 350 palavras. Cite fonte/data quando relevante.
+
+REGRAS DE CONTEÚDO:
+- Se NÃO encontrar informação confiável sobre a empresa específica, diga isso na seção correspondente e foque no contexto setorial.
 - NÃO invente fatos. Prefira fontes primárias (site da empresa, imprensa, órgãos reguladores).`;
 }
 

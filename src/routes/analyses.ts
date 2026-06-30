@@ -250,6 +250,25 @@ async function buildPeerComparison(
     : { classificacao: sector.name, setor: null as string | null, subsetor: null as string | null };
   const segLabel = seg.setor ?? seg.classificacao;
 
+  // Os nomes do catálogo B3 (Sector.name, do JSON oficial) podem diferir dos da base
+  // de pares (PeerCompany) por CASE/acento/pontuação (ex.: "Consumo não Cíclico" vs
+  // "Consumo Não Cíclico"). A query de pares casa por string EXATA — então remapeamos
+  // o segmento para a string exata que existe na base (match normalizado), senão a
+  // comparação sobe indevidamente pra "mercado" e marca "sem pares".
+  const normPeer = (s: string) =>
+    s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[.,]+/g, " ").replace(/\s+/g, " ").trim();
+  const [classifsB, setoresB] = await Promise.all([
+    prisma.peerCompany.findMany({ distinct: ["classificacao"], select: { classificacao: true } }),
+    prisma.peerCompany.findMany({ distinct: ["setor"], select: { setor: true } }),
+  ]);
+  const exato = (alvo: string | null, lista: string[]): string | null => {
+    if (!alvo) return null;
+    const n = normPeer(alvo);
+    return lista.find((x) => normPeer(x) === n) ?? alvo;
+  };
+  seg.classificacao = exato(seg.classificacao, classifsB.map((c) => c.classificacao)) ?? seg.classificacao;
+  seg.setor = exato(seg.setor, setoresB.map((s) => s.setor));
+
   const ult = [...periodos].sort((a, b) => (yearOfPeriodo(a) ?? 0) - (yearOfPeriodo(b) ?? 0)).at(-1)!;
   const companyYear = yearOfPeriodo(ult);
 

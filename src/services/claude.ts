@@ -227,11 +227,22 @@ Regras:
 - confianca: maior quando há 2+ períodos e indicadores completos.
 - Responda APENAS com o JSON.`;
 
-  const message = await createWithRetry({ model, max_tokens: 4096, messages: [{ role: "user", content: prompt }] });
+  // max_tokens generoso: com pares + contexto web no prompt, o JSON interpretativo
+  // ficou maior e estourava 4096 → truncado → JSON.parse falhava → SWOT/recs/opções
+  // vazios. Parse robusto também: aceita cerca ``` e descarta preâmbulo/sufixo de texto.
+  const message = await createWithRetry({ model, max_tokens: 8000, messages: [{ role: "user", content: prompt }] });
   let text = message.content[0]?.type === "text" ? message.content[0].text.trim() : "";
-  if (text.startsWith("```")) text = text.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) text = fence[1].trim();
   let ai: any = {};
-  try { ai = JSON.parse(text); } catch { ai = {}; }
+  try {
+    ai = JSON.parse(text);
+  } catch {
+    const ini = text.indexOf("{"), fim = text.lastIndexOf("}");
+    if (ini >= 0 && fim > ini) {
+      try { ai = JSON.parse(text.slice(ini, fim + 1)); } catch { ai = {}; }
+    }
+  }
 
   const custo = calcCusto(model, message.usage?.input_tokens ?? 0, message.usage?.output_tokens ?? 0);
   const result: AnalysisResult = {
