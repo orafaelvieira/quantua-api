@@ -50,6 +50,23 @@ export const PEER_HIGHER_IS_BETTER: Record<string, boolean> = {
   "Endividamento Geral": false,
 };
 
+/**
+ * Fallback EXTERNO: indicador nosso → métrica do SectorBenchmark (Premissas
+ * Setoriais: Damodaran/IBGE/curadoria). Usado quando a base interna de pares B3
+ * não tem par relevante para o subsetor (ex.: Financeiro). Só entram os
+ * indicadores com overlap honesto de conceito/escala com as métricas seedadas.
+ * Expandir conforme a base externa ganhar mais métricas (ex.: ROE, liquidez).
+ */
+export const PEER_TO_SECTOR_METRIC: Record<string, "margemBruta" | "dsoTarget"> = {
+  "Margem Bruta": "margemBruta",
+  "Prazo Médio Contas a Receber": "dsoTarget",
+};
+
+/** Métrica do SectorBenchmark para um indicador nosso, ou null. */
+export function sectorMetricFor(nomeIndicador: string): "margemBruta" | "dsoTarget" | null {
+  return PEER_TO_SECTOR_METRIC[nomeIndicador] ?? null;
+}
+
 /** Conta da base B3 para um indicador nosso, ou null se não houver par confiável. */
 export function peerContaFor(nomeIndicador: string): string | null {
   return PEER_INDICATOR_MAP[nomeIndicador] ?? null;

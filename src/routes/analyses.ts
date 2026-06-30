@@ -9,7 +9,8 @@ import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../s
 import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
-import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
+import { PEER_INDICATOR_MAP, PEER_TO_SECTOR_METRIC, higherIsBetter } from "../services/peer-indicator-map";
+import { getSectorBenchmark } from "../services/sector-benchmark";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta } from "../services/account-mapper";
 import { DRE_TEMPLATE } from "../services/financial-templates";
 import { calculateIndicators } from "../services/indicator-calculator";
@@ -207,31 +208,49 @@ function yearOfPeriodo(p: string): number | null {
   return m ? Number(m[0]) : null;
 }
 
+export interface PeerExternalRef {
+  indicador: string;
+  referencia: number;
+  fonte: string;
+  higherIsBetter: boolean;
+}
+
+export interface PeerComparisonResult {
+  year: number | null;
+  segment: string | null;
+  /** direta = par no próprio subsetor · aproximada = subiu p/ setor/classificação ·
+   *  ausente = sem par relevante na base interna (cai na referência externa). */
+  coverage: "direta" | "aproximada" | "ausente";
+  /** Comparações internas RELEVANTES (descarta nível "mercado", enganoso p/ nicho). */
+  rows: PeerComparisonRow[];
+  /** Referência setorial externa (Premissas Setoriais) quando a base interna não cobre. */
+  external: PeerExternalRef[];
+}
+
 /**
  * Monta a comparação com o Benchmark Setorial (pares B3) para a análise:
- * resolve o segmento B3 a partir do `sectorId` escolhido no picker, pega os
- * indicadores comparáveis no período mais recente e devolve a posição vs pares.
- * Retorna null quando não há setor escolhido. Determinístico (sem IA).
+ * resolve o segmento B3 do `sectorId`, posiciona a empresa vs pares do subsetor e,
+ * quando a base interna NÃO tem par relevante (ex.: Financeiro), busca referência
+ * EXTERNA (Premissas Setoriais) em vez de comparar contra o mercado inteiro
+ * (que seria enganoso). Determinístico (sem IA). Null quando não há setor.
  */
 async function buildPeerComparison(
   sectorId: string | null,
   indicadores: Array<{ nome: string; valores: Record<string, unknown> }>,
   periodos: string[],
-): Promise<{ year: number | null; segment: string | null; rows: PeerComparisonRow[] } | null> {
+): Promise<PeerComparisonResult | null> {
   if (!sectorId || indicadores.length === 0 || periodos.length === 0) return null;
 
   const sector = await prisma.sector.findUnique({ where: { code: sectorId }, include: { parent: true } });
   if (!sector) return null;
-  // Subsetor (nível 2): setor=nome, classificação=nome do pai. Nível 1: só classificação.
   const seg = sector.parentCode && sector.parent
     ? { classificacao: sector.parent.name, setor: sector.name, subsetor: null as string | null }
     : { classificacao: sector.name, setor: null as string | null, subsetor: null as string | null };
+  const segLabel = seg.setor ?? seg.classificacao;
 
-  // Período mais recente (maior ano detectado).
   const ult = [...periodos].sort((a, b) => (yearOfPeriodo(a) ?? 0) - (yearOfPeriodo(b) ?? 0)).at(-1)!;
   const companyYear = yearOfPeriodo(ult);
 
-  // Valores dos indicadores comparáveis (mapeados em PEER_INDICATOR_MAP) no último período.
   const valores: Array<{ indicador: string; valor: number }> = [];
   for (const ind of indicadores) {
     if (!(ind.nome in PEER_INDICATOR_MAP)) continue;
@@ -239,10 +258,38 @@ async function buildPeerComparison(
     const n = typeof v === "number" ? v : Number(v);
     if (Number.isFinite(n)) valores.push({ indicador: ind.nome, valor: n });
   }
-  if (valores.length === 0) return { year: companyYear, segment: seg.setor ?? seg.classificacao, rows: [] };
 
-  const { year, rows } = await comparePeersForIndicators(seg, valores, companyYear);
-  return { year, segment: seg.setor ?? seg.classificacao, rows };
+  const { year, rows: allRows } = valores.length
+    ? await comparePeersForIndicators(seg, valores, companyYear)
+    : { year: companyYear, rows: [] as PeerComparisonRow[] };
+
+  // RELEVÂNCIA: descarta linhas que só acharam pares no nível "mercado" (todas as
+  // listadas) — para subsetor nicho isso não é par, é ruído. Mantém subsetor/setor/classif.
+  const rows = allRows.filter((r) => r.level !== "mercado");
+  const coverage: PeerComparisonResult["coverage"] =
+    rows.some((r) => r.level === "subsetor") ? "direta"
+    : rows.length > 0 ? "aproximada"
+    : "ausente";
+
+  // FALLBACK EXTERNO: quando a cobertura interna não é direta, busca referência
+  // setorial (Premissas Setoriais) pros indicadores com overlap de métrica.
+  const external: PeerExternalRef[] = [];
+  if (coverage !== "direta") {
+    const bench = await getSectorBenchmark(sectorId);
+    if (bench) {
+      const cobertos = new Set(rows.map((r) => r.indicador));
+      for (const { indicador } of valores) {
+        if (cobertos.has(indicador)) continue; // já tem par interno relevante
+        const metricKey = PEER_TO_SECTOR_METRIC[indicador];
+        if (!metricKey) continue;
+        const ref = bench.metrics[metricKey];
+        if (ref == null) continue;
+        external.push({ indicador, referencia: ref, fonte: `Premissas setoriais (${bench.source})`, higherIsBetter: higherIsBetter(indicador) });
+      }
+    }
+  }
+
+  return { year, segment: segLabel, coverage, rows, external };
 }
 
 // Endpoint principal: dispara extração dos documentos + geração da análise com Claude

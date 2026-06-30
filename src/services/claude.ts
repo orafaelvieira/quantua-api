@@ -109,28 +109,50 @@ function kpisDeterministicos(indicadores: IndicadorLite[], periodos: string[]) {
   return { kpis, ...sec, tabela };
 }
 
+interface PeerBlockInput {
+  year: number | null;
+  segment: string | null;
+  coverage: "direta" | "aproximada" | "ausente";
+  rows: PeerComparisonRow[];
+  external: Array<{ indicador: string; referencia: number; fonte: string; higherIsBetter: boolean }>;
+}
+
 /** Formata o bloco "Posicionamento vs Pares" (Benchmark Setorial B3) pro prompt.
- *  Vazio quando não há comparações — o prompt então só usa leitura absoluta. */
-function buildPeerBlock(
-  peer?: { year: number | null; segment: string | null; rows: PeerComparisonRow[] } | null,
-): string {
-  if (!peer || peer.rows.length === 0) return "";
+ *  Inclui nota de cobertura e, quando a base interna não cobre, a referência
+ *  setorial externa. Vazio quando não há nada comparável. */
+function buildPeerBlock(peer?: PeerBlockInput | null): string {
+  if (!peer || (peer.rows.length === 0 && peer.external.length === 0)) return "";
   const fmt = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : "-");
   const nivelLabel: Record<PeerComparisonRow["level"], string> = {
     subsetor: "subsetor", setor: "setor", classificacao: "classificação", mercado: "mercado",
   };
-  const linhas = peer.rows
+  const seg = peer.segment ? ` — ${peer.segment}` : "";
+  const ano = peer.year ? `, ano ${peer.year}` : "";
+
+  const nota =
+    peer.coverage === "direta"
+      ? "Cobertura: pares DIRETOS do subsetor na base."
+      : peer.coverage === "aproximada"
+      ? "Cobertura: SEM pares diretos no subsetor — comparação usa nível setor/classificação (par aproximado; trate como direcional)."
+      : "Cobertura: SEM pares na base interna para este subsetor — abaixo apenas REFERÊNCIA SETORIAL externa. NÃO há percentil; trate como direcional e complemente com conhecimento do setor.";
+
+  const linhasInternas = peer.rows
     .map(
       (r) =>
         `- ${r.indicador}: empresa=${fmt(r.valor)} · mediana pares=${fmt(r.p50)} · faixa p25–p75=${fmt(r.p25)}–${fmt(r.p75)} · percentil=${r.percentil} · ${r.higherIsBetter ? "maior é melhor" : "menor é melhor"} · nível=${nivelLabel[r.level]} (n=${r.count})`,
     )
     .join("\n");
-  const seg = peer.segment ? ` — ${peer.segment}` : "";
-  const ano = peer.year ? `, ano ${peer.year}` : "";
+  const linhasExternas = peer.external
+    .map(
+      (e) =>
+        `- ${e.indicador}: referência setorial=${fmt(e.referencia)} · ${e.higherIsBetter ? "maior é melhor" : "menor é melhor"} · fonte=${e.fonte} (sem percentil)`,
+    )
+    .join("\n");
+
   return `
-POSICIONAMENTO VS PARES (Benchmark Setorial B3${seg}${ano}) — comparação da empresa com listadas do segmento:
-${linhas}
-`;
+POSICIONAMENTO VS PARES (Benchmark Setorial B3${seg}${ano}):
+${nota}
+${linhasInternas ? linhasInternas + "\n" : ""}${linhasExternas ? "REFERÊNCIA SETORIAL EXTERNA (Premissas Setoriais):\n" + linhasExternas + "\n" : ""}`;
 }
 
 /**
@@ -145,7 +167,7 @@ export async function generateAnalysis(
   empresa: { razaoSocial: string; setor: string; porte: string },
   periodo: string,
   modelKey?: string | null,
-  peer?: { year: number | null; segment: string | null; rows: PeerComparisonRow[] } | null,
+  peer?: PeerBlockInput | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
   const model = modeloAnaliseId(modelKey);
   const det = kpisDeterministicos(indicadores, periodos);
@@ -187,7 +209,7 @@ Pilares das opções (Oliver Wyman): strategic_repositioning = Reposicionamento 
 
 Regras:
 - Baseie-se SOMENTE nos indicadores fornecidos. NÃO invente nem recalcule números.
-- POSICIONAMENTO VS PARES: quando o bloco de pares estiver presente, o semáforo é RELATIVO ao setor — defina o status comparando a empresa à mediana e à faixa dos pares (não a um padrão absoluto), respeitando a polaridade indicada (maior/menor é melhor). Cite o percentil ou a mediana do par na descrição. Ancore forças/fraquezas (SWOT) e opções no GAP vs pares. Se o nível usado não for o subsetor (ex.: "setor"/"mercado"), trate a comparação como aproximada.
+- POSICIONAMENTO VS PARES: quando o bloco de pares estiver presente, o semáforo é RELATIVO ao setor — defina o status comparando a empresa à mediana e à faixa dos pares (não a um padrão absoluto), respeitando a polaridade indicada (maior/menor é melhor). Cite o percentil ou a mediana do par na descrição. Ancore forças/fraquezas (SWOT) e opções no GAP vs pares. RESPEITE A COBERTURA indicada: "direta" = comparação confiável; "aproximada" = par de nível superior, trate como direcional; "ausente" = NÃO invente percentil — use só a referência setorial externa + conhecimento do setor e seja EXPLÍCITO no diagnóstico de que não há pares diretos na base.
 - semaforo: cite o valor numérico relevante na descrição. recomendações: 3 a 6, práticas e específicas para a empresa. destaques: frases curtas (≤15 palavras).
 - opcoesEstrategicas: 4 a 8 no total, distribuídas pelos pilares conforme o diagnóstico (nem todo pilar precisa ter opção). priority p0=urgente, p1=importante, p2=oportuno. Específicas e acionáveis.
 - confianca: maior quando há 2+ períodos e indicadores completos.
