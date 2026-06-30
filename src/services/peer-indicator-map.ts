@@ -18,6 +18,7 @@ export const PEER_INDICATOR_MAP: Record<string, string> = {
   "Ciclo Financeiro": "CICLO FINANCEIRO",
   "Prazo Médio Contas a Receber": "PM - CONTAS A RECEBER",
   "Prazo Médio Estoque": "PM - ESTOQUES",
+  "Prazo Médio Fornecedores": "PM - PAGAMENTO",
   "ROA (Retorno sobre Ativos)": "ROA - RETORNO S/ ATIVO",
   "ROE (Retorno sobre Patrimônio Líquido)": "ROE - RETORNO S/ PL",
   "Giro do Ativo": "GIRO DO ATIVO",
@@ -42,6 +43,10 @@ export const PEER_HIGHER_IS_BETTER: Record<string, boolean> = {
   "Ciclo Financeiro": false,
   "Prazo Médio Contas a Receber": false,
   "Prazo Médio Estoque": false,
+  // PM Pagamento: prazo maior = mais financiamento de fornecedor → melhor working
+  // capital (reduz o Ciclo Financeiro). Em distress, esticar fornecedor pode ser
+  // sinal de stress — a IA nuança no diagnóstico; a polaridade-base segue a convenção.
+  "Prazo Médio Fornecedores": true,
   "ROA (Retorno sobre Ativos)": true,
   "ROE (Retorno sobre Patrimônio Líquido)": true,
   "Giro do Ativo": true,
