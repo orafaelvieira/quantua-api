@@ -33,7 +33,25 @@ export interface SectorSummary {
   code: string;
   name: string;
   parentCode: string | null;
+  /** Nome do setor-pai (nível 1 B3) — conveniência p/ agrupar no picker. */
+  parentName: string | null;
   active: boolean;
+  /** Nº de pares B3 (PeerCompany) com match direto neste subsetor. 0 em setores nível 1. */
+  peerCount: number;
+  /** true se há ≥1 par direto na base — define o selo "sem pares" do picker. */
+  hasPeers: boolean;
+}
+
+/** Normaliza nome p/ casar `Sector.name` ↔ `PeerCompany.setor/classificacao`
+ *  (dobra acento; ponto/vírgula da fonte B3 viram espaço). */
+function normName(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[.,]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1h
@@ -53,19 +71,49 @@ function cacheKey(sectorCode: string, year: number): string {
 }
 
 /**
- * Lê o catálogo de setores. Sem cache — listagem é leve.
+ * Lê o catálogo de setores + cobertura de pares (computada AO VIVO da base
+ * PeerCompany, sem coluna derivada/migração). Sem cache — listagem é leve.
+ *
+ * `peerCount` casa o subsetor (nível 2) por (classificação do pai, nome) contra
+ * `PeerCompany.{classificacao,setor}`, normalizando acento/pontuação. Setores
+ * nível 1 ficam com peerCount=0 (o agrupamento soma os filhos no front).
  */
 export async function listSectors(): Promise<SectorSummary[]> {
-  const sectors = await prisma.sector.findMany({
-    where: { active: true },
-    orderBy: [{ parentCode: { sort: "asc", nulls: "first" } }, { code: "asc" }],
+  const [sectors, peerGroups] = await Promise.all([
+    prisma.sector.findMany({
+      where: { active: true },
+      orderBy: [{ parentCode: { sort: "asc", nulls: "first" } }, { code: "asc" }],
+    }),
+    prisma.peerCompany.groupBy({
+      by: ["classificacao", "setor"],
+      _count: { papel: true },
+    }),
+  ]);
+
+  // (classif normalizada, setor normalizado) → contagem de pares
+  const peerByKey = new Map<string, number>();
+  for (const g of peerGroups) {
+    peerByKey.set(`${normName(g.classificacao)}::${normName(g.setor)}`, g._count.papel);
+  }
+  const nameByCode = new Map(sectors.map((s) => [s.code, s.name]));
+
+  return sectors.map((s) => {
+    const parentName = s.parentCode ? nameByCode.get(s.parentCode) ?? null : null;
+    // peerCount só faz sentido em subsetor (nível 2): precisa do pai p/ escopar.
+    const peerCount =
+      s.parentCode && parentName
+        ? peerByKey.get(`${normName(parentName)}::${normName(s.name)}`) ?? 0
+        : 0;
+    return {
+      code: s.code,
+      name: s.name,
+      parentCode: s.parentCode,
+      parentName,
+      active: s.active,
+      peerCount,
+      hasPeers: peerCount > 0,
+    };
   });
-  return sectors.map((s) => ({
-    code: s.code,
-    name: s.name,
-    parentCode: s.parentCode,
-    active: s.active,
-  }));
 }
 
 /**
@@ -121,7 +169,26 @@ export async function getSectorBenchmark(
     }
   }
 
-  // Fallback default pra métricas que não vieram do setor pedido.
+  // Cascata B3: subsetor (nível 2) → setor-pai (nível 1) p/ métricas faltantes.
+  // Cobre subsetores sem premissa própria e o "Outros"/custom futuro.
+  const missingAfterSelf = (Object.keys(metrics) as Array<keyof typeof metrics>).filter((k) => metrics[k] === null);
+  if (missingAfterSelf.length > 0) {
+    const self = await prisma.sector.findUnique({
+      where: { code: sectorCode },
+      select: { parentCode: true },
+    });
+    if (self?.parentCode) {
+      const parentRows = await prisma.sectorBenchmark.findMany({
+        where: { sectorCode: self.parentCode, year: targetYear },
+      });
+      for (const row of parentRows) {
+        const key = METRIC_KEYS[row.metric];
+        if (key && metrics[key] === null) metrics[key] = row.value;
+      }
+    }
+  }
+
+  // Fallback default pra métricas que ainda não vieram (subsetor nem pai cobriram).
   const missing = (Object.keys(metrics) as Array<keyof typeof metrics>).filter((k) => metrics[k] === null);
   if (missing.length > 0 && sectorCode !== "default") {
     const defaultRows = await prisma.sectorBenchmark.findMany({

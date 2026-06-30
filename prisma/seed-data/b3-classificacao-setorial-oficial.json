@@ -1,0 +1,375 @@
+[
+  {
+    "sector": "Bens Industriais",
+    "subSectors": [
+      {
+        "describle": "Comércio",
+        "segment": [
+          "Máquinas e Equipamentos",
+          "Material de Transporte"
+        ]
+      },
+      {
+        "describle": "Construção e Engenharia",
+        "segment": [
+          "Construção Pesada",
+          "Engenharia Consultiva",
+          "Produtos para Construção",
+          "Serviços Diversos"
+        ]
+      },
+      {
+        "describle": "Máquinas e Equipamentos",
+        "segment": [
+          "Armas e Munições",
+          "Máq. e Equip. Construção e Agrícolas",
+          "Máq. e Equip. Industriais",
+          "Motores . Compressores e Outros"
+        ]
+      },
+      {
+        "describle": "Material de Transporte",
+        "segment": [
+          "Material Aeronáutico e de Defesa",
+          "Material Rodoviário"
+        ]
+      },
+      {
+        "describle": "Serviços",
+        "segment": [
+          "Serviços Diversos"
+        ]
+      },
+      {
+        "describle": "Transporte",
+        "segment": [
+          "Exploração de Rodovias",
+          "Serviços de Apoio e Armazenagem",
+          "Transporte Aéreo",
+          "Transporte Ferroviário",
+          "Transporte Hidroviário",
+          "Transporte Metroviário",
+          "Transporte Rodoviário"
+        ]
+      }
+    ]
+  },
+  {
+    "sector": "Comunicações",
+    "subSectors": [
+      {
+        "describle": "Telecomunicações",
+        "segment": [
+          "Telecomunicações"
+        ]
+      }
+    ]
+  },
+  {
+    "sector": "Construção e Transporte",
+    "subSectors": []
+  },
+  {
+    "sector": "Consumo Cíclico",
+    "subSectors": [
+      {
+        "describle": "Automóveis e Motocicletas",
+        "segment": [
+          "Automóveis e Motocicletas"
+        ]
+      },
+      {
+        "describle": "Comércio",
+        "segment": [
+          "Eletrodomésticos",
+          "Produtos Diversos",
+          "Tecidos. Vestuário e Calçados"
+        ]
+      },
+      {
+        "describle": "Construção Civil",
+        "segment": [
+          "Incorporações"
+        ]
+      },
+      {
+        "describle": "Diversos",
+        "segment": [
+          "Aluguel de carros",
+          "Programas de Fidelização",
+          "Serviços Educacionais"
+        ]
+      },
+      {
+        "describle": "Hoteis e Restaurantes",
+        "segment": [
+          "Hotelaria",
+          "Restaurante e Similares"
+        ]
+      },
+      {
+        "describle": "Tecidos. Vestuário e Calçados",
+        "segment": [
+          "Acessórios",
+          "Calçados",
+          "Fios e Tecidos",
+          "Vestuário"
+        ]
+      },
+      {
+        "describle": "Utilidades Domésticas",
+        "segment": [
+          "Eletrodomésticos",
+          "Móveis",
+          "Utensílios Domésticos"
+        ]
+      },
+      {
+        "describle": "Viagens e Lazer",
+        "segment": [
+          "Atividades Esportivas",
+          "Bicicletas",
+          "Brinquedos e Jogos",
+          "Produção de Eventos e Shows",
+          "Viagens e Turismo"
+        ]
+      }
+    ]
+  },
+  {
+    "sector": "Consumo não Cíclico",
+    "subSectors": [
+      {
+        "describle": "Agropecuária",
+        "segment": [
+          "Agricultura"
+        ]
+      },
+      {
+        "describle": "Alimentos Processados",
+        "segment": [
+          "Açucar e Alcool",
+          "Alimentos Diversos",
+          "Carnes e Derivados",
+          "Laticínios"
+        ]
+      },
+      {
+        "describle": "Bebidas",
+        "segment": [
+          "Cervejas e Refrigerantes"
+        ]
+      },
+      {
+        "describle": "Comércio e Distribuição",
+        "segment": [
+          "Alimentos",
+          "Medicamentos"
+        ]
+      },
+      {
+        "describle": "Produtos de Uso Pessoal e de Limpeza",
+        "segment": [
+          "Produtos de Limpeza",
+          "Produtos de Uso Pessoal"
+        ]
+      }
+    ]
+  },
+  {
+    "sector": "Financeiro",
+    "subSectors": [
+      {
+        "describle": "Exploração de Imóveis",
+        "segment": [
+          "Exploração de Imóveis",
+          "Intermediação Imobiliária"
+        ]
+      },
+      {
+        "describle": "Holdings Diversificadas",
+        "segment": [
+          "Holdings Diversificadas"
+        ]
+      },
+      {
+        "describle": "Intermediários Financeiros",
+        "segment": [
+          "Bancos",
+          "Outros Intermediarios Financeiros",
+          "Soc. Arrendamento Mercantil"
+        ]
+      },
+      {
+        "describle": "Previdência e Seguros",
+        "segment": [
+          "Corretoras de Seguros e Resseguros",
+          "Resseguradoras",
+          "Seguradoras"
+        ]
+      },
+      {
+        "describle": "Securitizadoras de Recebíveis",
+        "segment": [
+          "Securitizadoras de Recebíveis"
+        ]
+      },
+      {
+        "describle": "Serviços Diversos",
+        "segment": [
+          "Serviços Diversos"
+        ]
+      },
+      {
+        "describle": "Serviços Financeiros Diversos",
+        "segment": [
+          "Gestão de Recursos e Investimentos",
+          "Serviços Financeiros Diversos"
+        ]
+      }
+    ]
+  },
+  {
+    "sector": "Materiais Básicos",
+    "subSectors": [
+      {
+        "describle": "Embalagens",
+        "segment": [
+          "Embalagens"
+        ]
+      },
+      {
+        "describle": "Madeira e Papel",
+        "segment": [
+          "Madeira",
+          "Papel e Celulose"
+        ]
+      },
+      {
+        "describle": "Materiais Diversos",
+        "segment": [
+          "Materiais Diversos"
+        ]
+      },
+      {
+        "describle": "Mineração",
+        "segment": [
+          "Minerais Metálicos"
+        ]
+      },
+      {
+        "describle": "Químicos",
+        "segment": [
+          "Fertilizantes e Defensivos",
+          "Petroquímicos",
+          "Químicos Diversos"
+        ]
+      },
+      {
+        "describle": "Siderurgia e Metalurgia",
+        "segment": [
+          "Artefatos de Cobre",
+          "Artefatos de Ferro e Aço",
+          "Siderurgia"
+        ]
+      }
+    ]
+  },
+  {
+    "sector": "Outros",
+    "subSectors": [
+      {
+        "describle": "Outros",
+        "segment": [
+          "Outros"
+        ]
+      }
+    ]
+  },
+  {
+    "sector": "Petróleo. Gás e Biocombustíveis",
+    "subSectors": [
+      {
+        "describle": "Petróleo. Gás e Biocombustíveis",
+        "segment": [
+          "Distribuição de Combustíveis",
+          "Equipamentos e Serviços",
+          "Exploração. Refino e Distribuição"
+        ]
+      }
+    ]
+  },
+  {
+    "sector": "Saúde",
+    "subSectors": [
+      {
+        "describle": "Comércio e Distribuição",
+        "segment": [
+          "Medicamentos e Outros Produtos"
+        ]
+      },
+      {
+        "describle": "Equipamentos",
+        "segment": [
+          "Equipamentos"
+        ]
+      },
+      {
+        "describle": "Medicamentos e Outros Produtos",
+        "segment": [
+          "Medicamentos e Outros Produtos"
+        ]
+      },
+      {
+        "describle": "Serv.Méd.Hospit..Análises e Diagnósticos",
+        "segment": [
+          "Serv.Méd.Hospit..Análises e Diagnósticos"
+        ]
+      }
+    ]
+  },
+  {
+    "sector": "Setor Inicial",
+    "subSectors": []
+  },
+  {
+    "sector": "Tecnologia da Informação",
+    "subSectors": [
+      {
+        "describle": "Computadores e Equipamentos",
+        "segment": [
+          "Computadores e Equipamentos"
+        ]
+      },
+      {
+        "describle": "Programas e Serviços",
+        "segment": [
+          "Programas e Serviços"
+        ]
+      }
+    ]
+  },
+  {
+    "sector": "Utilidade Pública",
+    "subSectors": [
+      {
+        "describle": "Água e Saneamento",
+        "segment": [
+          "Água e Saneamento"
+        ]
+      },
+      {
+        "describle": "Energia Elétrica",
+        "segment": [
+          "Energia Elétrica"
+        ]
+      },
+      {
+        "describle": "Gás",
+        "segment": [
+          "Gás"
+        ]
+      }
+    ]
+  }
+]

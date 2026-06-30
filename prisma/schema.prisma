@@ -232,6 +232,10 @@ model Analysis {
   mode              String?  @map("mode")
   ibrType           String?  @map("ibr_type")
   sectorId          String?  @map("sector_id")
+  /// Texto livre do setor/subsetor quando o analista escolhe "Outros" no picker
+  /// (atividade que não encaixa na taxonomia B3). Alimenta o setorText do
+  /// resolvedor de premissas como último recurso.
+  sectorCustom      String?  @map("sector_custom")
   reviewState       String   @default("draft") @map("review_state")
   resultado         Json?
   dadosEstruturados Json?    @map("dados_estruturados")

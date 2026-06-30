@@ -8,6 +8,8 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { generateAnalysis } from "../services/claude";
+import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
+import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta } from "../services/account-mapper";
 import { DRE_TEMPLATE } from "../services/financial-templates";
 import { calculateIndicators } from "../services/indicator-calculator";
@@ -36,6 +38,8 @@ const analysisSchema = z.object({
   mode: z.enum(["recurring", "ibr"]).optional(),
   ibrType: z.enum(["light", "full", "crisis"]).optional(),
   sectorId: z.string().optional(),
+  // Texto livre quando o picker está em "Outros" (setor fora da taxonomia B3).
+  sectorCustom: z.string().max(120).optional(),
   documentChecklist: z.array(z.object({
     id: z.string(),
     label: z.string(),
@@ -97,6 +101,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       mode: resolvedMode,
       ibrType: analysisData.ibrType,
       sectorId: analysisData.sectorId,
+      sectorCustom: analysisData.sectorCustom,
       documentChecklist: documentChecklist as object | undefined,
       userId: req.userId!,
       nextReviewAt,
@@ -196,6 +201,50 @@ router.post("/:id/snooze-review", async (req: AuthRequest, res: Response): Promi
   res.json({ id: updated.id, nextReviewAt: updated.nextReviewAt?.toISOString() ?? null });
 });
 
+/** Ano (4 dígitos) de uma string de período ("2024", "31/12/2024"…), ou null. */
+function yearOfPeriodo(p: string): number | null {
+  const m = p.match(/(19|20)\d{2}/);
+  return m ? Number(m[0]) : null;
+}
+
+/**
+ * Monta a comparação com o Benchmark Setorial (pares B3) para a análise:
+ * resolve o segmento B3 a partir do `sectorId` escolhido no picker, pega os
+ * indicadores comparáveis no período mais recente e devolve a posição vs pares.
+ * Retorna null quando não há setor escolhido. Determinístico (sem IA).
+ */
+async function buildPeerComparison(
+  sectorId: string | null,
+  indicadores: Array<{ nome: string; valores: Record<string, unknown> }>,
+  periodos: string[],
+): Promise<{ year: number | null; segment: string | null; rows: PeerComparisonRow[] } | null> {
+  if (!sectorId || indicadores.length === 0 || periodos.length === 0) return null;
+
+  const sector = await prisma.sector.findUnique({ where: { code: sectorId }, include: { parent: true } });
+  if (!sector) return null;
+  // Subsetor (nível 2): setor=nome, classificação=nome do pai. Nível 1: só classificação.
+  const seg = sector.parentCode && sector.parent
+    ? { classificacao: sector.parent.name, setor: sector.name, subsetor: null as string | null }
+    : { classificacao: sector.name, setor: null as string | null, subsetor: null as string | null };
+
+  // Período mais recente (maior ano detectado).
+  const ult = [...periodos].sort((a, b) => (yearOfPeriodo(a) ?? 0) - (yearOfPeriodo(b) ?? 0)).at(-1)!;
+  const companyYear = yearOfPeriodo(ult);
+
+  // Valores dos indicadores comparáveis (mapeados em PEER_INDICATOR_MAP) no último período.
+  const valores: Array<{ indicador: string; valor: number }> = [];
+  for (const ind of indicadores) {
+    if (!(ind.nome in PEER_INDICATOR_MAP)) continue;
+    const v = ind.valores?.[ult];
+    const n = typeof v === "number" ? v : Number(v);
+    if (Number.isFinite(n)) valores.push({ indicador: ind.nome, valor: n });
+  }
+  if (valores.length === 0) return { year: companyYear, segment: seg.setor ?? seg.classificacao, rows: [] };
+
+  const { year, rows } = await comparePeersForIndicators(seg, valores, companyYear);
+  return { year, segment: seg.setor ?? seg.classificacao, rows };
+}
+
 // Endpoint principal: dispara extração dos documentos + geração da análise com Claude
 /**
  * ÚNICA passada de IA do IBR (camada interpretativa) — lê os dados JÁ extraídos/persistidos
@@ -223,6 +272,11 @@ async function runAnalysisBackground(analysisId: string, modelKey?: string | nul
       return;
     }
 
+    // Benchmark Setorial (pares B3): posiciona a empresa vs listadas do subsetor
+    // escolhido no picker. Só leitura de DB (sem IA/tokens). Entra no prompt p/
+    // tornar o semáforo relativo ao setor e fica persistido p/ a UI/PDF.
+    const peer = await buildPeerComparison(analysis.sectorId, indicadores, periodos);
+
     const analise = await generateAnalysis(
       indicadores,
       periodos,
@@ -233,8 +287,9 @@ async function runAnalysisBackground(analysisId: string, modelKey?: string | nul
       },
       analysis.periodo ?? "Período não informado",
       modelKey,
+      peer,
     );
-    const resultado = { ...analise.result, custoAnalise: analise.custo };
+    const resultado = { ...analise.result, custoAnalise: analise.custo, peerComparison: peer };
     console.log(`[generate] ${analysisId} análise: modelo=${analise.custo.modelo} custo=$${analise.custo.usd.toFixed(4)} (${analise.custo.inputTokens}+${analise.custo.outputTokens} tk)`);
 
     const docConfianca = typeof dados?.validacao?.confiancaGeral === "number" ? dados.validacao.confiancaGeral : analise.result.confianca;

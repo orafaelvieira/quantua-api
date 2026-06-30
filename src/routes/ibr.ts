@@ -162,7 +162,9 @@ router.get("/:id/projections", async (req: AuthRequest, res: Response): Promise<
   try {
     const premises = await resolveSectorPremises({
       sectorCode: analysis.sectorId,
-      setorText: analysis.company?.setor ?? null,
+      // "Outros" do picker grava sectorCustom (texto livre) — tem prioridade
+      // sobre o setor cadastrado da empresa no fallback textual.
+      setorText: analysis.sectorCustom ?? analysis.company?.setor ?? null,
     });
     const projections = computeProjections({
       dadosEstruturados: analysis.dadosEstruturados,

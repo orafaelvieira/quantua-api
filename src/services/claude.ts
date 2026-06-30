@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { env } from "../config/env";
 import { calcCusto, modeloAnaliseId, type CustoIA } from "./ai-extraction";
+import type { PeerComparisonRow } from "./peer-benchmark";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
 
@@ -108,10 +109,35 @@ function kpisDeterministicos(indicadores: IndicadorLite[], periodos: string[]) {
   return { kpis, ...sec, tabela };
 }
 
+/** Formata o bloco "Posicionamento vs Pares" (Benchmark Setorial B3) pro prompt.
+ *  Vazio quando não há comparações — o prompt então só usa leitura absoluta. */
+function buildPeerBlock(
+  peer?: { year: number | null; segment: string | null; rows: PeerComparisonRow[] } | null,
+): string {
+  if (!peer || peer.rows.length === 0) return "";
+  const fmt = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : "-");
+  const nivelLabel: Record<PeerComparisonRow["level"], string> = {
+    subsetor: "subsetor", setor: "setor", classificacao: "classificação", mercado: "mercado",
+  };
+  const linhas = peer.rows
+    .map(
+      (r) =>
+        `- ${r.indicador}: empresa=${fmt(r.valor)} · mediana pares=${fmt(r.p50)} · faixa p25–p75=${fmt(r.p25)}–${fmt(r.p75)} · percentil=${r.percentil} · ${r.higherIsBetter ? "maior é melhor" : "menor é melhor"} · nível=${nivelLabel[r.level]} (n=${r.count})`,
+    )
+    .join("\n");
+  const seg = peer.segment ? ` — ${peer.segment}` : "";
+  const ano = peer.year ? `, ano ${peer.year}` : "";
+  return `
+POSICIONAMENTO VS PARES (Benchmark Setorial B3${seg}${ano}) — comparação da empresa com listadas do segmento:
+${linhas}
+`;
+}
+
 /**
  * Camada INTERPRETATIVA do IBR. Recebe os indicadores JÁ CALCULADOS (determinísticos) — a IA
  * não recalcula número nenhum, só interpreta. Roda no modelo escolhido (Workspace.aiAnalysisModel,
- * default sonnet) e devolve o custo da chamada.
+ * default sonnet) e devolve o custo da chamada. `peer` injeta o Benchmark Setorial (pares B3)
+ * pra tornar o semáforo RELATIVO ao setor.
  */
 export async function generateAnalysis(
   indicadores: IndicadorLite[],
@@ -119,9 +145,11 @@ export async function generateAnalysis(
   empresa: { razaoSocial: string; setor: string; porte: string },
   periodo: string,
   modelKey?: string | null,
+  peer?: { year: number | null; segment: string | null; rows: PeerComparisonRow[] } | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
   const model = modeloAnaliseId(modelKey);
   const det = kpisDeterministicos(indicadores, periodos);
+  const peerBlock = buildPeerBlock(peer);
 
   const prompt = `Você é um CFO/consultor financeiro sênior analisando uma empresa brasileira de pequeno/médio porte.
 
@@ -129,6 +157,7 @@ Empresa: "${empresa.razaoSocial}" · Setor: ${empresa.setor} · Porte: ${empresa
 
 INDICADORES JÁ CALCULADOS E AUDITADOS (valores por período — NÃO recalcule, apenas INTERPRETE):
 ${det.tabela || "(indicadores indisponíveis)"}
+${peerBlock}
 
 Produza a CAMADA INTERPRETATIVA (não numérica) de um IBR — leitura de CFO desses indicadores.
 
@@ -158,6 +187,7 @@ Pilares das opções (Oliver Wyman): strategic_repositioning = Reposicionamento 
 
 Regras:
 - Baseie-se SOMENTE nos indicadores fornecidos. NÃO invente nem recalcule números.
+- POSICIONAMENTO VS PARES: quando o bloco de pares estiver presente, o semáforo é RELATIVO ao setor — defina o status comparando a empresa à mediana e à faixa dos pares (não a um padrão absoluto), respeitando a polaridade indicada (maior/menor é melhor). Cite o percentil ou a mediana do par na descrição. Ancore forças/fraquezas (SWOT) e opções no GAP vs pares. Se o nível usado não for o subsetor (ex.: "setor"/"mercado"), trate a comparação como aproximada.
 - semaforo: cite o valor numérico relevante na descrição. recomendações: 3 a 6, práticas e específicas para a empresa. destaques: frases curtas (≤15 palavras).
 - opcoesEstrategicas: 4 a 8 no total, distribuídas pelos pilares conforme o diagnóstico (nem todo pilar precisa ter opção). priority p0=urgente, p1=importante, p2=oportuno. Específicas e acionáveis.
 - confianca: maior quando há 2+ períodos e indicadores completos.

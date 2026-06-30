@@ -1,0 +1,697 @@
+{
+  "_meta": {
+    "source": "B3 GetIndustryClassification (oficial, live)",
+    "generatedFrom": "b3-classificacao-setorial-oficial.json + base_bovespa.xlsx",
+    "match": "direto (classif+subsetor), consistente com peer-benchmark.ts",
+    "levels": "1=setor, 2=subsetor",
+    "note": "buckets vazios omitidos"
+  },
+  "sectors": [
+    {
+      "code": "bens_industriais",
+      "name": "Bens Industriais",
+      "parentCode": null,
+      "level": 1
+    },
+    {
+      "code": "comunicacoes",
+      "name": "Comunicações",
+      "parentCode": null,
+      "level": 1
+    },
+    {
+      "code": "consumo_ciclico",
+      "name": "Consumo Cíclico",
+      "parentCode": null,
+      "level": 1
+    },
+    {
+      "code": "consumo_nao_ciclico",
+      "name": "Consumo não Cíclico",
+      "parentCode": null,
+      "level": 1
+    },
+    {
+      "code": "financeiro",
+      "name": "Financeiro",
+      "parentCode": null,
+      "level": 1
+    },
+    {
+      "code": "materiais_basicos",
+      "name": "Materiais Básicos",
+      "parentCode": null,
+      "level": 1
+    },
+    {
+      "code": "outros",
+      "name": "Outros",
+      "parentCode": null,
+      "level": 1
+    },
+    {
+      "code": "petroleo_gas_e_biocombustiveis",
+      "name": "Petróleo. Gás e Biocombustíveis",
+      "parentCode": null,
+      "level": 1
+    },
+    {
+      "code": "saude",
+      "name": "Saúde",
+      "parentCode": null,
+      "level": 1
+    },
+    {
+      "code": "tecnologia_da_informacao",
+      "name": "Tecnologia da Informação",
+      "parentCode": null,
+      "level": 1
+    },
+    {
+      "code": "utilidade_publica",
+      "name": "Utilidade Pública",
+      "parentCode": null,
+      "level": 1
+    }
+  ],
+  "subsectors": [
+    {
+      "code": "bens_industriais__comercio",
+      "name": "Comércio",
+      "parentCode": "bens_industriais",
+      "level": 2,
+      "b3Classificacao": "Bens Industriais",
+      "b3Subsetor": "Comércio",
+      "segments": [
+        "Máquinas e Equipamentos",
+        "Material de Transporte"
+      ],
+      "peerCount": 0,
+      "hasPeers": false
+    },
+    {
+      "code": "bens_industriais__construcao_e_engenharia",
+      "name": "Construção e Engenharia",
+      "parentCode": "bens_industriais",
+      "level": 2,
+      "b3Classificacao": "Bens Industriais",
+      "b3Subsetor": "Construção e Engenharia",
+      "segments": [
+        "Construção Pesada",
+        "Engenharia Consultiva",
+        "Produtos para Construção",
+        "Serviços Diversos"
+      ],
+      "peerCount": 4,
+      "hasPeers": true
+    },
+    {
+      "code": "bens_industriais__maquinas_e_equipamentos",
+      "name": "Máquinas e Equipamentos",
+      "parentCode": "bens_industriais",
+      "level": 2,
+      "b3Classificacao": "Bens Industriais",
+      "b3Subsetor": "Máquinas e Equipamentos",
+      "segments": [
+        "Armas e Munições",
+        "Máq. e Equip. Construção e Agrícolas",
+        "Máq. e Equip. Industriais",
+        "Motores . Compressores e Outros"
+      ],
+      "peerCount": 9,
+      "hasPeers": true
+    },
+    {
+      "code": "bens_industriais__material_de_transporte",
+      "name": "Material de Transporte",
+      "parentCode": "bens_industriais",
+      "level": 2,
+      "b3Classificacao": "Bens Industriais",
+      "b3Subsetor": "Material de Transporte",
+      "segments": [
+        "Material Aeronáutico e de Defesa",
+        "Material Rodoviário"
+      ],
+      "peerCount": 6,
+      "hasPeers": true
+    },
+    {
+      "code": "bens_industriais__servicos",
+      "name": "Serviços",
+      "parentCode": "bens_industriais",
+      "level": 2,
+      "b3Classificacao": "Bens Industriais",
+      "b3Subsetor": "Serviços",
+      "segments": [
+        "Serviços Diversos"
+      ],
+      "peerCount": 0,
+      "hasPeers": false
+    },
+    {
+      "code": "bens_industriais__transporte",
+      "name": "Transporte",
+      "parentCode": "bens_industriais",
+      "level": 2,
+      "b3Classificacao": "Bens Industriais",
+      "b3Subsetor": "Transporte",
+      "segments": [
+        "Exploração de Rodovias",
+        "Serviços de Apoio e Armazenagem",
+        "Transporte Aéreo",
+        "Transporte Ferroviário",
+        "Transporte Hidroviário",
+        "Transporte Metroviário",
+        "Transporte Rodoviário"
+      ],
+      "peerCount": 9,
+      "hasPeers": true
+    },
+    {
+      "code": "comunicacoes__telecomunicacoes",
+      "name": "Telecomunicações",
+      "parentCode": "comunicacoes",
+      "level": 2,
+      "b3Classificacao": "Comunicações",
+      "b3Subsetor": "Telecomunicações",
+      "segments": [
+        "Telecomunicações"
+      ],
+      "peerCount": 5,
+      "hasPeers": true
+    },
+    {
+      "code": "consumo_ciclico__automoveis_e_motocicletas",
+      "name": "Automóveis e Motocicletas",
+      "parentCode": "consumo_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo Cíclico",
+      "b3Subsetor": "Automóveis e Motocicletas",
+      "segments": [
+        "Automóveis e Motocicletas"
+      ],
+      "peerCount": 1,
+      "hasPeers": true
+    },
+    {
+      "code": "consumo_ciclico__comercio",
+      "name": "Comércio",
+      "parentCode": "consumo_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo Cíclico",
+      "b3Subsetor": "Comércio",
+      "segments": [
+        "Eletrodomésticos",
+        "Produtos Diversos",
+        "Tecidos. Vestuário e Calçados"
+      ],
+      "peerCount": 15,
+      "hasPeers": true
+    },
+    {
+      "code": "consumo_ciclico__construcao_civil",
+      "name": "Construção Civil",
+      "parentCode": "consumo_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo Cíclico",
+      "b3Subsetor": "Construção Civil",
+      "segments": [
+        "Incorporações"
+      ],
+      "peerCount": 21,
+      "hasPeers": true
+    },
+    {
+      "code": "consumo_ciclico__diversos",
+      "name": "Diversos",
+      "parentCode": "consumo_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo Cíclico",
+      "b3Subsetor": "Diversos",
+      "segments": [
+        "Aluguel de carros",
+        "Programas de Fidelização",
+        "Serviços Educacionais"
+      ],
+      "peerCount": 0,
+      "hasPeers": false
+    },
+    {
+      "code": "consumo_ciclico__hoteis_e_restaurantes",
+      "name": "Hoteis e Restaurantes",
+      "parentCode": "consumo_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo Cíclico",
+      "b3Subsetor": "Hoteis e Restaurantes",
+      "segments": [
+        "Hotelaria",
+        "Restaurante e Similares"
+      ],
+      "peerCount": 2,
+      "hasPeers": true
+    },
+    {
+      "code": "consumo_ciclico__tecidos_vestuario_e_calcados",
+      "name": "Tecidos. Vestuário e Calçados",
+      "parentCode": "consumo_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo Cíclico",
+      "b3Subsetor": "Tecidos. Vestuário e Calçados",
+      "segments": [
+        "Acessórios",
+        "Calçados",
+        "Fios e Tecidos",
+        "Vestuário"
+      ],
+      "peerCount": 10,
+      "hasPeers": true
+    },
+    {
+      "code": "consumo_ciclico__utilidades_domesticas",
+      "name": "Utilidades Domésticas",
+      "parentCode": "consumo_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo Cíclico",
+      "b3Subsetor": "Utilidades Domésticas",
+      "segments": [
+        "Eletrodomésticos",
+        "Móveis",
+        "Utensílios Domésticos"
+      ],
+      "peerCount": 3,
+      "hasPeers": true
+    },
+    {
+      "code": "consumo_ciclico__viagens_e_lazer",
+      "name": "Viagens e Lazer",
+      "parentCode": "consumo_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo Cíclico",
+      "b3Subsetor": "Viagens e Lazer",
+      "segments": [
+        "Atividades Esportivas",
+        "Bicicletas",
+        "Brinquedos e Jogos",
+        "Produção de Eventos e Shows",
+        "Viagens e Turismo"
+      ],
+      "peerCount": 4,
+      "hasPeers": true
+    },
+    {
+      "code": "consumo_nao_ciclico__agropecuaria",
+      "name": "Agropecuária",
+      "parentCode": "consumo_nao_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo não Cíclico",
+      "b3Subsetor": "Agropecuária",
+      "segments": [
+        "Agricultura"
+      ],
+      "peerCount": 5,
+      "hasPeers": true
+    },
+    {
+      "code": "consumo_nao_ciclico__alimentos_processados",
+      "name": "Alimentos Processados",
+      "parentCode": "consumo_nao_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo não Cíclico",
+      "b3Subsetor": "Alimentos Processados",
+      "segments": [
+        "Açucar e Alcool",
+        "Alimentos Diversos",
+        "Carnes e Derivados",
+        "Laticínios"
+      ],
+      "peerCount": 5,
+      "hasPeers": true
+    },
+    {
+      "code": "consumo_nao_ciclico__bebidas",
+      "name": "Bebidas",
+      "parentCode": "consumo_nao_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo não Cíclico",
+      "b3Subsetor": "Bebidas",
+      "segments": [
+        "Cervejas e Refrigerantes"
+      ],
+      "peerCount": 1,
+      "hasPeers": true
+    },
+    {
+      "code": "consumo_nao_ciclico__comercio_e_distribuicao",
+      "name": "Comércio e Distribuição",
+      "parentCode": "consumo_nao_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo não Cíclico",
+      "b3Subsetor": "Comércio e Distribuição",
+      "segments": [
+        "Alimentos",
+        "Medicamentos"
+      ],
+      "peerCount": 2,
+      "hasPeers": true
+    },
+    {
+      "code": "consumo_nao_ciclico__produtos_de_uso_pessoal_e_de_limpeza",
+      "name": "Produtos de Uso Pessoal e de Limpeza",
+      "parentCode": "consumo_nao_ciclico",
+      "level": 2,
+      "b3Classificacao": "Consumo não Cíclico",
+      "b3Subsetor": "Produtos de Uso Pessoal e de Limpeza",
+      "segments": [
+        "Produtos de Limpeza",
+        "Produtos de Uso Pessoal"
+      ],
+      "peerCount": 1,
+      "hasPeers": true
+    },
+    {
+      "code": "financeiro__exploracao_de_imoveis",
+      "name": "Exploração de Imóveis",
+      "parentCode": "financeiro",
+      "level": 2,
+      "b3Classificacao": "Financeiro",
+      "b3Subsetor": "Exploração de Imóveis",
+      "segments": [
+        "Exploração de Imóveis",
+        "Intermediação Imobiliária"
+      ],
+      "peerCount": 10,
+      "hasPeers": true
+    },
+    {
+      "code": "financeiro__holdings_diversificadas",
+      "name": "Holdings Diversificadas",
+      "parentCode": "financeiro",
+      "level": 2,
+      "b3Classificacao": "Financeiro",
+      "b3Subsetor": "Holdings Diversificadas",
+      "segments": [
+        "Holdings Diversificadas"
+      ],
+      "peerCount": 0,
+      "hasPeers": false
+    },
+    {
+      "code": "financeiro__intermediarios_financeiros",
+      "name": "Intermediários Financeiros",
+      "parentCode": "financeiro",
+      "level": 2,
+      "b3Classificacao": "Financeiro",
+      "b3Subsetor": "Intermediários Financeiros",
+      "segments": [
+        "Bancos",
+        "Outros Intermediarios Financeiros",
+        "Soc. Arrendamento Mercantil"
+      ],
+      "peerCount": 0,
+      "hasPeers": false
+    },
+    {
+      "code": "financeiro__previdencia_e_seguros",
+      "name": "Previdência e Seguros",
+      "parentCode": "financeiro",
+      "level": 2,
+      "b3Classificacao": "Financeiro",
+      "b3Subsetor": "Previdência e Seguros",
+      "segments": [
+        "Corretoras de Seguros e Resseguros",
+        "Resseguradoras",
+        "Seguradoras"
+      ],
+      "peerCount": 0,
+      "hasPeers": false
+    },
+    {
+      "code": "financeiro__securitizadoras_de_recebiveis",
+      "name": "Securitizadoras de Recebíveis",
+      "parentCode": "financeiro",
+      "level": 2,
+      "b3Classificacao": "Financeiro",
+      "b3Subsetor": "Securitizadoras de Recebíveis",
+      "segments": [
+        "Securitizadoras de Recebíveis"
+      ],
+      "peerCount": 0,
+      "hasPeers": false
+    },
+    {
+      "code": "financeiro__servicos_diversos",
+      "name": "Serviços Diversos",
+      "parentCode": "financeiro",
+      "level": 2,
+      "b3Classificacao": "Financeiro",
+      "b3Subsetor": "Serviços Diversos",
+      "segments": [
+        "Serviços Diversos"
+      ],
+      "peerCount": 0,
+      "hasPeers": false
+    },
+    {
+      "code": "financeiro__servicos_financeiros_diversos",
+      "name": "Serviços Financeiros Diversos",
+      "parentCode": "financeiro",
+      "level": 2,
+      "b3Classificacao": "Financeiro",
+      "b3Subsetor": "Serviços Financeiros Diversos",
+      "segments": [
+        "Gestão de Recursos e Investimentos",
+        "Serviços Financeiros Diversos"
+      ],
+      "peerCount": 0,
+      "hasPeers": false
+    },
+    {
+      "code": "materiais_basicos__embalagens",
+      "name": "Embalagens",
+      "parentCode": "materiais_basicos",
+      "level": 2,
+      "b3Classificacao": "Materiais Básicos",
+      "b3Subsetor": "Embalagens",
+      "segments": [
+        "Embalagens"
+      ],
+      "peerCount": 0,
+      "hasPeers": false
+    },
+    {
+      "code": "materiais_basicos__madeira_e_papel",
+      "name": "Madeira e Papel",
+      "parentCode": "materiais_basicos",
+      "level": 2,
+      "b3Classificacao": "Materiais Básicos",
+      "b3Subsetor": "Madeira e Papel",
+      "segments": [
+        "Madeira",
+        "Papel e Celulose"
+      ],
+      "peerCount": 4,
+      "hasPeers": true
+    },
+    {
+      "code": "materiais_basicos__materiais_diversos",
+      "name": "Materiais Diversos",
+      "parentCode": "materiais_basicos",
+      "level": 2,
+      "b3Classificacao": "Materiais Básicos",
+      "b3Subsetor": "Materiais Diversos",
+      "segments": [
+        "Materiais Diversos"
+      ],
+      "peerCount": 1,
+      "hasPeers": true
+    },
+    {
+      "code": "materiais_basicos__mineracao",
+      "name": "Mineração",
+      "parentCode": "materiais_basicos",
+      "level": 2,
+      "b3Classificacao": "Materiais Básicos",
+      "b3Subsetor": "Mineração",
+      "segments": [
+        "Minerais Metálicos"
+      ],
+      "peerCount": 4,
+      "hasPeers": true
+    },
+    {
+      "code": "materiais_basicos__quimicos",
+      "name": "Químicos",
+      "parentCode": "materiais_basicos",
+      "level": 2,
+      "b3Classificacao": "Materiais Básicos",
+      "b3Subsetor": "Químicos",
+      "segments": [
+        "Fertilizantes e Defensivos",
+        "Petroquímicos",
+        "Químicos Diversos"
+      ],
+      "peerCount": 7,
+      "hasPeers": true
+    },
+    {
+      "code": "materiais_basicos__siderurgia_e_metalurgia",
+      "name": "Siderurgia e Metalurgia",
+      "parentCode": "materiais_basicos",
+      "level": 2,
+      "b3Classificacao": "Materiais Básicos",
+      "b3Subsetor": "Siderurgia e Metalurgia",
+      "segments": [
+        "Artefatos de Cobre",
+        "Artefatos de Ferro e Aço",
+        "Siderurgia"
+      ],
+      "peerCount": 7,
+      "hasPeers": true
+    },
+    {
+      "code": "outros__outros",
+      "name": "Outros",
+      "parentCode": "outros",
+      "level": 2,
+      "b3Classificacao": "Outros",
+      "b3Subsetor": "Outros",
+      "segments": [
+        "Outros"
+      ],
+      "peerCount": 0,
+      "hasPeers": false
+    },
+    {
+      "code": "petroleo_gas_e_biocombustiveis__petroleo_gas_e_biocombustiveis",
+      "name": "Petróleo. Gás e Biocombustíveis",
+      "parentCode": "petroleo_gas_e_biocombustiveis",
+      "level": 2,
+      "b3Classificacao": "Petróleo. Gás e Biocombustíveis",
+      "b3Subsetor": "Petróleo. Gás e Biocombustíveis",
+      "segments": [
+        "Distribuição de Combustíveis",
+        "Equipamentos e Serviços",
+        "Exploração. Refino e Distribuição"
+      ],
+      "peerCount": 10,
+      "hasPeers": true
+    },
+    {
+      "code": "saude__comercio_e_distribuicao",
+      "name": "Comércio e Distribuição",
+      "parentCode": "saude",
+      "level": 2,
+      "b3Classificacao": "Saúde",
+      "b3Subsetor": "Comércio e Distribuição",
+      "segments": [
+        "Medicamentos e Outros Produtos"
+      ],
+      "peerCount": 7,
+      "hasPeers": true
+    },
+    {
+      "code": "saude__equipamentos",
+      "name": "Equipamentos",
+      "parentCode": "saude",
+      "level": 2,
+      "b3Classificacao": "Saúde",
+      "b3Subsetor": "Equipamentos",
+      "segments": [
+        "Equipamentos"
+      ],
+      "peerCount": 1,
+      "hasPeers": true
+    },
+    {
+      "code": "saude__medicamentos_e_outros_produtos",
+      "name": "Medicamentos e Outros Produtos",
+      "parentCode": "saude",
+      "level": 2,
+      "b3Classificacao": "Saúde",
+      "b3Subsetor": "Medicamentos e Outros Produtos",
+      "segments": [
+        "Medicamentos e Outros Produtos"
+      ],
+      "peerCount": 1,
+      "hasPeers": true
+    },
+    {
+      "code": "saude__serv_med_hospit_analises_e_diagnosticos",
+      "name": "Serv.Méd.Hospit..Análises e Diagnósticos",
+      "parentCode": "saude",
+      "level": 2,
+      "b3Classificacao": "Saúde",
+      "b3Subsetor": "Serv.Méd.Hospit..Análises e Diagnósticos",
+      "segments": [
+        "Serv.Méd.Hospit..Análises e Diagnósticos"
+      ],
+      "peerCount": 6,
+      "hasPeers": true
+    },
+    {
+      "code": "tecnologia_da_informacao__computadores_e_equipamentos",
+      "name": "Computadores e Equipamentos",
+      "parentCode": "tecnologia_da_informacao",
+      "level": 2,
+      "b3Classificacao": "Tecnologia da Informação",
+      "b3Subsetor": "Computadores e Equipamentos",
+      "segments": [
+        "Computadores e Equipamentos"
+      ],
+      "peerCount": 0,
+      "hasPeers": false
+    },
+    {
+      "code": "tecnologia_da_informacao__programas_e_servicos",
+      "name": "Programas e Serviços",
+      "parentCode": "tecnologia_da_informacao",
+      "level": 2,
+      "b3Classificacao": "Tecnologia da Informação",
+      "b3Subsetor": "Programas e Serviços",
+      "segments": [
+        "Programas e Serviços"
+      ],
+      "peerCount": 8,
+      "hasPeers": true
+    },
+    {
+      "code": "utilidade_publica__agua_e_saneamento",
+      "name": "Água e Saneamento",
+      "parentCode": "utilidade_publica",
+      "level": 2,
+      "b3Classificacao": "Utilidade Pública",
+      "b3Subsetor": "Água e Saneamento",
+      "segments": [
+        "Água e Saneamento"
+      ],
+      "peerCount": 4,
+      "hasPeers": true
+    },
+    {
+      "code": "utilidade_publica__energia_eletrica",
+      "name": "Energia Elétrica",
+      "parentCode": "utilidade_publica",
+      "level": 2,
+      "b3Classificacao": "Utilidade Pública",
+      "b3Subsetor": "Energia Elétrica",
+      "segments": [
+        "Energia Elétrica"
+      ],
+      "peerCount": 23,
+      "hasPeers": true
+    },
+    {
+      "code": "utilidade_publica__gas",
+      "name": "Gás",
+      "parentCode": "utilidade_publica",
+      "level": 2,
+      "b3Classificacao": "Utilidade Pública",
+      "b3Subsetor": "Gás",
+      "segments": [
+        "Gás"
+      ],
+      "peerCount": 2,
+      "hasPeers": true
+    }
+  ]
+}
