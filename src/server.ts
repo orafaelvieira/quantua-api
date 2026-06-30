@@ -24,6 +24,7 @@ import adminRouter from "./routes/admin";
 import peersRouter from "./routes/peers";
 import { startJobs } from "./jobs";
 import { prisma } from "./db/client";
+import { exec } from "node:child_process";
 
 const app = express();
 
@@ -55,7 +56,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-06-30.pm-pagamento+subsetor+csv";
+const BUILD_VERSION = "2026-06-30.seeds-pos-listen";
 app.get("/version", async (_req, res) => {
   try {
     const [peerCompanies, pmPagamentoLines, sectorsActive] = await Promise.all([
@@ -91,9 +92,35 @@ app.use("/sectors", sectorsRouter);
 app.use("/admin", adminRouter);
 app.use("/peers", peersRouter);
 
+/**
+ * Seeds rodam APÓS o `listen` (não no `start`, antes do server) — senão um seed
+ * lento (import-peers em carga limpa ~40s + dictionary ~32s) atrasa o HTTP e o
+ * health check do DigitalOcean falha ("connection refused", deploy Health Checks).
+ * Aqui o `/health` já responde de imediato; os seeds populam em background.
+ * Idempotentes/hash-gated — seguro rodar a cada boot. Desligar com RUN_STARTUP_SEEDS=false.
+ * Trade-off: janela curta (~1-2min) pós-deploy com dados do deploy anterior (ou pares
+ * recarregando) — aceitável p/ ferramenta interna; o que importa é o deploy não falhar.
+ */
+function runStartupSeeds(): void {
+  if (process.env.RUN_STARTUP_SEEDS === "false") {
+    console.log("[startup] seeds desligados (RUN_STARTUP_SEEDS=false)");
+    return;
+  }
+  const cmd =
+    "npm run db:seed:sectors && npm run db:seed:b3 && npm run db:seed:dictionary && npm run db:seed:models && npm run db:seed:peers";
+  console.log("[startup] rodando seeds em background (server já escutando)…");
+  const child = exec(cmd, { maxBuffer: 32 * 1024 * 1024 });
+  child.stdout?.on("data", (d) => process.stdout.write(String(d)));
+  child.stderr?.on("data", (d) => process.stderr.write(String(d)));
+  child.on("exit", (code) =>
+    console.log(`[startup] seeds finalizados (exit ${code})${code ? " — VERIFICAR LOG" : ""}`),
+  );
+}
+
 app.listen(env.port, () => {
   console.log(`Server running on port ${env.port}`);
   startJobs();
+  runStartupSeeds();
   // Recuperação de jobs órfãos: o /process é assíncrono (fire-and-forget). Se um restart/
   // deploy mata o servidor no meio do processamento, a análise ficaria presa em "Extraindo"/
   // "Gerando diagnóstico" girando o spinner pra sempre. No boot, marcamos essas como "Erro"
