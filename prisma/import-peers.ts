@@ -67,6 +67,12 @@ async function main() {
     }
   }
 
+  // Trava de segurança: nunca zera a base por um arquivo de atualização truncado/corrompido.
+  const MIN_EMPRESAS = 50;
+  if (companies.size < MIN_EMPRESAS) {
+    throw new Error(`[import-peers] SEGURANÇA: arquivo com só ${companies.size} empresas (< ${MIN_EMPRESAS}) — abortado para não zerar a base de pares.`);
+  }
+
   console.log(`[import-peers] ${companies.size} empresas, ${lines.length} linhas — recarregando (carga limpa)...`);
   await prisma.peerLine.deleteMany({});
   await prisma.peerCompany.deleteMany({});

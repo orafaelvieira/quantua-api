@@ -21,6 +21,7 @@ import billingRouter from "./routes/billing";
 import teamRouter from "./routes/team";
 import sectorsRouter from "./routes/sectors";
 import adminRouter from "./routes/admin";
+import peersRouter from "./routes/peers";
 import { startJobs } from "./jobs";
 import { prisma } from "./db/client";
 
@@ -71,6 +72,7 @@ app.use("/billing", billingRouter);
 app.use("/team", teamRouter);
 app.use("/sectors", sectorsRouter);
 app.use("/admin", adminRouter);
+app.use("/peers", peersRouter);
 
 app.listen(env.port, () => {
   console.log(`Server running on port ${env.port}`);
