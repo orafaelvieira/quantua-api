@@ -52,6 +52,23 @@ app.use((req, res, next) => {
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+// Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
+// `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
+// reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
+const BUILD_VERSION = "2026-06-30.pm-pagamento+subsetor+csv";
+app.get("/version", async (_req, res) => {
+  try {
+    const [peerCompanies, pmPagamentoLines, sectorsActive] = await Promise.all([
+      prisma.peerCompany.count(),
+      prisma.peerLine.count({ where: { documento: "INDICADOR", conta: "PM - PAGAMENTO" } }),
+      prisma.sector.count({ where: { active: true } }),
+    ]);
+    res.json({ ok: true, build: BUILD_VERSION, peers: { peerCompanies, pmPagamentoLines }, sectorsActive });
+  } catch {
+    res.json({ ok: true, build: BUILD_VERSION, peers: null });
+  }
+});
+
 app.use("/auth", authRouter);
 app.use("/onboarding", onboardingRouter);
 app.use("/companies", companiesRouter);

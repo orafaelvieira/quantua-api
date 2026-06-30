@@ -11,9 +11,10 @@ router.use(requireRole("partner")); // base de comparáveis = consulta interna (
 
 // GET /peers/meta — opções de filtro + totais + data-base.
 router.get("/meta", async (_req: AuthRequest, res: Response): Promise<void> => {
-  const [classifs, setores, anos, totalEmpresas, totalLinhas] = await Promise.all([
+  const [classifs, setores, subsetores, anos, totalEmpresas, totalLinhas] = await Promise.all([
     prisma.peerCompany.findMany({ distinct: ["classificacao"], select: { classificacao: true }, orderBy: { classificacao: "asc" } }),
     prisma.peerCompany.findMany({ distinct: ["setor"], select: { setor: true, classificacao: true }, orderBy: { setor: "asc" } }),
+    prisma.peerCompany.findMany({ where: { subsetor: { not: null } }, distinct: ["subsetor"], select: { subsetor: true, setor: true, classificacao: true }, orderBy: { subsetor: "asc" } }),
     prisma.peerLine.findMany({ distinct: ["year"], select: { year: true }, orderBy: { year: "desc" } }),
     prisma.peerCompany.count(),
     prisma.peerLine.count(),
@@ -21,6 +22,7 @@ router.get("/meta", async (_req: AuthRequest, res: Response): Promise<void> => {
   res.json({
     classificacoes: classifs.map((c) => c.classificacao),
     setores: setores.map((s) => ({ setor: s.setor, classificacao: s.classificacao })),
+    subsetores: subsetores.map((s) => ({ subsetor: s.subsetor, setor: s.setor, classificacao: s.classificacao })),
     anos: anos.map((a) => a.year),
     indicadores: Object.keys(PEER_INDICATOR_MAP), // nomes NOSSOS que têm par
     indicadorParaConta: PEER_INDICATOR_MAP,
@@ -31,10 +33,11 @@ router.get("/meta", async (_req: AuthRequest, res: Response): Promise<void> => {
 
 // GET /peers?classificacao=&setor=&search= — lista de empresas.
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
-  const { classificacao, setor, search } = req.query;
+  const { classificacao, setor, subsetor, search } = req.query;
   const where: Record<string, unknown> = {};
   if (classificacao) where.classificacao = String(classificacao);
   if (setor) where.setor = String(setor);
+  if (subsetor) where.subsetor = String(subsetor);
   if (search) {
     const s = String(search);
     where.OR = [
@@ -63,16 +66,48 @@ router.get("/:papel/indicators", async (req: AuthRequest, res: Response): Promis
   res.json({ company, lines });
 });
 
-// GET /peers/distribution?conta=&year=&setor=&classificacao= — distribuição (mediana/quartis)
-// com o fallback em camadas. Para a aba "Distribuição por setor".
+// GET /peers/distribution?conta=&year=&subsetor=&setor=&classificacao= — distribuição
+// (mediana/quartis) com fallback em camadas (subsetor→setor→classificação→mercado).
 router.get("/distribution", async (req: AuthRequest, res: Response): Promise<void> => {
   const conta = String(req.query.conta ?? "");
   const year = Number(req.query.year);
+  const subsetor = req.query.subsetor ? String(req.query.subsetor) : null;
   const setor = req.query.setor ? String(req.query.setor) : null;
   const classificacao = req.query.classificacao ? String(req.query.classificacao) : null;
   if (!conta || !Number.isFinite(year)) { res.status(400).json({ error: "conta e year são obrigatórios" }); return; }
-  const dist = await getPeerDistribution({ setor, classificacao }, conta, year);
+  const dist = await getPeerDistribution({ subsetor, setor, classificacao }, conta, year);
   res.json(dist);
+});
+
+// GET /peers/indicators-export?classificacao=&setor=&subsetor= — dados achatados dos
+// indicadores (com par) p/ download CSV no front. Long format: 1 linha por empresa×indicador×ano.
+router.get("/indicators-export", async (req: AuthRequest, res: Response): Promise<void> => {
+  const { classificacao, setor, subsetor } = req.query;
+  const companyWhere: Record<string, unknown> = {};
+  if (classificacao) companyWhere.classificacao = String(classificacao);
+  if (setor) companyWhere.setor = String(setor);
+  if (subsetor) companyWhere.subsetor = String(subsetor);
+
+  const contaParaInd = Object.fromEntries(Object.entries(PEER_INDICATOR_MAP).map(([ind, conta]) => [conta, ind]));
+  const empresas = await prisma.peerCompany.findMany({
+    where: companyWhere,
+    select: { papel: true, nome: true, classificacao: true, setor: true, subsetor: true },
+    orderBy: [{ classificacao: "asc" }, { setor: "asc" }, { nome: "asc" }],
+  });
+  const papeis = empresas.map((e) => e.papel);
+  const compByPapel = new Map(empresas.map((e) => [e.papel, e]));
+  const lines = await prisma.peerLine.findMany({
+    where: { papel: { in: papeis }, documento: "INDICADOR", conta: { in: Object.values(PEER_INDICATOR_MAP) } },
+    select: { papel: true, conta: true, year: true, value: true },
+  });
+  const rows = lines.map((l) => {
+    const c = compByPapel.get(l.papel)!;
+    return {
+      papel: l.papel, nome: c.nome, classificacao: c.classificacao, setor: c.setor, subsetor: c.subsetor,
+      indicador: contaParaInd[l.conta] ?? l.conta, ano: l.year, valor: l.value,
+    };
+  });
+  res.json({ rows });
 });
 
 export default router;
