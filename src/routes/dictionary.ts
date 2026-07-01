@@ -2,9 +2,49 @@ import { Router, Response } from "express";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { bumpDictionaryVersion, getCurrentDictionaryVersion } from "../services/dictionary-version";
+import { DEFAULT_BP_MODEL, IGNORAR_DESTINO } from "../services/account-mapper";
 
 const router = Router();
 router.use(requireAuth);
+
+// classificacao (do template) → grupo de alto nível; e aliases de grupoConta → código.
+const CLASSIF_TO_GRUPO: Record<string, string> = { AC: "AC", AF: "AC", AO: "AC", ANC: "ANC", PC: "PC", PO: "PC", PF: "PC", PNC: "PNC", PL: "PL" };
+const GRUPO_ALIASES: Record<string, string> = {
+  "ativo circulante": "AC", ac: "AC",
+  "ativo nao circulante": "ANC", anc: "ANC",
+  "passivo circulante": "PC", pc: "PC",
+  "passivo nao circulante": "PNC", pnc: "PNC",
+  "patrimonio liquido": "PL", pl: "PL",
+};
+const normGrp = (s: string) => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+
+// GET /dictionary/audit — READ ONLY. Reporta entradas de BP cujo DESTINO é de um grupo
+// diferente do grupoConta em que a conta foi vista (cruza Ativo/Passivo ou CP/LP). NÃO
+// exclui nada — é só um raio-x para o analista decidir. Ignora __IGNORAR__ (intencional)
+// e destinos fora do template atual (podem ser de um modelo antigo, não necessariamente erro).
+router.get("/audit", async (req: AuthRequest, res: Response): Promise<void> => {
+  const rows = await prisma.accountDictionary.findMany({
+    where: { OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }] },
+    select: { id: true, nomeOriginal: true, contaDestino: true, grupoConta: true, tipo: true, userId: true },
+  });
+  const suspeitas: Array<Record<string, unknown>> = [];
+  for (const r of rows) {
+    if (r.tipo !== "BP" || r.contaDestino === IGNORAR_DESTINO) continue;
+    const classif = DEFAULT_BP_MODEL.classifMap.get(r.contaDestino);
+    if (!classif) continue; // destino fora do template atual — não auditável com certeza
+    const grupoDestino = CLASSIF_TO_GRUPO[classif];
+    const grupoEntry = GRUPO_ALIASES[normGrp(r.grupoConta)];
+    if (!grupoDestino || !grupoEntry) continue;
+    if (grupoDestino !== grupoEntry) {
+      suspeitas.push({
+        id: r.id, nomeOriginal: r.nomeOriginal, contaDestino: r.contaDestino,
+        grupoConta: r.grupoConta, grupoDoDestino: grupoDestino, escopo: r.userId ? "usuário" : "global",
+        motivo: `Cruza grupo: destino "${r.contaDestino}" é ${grupoDestino}, mas a conta foi vista em ${grupoEntry}.`,
+      });
+    }
+  }
+  res.json({ totalEntradas: rows.length, bp: rows.filter((r) => r.tipo === "BP").length, suspeitas });
+});
 
 // Nome de exibição do usuário para o changelog (controle interno).
 async function nomeUsuario(userId?: string): Promise<string | null> {
