@@ -47,8 +47,10 @@ Organize o resultado EXATAMENTE nestas 6 seções NUMERADAS, nesta ordem:
 6) Alertas para o IBR
 
 FORMATAÇÃO (siga à risca):
+- SEM preâmbulo. Comece DIRETO no título "1) Dados cadastrais e estrutura societária".
 - Cada título de seção em NEGRITO com o número, no formato **1) Título da seção** (markdown). NÃO use # nem ## em hipótese alguma.
 - Sob cada título, escreva os pontos como bullets começando com "- " SEGUIDO do texto NA MESMA LINHA (ex.: "- Razão social: ..."). NUNCA deixe uma linha contendo só "-" ou só um marcador sem texto.
+- NÃO use "---" nem qualquer linha separadora entre seções.
 - Frases curtas e objetivas. NO MÁXIMO uma linha em branco entre seções; nunca pule várias linhas seguidas.
 - Texto total ≤ 380 palavras. Cite fonte/data quando relevante.
 
