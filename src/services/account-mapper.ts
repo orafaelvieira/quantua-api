@@ -26,6 +26,18 @@ function normalize(s: string): string {
     .trim();
 }
 
+/** Destino-sentinela: o analista marcou a conta para IGNORAR (ex.: linha de SUBTOTAL
+ *  redundante, cujos filhos já foram capturados). Fica no dicionário como qualquer
+ *  classificação, mas o fold PULA a conta por completo (não soma, não vira "não mapeada"). */
+export const IGNORAR_DESTINO = "__IGNORAR__";
+
+/** true se a conta foi marcada para IGNORAR no dicionário (match por nome normalizado). */
+export function isContaIgnorada(nome: string, dict?: DictionaryEntry[]): boolean {
+  if (!dict || dict.length === 0) return false;
+  const n = normalize(nome);
+  return dict.some((e) => e.contaDestino === IGNORAR_DESTINO && normalize(e.nomeOriginal) === n);
+}
+
 /** Remove common prefixes like (-), (–) and leading whitespace */
 function cleanAccountName(name: string): string {
   return name

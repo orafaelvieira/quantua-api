@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { env } from "../config/env";
 import { DRE_TEMPLATE } from "./financial-templates";
 import type { BPLineItem, DRELineItem } from "../types/financial";
-import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, DEFAULT_BP_MODEL, type BPModel, type DictionaryEntry } from "./account-mapper";
+import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, isContaIgnorada, DEFAULT_BP_MODEL, type BPModel, type DictionaryEntry } from "./account-mapper";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
 const AI_MODEL = "claude-sonnet-4-6";        // visão (lê o PDF) — caro
@@ -162,6 +162,7 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
     const inputs = secoes.filter((it) => !DRE_SUBTOTAIS.has(normNome(it.nome)));
     for (const it of inputs) {
       if (typeof it.valor !== "number" || it.valor === 0) continue;
+      if (isContaIgnorada(it.nome, dict)) { it.destino = "(ignorada pelo analista)"; continue; }
       let dest = mapAccountToDRE(it.nome, dict);
       if (!dest || !dreInputsSet.has(dest)) {
         dest = it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
@@ -250,6 +251,9 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
       for (const it of itens) {
         if (typeof it.valor !== "number") continue;
         if (isCompensacao(it.nome)) { it.destino = "(compensação — excluída)"; continue; }
+        // IGNORAR (analista): pula ANTES de somar no subtotal — uma linha de subtotal
+        // redundante não pode inflar o grupo nem virar "não mapeada".
+        if (isContaIgnorada(it.nome, dict)) { it.destino = "(ignorada pelo analista)"; continue; }
         const v = it.valor * fator;
         add(subtotal, g, p, v);
         const dest = mapAccountToBPGroup(it.nome, g, dict, model);
