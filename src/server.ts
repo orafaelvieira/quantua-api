@@ -56,7 +56,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-06-30.materiais-complementares";
+const BUILD_VERSION = "2026-06-30.boot-recovery-resultado";
 app.get("/version", async (_req, res) => {
   try {
     const [peerCompanies, pmPagamentoLines, sectorsActive] = await Promise.all([
@@ -123,13 +123,39 @@ app.listen(env.port, () => {
   runStartupSeeds();
   // Recuperação de jobs órfãos: o /process é assíncrono (fire-and-forget). Se um restart/
   // deploy mata o servidor no meio do processamento, a análise ficaria presa em "Extraindo"/
-  // "Gerando diagnóstico" girando o spinner pra sempre. No boot, marcamos essas como "Erro"
-  // → o usuário vê o erro e pode reprocessar.
-  prisma.analysis
-    .updateMany({
-      where: { status: { in: ["Extraindo", "Gerando diagnóstico"] } },
-      data: { status: "Erro" },
-    })
-    .then((r) => { if (r.count > 0) console.log(`[boot] ${r.count} análise(s) presa(s) em processamento → "Erro" (reprocessável)`); })
-    .catch((e) => console.error("[boot] recuperação de jobs órfãos falhou:", e?.message ?? e));
+  // "Gerando diagnóstico" girando o spinner pra sempre. No boot, olhamos o RESULTADO antes de
+  // decidir: se a geração TERMINOU (resultado completo, sem .erro) mas o restart pegou o status
+  // no meio — ou marcou "Erro" indevidamente — recuperamos para "Concluída"; só marcamos "Erro"
+  // (com mensagem) quando de fato não há resultado. Evita perder análise boa por causa de deploy.
+  recoverOrphanAnalyses().catch((e) => console.error("[boot] recuperação de jobs órfãos falhou:", e?.message ?? e));
 });
+
+async function recoverOrphanAnalyses(): Promise<void> {
+  const presas = await prisma.analysis.findMany({
+    where: { status: { in: ["Extraindo", "Gerando diagnóstico", "Erro"] } },
+    select: { id: true, status: true, resultado: true },
+  });
+  let recuperadas = 0;
+  let marcadasErro = 0;
+  for (const a of presas) {
+    const r = a.resultado as { erro?: string; kpis?: unknown; semaforo?: unknown[] } | null;
+    const temResultadoBom = !!r && !r.erro && (!!r.kpis || (Array.isArray(r.semaforo) && r.semaforo.length > 0));
+    if (temResultadoBom) {
+      // Geração concluiu; o status só ficou desalinhado por um restart. Recupera.
+      if (a.status !== "Concluída") {
+        await prisma.analysis.update({ where: { id: a.id }, data: { status: "Concluída" } });
+        recuperadas++;
+      }
+    } else if (a.status === "Extraindo" || a.status === "Gerando diagnóstico") {
+      // Órfã real (sem resultado): marca Erro COM mensagem, para a tela não ficar muda.
+      await prisma.analysis.update({
+        where: { id: a.id },
+        data: { status: "Erro", resultado: { erro: "Processamento interrompido por um reinício do servidor (deploy). Reprocesse a análise." } as object },
+      });
+      marcadasErro++;
+    }
+    // status "Erro" sem resultado bom → deixa como está (erro legítimo).
+  }
+  if (recuperadas > 0) console.log(`[boot] ${recuperadas} análise(s) com resultado completo recuperada(s) → "Concluída"`);
+  if (marcadasErro > 0) console.log(`[boot] ${marcadasErro} análise(s) órfã(s) sem resultado → "Erro" (reprocessável, com mensagem)`);
+}
