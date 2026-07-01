@@ -358,9 +358,9 @@ PRINCÍPIOS (inegociáveis):
 
   // max_tokens generoso: o JSON rico (diagnóstico + semáforo + swot + causas + opções) é grande.
   // Parse robusto: aceita cerca ``` e descarta preâmbulo/sufixo de texto.
-  // temperature 0: a análise deve ser ESTÁVEL — mesma entrada → mesma leitura (estágio,
-  // situação etc. não podem variar entre regerações). Reduz a variância de amostragem.
-  const message = await createWithRetry({ model, max_tokens: 12000, temperature: 0, messages: [{ role: "user", content: prompt }] });
+  // A estabilidade dos rótulos-chave (estágio etc.) vem do classificador DETERMINÍSTICO no
+  // motor, não da amostragem. Opus 4.8 NÃO aceita `temperature` (depreciado) — não enviar.
+  const message = await createWithRetry({ model, max_tokens: 12000, messages: [{ role: "user", content: prompt }] });
   let text = message.content[0]?.type === "text" ? message.content[0].text.trim() : "";
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) text = fence[1].trim();
