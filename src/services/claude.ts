@@ -38,6 +38,18 @@ export interface AnalysisResult {
     effort: "low" | "medium" | "high";
     priority: "p0" | "p1" | "p2";
   }>;
+  /** DIAGNÓSTICO de IBR (camada rica, Fase 1a) — leitura de sócio de reestruturação. */
+  estagioCicloVida?: { estagio: string; justificativa: string };
+  tipoCrise?: { classificacao: string; racional: string };
+  sustentabilidadeDivida?: { status: string; mesesDeCaixa: number | null; leitura: string };
+  causasProvaveis?: Array<{
+    problema: string;
+    causaHipotese: string;
+    natureza: "interna" | "externa" | "mista" | string;
+    evidencia: string;
+    confianca: "alta" | "media" | "baixa" | string;
+    verificar: string;
+  }>;
 }
 
 interface IndicadorLite {
@@ -117,6 +129,24 @@ interface PeerBlockInput {
   external: Array<{ indicador: string; referencia: number; fonte: string; higherIsBetter: boolean }>;
 }
 
+/** Formata as LINHAS DA DRE (estrutura de custo/resultado) pro prompt — base da árvore
+ *  de custos do pilar Operacional (onde a margem se perde). Vazio se não houver. */
+function buildDreBlock(dre?: Array<{ conta: string; valores: Record<string, number>; subtotal?: boolean }> | null, periodos?: string[]): string {
+  if (!dre || dre.length === 0) return "";
+  const ps = periodos && periodos.length ? periodos : Object.keys(dre[0]?.valores ?? {});
+  const linhas = dre
+    .filter((l) => ps.some((p) => typeof l.valores[p] === "number"))
+    .map((l) => {
+      const vals = ps.map((p) => `${p}=${typeof l.valores[p] === "number" ? Math.round(l.valores[p]).toLocaleString("pt-BR") : "-"}`).join(" · ");
+      return `${l.subtotal ? "» " : "- "}${l.conta}: ${vals}`;
+    })
+    .join("\n");
+  if (!linhas) return "";
+  return `
+LINHAS DA DRE (valores em R$ por período; "»" = subtotal — use para a árvore de custos e a ponte margem bruta→operacional):
+${linhas}`;
+}
+
 /** Formata o bloco dos MATERIAIS COMPLEMENTARES (Input 4) pro prompt — resumos de
  *  docs não-financeiros (notas de reunião, apresentações). Vazio se não houver. */
 function buildMateriaisBlock(materiais?: Array<{ nome: string; resumo: string }> | null): string {
@@ -190,40 +220,53 @@ export async function generateAnalysis(
   peer?: PeerBlockInput | null,
   web?: { resumo: string; fontes: { titulo: string; url: string }[] } | null,
   materiais?: Array<{ nome: string; resumo: string }> | null,
+  dre?: Array<{ conta: string; valores: Record<string, number>; subtotal?: boolean }> | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
   const model = modeloAnaliseId(modelKey);
   const det = kpisDeterministicos(indicadores, periodos);
   const peerBlock = buildPeerBlock(peer);
   const webBlock = buildWebBlock(web);
   const materiaisBlock = buildMateriaisBlock(materiais);
+  const dreBlock = buildDreBlock(dre, periodos);
 
-  const prompt = `Você é um CFO/consultor financeiro sênior analisando uma empresa brasileira de pequeno/médio porte.
+  const prompt = `Você é sócio de uma consultoria de reestruturação (turnaround / Independent Business Review) de elite, com background de CFO e de private equity. Está analisando uma empresa brasileira de pequeno/médio porte. Sua leitura precisa ser de nível INSTITUCIONAL — o diagnóstico que um credor ou investidor usaria para decidir aportar, reestruturar ou sair. Profundidade, precisão e conexão entre os dados são o diferencial.
 
-Empresa: "${empresa.razaoSocial}" · Setor: ${empresa.setor} · Porte: ${empresa.porte} · Período: ${periodo}
+Empresa: "${empresa.razaoSocial}" · Setor: ${empresa.setor} · Porte: ${empresa.porte} · Período analisado: ${periodo}
 
-INDICADORES JÁ CALCULADOS E AUDITADOS (valores por período — NÃO recalcule, apenas INTERPRETE):
+Você recebe VÁRIAS fontes. USE TODAS e CRUZE-AS — o valor está em conectar número → causa → contexto → ação:
+
+[1] INDICADORES JÁ CALCULADOS E AUDITADOS (determinísticos — NÃO recalcule, apenas INTERPRETE):
 ${det.tabela || "(indicadores indisponíveis)"}
-${peerBlock}${webBlock}${materiaisBlock}
+${dreBlock}${peerBlock}${webBlock}${materiaisBlock}
 
-Produza a CAMADA INTERPRETATIVA (não numérica) de um IBR — leitura de CFO desses indicadores.
+MÉTODO DE RACIOCÍNIO (siga NESTA ordem — cada etapa condiciona a próxima):
+1. ESTÁGIO DO CICLO DE VIDA: pela TENDÊNCIA multi-ano (não pela foto de um período), classifique: Crescimento / Platô / Declínio / Crise de caixa / Insolvência iminente. Condiciona toda a leitura.
+2. CAUSA × SINTOMA (sempre HIPÓTESE, nunca afirmação — "a causa não está nas demonstrações"): separe o SINTOMA (o número ruim) da CAUSA provável. Regra de natureza: indicador piorou E os pares/setor também → provável causa EXTERNA (mercado); piorou E os pares NÃO → provável causa INTERNA (gestão). Cada hipótese com evidência (qual número/par/fato a sustenta), confiança e O QUE VERIFICAR (pergunta de entrevista ou documento a pedir).
+3. CRISE OPERACIONAL × FINANCEIRA: a deterioração nasce na OPERAÇÃO (margem/custo) ou na ALAVANCAGEM (estrutura de capital/dívida)? Muda o diagnóstico e o valor.
+4. SUSTENTABILIDADE DA DÍVIDA × CAIXA: a dívida é pagável pela geração de caixa atual? Estime meses de caixa. "Dívida barata não adianta se não paga." Sinalize se o caixa cobre menos de 3 meses de operação.
+5. OPÇÕES por LENTE analítica: Reposicionamento → 5 Forças de Porter (rivalidade, entrantes, substitutos, poder de fornecedor e de cliente) ancoradas no contexto setorial da web; Excelência Operacional → ÁRVORE DE CUSTOS da DRE (aponte QUAL rubrica destrói a margem, da bruta para a operacional); Reestruturação Financeira → dívida/liquidez/capital de giro/runway; Modelo de Negócio orientado a Valor → onde se CRIA e onde se CAPTURA valor (proposta, pricing, mix, canais).
 
 Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta estrutura:
 {
+  "estagioCicloVida": { "estagio": "Crescimento|Platô|Declínio|Crise de caixa|Insolvência iminente", "justificativa": "<1-2 frases citando a tendência dos números>" },
+  "tipoCrise": { "classificacao": "sem crise|operacional|financeira|mista", "racional": "<onde nasce a deterioração, com evidência>" },
+  "sustentabilidadeDivida": { "status": "ok|apertada|insustentavel", "mesesDeCaixa": <número ou null>, "leitura": "<dívida vs geração de caixa; runway>" },
+  "causasProvaveis": [ { "problema": "<sintoma>", "causaHipotese": "<causa-raiz provável>", "natureza": "interna|externa|mista", "evidencia": "<número/par/fato>", "confianca": "alta|media|baixa", "verificar": "<o que perguntar/pedir>" } ],
   "semaforo": [
-    { "area": "Receita e Crescimento", "status": "ok|atencao|critico", "descricao": "<1 frase citando o número relevante>" },
+    { "area": "Receita e Crescimento", "status": "ok|atencao|critico", "descricao": "<1 frase citando número e percentil vs pares>" },
     { "area": "Margens Operacionais", "status": "ok|atencao|critico", "descricao": "<...>" },
     { "area": "Liquidez", "status": "ok|atencao|critico", "descricao": "<...>" },
     { "area": "Endividamento", "status": "ok|atencao|critico", "descricao": "<...>" },
     { "area": "Rentabilidade", "status": "ok|atencao|critico", "descricao": "<...>" },
     { "area": "Capital de Giro", "status": "ok|atencao|critico", "descricao": "<...>" }
   ],
-  "swot": { "forcas": ["<3 itens>"], "fraquezas": ["<3>"], "oportunidades": ["<3>"], "riscos": ["<3>"] },
-  "recomendacoes": [ { "titulo": "<ação concreta>", "prioridade": "Alta|Média|Baixa", "impacto": "Alto|Médio|Baixo", "esforco": "Alto|Médio|Baixo", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<detalhe prático>" } ],
+  "swot": { "forcas": ["<3-4, ancoradas em gap vs pares e no contexto>"], "fraquezas": ["<3-4>"], "oportunidades": ["<3-4>"], "riscos": ["<3-4>"] },
+  "recomendacoes": [ { "titulo": "<ação concreta>", "prioridade": "Alta|Média|Baixa", "impacto": "Alto|Médio|Baixo", "esforco": "Alto|Médio|Baixo", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<detalhe prático com número>" } ],
   "destaques": ["<insight 1>", "<insight 2>", "<insight 3>", "<insight 4>"],
   "confianca": <0-100>,
   "opcoesEstrategicas": [
     { "pillar": "strategic_repositioning|value_focused_business_model|operational_excellence|financial_restructuring",
-      "title": "<opção concreta>", "description": "<como executar / racional>",
+      "title": "<opção concreta>", "description": "<como executar + a LENTE do pilar aplicada, com número>",
       "estimatedImpactBRL": <impacto_em_reais_ou_omita>, "horizonMonths": <meses_ou_omita>,
       "effort": "low|medium|high", "priority": "p0|p1|p2" }
   ]
@@ -231,18 +274,18 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
 
 Pilares das opções (quatro frentes de valor): strategic_repositioning = Reposicionamento Estratégico (onde competir/como vencer) · value_focused_business_model = Modelo de Negócio orientado a Valor (proposta e captura de valor) · operational_excellence = Excelência Operacional (custos/processos/eficiência) · financial_restructuring = Reestruturação Financeira (capital/dívida/liquidez).
 
-Regras:
-- Baseie-se SOMENTE nos indicadores fornecidos. NÃO invente nem recalcule números.
-- POSICIONAMENTO VS PARES: quando o bloco de pares estiver presente, o semáforo é RELATIVO ao setor — defina o status comparando a empresa à mediana e à faixa dos pares (não a um padrão absoluto), respeitando a polaridade indicada (maior/menor é melhor). Cite o percentil ou a mediana do par na descrição. Ancore forças/fraquezas (SWOT) e opções no GAP vs pares. RESPEITE A COBERTURA indicada: "direta" = comparação confiável; "aproximada" = par de nível superior, trate como direcional; "ausente" = NÃO invente percentil — use a referência externa da web (quando houver) + conhecimento do setor e seja EXPLÍCITO no diagnóstico de que não há pares diretos na base.
-- semaforo: cite o valor numérico relevante na descrição. recomendações: 3 a 6, práticas e específicas para a empresa. destaques: frases curtas (≤15 palavras).
-- opcoesEstrategicas: 4 a 8 no total, distribuídas pelos pilares conforme o diagnóstico (nem todo pilar precisa ter opção). priority p0=urgente, p1=importante, p2=oportuno. Específicas e acionáveis.
-- confianca: maior quando há 2+ períodos e indicadores completos.
+PRINCÍPIOS (inegociáveis):
+- Hipótese e FATO sempre separados. A IA NÃO inventa nem recalcula número — cita os números já prontos (indicadores, DRE, pares).
+- Lente PME-Brasil: gestão familiar/pessoa-chave, peso tributário, custo do capital de giro, informalidade de mercado.
+- Toda afirmação relevante ancorada em NÚMERO (R$, %, dias, percentil) e, quando houver, no GAP vs pares e no contexto web/materiais. Nada de generalidade vazia.
+- POSICIONAMENTO VS PARES: com o bloco de pares presente, o semáforo é RELATIVO ao setor (status pela posição vs mediana/faixa, respeitando a polaridade "maior/menor é melhor"); cite percentil/mediana. RESPEITE A COBERTURA: "direta" = confiável; "aproximada" = nível superior, direcional; "ausente" = NÃO invente percentil, use referência externa da web + conhecimento do setor e seja explícito.
+- causasProvaveis: 3 a 6, priorizando as que explicam a MAIOR destruição de valor. opcoesEstrategicas: 4 a 8 distribuídas pelos pilares conforme o diagnóstico. recomendacoes: 4 a 6. destaques: frases ≤15 palavras. priority p0=urgente, p1=importante, p2=oportuno.
+- confianca: maior com 2+ períodos e indicadores/DRE completos.
 - Responda APENAS com o JSON.`;
 
-  // max_tokens generoso: com pares + contexto web no prompt, o JSON interpretativo
-  // ficou maior e estourava 4096 → truncado → JSON.parse falhava → SWOT/recs/opções
-  // vazios. Parse robusto também: aceita cerca ``` e descarta preâmbulo/sufixo de texto.
-  const message = await createWithRetry({ model, max_tokens: 8000, messages: [{ role: "user", content: prompt }] });
+  // max_tokens generoso: o JSON rico (diagnóstico + semáforo + swot + causas + opções) é grande.
+  // Parse robusto: aceita cerca ``` e descarta preâmbulo/sufixo de texto.
+  const message = await createWithRetry({ model, max_tokens: 12000, messages: [{ role: "user", content: prompt }] });
   let text = message.content[0]?.type === "text" ? message.content[0].text.trim() : "";
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) text = fence[1].trim();
@@ -271,6 +314,10 @@ Regras:
     confianca: typeof ai.confianca === "number" ? ai.confianca : 60,
     destaques: Array.isArray(ai.destaques) ? ai.destaques : [],
     opcoesEstrategicas: Array.isArray(ai.opcoesEstrategicas) ? ai.opcoesEstrategicas : [],
+    estagioCicloVida: ai.estagioCicloVida && typeof ai.estagioCicloVida === "object" ? ai.estagioCicloVida : undefined,
+    tipoCrise: ai.tipoCrise && typeof ai.tipoCrise === "object" ? ai.tipoCrise : undefined,
+    sustentabilidadeDivida: ai.sustentabilidadeDivida && typeof ai.sustentabilidadeDivida === "object" ? ai.sustentabilidadeDivida : undefined,
+    causasProvaveis: Array.isArray(ai.causasProvaveis) ? ai.causasProvaveis : [],
   };
   return { result, custo };
 }

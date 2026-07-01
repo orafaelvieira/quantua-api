@@ -385,6 +385,9 @@ async function runAnalysisBackground(
     }
     if (materiais) console.log(`[generate] ${analysisId} materiais: ${materiais.blocos.length} resumos, $${(materiais.custo?.usd ?? 0).toFixed(4)}`);
 
+    // A CAMADA DE RACIOCÍNIO (diagnóstico IBR) roda em OPUS — é a joia da coroa e justifica o
+    // custo maior. Web/materiais (resumo) ficam no modelo configurado (mais barato). As linhas
+    // da DRE entram para a árvore de custos do pilar Operacional.
     const analise = await generateAnalysis(
       indicadores,
       periodos,
@@ -394,10 +397,11 @@ async function runAnalysisBackground(
         porte: analysis.company.porte ?? "Não informado",
       },
       analysis.periodo ?? "Período não informado",
-      modelKey,
+      "opus",
       peer,
       web ? { resumo: web.resumo, fontes: web.fontes } : null,
       materiais ? materiais.blocos : null,
+      dados?.dre ?? null,
     );
     const resultado = {
       ...analise.result,
