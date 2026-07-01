@@ -309,7 +309,11 @@ async function buildPeerComparison(
  * "Cancelada") e, ao fim, "Concluída" (condicional, respeita cancelamento). Erro → "Erro".
  * Reutilizada pelo /process (auto, quando a extração fecha limpa) e pelo /generate (manual).
  */
-async function runAnalysisBackground(analysisId: string, modelKey?: string | null): Promise<void> {
+async function runAnalysisBackground(
+  analysisId: string,
+  modelKey?: string | null,
+  opts?: { reuseWeb?: boolean },
+): Promise<void> {
   // "Extraindo" cobre o fluxo automático do /process (extração → geração). "Erro"/"Cancelada"
   // entram para permitir "Regerar só a análise" (reusa a extração já feita, sem re-extrair — o
   // /generate valida antes que há indicadores).
@@ -345,20 +349,32 @@ async function runAnalysisBackground(analysisId: string, modelKey?: string | nul
 
     // Input 3: pesquisa web (notícias/mercado/contexto setorial). Best-effort —
     // se falhar, a análise segue sem. Custo vinculado ao IBR ([[registrar-custo-ia]]).
+    // CACHE: no "Regerar só a análise" (reuseWeb), reaproveita a pesquisa já salva no
+    // resultado anterior — evita re-buscar (tokens + US$) a cada regeração. O "Reprocessar
+    // tudo" e o botão "atualizar pesquisa" passam reuseWeb=false para buscar de novo.
+    const prev = analysis.resultado as { webResearch?: { resumo?: string; fontes?: { titulo: string; url: string }[] }; custoWebResearch?: any } | null;
     let web: Awaited<ReturnType<typeof researchCompanyWeb>> = null;
-    try {
-      web = await researchCompanyWeb(
-        {
-          razaoSocial: analysis.company.razaoSocial,
-          setor: analysis.sectorCustom ?? analysis.company.setor ?? null,
-          site: (analysis.company as { site?: string | null }).site ?? null,
-        },
-        modelKey,
-      );
-    } catch (e: any) {
-      console.error(`[generate] ${analysisId} web falhou (segue sem):`, e?.message ?? e);
+    const cachedWeb = opts?.reuseWeb && prev?.webResearch?.resumo?.trim()
+      ? { resumo: prev.webResearch.resumo, fontes: prev.webResearch.fontes ?? [], custo: prev.custoWebResearch ?? null }
+      : null;
+    if (cachedWeb) {
+      web = cachedWeb as unknown as typeof web;
+      console.log(`[generate] ${analysisId} web: REUSADA do cache (0 buscas novas), ${cachedWeb.fontes.length} fontes`);
+    } else {
+      try {
+        web = await researchCompanyWeb(
+          {
+            razaoSocial: analysis.company.razaoSocial,
+            setor: analysis.sectorCustom ?? analysis.company.setor ?? null,
+            site: (analysis.company as { site?: string | null }).site ?? null,
+          },
+          modelKey,
+        );
+      } catch (e: any) {
+        console.error(`[generate] ${analysisId} web falhou (segue sem):`, e?.message ?? e);
+      }
+      if (web) console.log(`[generate] ${analysisId} web: ${web.custo.buscas} buscas, $${web.custo.usd.toFixed(4)}, ${web.fontes.length} fontes`);
     }
-    if (web) console.log(`[generate] ${analysisId} web: ${web.custo.buscas} buscas, $${web.custo.usd.toFixed(4)}, ${web.fontes.length} fontes`);
 
     // Input 4: materiais complementares (notas/apresentações) resumidos pela IA.
     let materiais: Awaited<ReturnType<typeof buildMateriaisContext>> = null;
@@ -879,9 +895,12 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
   if (!dados?.indicadores?.length) { res.status(400).json({ error: "Extraia os documentos primeiro (sem indicadores)" }); return; }
 
   const ws = await prisma.workspace.findFirst({ where: { members: { some: { id: req.userId! } } }, select: { aiAnalysisModel: true } });
+  // "Regerar só a análise" reaproveita a pesquisa web já salva (reuseWeb) — barato. Passar
+  // { refreshWeb: true } força uma nova busca (botão "atualizar pesquisa de mercado").
+  const refreshWeb = req.body?.refreshWeb === true;
   res.status(202).json({ id, status: "Gerando diagnóstico" });
   // fire-and-forget: runAnalysisBackground faz a transição de status e persiste; o boot-recovery cobre órfãos.
-  void runAnalysisBackground(id, ws?.aiAnalysisModel);
+  void runAnalysisBackground(id, ws?.aiAnalysisModel, { reuseWeb: !refreshWeb });
 });
 
 // === Structured Financial Data Endpoints ===
