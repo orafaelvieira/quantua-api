@@ -231,7 +231,7 @@ export async function generateAnalysis(
 
   const prompt = `Você é diretor de estratégia e líder de um Independent Business Review (IBR), com background de CFO e de private equity. Sua leitura é de nível INSTITUCIONAL — do tipo que um sócio, conselho, credor ou investidor usa para decidir. Profundidade, precisão e a CONEXÃO entre os dados são o diferencial.
 
-A empresa pode estar em QUALQUER momento — crescendo bem, madura e estável, ou sob pressão. NÃO assuma crise. ADAPTE a leitura ao estágio: empresa saudável recebe foco em crescer com rentabilidade, alocar capital e defender a posição; empresa sob pressão recebe foco em estabilizar e recuperar. O mesmo rigor serve para planejar o futuro de uma empresa boa e para virar o jogo de uma empresa em dificuldade.
+A empresa pode estar em QUALQUER momento — crescendo bem, madura e estável, ou sob pressão. NÃO assuma crise POR PADRÃO; mas quando os números mostram aperto (caixa baixo, margem operacional negativa, dívida insustentável), NOMEIE a situação com honestidade — suavizar um problema real é um erro tão grave quanto exagerar um inexistente. ADAPTE a leitura ao estágio: empresa saudável recebe foco em crescer com rentabilidade, alocar capital e defender a posição; empresa sob pressão recebe foco em estabilizar e recuperar. O mesmo rigor serve para planejar o futuro de uma empresa boa e para virar o jogo de uma empresa em dificuldade.
 
 Empresa: "${empresa.razaoSocial}" · Setor: ${empresa.setor} · Porte: ${empresa.porte} · Período analisado: ${periodo}
 
@@ -242,7 +242,13 @@ ${det.tabela || "(indicadores indisponíveis)"}
 ${dreBlock}${peerBlock}${webBlock}${materiaisBlock}
 
 MÉTODO DE RACIOCÍNIO (siga NESTA ordem — cada etapa condiciona a próxima):
-1. ESTÁGIO DO CICLO: pela TENDÊNCIA multi-ano (não pela foto), classifique em Crescimento / Maturidade / Platô / Declínio / Crise de caixa. Condiciona TODA a leitura e o tom das opções.
+1. ESTÁGIO DO CICLO: aplique estes CRITÉRIOS OBJETIVOS na ordem — o PRIMEIRO que se aplicar vence (use a TENDÊNCIA multi-ano + os níveis atuais dos números fornecidos, nunca "no olho"):
+   • Crise de caixa: meses de caixa < 3 OU (margem operacional < 0 E liquidez corrente < 1). Aperto agudo de liquidez manda, independentemente do resto.
+   • Declínio: receita caindo em 2+ períodos seguidos, ou margem operacional em queda consistente para nível baixo — SEM aperto agudo de caixa.
+   • Crescimento: receita em expansão consistente (tendência de alta clara) com margem positiva.
+   • Maturidade: receita estável a leve alta, margem positiva e estável, boa liquidez.
+   • Platô: receita praticamente estagnada (variação pequena nos dois sentidos), SEM nenhum sinal acima.
+   REGRA DURA: NUNCA classifique como "Platô" ou "Maturidade" se houver aperto de caixa ou margem operacional negativa — nesse caso é Crise de caixa ou Declínio. O estágio condiciona TODA a leitura e o tom das opções.
 2. SITUAÇÃO: leia o momento com honestidade — de "saudável" a "crise" —, indicando se a força/pressão nasce na OPERAÇÃO (margem/custo) ou na ESTRUTURA FINANCEIRA (capital/dívida/caixa).
 3. SAÚDE FINANCEIRA × CAIXA: liquidez, dívida e geração de caixa são compatíveis com o estágio? Estime meses de caixa. Para empresa boa, avalie capacidade de investir/distribuir; para empresa apertada, avalie runway (sinalize se caixa < 3 meses).
 4. FATORES-CHAVE (sempre HIPÓTESE, nunca afirmação — "a causa não está nas demonstrações"): os vetores que explicam o desempenho — POSITIVOS e negativos. Regra de natureza: indicador acima/abaixo E os pares no mesmo sentido → provável causa EXTERNA (mercado); divergente dos pares → provável causa INTERNA (gestão). Cada fator com evidência (número/par/fato), confiança e O QUE VERIFICAR (pergunta de entrevista ou documento a pedir).
@@ -293,7 +299,9 @@ PRINCÍPIOS (inegociáveis):
 
   // max_tokens generoso: o JSON rico (diagnóstico + semáforo + swot + causas + opções) é grande.
   // Parse robusto: aceita cerca ``` e descarta preâmbulo/sufixo de texto.
-  const message = await createWithRetry({ model, max_tokens: 12000, messages: [{ role: "user", content: prompt }] });
+  // temperature 0: a análise deve ser ESTÁVEL — mesma entrada → mesma leitura (estágio,
+  // situação etc. não podem variar entre regerações). Reduz a variância de amostragem.
+  const message = await createWithRetry({ model, max_tokens: 12000, temperature: 0, messages: [{ role: "user", content: prompt }] });
   let text = message.content[0]?.type === "text" ? message.content[0].text.trim() : "";
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) text = fence[1].trim();
