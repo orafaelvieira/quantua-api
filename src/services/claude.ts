@@ -38,13 +38,13 @@ export interface AnalysisResult {
     effort: "low" | "medium" | "high";
     priority: "p0" | "p1" | "p2";
   }>;
-  /** DIAGNÓSTICO de IBR (camada rica, Fase 1a) — leitura de sócio de reestruturação. */
+  /** DIAGNÓSTICO de IBR (camada rica) — leitura universal (empresa boa, estável ou sob pressão). */
   estagioCicloVida?: { estagio: string; justificativa: string };
-  tipoCrise?: { classificacao: string; racional: string };
-  sustentabilidadeDivida?: { status: string; mesesDeCaixa: number | null; leitura: string };
-  causasProvaveis?: Array<{
-    problema: string;
-    causaHipotese: string;
+  situacao?: { classificacao: string; racional: string };
+  saudeFinanceira?: { status: string; mesesDeCaixa: number | null; leitura: string };
+  fatoresChave?: Array<{
+    fator: string;
+    hipotese: string;
     natureza: "interna" | "externa" | "mista" | string;
     evidencia: string;
     confianca: "alta" | "media" | "baixa" | string;
@@ -229,7 +229,9 @@ export async function generateAnalysis(
   const materiaisBlock = buildMateriaisBlock(materiais);
   const dreBlock = buildDreBlock(dre, periodos);
 
-  const prompt = `Você é sócio de uma consultoria de reestruturação (turnaround / Independent Business Review) de elite, com background de CFO e de private equity. Está analisando uma empresa brasileira de pequeno/médio porte. Sua leitura precisa ser de nível INSTITUCIONAL — o diagnóstico que um credor ou investidor usaria para decidir aportar, reestruturar ou sair. Profundidade, precisão e conexão entre os dados são o diferencial.
+  const prompt = `Você é diretor de estratégia e líder de um Independent Business Review (IBR), com background de CFO e de private equity. Sua leitura é de nível INSTITUCIONAL — do tipo que um sócio, conselho, credor ou investidor usa para decidir. Profundidade, precisão e a CONEXÃO entre os dados são o diferencial.
+
+A empresa pode estar em QUALQUER momento — crescendo bem, madura e estável, ou sob pressão. NÃO assuma crise. ADAPTE a leitura ao estágio: empresa saudável recebe foco em crescer com rentabilidade, alocar capital e defender a posição; empresa sob pressão recebe foco em estabilizar e recuperar. O mesmo rigor serve para planejar o futuro de uma empresa boa e para virar o jogo de uma empresa em dificuldade.
 
 Empresa: "${empresa.razaoSocial}" · Setor: ${empresa.setor} · Porte: ${empresa.porte} · Período analisado: ${periodo}
 
@@ -240,18 +242,18 @@ ${det.tabela || "(indicadores indisponíveis)"}
 ${dreBlock}${peerBlock}${webBlock}${materiaisBlock}
 
 MÉTODO DE RACIOCÍNIO (siga NESTA ordem — cada etapa condiciona a próxima):
-1. ESTÁGIO DO CICLO DE VIDA: pela TENDÊNCIA multi-ano (não pela foto de um período), classifique: Crescimento / Platô / Declínio / Crise de caixa / Insolvência iminente. Condiciona toda a leitura.
-2. CAUSA × SINTOMA (sempre HIPÓTESE, nunca afirmação — "a causa não está nas demonstrações"): separe o SINTOMA (o número ruim) da CAUSA provável. Regra de natureza: indicador piorou E os pares/setor também → provável causa EXTERNA (mercado); piorou E os pares NÃO → provável causa INTERNA (gestão). Cada hipótese com evidência (qual número/par/fato a sustenta), confiança e O QUE VERIFICAR (pergunta de entrevista ou documento a pedir).
-3. CRISE OPERACIONAL × FINANCEIRA: a deterioração nasce na OPERAÇÃO (margem/custo) ou na ALAVANCAGEM (estrutura de capital/dívida)? Muda o diagnóstico e o valor.
-4. SUSTENTABILIDADE DA DÍVIDA × CAIXA: a dívida é pagável pela geração de caixa atual? Estime meses de caixa. "Dívida barata não adianta se não paga." Sinalize se o caixa cobre menos de 3 meses de operação.
-5. OPÇÕES por LENTE analítica: Reposicionamento → 5 Forças de Porter (rivalidade, entrantes, substitutos, poder de fornecedor e de cliente) ancoradas no contexto setorial da web; Excelência Operacional → ÁRVORE DE CUSTOS da DRE (aponte QUAL rubrica destrói a margem, da bruta para a operacional); Reestruturação Financeira → dívida/liquidez/capital de giro/runway; Modelo de Negócio orientado a Valor → onde se CRIA e onde se CAPTURA valor (proposta, pricing, mix, canais).
+1. ESTÁGIO DO CICLO: pela TENDÊNCIA multi-ano (não pela foto), classifique em Crescimento / Maturidade / Platô / Declínio / Crise de caixa. Condiciona TODA a leitura e o tom das opções.
+2. SITUAÇÃO: leia o momento com honestidade — de "saudável" a "crise" —, indicando se a força/pressão nasce na OPERAÇÃO (margem/custo) ou na ESTRUTURA FINANCEIRA (capital/dívida/caixa).
+3. SAÚDE FINANCEIRA × CAIXA: liquidez, dívida e geração de caixa são compatíveis com o estágio? Estime meses de caixa. Para empresa boa, avalie capacidade de investir/distribuir; para empresa apertada, avalie runway (sinalize se caixa < 3 meses).
+4. FATORES-CHAVE (sempre HIPÓTESE, nunca afirmação — "a causa não está nas demonstrações"): os vetores que explicam o desempenho — POSITIVOS e negativos. Regra de natureza: indicador acima/abaixo E os pares no mesmo sentido → provável causa EXTERNA (mercado); divergente dos pares → provável causa INTERNA (gestão). Cada fator com evidência (número/par/fato), confiança e O QUE VERIFICAR (pergunta de entrevista ou documento a pedir).
+5. OPÇÕES por LENTE analítica, condicionadas ao estágio: Reposicionamento → 5 Forças de Porter (rivalidade, entrantes, substitutos, poder de fornecedor e de cliente) ancoradas no contexto da web; Excelência Operacional → ÁRVORE DE CUSTOS da DRE (qual rubrica pesa na margem, da bruta para a operacional); Reestruturação/Estrutura Financeira → capital, dívida, liquidez, giro, alocação de caixa; Modelo de Negócio orientado a Valor → onde se CRIA e onde se CAPTURA valor (proposta, pricing, mix, canais).
 
-Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta estrutura:
+Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta estrutura. Evite REPETIR conteúdo entre seções — cada uma tem um papel distinto (veja as regras):
 {
-  "estagioCicloVida": { "estagio": "Crescimento|Platô|Declínio|Crise de caixa|Insolvência iminente", "justificativa": "<1-2 frases citando a tendência dos números>" },
-  "tipoCrise": { "classificacao": "sem crise|operacional|financeira|mista", "racional": "<onde nasce a deterioração, com evidência>" },
-  "sustentabilidadeDivida": { "status": "ok|apertada|insustentavel", "mesesDeCaixa": <número ou null>, "leitura": "<dívida vs geração de caixa; runway>" },
-  "causasProvaveis": [ { "problema": "<sintoma>", "causaHipotese": "<causa-raiz provável>", "natureza": "interna|externa|mista", "evidencia": "<número/par/fato>", "confianca": "alta|media|baixa", "verificar": "<o que perguntar/pedir>" } ],
+  "estagioCicloVida": { "estagio": "Crescimento|Maturidade|Platô|Declínio|Crise de caixa", "justificativa": "<1-2 frases citando a tendência dos números>" },
+  "situacao": { "classificacao": "saudável|estável|atenção|pressão operacional|pressão financeira|crise", "racional": "<onde nasce a força ou a pressão, com evidência>" },
+  "saudeFinanceira": { "status": "sólida|adequada|apertada|frágil", "mesesDeCaixa": <número ou null>, "leitura": "<liquidez, dívida, caixa e o que isso permite/exige no estágio atual>" },
+  "fatoresChave": [ { "fator": "<vetor de desempenho, positivo ou negativo>", "hipotese": "<causa-raiz provável>", "natureza": "interna|externa|mista", "evidencia": "<número/par/fato>", "confianca": "alta|media|baixa", "verificar": "<o que perguntar/pedir>" } ],
   "semaforo": [
     { "area": "Receita e Crescimento", "status": "ok|atencao|critico", "descricao": "<1 frase citando número e percentil vs pares>" },
     { "area": "Margens Operacionais", "status": "ok|atencao|critico", "descricao": "<...>" },
@@ -260,26 +262,32 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
     { "area": "Rentabilidade", "status": "ok|atencao|critico", "descricao": "<...>" },
     { "area": "Capital de Giro", "status": "ok|atencao|critico", "descricao": "<...>" }
   ],
-  "swot": { "forcas": ["<3-4, ancoradas em gap vs pares e no contexto>"], "fraquezas": ["<3-4>"], "oportunidades": ["<3-4>"], "riscos": ["<3-4>"] },
-  "recomendacoes": [ { "titulo": "<ação concreta>", "prioridade": "Alta|Média|Baixa", "impacto": "Alto|Médio|Baixo", "esforco": "Alto|Médio|Baixo", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<detalhe prático com número>" } ],
-  "destaques": ["<insight 1>", "<insight 2>", "<insight 3>", "<insight 4>"],
-  "confianca": <0-100>,
+  "swot": { "forcas": ["<3-4>"], "fraquezas": ["<3-4>"], "oportunidades": ["<3-4>"], "riscos": ["<3-4>"] },
   "opcoesEstrategicas": [
     { "pillar": "strategic_repositioning|value_focused_business_model|operational_excellence|financial_restructuring",
-      "title": "<opção concreta>", "description": "<como executar + a LENTE do pilar aplicada, com número>",
+      "title": "<movimento concreto>", "description": "<como executar + a LENTE do pilar aplicada, com número>",
       "estimatedImpactBRL": <impacto_em_reais_ou_omita>, "horizonMonths": <meses_ou_omita>,
       "effort": "low|medium|high", "priority": "p0|p1|p2" }
-  ]
+  ],
+  "recomendacoes": [ { "titulo": "<qual OPÇÃO priorizar>", "prioridade": "Alta|Média|Baixa", "impacto": "Alto|Médio|Baixo", "esforco": "Alto|Médio|Baixo", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<por que primeiro e como sequenciar; referencia uma opção acima>" } ],
+  "destaques": ["<insight 1>", "<insight 2>", "<insight 3>", "<insight 4>"],
+  "confianca": <0-100>
 }
 
-Pilares das opções (quatro frentes de valor): strategic_repositioning = Reposicionamento Estratégico (onde competir/como vencer) · value_focused_business_model = Modelo de Negócio orientado a Valor (proposta e captura de valor) · operational_excellence = Excelência Operacional (custos/processos/eficiência) · financial_restructuring = Reestruturação Financeira (capital/dívida/liquidez).
+Pilares das opções (quatro frentes de valor): strategic_repositioning = Reposicionamento Estratégico (onde competir/como vencer) · value_focused_business_model = Modelo de Negócio orientado a Valor (proposta e captura de valor) · operational_excellence = Excelência Operacional (custos/processos/eficiência) · financial_restructuring = Estrutura Financeira (capital/dívida/liquidez/alocação).
+
+PAPÉIS DAS SEÇÕES (NÃO haja overlap — cada uma responde a uma pergunta diferente):
+- estagioCicloVida + situacao + saudeFinanceira + fatoresChave + semaforo = o DIAGNÓSTICO ("onde a empresa está e por quê"). O semaforo é o placar por área; os fatoresChave são as hipóteses de causa. NÃO repita os números do semáforo dentro do swot.
+- swot = POSIÇÃO ESTRATÉGICA/COMPETITIVA ("como se posiciona no mercado"). Use Porter, pares e contexto (web/materiais). NÃO re-liste índices financeiros aqui — força/fraqueza aqui é de mercado, modelo, marca, capacidade, dependência, canal.
+- opcoesEstrategicas = o LEQUE de movimentos possíveis por pilar ("o que dá para fazer").
+- recomendacoes = o PLANO PRIORIZADO ("por onde começar"): escolha e SEQUENCIE as melhores opcoesEstrategicas em horizontes (0–30d/30–90d/90–180d). NÃO invente ações novas fora das opções — priorize e ordene as que você propôs.
 
 PRINCÍPIOS (inegociáveis):
 - Hipótese e FATO sempre separados. A IA NÃO inventa nem recalcula número — cita os números já prontos (indicadores, DRE, pares).
 - Lente PME-Brasil: gestão familiar/pessoa-chave, peso tributário, custo do capital de giro, informalidade de mercado.
 - Toda afirmação relevante ancorada em NÚMERO (R$, %, dias, percentil) e, quando houver, no GAP vs pares e no contexto web/materiais. Nada de generalidade vazia.
 - POSICIONAMENTO VS PARES: com o bloco de pares presente, o semáforo é RELATIVO ao setor (status pela posição vs mediana/faixa, respeitando a polaridade "maior/menor é melhor"); cite percentil/mediana. RESPEITE A COBERTURA: "direta" = confiável; "aproximada" = nível superior, direcional; "ausente" = NÃO invente percentil, use referência externa da web + conhecimento do setor e seja explícito.
-- causasProvaveis: 3 a 6, priorizando as que explicam a MAIOR destruição de valor. opcoesEstrategicas: 4 a 8 distribuídas pelos pilares conforme o diagnóstico. recomendacoes: 4 a 6. destaques: frases ≤15 palavras. priority p0=urgente, p1=importante, p2=oportuno.
+- fatoresChave: 3 a 6, priorizando os que mais explicam o desempenho. opcoesEstrategicas: 4 a 8 pelos pilares conforme o diagnóstico. recomendacoes: 4 a 6, todas derivadas das opções. destaques: frases ≤15 palavras. priority p0=urgente, p1=importante, p2=oportuno.
 - confianca: maior com 2+ períodos e indicadores/DRE completos.
 - Responda APENAS com o JSON.`;
 
@@ -315,9 +323,9 @@ PRINCÍPIOS (inegociáveis):
     destaques: Array.isArray(ai.destaques) ? ai.destaques : [],
     opcoesEstrategicas: Array.isArray(ai.opcoesEstrategicas) ? ai.opcoesEstrategicas : [],
     estagioCicloVida: ai.estagioCicloVida && typeof ai.estagioCicloVida === "object" ? ai.estagioCicloVida : undefined,
-    tipoCrise: ai.tipoCrise && typeof ai.tipoCrise === "object" ? ai.tipoCrise : undefined,
-    sustentabilidadeDivida: ai.sustentabilidadeDivida && typeof ai.sustentabilidadeDivida === "object" ? ai.sustentabilidadeDivida : undefined,
-    causasProvaveis: Array.isArray(ai.causasProvaveis) ? ai.causasProvaveis : [],
+    situacao: ai.situacao && typeof ai.situacao === "object" ? ai.situacao : undefined,
+    saudeFinanceira: ai.saudeFinanceira && typeof ai.saudeFinanceira === "object" ? ai.saudeFinanceira : undefined,
+    fatoresChave: Array.isArray(ai.fatoresChave) ? ai.fatoresChave : [],
   };
   return { result, custo };
 }
