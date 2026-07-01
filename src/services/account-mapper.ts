@@ -100,6 +100,11 @@ function findBestMatch(
     if (grupo) {
       for (const entry of dictionaryEntries) {
         if (normalize(entry.nomeOriginal) === norm && candidates.includes(entry.contaDestino)) {
+          // BLINDAGEM: mesmo casando por nome+grupo, o DESTINO precisa ser do grupo certo.
+          // Sem isto, uma entrada de dicionário errada (aprendida de uma extração ruim)
+          // joga p.ex. "Obrigações Tributárias" (PC) em "Empréstimos LP" (PNC) — cruzando
+          // Circulante/Não-Circulante. isGrupoCompatible nunca deixa cruzar AC/ANC nem PC/PNC.
+          if (!isGrupoCompatible(entry.contaDestino)) continue;
           // If dictionary entry has a grupoConta, require it to match
           if (entry.grupoConta && normalize(entry.grupoConta).includes(normalize(grupo))) {
             return entry.contaDestino;

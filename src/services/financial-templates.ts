@@ -489,7 +489,11 @@ export const ACCOUNT_ALIASES: Record<string, string> = {
   "ENCARGOS SOCIAIS A PAGAR": "Obrigações Trabalhistas - CP",
 
   // === OBRIGAÇÕES TRIBUTÁRIAS ===
-  "Impostos Parcelados a Longo Prazo": "Obrigações Tributárias - CP",
+  // Parcelamento tributário de LONGO PRAZO é passivo NÃO circulante (era CP — bug).
+  "Impostos Parcelados a Longo Prazo": "Obrigações Tributárias - LP",
+  "Tributos Parcelados - LP": "Obrigações Tributárias - LP",
+  "Parcelamento de Tributos - LP": "Obrigações Tributárias - LP",
+  "Obrigações Tributárias a Longo Prazo": "Obrigações Tributárias - LP",
   "ISS": "Obrigações Tributárias - CP",
   "Tributos e Encargos Sociais": "Obrigações Tributárias - CP",
   "Impostos e Contribuições a Recolher": "Obrigações Tributárias - CP",
