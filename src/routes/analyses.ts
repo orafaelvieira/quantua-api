@@ -310,8 +310,11 @@ async function buildPeerComparison(
  * Reutilizada pelo /process (auto, quando a extração fecha limpa) e pelo /generate (manual).
  */
 async function runAnalysisBackground(analysisId: string, modelKey?: string | null): Promise<void> {
+  // "Extraindo" cobre o fluxo automático do /process (extração → geração). "Erro"/"Cancelada"
+  // entram para permitir "Regerar só a análise" (reusa a extração já feita, sem re-extrair — o
+  // /generate valida antes que há indicadores).
   const iniciou = await prisma.analysis.updateMany({
-    where: { id: analysisId, status: { in: ["Extraindo", "Pronta para gerar", "Revisão necessária", "Concluída"] } },
+    where: { id: analysisId, status: { in: ["Extraindo", "Pronta para gerar", "Revisão necessária", "Concluída", "Erro", "Cancelada"] } },
     data: { status: "Gerando diagnóstico" },
   });
   if (iniciou.count === 0) { console.log(`[generate] ${analysisId}: estado não permite gerar (cancelado/corrida) — abortado`); return; }
