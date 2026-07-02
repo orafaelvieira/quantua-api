@@ -42,10 +42,6 @@ async function seedTipo(tipo: "BP" | "DRE") {
           sinal: null as number | null,
         }));
 
-  // Modelo vigente no banco (se houver). Só publica nova versão se o CONTEÚDO do
-  // template mudou — preservando a versão anterior (pinagem). Edições futuras feitas
-  // pelo usuário na tela ficam protegidas: o seed só age quando o template do código
-  // diverge do vigente (ex.: esta migração do BP granular CP/LP).
   const ativo = await prisma.standardModel.findFirst({
     where: { tipo, ativo: true },
     include: { linhas: { orderBy: { ordem: "asc" } } },
@@ -53,24 +49,41 @@ async function seedTipo(tipo: "BP" | "DRE") {
   const assinatura = (ls: Array<{ nome: string; grupo: string; nivel: number; tipo: string }>) =>
     ls.map((l) => `${l.nome}|${l.grupo}|${l.nivel}|${l.tipo}`).join("\n");
 
-  if (ativo && assinatura(ativo.linhas) === assinatura(linhas)) {
-    console.log(`  ${tipo}: v${ativo.versao} já reflete o template — pulando.`);
+  // A referência de comparação é a ÚLTIMA VERSÃO QUE O PRÓPRIO SEED PUBLICOU
+  // (criadoPor "sistema"), NUNCA a vigente: comparar com a vigente fazia o seed
+  // ATROPELAR edições do usuário a cada deploy (uma edição também "diverge do
+  // template"). Vale para BP e DRE — esta função atende os dois.
+  const ultimaSeed = await prisma.standardModel.findFirst({
+    where: { tipo, criadoPor: "sistema" },
+    orderBy: { versao: "desc" },
+    include: { linhas: { orderBy: { ordem: "asc" } } },
+  });
+  if (ultimaSeed && assinatura(ultimaSeed.linhas) === assinatura(linhas)) {
+    console.log(`  ${tipo}: template do código inalterado (última seed v${ultimaSeed.versao}) — edições do usuário preservadas.`);
     return;
   }
 
+  // Template do código REALMENTE mudou (ou primeira carga). Se a vigente é edição de
+  // USUÁRIO, a nova versão entra INATIVA (fica no histórico, sem atropelar a edição).
+  const vigenteEhDoUsuario = !!ativo && ativo.criadoPor !== "sistema";
+  const ativarNova = !vigenteEhDoUsuario;
   const proxVersao = ((await prisma.standardModel.aggregate({ where: { tipo }, _max: { versao: true } }))._max.versao ?? 0) + 1;
   await prisma.$transaction(async (tx) => {
-    await tx.standardModel.updateMany({ where: { tipo, ativo: true }, data: { ativo: false } });
+    if (ativarNova) await tx.standardModel.updateMany({ where: { tipo, ativo: true }, data: { ativo: false } });
     await tx.standardModel.create({
       data: {
-        tipo, versao: proxVersao, ativo: true,
-        nota: proxVersao === 1 ? "Versão inicial (migrada dos templates do código)" : "Atualização do template do código",
+        tipo, versao: proxVersao, ativo: ativarNova,
+        nota: proxVersao === 1
+          ? "Versão inicial (migrada dos templates do código)"
+          : ativarNova
+            ? "Atualização do template do código"
+            : "Atualização do template do código (inativa — a vigente é edição do usuário)",
         criadoPor: "sistema",
         linhas: { create: linhas },
       },
     });
   });
-  console.log(`  ${tipo}: v${proxVersao} publicada com ${linhas.length} linhas${ativo ? ` (anterior v${ativo.versao} preservada)` : ""}.`);
+  console.log(`  ${tipo}: v${proxVersao} publicada (${linhas.length} linhas, ${ativarNova ? "ATIVA" : "inativa — vigente do usuário mantida"}).`);
 }
 
 async function main() {
