@@ -245,7 +245,8 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
           marcaAbsorvidos(filhos, dest);
           const s = somaDireta(filhos);
           if (Math.abs(s - it.valor) > tolDe(it.valor)) {
-            alertasComposicao.push({ periodo: p, grupo: "DRE", caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta: it.valor - s });
+            // INFO: o nó mapeou e usou o valor DECLARADO — total certo; só transparência.
+            alertasComposicao.push({ periodo: p, grupo: "DRE", caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta: it.valor - s, severidade: "info" });
           }
         }
         return;
@@ -258,7 +259,8 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
           if (Math.abs(s - it.valor) > tolDe(it.valor)) {
             const delta = it.valor - s;
             addAcc(delta < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais", p, delta);
-            alertasComposicao.push({ periodo: p, grupo: "DRE", caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta });
+            // ERRO: delta foi para o balde — a composição precisa de revisão.
+            alertasComposicao.push({ periodo: p, grupo: "DRE", caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta, severidade: "erro" });
           }
         }
         return;
@@ -374,6 +376,9 @@ function detectaPaisFlat(itens: BPN3Item[]): Map<BPN3Item, BPN3Item[]> {
 export interface AlertaComposicaoBP {
   periodo: string; grupo: string; caminho: string;
   declarado: number; somaFilhos: number; delta: number;
+  /** "info" = nó mapeado usou o valor DECLARADO (total certo; captura interna incompleta —
+   *  transparência, sem impacto). "erro" = delta foi para "Outros" (composição a revisar). */
+  severidade: "info" | "erro";
 }
 
 export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryEntry[], model: BPModel = DEFAULT_BP_MODEL): { bp: BPLineItem[]; naoMapeados: NaoMapeado[]; alertasComposicao: AlertaComposicaoBP[] } {
@@ -449,7 +454,8 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
             marcaAbsorvidos(filhos, dest);
             const s = somaDireta(filhos);
             if (Math.abs(s - it.valor) > tolDe(it.valor)) {
-              alertasComposicao.push({ periodo: p, grupo: grupoNome, caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta: it.valor - s });
+              // INFO: o nó mapeou e usou o valor DECLARADO — total certo; só transparência.
+              alertasComposicao.push({ periodo: p, grupo: grupoNome, caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta: it.valor - s, severidade: "info" });
             }
           }
           return;
@@ -464,7 +470,8 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
               const delta = (it.valor - s) * fator;
               const balde = OUTROS_GRUPO[g];
               if (balde) { add(detalhe, balde, p, delta); add(subtotal, g, p, delta); }
-              alertasComposicao.push({ periodo: p, grupo: grupoNome, caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta: it.valor - s });
+              // ERRO: delta foi para o balde — a composição precisa de revisão.
+              alertasComposicao.push({ periodo: p, grupo: grupoNome, caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta: it.valor - s, severidade: "erro" });
             }
           }
           return;

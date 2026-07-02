@@ -1153,18 +1153,22 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
   // PROVA DE COMPOSIÇÃO (motor árvore): nós cujo subtotal declarado não bate com a soma
   // dos filhos capturados. O total não quebra (delta preservado), mas a composição das
   // linhas do padrão precisa de revisão — entra como alerta de área própria.
-  const alertasComp = ((dados as any).alertasComposicao ?? []) as Array<{ periodo: string; grupo: string; caminho: string; declarado: number; somaFilhos: number; delta: number }>;
+  const alertasComp = ((dados as any).alertasComposicao ?? []) as Array<{ periodo: string; grupo: string; caminho: string; declarado: number; somaFilhos: number; delta: number; severidade?: "info" | "erro" }>;
   const fmtBR = (n: number) => n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   for (const a of alertasComp) {
+    const ehInfo = a.severidade === "info";
     validacao.alertas.push({
-      tipo: "erro",
+      tipo: ehInfo ? "aviso" : "erro",
       area: "Composição",
       mensagem: `${a.periodo} · ${a.grupo}: "${a.caminho}" declara ${fmtBR(a.declarado)}, mas os filhos capturados somam ${fmtBR(a.somaFilhos)} (delta ${fmtBR(a.delta)}).`,
-      detalhes: "O delta foi preservado em 'Outros' para o total não se perder — revise a captura/classificação deste nó.",
+      detalhes: ehInfo
+        ? "O nó foi classificado com o valor DECLARADO no documento — o total está correto; a captura do detalhe abaixo dele ficou incompleta (apenas transparência, sem impacto nos números)."
+        : "O delta foi preservado em 'Outros' para o total não se perder — revise a captura/classificação deste nó.",
     });
   }
+  const errosComp = alertasComp.filter((a) => a.severidade !== "info");
 
-  res.json({ ...validacao, benford, composicaoOk: alertasComp.length === 0, alertasComposicao: alertasComp });
+  res.json({ ...validacao, benford, composicaoOk: errosComp.length === 0, alertasComposicao: alertasComp });
 });
 
 // Validation report — per-document extraction stats + overall summary
