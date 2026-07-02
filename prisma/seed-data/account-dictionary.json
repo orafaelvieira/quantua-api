@@ -7336,5 +7336,29 @@
     "contaDestino": "Resultado Não Operacional",
     "grupoConta": "Resultado Não Operacional",
     "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Cartões de Crédito",
+    "contaDestino": "Contas a Receber - CP",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tributos e Contribuições a Compensar",
+    "contaDestino": "Tributos a Recuperar - CP",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Aplicações Financeiras de Renda Fixa",
+    "contaDestino": "Caixa e Equivalentes de Caixa",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Deduções dos Direitos",
+    "contaDestino": "Contas a Receber - CP",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
   }
 ]

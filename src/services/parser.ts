@@ -673,8 +673,12 @@ export async function parsePDF(buffer: Buffer, tipo: string, filename?: string):
     linhas = removeChildRowsByValueSum(linhas, periodos);
   }
 
-  // Gera raw text — sempre inclui o texto original para o Claude
-  const raw = `${tipo}\n${text.slice(0, 8000)}`;
+  // Gera raw text — sempre inclui o texto original para o Claude.
+  // TETO 120k chars (~35k tokens Haiku ≈ $0,035): o cap antigo de 8.000 chars MUTILAVA
+  // qualquer PDF com 2+ páginas — o Passivo nunca chegava à IA barata (o BP 2021 da
+  // Maniacs cortava no meio do Imobilizado), forçando o fallback caro de visão ou,
+  // pior, extração parcial silenciosa. Documentos maiores que o teto seguem para a visão.
+  const raw = `${tipo}\n${text.slice(0, 120_000)}`;
 
   // Colapsa abertura+fechamento (ECF/ECD/SPED) para o saldo de FECHAMENTO.
   const periodosFinal = collapseOpeningClosing(periodos, linhas);

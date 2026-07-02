@@ -642,7 +642,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       bp: BPLineItem[]; dre: DRELineItem[]; periodos: string[];
       declarados: Record<string, Record<string, number>>;
       unmatched: UnmatchedAccount[];              // N3 p/ tela manual (só do híbrido; heurístico = [])
-      arvoreBP: unknown; arvoreDRE: unknown; naoMapeados: unknown[];
+      arvoreBP: unknown; arvoreDRE: unknown; naoMapeados: unknown[]; alertasComposicao: unknown[];
       custoUsd: number;
       validacao: ReturnType<typeof validateFinancialData>;
       score: number; fecha: boolean;
@@ -690,7 +690,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       const declarados = declaradosDe(dre, periodos);
       // unmatched do heurístico é folha profunda (N4+) → NUNCA vai p/ a tela (dupla contagem).
       // Guardamos só p/ telemetria; a tela manual é N3-only (alimentada pelo híbrido).
-      return avalia({ fonte: "heuristico", bp, dre, periodos, declarados, unmatched: [], arvoreBP: null, arvoreDRE: null, naoMapeados: [], custoUsd: 0 });
+      return avalia({ fonte: "heuristico", bp, dre, periodos, declarados, unmatched: [], arvoreBP: null, arvoreDRE: null, naoMapeados: [], alertasComposicao: [], custoUsd: 0 });
     };
 
     // N3 de BP não mapeados → tela manual (NUNCA N4+; a soma das folhas já está no N3).
@@ -728,7 +728,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       if (!aiDocs.length) return null;
       const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel);
       if (!temDadosIA(r)) return null;
-      return avalia({ fonte: "hibrido", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: naoMapeadosParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, custoUsd: r.custo.usd });
+      return avalia({ fonte: "hibrido", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: naoMapeadosParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, alertasComposicao: r.alertasComposicao, custoUsd: r.custo.usd });
     };
 
     // Nível 3 — VISÃO (Sonnet lê o PDF original). Caro: só como ÚLTIMO recurso. Re-baixa os
@@ -745,7 +745,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       if (!visDocs.length) return null;
       const r = await extractFinancialsWithAI(visDocs, [], dictAll, bpModel); // buffer → Sonnet visão
       if (!temDadosIA(r)) return null;
-      return avalia({ fonte: "visao", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: naoMapeadosParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, custoUsd: r.custo.usd });
+      return avalia({ fonte: "visao", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: naoMapeadosParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, alertasComposicao: r.alertasComposicao, custoUsd: r.custo.usd });
     };
 
     const custos: Array<{ fonte: string; usd: number }> = [];
@@ -825,6 +825,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       arvoreOriginalBP: arvoreOriginalBP,
       arvoreOriginalDRE: arvoreOriginalDRE,
       naoMapeados: usouIA ? hibridoNaoMapeados : [],
+      alertasComposicao: usouIA ? escolhido.alertasComposicao : [],
       modeloVersaoBP: modeloVersoes.bp,
       modeloVersaoDRE: modeloVersoes.dre,
       dicionarioVersao,
@@ -977,8 +978,10 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const periodos: string[] = dados.periodos ?? Object.keys(arvoreBP ?? arvoreDRE ?? {});
   const naoMapeados: any[] = [];
   const bpModelRefold = await loadActiveBPModel(); // bridge: re-dobra com o modelo de BP vigente do banco
-  if (arvoreBP) { const r = foldBP(arvoreBP, periodos, dictRows, bpModelRefold); dados.bp = r.bp; dados.arvoreOriginalBP = arvoreBP; naoMapeados.push(...r.naoMapeados); }
-  if (arvoreDRE) { const r = foldDRE(arvoreDRE, periodos, dictRows); dados.dre = r.dre; dados.arvoreOriginalDRE = arvoreDRE; naoMapeados.push(...r.naoMapeados); }
+  const alertasComp: any[] = [];
+  if (arvoreBP) { const r = foldBP(arvoreBP, periodos, dictRows, bpModelRefold); dados.bp = r.bp; dados.arvoreOriginalBP = arvoreBP; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
+  if (arvoreDRE) { const r = foldDRE(arvoreDRE, periodos, dictRows); dados.dre = r.dre; dados.arvoreOriginalDRE = arvoreDRE; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
+  dados.alertasComposicao = alertasComp;
   dados.naoMapeados = naoMapeados;
   dados.indicadores = calculateIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
 
@@ -1147,7 +1150,21 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
   }
   const benford = benfordAnalysis(allValues);
 
-  res.json({ ...validacao, benford });
+  // PROVA DE COMPOSIÇÃO (motor árvore): nós cujo subtotal declarado não bate com a soma
+  // dos filhos capturados. O total não quebra (delta preservado), mas a composição das
+  // linhas do padrão precisa de revisão — entra como alerta de área própria.
+  const alertasComp = ((dados as any).alertasComposicao ?? []) as Array<{ periodo: string; grupo: string; caminho: string; declarado: number; somaFilhos: number; delta: number }>;
+  const fmtBR = (n: number) => n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  for (const a of alertasComp) {
+    validacao.alertas.push({
+      tipo: "erro",
+      area: "Composição",
+      mensagem: `${a.periodo} · ${a.grupo}: "${a.caminho}" declara ${fmtBR(a.declarado)}, mas os filhos capturados somam ${fmtBR(a.somaFilhos)} (delta ${fmtBR(a.delta)}).`,
+      detalhes: "O delta foi preservado em 'Outros' para o total não se perder — revise a captura/classificação deste nó.",
+    });
+  }
+
+  res.json({ ...validacao, benford, composicaoOk: alertasComp.length === 0, alertasComposicao: alertasComp });
 });
 
 // Validation report — per-document extraction stats + overall summary
