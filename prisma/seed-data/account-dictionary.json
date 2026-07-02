@@ -3583,8 +3583,8 @@
   },
   {
     "nomeOriginal": "Impostos Parcelados a Longo Prazo",
-    "contaDestino": "Obrigações Tributárias - CP",
-    "grupoConta": "Passivo Circulante",
+    "contaDestino": "Obrigações Tributárias - LP",
+    "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
   },
   {
@@ -4435,7 +4435,7 @@
   },
   {
     "nomeOriginal": "Contas a Pagar Longo Prazo",
-    "contaDestino": "Empréstimos e Financiamentos - LP",
+    "contaDestino": "Outros Passivos não Circulantes",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
   },
@@ -4746,12 +4746,6 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "Obrigações a Longo Prazo",
-    "contaDestino": "Empréstimos e Financiamentos - LP",
-    "grupoConta": "Passivo Não Circulante",
-    "tipo": "BP"
-  },
-  {
     "nomeOriginal": "Obrigações de Longo Prazo",
     "contaDestino": "Passivo Não Circulante",
     "grupoConta": "Passivo Não Circulante",
@@ -4765,7 +4759,7 @@
   },
   {
     "nomeOriginal": "PERT - Longo Prazo",
-    "contaDestino": "Tributos Diferidos - LP",
+    "contaDestino": "Obrigações Tributárias - LP",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
   },
@@ -4783,13 +4777,13 @@
   },
   {
     "nomeOriginal": "Parcelamento de Tributos - Longo Prazo",
-    "contaDestino": "Tributos Diferidos - LP",
+    "contaDestino": "Obrigações Tributárias - LP",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "Parcelamentos - Longo Prazo",
-    "contaDestino": "Tributos Diferidos - LP",
+    "contaDestino": "Obrigações Tributárias - LP",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
   },
@@ -4915,7 +4909,7 @@
   },
   {
     "nomeOriginal": "REFIS - Longo Prazo",
-    "contaDestino": "Tributos Diferidos - LP",
+    "contaDestino": "Obrigações Tributárias - LP",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
   },
@@ -4933,7 +4927,7 @@
   },
   {
     "nomeOriginal": "Tributos Parcelados - Longo Prazo",
-    "contaDestino": "Tributos Diferidos - LP",
+    "contaDestino": "Obrigações Tributárias - LP",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
   },
