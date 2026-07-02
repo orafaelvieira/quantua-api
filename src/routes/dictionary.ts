@@ -153,7 +153,15 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
     else add(u.grupoConta, u.contaDestino);
   }
 
-  res.json({ template: BP_TEMPLATE, dreTemplate: dreModel.lines, grouped, dreGrouped });
+  // Guia "entra/não entra" por conta (linhas dos modelos VIGENTES) — tooltips dos dropdowns.
+  const linhasGuia = await prisma.standardModelLine.findMany({
+    where: { model: { ativo: true }, NOT: { descricao: null } },
+    select: { nome: true, descricao: true },
+  });
+  const descricoes: Record<string, string> = {};
+  for (const l of linhasGuia) if (l.descricao && !descricoes[l.nome]) descricoes[l.nome] = l.descricao;
+
+  res.json({ template: BP_TEMPLATE, dreTemplate: dreModel.lines, grouped, dreGrouped, descricoes });
 });
 
 // Helper to determine parent group based on classificacao

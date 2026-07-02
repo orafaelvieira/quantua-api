@@ -86,10 +86,26 @@ async function seedTipo(tipo: "BP" | "DRE") {
   console.log(`  ${tipo}: v${proxVersao} publicada (${linhas.length} linhas, ${ativarNova ? "ATIVA" : "inativa — vigente do usuário mantida"}).`);
 }
 
+/** Preenche o guia "entra/não entra" (descricao) das linhas — SÓ onde está vazio
+ *  (nunca sobrescreve texto editado pelo usuário no editor). Idempotente. */
+async function backfillGuia(): Promise<void> {
+  const { GUIA_LINHAS } = await import("./seed-data/model-line-guide");
+  let filled = 0;
+  for (const [nome, descricao] of Object.entries(GUIA_LINHAS)) {
+    const r = await prisma.standardModelLine.updateMany({
+      where: { nome, OR: [{ descricao: null }, { descricao: "" }] },
+      data: { descricao },
+    });
+    filled += r.count;
+  }
+  if (filled > 0) console.log(`  guia: ${filled} descrição(ões) preenchida(s) (só onde estava vazio).`);
+}
+
 async function main() {
   console.log("Seed dos modelos padrão (BP/DRE):");
   await seedTipo("BP");
   await seedTipo("DRE");
+  await backfillGuia();
   const total = await prisma.standardModelLine.count();
   console.log(`Concluído. Total de linhas de modelo no banco: ${total}.`);
 }

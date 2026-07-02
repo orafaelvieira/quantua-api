@@ -29,6 +29,7 @@ router.get("/", async (_req: AuthRequest, res: Response): Promise<void> => {
         tipo: l.tipo,
         nivel: l.nivel,
         sinal: l.sinal,
+        descricao: l.descricao,
       })),
     };
   };
@@ -52,7 +53,7 @@ function slugify(nome: string): string {
 
 interface LinhaInput {
   codigo?: string; nome: string; grupo?: string; ordem?: number;
-  tipo?: string; nivel?: number; sinal?: number | null;
+  tipo?: string; nivel?: number; sinal?: number | null; descricao?: string | null;
 }
 
 // POST /standard-models/:tipo/versions — publica uma NOVA versão (rascunho → publicar).
@@ -83,6 +84,7 @@ router.post("/:tipo/versions", async (req: AuthRequest, res: Response): Promise<
       tipo: tipoLinha,
       nivel: typeof l.nivel === "number" ? l.nivel : tipoLinha === "input" ? 2 : 1,
       sinal: typeof l.sinal === "number" ? l.sinal : null,
+      descricao: typeof l.descricao === "string" && l.descricao.trim() ? l.descricao.trim() : null,
     };
   });
 

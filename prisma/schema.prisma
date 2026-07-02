@@ -187,6 +187,7 @@ model StandardModelLine {
   tipo    String  @default("input") // "input" | "subtotal" | "total"
   nivel   Int     @default(2)
   sinal   Int? // convenção de sinal para inputs (+1/-1); null = neutro/subtotal
+  descricao String? // guia "o que entra / o que NÃO entra" — exibido nos dropdowns de classificação
 
   model StandardModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
 

@@ -12,6 +12,7 @@ import { comparePeersForIndicators, type PeerComparisonRow } from "../services/p
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
 import { researchCompanyWeb } from "../services/web-research";
 import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-context";
+import { sugerirClassificacoesIA, chaveNM } from "../services/classification-suggest";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta } from "../services/account-mapper";
 import { DRE_TEMPLATE } from "../services/financial-templates";
 import { calculateIndicators } from "../services/indicator-calculator";
@@ -812,6 +813,31 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       });
     }
 
+    // SUGESTÃO POR IA para as contas não-mapeadas (âmbar): UMA chamada Haiku no lote,
+    // temperature 0, opções fechadas por grupo/natureza. Gerada AQUI (1x por extração)
+    // e CACHEADA em dadosEstruturados — a tela nunca re-consulta IA. Best-effort.
+    let sugestoesIA: Record<string, import("../services/classification-suggest").SugestaoIA> = {};
+    let custoSugestoes: import("../services/ai-extraction").CustoIA | null = null;
+    const nmParaSugerir = (usouIA ? hibridoNaoMapeados : []) as import("../services/ai-extraction").NaoMapeado[];
+    if (nmParaSugerir.length > 0) {
+      try {
+        const dreModelAtivo = await loadActiveDREModel();
+        const dreInputs = dreModelAtivo.lines.filter((l: { subtotal: boolean }) => !l.subtotal).map((l: { conta: string }) => l.conta);
+        const receitaLinha = structuredDRE.find((l) => l.conta === "Receita Bruta");
+        const ultimoP = [...allPeriodos].sort().slice(-1)[0];
+        const r = await sugerirClassificacoesIA(
+          nmParaSugerir,
+          { setor: analysis.sectorCustom ?? analysis.company.setor ?? null, receitaUltimoAno: receitaLinha && ultimoP ? receitaLinha.valores[ultimoP] ?? null : null },
+          dreInputs,
+        );
+        sugestoesIA = r.sugestoes;
+        custoSugestoes = r.custo;
+        if (r.custo) console.log(`[process] sugestões IA: ${Object.keys(r.sugestoes).length}/${nmParaSugerir.length} contas, $${r.custo.usd.toFixed(4)}`);
+      } catch (e: any) {
+        console.warn(`[process] sugestões IA falharam (segue sem):`, e?.message ?? e);
+      }
+    }
+
     // Tela de classificação manual = N3 não-mapeados do vencedor (já é N3-only por
     // construção: heurístico entrega []; híbrido entrega os N3 de BP). NUNCA folhas N4+.
     const modeloVersoes = await getActiveModelVersions();
@@ -826,6 +852,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       arvoreOriginalBP: arvoreOriginalBP,
       arvoreOriginalDRE: arvoreOriginalDRE,
       naoMapeados: usouIA ? hibridoNaoMapeados : [],
+      sugestoesIA,
+      custoSugestoes,
       alertasComposicao: usouIA ? escolhido.alertasComposicao : [],
       modeloVersaoBP: modeloVersoes.bp,
       modeloVersaoDRE: modeloVersoes.dre,
@@ -984,6 +1012,11 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   if (arvoreBP) { const r = foldBP(arvoreBP, periodos, dictRows, bpModelRefold); dados.bp = r.bp; dados.arvoreOriginalBP = arvoreBP; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
   if (arvoreDRE) { const r = foldDRE(arvoreDRE, periodos, dictRows, dreModelRefold); dados.dre = r.dre; dados.arvoreOriginalDRE = arvoreDRE; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
   dados.alertasComposicao = alertasComp;
+  // Carry-over das sugestões IA (cacheadas na extração) para os que continuam não-mapeados.
+  const sugAntigas = (dados as any).sugestoesIA ?? {};
+  const sugNovas: Record<string, any> = {};
+  for (const nm of naoMapeados) { const k = chaveNM(nm as any); if (sugAntigas[k]) sugNovas[k] = sugAntigas[k]; }
+  (dados as any).sugestoesIA = sugNovas;
   dados.naoMapeados = naoMapeados;
   dados.indicadores = calculateIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
 
