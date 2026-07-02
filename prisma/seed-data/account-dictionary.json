@@ -7360,5 +7360,65 @@
     "contaDestino": "Contas a Receber - CP",
     "grupoConta": "Ativo Circulante",
     "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Tributos Retidos a Recolher",
+    "contaDestino": "Obrigações Tributárias - CP",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Parcelamento de Impostos",
+    "contaDestino": "Obrigações Tributárias - CP",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações com o Pessoal",
+    "contaDestino": "Obrigações Trabalhistas - CP",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Obrigações Previdenciárias",
+    "contaDestino": "Obrigações Trabalhistas - CP",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Títulos Descontados",
+    "contaDestino": "Empréstimos e Financiamentos - CP",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outras Obrigações Bancárias",
+    "contaDestino": "Empréstimos e Financiamentos - CP",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamentos a Funcionários",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Adiantamentos a Funcionarios",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Bens em Operação",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Depreciação/Amortização/Exaustão Acumulada",
+    "contaDestino": "Imobilizado",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
   }
 ]

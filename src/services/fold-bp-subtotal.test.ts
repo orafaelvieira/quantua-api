@@ -25,9 +25,11 @@ describe("foldBP — descarte de subtotal POR VALOR (caso Maniacs)", () => {
     // Subtotal do grupo NÃO duplica: PNC = 2.012.221,40 (não 4.024.442,80)
     const pnc = bp.find((l) => l.classificacao === "PNC" && l.nivel === 1);
     expect(pnc?.valores["2021"]).toBeCloseTo(2012221.4, 1);
-    // Pai anotado como subtotal na trilha de auditoria
+    // Pai flat vira ESTRUTURAL (a árvore é reconstruída pela relação de valor e os
+    // filhos são classificados — não órfãos, não duplicados)
     const pai = arvore["2021"].grupos["Passivo Não Circulante"][0];
-    expect(pai.destino).toContain("subtotal");
+    expect(pai.destino).toContain("estrutural");
+    expect(pai.filhos?.length).toBe(2); // árvore reconstruída in-place (auditoria aninhada)
     // Filho tributário mapeado no destino certo (keyword + grupo LP)
     expect(valorDe(bp, "Obrigações Tributárias - LP", "2021")).toBeCloseTo(853705.43, 1);
     // Filho de empréstimos preservado no grupo (destino específico OU balde "Outros" —
@@ -200,5 +202,40 @@ describe("foldBP v2 — árvore completa (hierarquia real da Maniacs)", () => {
     expect(pc?.valores["2021"]).toBeCloseTo(500, 1);
     const filhos = arvore["2021"].grupos["Passivo Circulante"][0].filhos;
     expect(filhos[0].destino).toContain("absorvido");
+  });
+});
+
+describe("foldBP — captura FLAT do caso REAL de produção (pai+filhos no mesmo nível)", () => {
+  it("2020 PC flat: reconstrói a árvore e o pai que mapeia ABSORVE os filhos (sem órfãos)", () => {
+    // Exatamente o que a IA devolveu em produção: tudo no mesmo nível, sem `filhos`.
+    const arvore = {
+      "2020": {
+        grupos: {
+          "Passivo Circulante": [
+            { nome: "OBRIGAÇÕES TRIBUTÁRIAS", valor: 2143932.09 },
+            { nome: "IMPOSTOS E CONTRIBUIÇÕES A RECOLHER", valor: 1234394.88 },
+            { nome: "TRIBUTOS RETIDOS A RECOLHER", valor: 19124.08 },
+            { nome: "PARCELAMENTO DE IMPOSTOS", valor: 890413.13 },
+            { nome: "OBRIGAÇÕES TRABALHISTAS E PRIVIDENCIÁRIAS", valor: 480539.43 },
+            { nome: "OBRIGAÇÕES COM O PESSOAL", valor: 72390.40 },
+            { nome: "OBRIGAÇÕES PREVIDENCIÁRIAS", valor: 344982.49 },
+            { nome: "PROVISÕES", valor: 63166.54 },
+            { nome: "FORNECEDORES", valor: 3810318.43 },
+          ],
+        },
+      },
+    } as any;
+    const { bp, naoMapeados } = foldBP(arvore, ["2020"]);
+    // Pais mapeiam e absorvem com o valor declarado — composição exata, zero órfãos
+    expect(valorDe(bp, "Obrigações Tributárias - CP", "2020")).toBeCloseTo(2143932.09, 1);
+    expect(valorDe(bp, "Obrigações Trabalhistas - CP", "2020")).toBeCloseTo(480539.43, 1);
+    expect(valorDe(bp, "Fornecedores - CP", "2020")).toBeCloseTo(3810318.43, 1);
+    expect(valorDe(bp, "Outros Passivos Circulantes", "2020")).toBeCloseTo(0, 1);
+    expect(naoMapeados.length).toBe(0); // era o bug: 10 contas órfãs para classificar
+    const pc = bp.find((l) => l.classificacao === "PC" && l.nivel === 1);
+    expect(pc?.valores["2020"]).toBeCloseTo(2143932.09 + 480539.43 + 3810318.43, 1);
+    // Árvore reconstruída in-place: filhos aninhados sob os pais (auditoria)
+    const ot = arvore["2020"].grupos["Passivo Circulante"].find((i: any) => i.nome === "OBRIGAÇÕES TRIBUTÁRIAS");
+    expect(ot.filhos?.length).toBe(3);
   });
 });

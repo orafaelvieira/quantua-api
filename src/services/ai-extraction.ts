@@ -339,33 +339,33 @@ function achaSubsetSoma(vals: number[], alvo: number, tol: number): number[] | n
   return dfs(0, alvo);
 }
 
-/** Detecta SUBTOTAIS POR VALOR no BP (espelha o descarte da DRE): uma linha cujo valor
- *  é a soma de OUTRAS linhas capturadas do mesmo grupo/período é um cabeçalho cujos
- *  filhos já vieram — descartar evita dupla contagem (ex.: "Obrigações a Longo Prazo" =
- *  Empréstimos LP + Obrigações Tributárias LP). Regras de segurança: match a centavos
- *  (tol ≤ R$0,05); pareamento 1-para-1 só quando um nome contém o outro. */
-function detectaSubtotaisBP(itens: BPN3Item[]): Set<BPN3Item> {
-  const out = new Set<BPN3Item>();
+/** Detecta relações PAI→FILHOS numa captura FLAT (a IA nem sempre aninha): uma linha
+ *  cujo valor é a soma exata de OUTRAS linhas do mesmo grupo/período é o PAI delas.
+ *  Em vez de descartar o pai (que órfãva os filhos), RECONSTRUÍMOS a árvore — o fold
+ *  então aplica a mesma lógica estrutural (pai que mapeia absorve; senão desce com
+ *  contexto). Segurança: match a centavos (tol ≤ R$0,05); pareamento 1-para-1 só
+ *  quando um nome contém o outro (valores iguais de contas distintas não são pai/filho). */
+function detectaPaisFlat(itens: BPN3Item[]): Map<BPN3Item, BPN3Item[]> {
+  const pares = new Map<BPN3Item, BPN3Item[]>();
   const validos = itens.filter((it) => typeof it.valor === "number" && it.valor !== 0 && !isCompensacao(it.nome));
-  if (validos.length < 2) return out;
+  if (validos.length < 2) return pares;
   const usadoComoFilho = new Set<BPN3Item>();
   const ordenados = [...validos].sort((a, b) => Math.abs(b.valor) - Math.abs(a.valor)); // pais tendem a ser maiores
   for (const cand of ordenados) {
-    if (out.has(cand) || usadoComoFilho.has(cand)) continue;
-    const outros = validos.filter((o) => o !== cand && !out.has(o) && !usadoComoFilho.has(o));
+    if (pares.has(cand) || usadoComoFilho.has(cand)) continue;
+    const outros = validos.filter((o) => o !== cand && !pares.has(o) && !usadoComoFilho.has(o));
     if (!outros.length) continue;
     const subset = achaSubsetSoma(outros.map((o) => o.valor), cand.valor, 0.05);
     if (!subset) continue;
     if (subset.length === 1) {
-      // Valores iguais de contas DISTINTAS não são duplicação — exige nomes contidos
-      // (ex.: "OUTRAS OBRIGAÇÕES A LONGO PRAZO" ⊃ "OUTRAS OBRIGAÇÕES").
       const a = normNome(cand.nome), b = normNome(outros[subset[0]].nome);
       if (!(a.includes(b) || b.includes(a))) continue;
     }
-    out.add(cand);
-    for (const idx of subset) usadoComoFilho.add(outros[idx]);
+    const filhos = subset.map((idx) => outros[idx]);
+    pares.set(cand, filhos);
+    for (const f of filhos) usadoComoFilho.add(f);
   }
-  return out;
+  return pares;
 }
 
 /** Divergência de COMPOSIÇÃO: um nó declara um subtotal que não bate com a soma dos
@@ -402,10 +402,21 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
     for (const [grupoNome, itens] of Object.entries(cap.grupos ?? {})) {
       const g = GRP[grupoNome]; if (!g) continue;
       const fator = flipPassivo && (g === "PC" || g === "PNC" || g === "PL") ? -1 : 1;
-      // Fallback p/ capturas FLAT antigas (sem `filhos`): detecção de subtotal POR VALOR.
-      // Com hierarquia capturada, a verdade é ESTRUTURAL — subset-sum desnecessário.
+      // Captura FLAT (a IA nem sempre aninha, e capturas antigas não têm `filhos`):
+      // RECONSTRÓI a árvore pela relação de valor (pai = soma exata dos filhos) e roda a
+      // MESMA lógica estrutural — pai que mapeia absorve os filhos (sem órfãos), pai que
+      // não mapeia desce com contexto. Mutação in-place: a auditoria passa a ver aninhado.
       const temHierarquia = itens.some((it) => it.filhos && it.filhos.length > 0);
-      const subtotaisAuto = temHierarquia ? new Set<BPN3Item>() : detectaSubtotaisBP(itens);
+      let itensNivel0 = itens;
+      if (!temHierarquia) {
+        const pares = detectaPaisFlat(itens);
+        if (pares.size > 0) {
+          const filhosSet = new Set<BPN3Item>();
+          for (const [pai, filhos] of pares) { pai.filhos = filhos; for (const f of filhos) filhosSet.add(f); }
+          itensNivel0 = itens.filter((it) => !filhosSet.has(it));
+          cap.grupos[grupoNome] = itensNivel0; // persiste a árvore reconstruída (auditoria aninhada)
+        }
+      }
 
       const somaDireta = (filhos: BPN3Item[]): number =>
         filhos.reduce((s, f) => s + (typeof f.valor === "number" && !isCompensacao(f.nome) ? f.valor : 0), 0);
@@ -420,7 +431,6 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
       // ambígua tenta o contexto do pai ("Obrigações Trabalhistas Provisões") antes do balde.
       const processa = (it: BPN3Item, caminho: string[]): void => {
         if (isCompensacao(it.nome)) { it.destino = "(compensação — excluída)"; return; }
-        if (subtotaisAuto.has(it)) { it.destino = "(subtotal — filhos já contabilizados)"; return; }
         if (isContaIgnorada(it.nome, dict)) { it.destino = "(ignorada pelo analista)"; return; }
         const temValor = typeof it.valor === "number";
         const filhos = it.filhos ?? [];
@@ -473,7 +483,7 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
         it.destino = balde ?? "(não classificado)";
         naoMapeados.push({ nome: it.nome, grupo: caminho.length ? `${grupoNome} > ${caminho.join(" > ")}` : grupoNome, destino: it.destino, valor: v, periodo: p, tipo: "BP" });
       };
-      for (const it of itens) processa(it, []);
+      for (const it of itensNivel0) processa(it, []);
     }
   }
 
