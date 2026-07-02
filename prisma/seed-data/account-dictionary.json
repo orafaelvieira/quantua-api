@@ -6793,8 +6793,8 @@
   },
   {
     "nomeOriginal": "Despesas Tributárias",
-    "contaDestino": "Outras Despesas Operacionais",
-    "grupoConta": "Outras Despesas Operacionais",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
     "tipo": "DRE"
   },
   {
@@ -6805,8 +6805,8 @@
   },
   {
     "nomeOriginal": "Multas e Juros Fiscais",
-    "contaDestino": "Outras Despesas Operacionais",
-    "grupoConta": "Outras Despesas Operacionais",
+    "contaDestino": "Despesas Financeiras",
+    "grupoConta": "Despesas Financeiras",
     "tipo": "DRE"
   },
   {
@@ -6865,14 +6865,14 @@
   },
   {
     "nomeOriginal": "TAXAS E CONTRIBUIÇÕES",
-    "contaDestino": "Outras Despesas Operacionais",
-    "grupoConta": "Outras Despesas Operacionais",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
     "tipo": "DRE"
   },
   {
     "nomeOriginal": "UTILIDADES E SERVIÇOS",
-    "contaDestino": "Outras Despesas Operacionais",
-    "grupoConta": "Outras Despesas Operacionais",
+    "contaDestino": "Despesas Gerais e Administrativas",
+    "grupoConta": "Despesas Gerais e Administrativas",
     "tipo": "DRE"
   },
   {
