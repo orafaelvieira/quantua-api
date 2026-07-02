@@ -467,10 +467,14 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
         const filhos = it.filhos ?? [];
 
         const destBruto = temValor ? mapAccountToBPGroup(it.nome, g, dict, model) : null;
-        // Se o pai só mapeia para um balde "Outros ..." mas TEM filhos, prefira descer:
-        // os filhos podem classificar mais específico (pior caso, caem no mesmo balde).
-        const destEhBalde = destBruto != null && Object.values(OUTROS_GRUPO).includes(destBruto);
-        const dest = destEhBalde && filhos.length > 0 ? null : destBruto;
+        // Se o pai só mapeia para um destino GENÉRICO — o balde do grupo OU qualquer linha
+        // "Outros/Outras ..." (ex.: "Outros Créditos a Receber - CP") — mas TEM filhos,
+        // prefira descer: os filhos podem classificar mais específico (ex.: "Tributos a
+        // Recuperar" sob "OUTROS CRÉDITOS" → linha própria). Pior caso, o filho cai no
+        // mesmo destino do pai via contexto — nunca pior que a absorção.
+        const destEhGenerico = destBruto != null &&
+          (Object.values(OUTROS_GRUPO).includes(destBruto) || /^outr[oa]s\b/.test(normNome(destBruto)));
+        const dest = destEhGenerico && filhos.length > 0 ? null : destBruto;
         if (dest) {
           const v = it.valor * fator;
           add(subtotal, g, p, v);

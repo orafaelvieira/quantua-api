@@ -262,6 +262,37 @@ describe("foldBP — contexto do pai não pode inflar o keyword-match (palavra d
   });
 });
 
+describe("foldBP — pai com destino genérico ('Outros ...') desce para os filhos", () => {
+  it("OUTROS CRÉDITOS: filho específico ganha a própria linha; resto segue no destino do pai; AC fecha", () => {
+    const arvore = {
+      "2022": {
+        grupos: {
+          "Ativo Circulante": [
+            { nome: "OUTROS CRÉDITOS", valor: 1575947, filhos: [
+              { nome: "ADIANTAMENTOS A TERCEIROS", valor: 618348 },
+              { nome: "ADIANTAMENTOS A FUNCIONARIOS", valor: 15076 },
+              { nome: "EMPRÉSTIMOS A FUNCIONÁRIOS", valor: 1500 },
+              { nome: "EMPRÉSTIMOS A SÓCIOS", valor: 583774 },
+              { nome: "TRIBUTOS A RECUPERAR", valor: 357249 },
+            ]},
+          ],
+        },
+      },
+    } as any;
+    // Dicionário: o PAI mapeia para linha genérica "Outros ..." (não é o balde do grupo) —
+    // antes ABSORVIA tudo; agora desce para os filhos classificarem específico.
+    const dict = [{ nomeOriginal: "Outros Créditos", contaDestino: "Outros Créditos a Receber - CP", grupoConta: "Ativo Circulante" }];
+    const { bp, naoMapeados } = foldBP(arvore, ["2022"], dict);
+    expect(valorDe(bp, "Tributos a Recuperar - CP", "2022")).toBeCloseTo(357249, 1); // linha própria
+    expect(valorDe(bp, "Despesas Ant. / Adiantamentos - Ativo", "2022")).toBeCloseTo(618348, 1); // via alias
+    // Filhos sem linha específica caem no destino do pai via contexto (nunca pior que a absorção)
+    expect(valorDe(bp, "Outros Créditos a Receber - CP", "2022")).toBeCloseTo(15076 + 1500 + 583774, 1);
+    const ac = bp.find((l) => l.classificacao === "AC" && l.nivel === 1);
+    expect(ac?.valores["2022"]).toBeCloseTo(1575947, 1); // total do grupo fecha com o declarado
+    expect(naoMapeados.length).toBe(0); // nada de âmbar: tudo resolvido determinístico
+  });
+});
+
 describe("foldDRE — blindagem contextual (posição no documento × dicionário)", () => {
   const RECEITA = { nome: "RECEITA OPERACIONAL BRUTA", valor: 1000 };
   const arvoreCom = (paiNome: string) => ({
