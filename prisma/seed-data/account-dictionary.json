@@ -2856,12 +2856,6 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "(-) Juros Pronampe - Lp",
-    "contaDestino": "Empréstimos e Financiamentos - CP",
-    "grupoConta": "Passivo Circulante",
-    "tipo": "BP"
-  },
-  {
     "nomeOriginal": "13º Salário a Pagar",
     "contaDestino": "Obrigações Trabalhistas - CP",
     "grupoConta": "Passivo Circulante",
@@ -3211,12 +3205,6 @@
   },
   {
     "nomeOriginal": "Emprestimos Bndes",
-    "contaDestino": "Empréstimos e Financiamentos - CP",
-    "grupoConta": "Passivo Circulante",
-    "tipo": "BP"
-  },
-  {
-    "nomeOriginal": "Emprestimos Lp",
     "contaDestino": "Empréstimos e Financiamentos - CP",
     "grupoConta": "Passivo Circulante",
     "tipo": "BP"
@@ -4008,12 +3996,6 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "Pronampe - Lp",
-    "contaDestino": "Empréstimos e Financiamentos - CP",
-    "grupoConta": "Passivo Circulante",
-    "tipo": "BP"
-  },
-  {
     "nomeOriginal": "Provisão De Ferias",
     "contaDestino": "Obrigações Trabalhistas - CP",
     "grupoConta": "Passivo Circulante",
@@ -4356,12 +4338,6 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "(-) Juros Pronampe - Cp",
-    "contaDestino": "Empréstimos e Financiamentos - LP",
-    "grupoConta": "Passivo Não Circulante",
-    "tipo": "BP"
-  },
-  {
     "nomeOriginal": "(-) Juros Pronampe - Lp",
     "contaDestino": "Empréstimos e Financiamentos - LP",
     "grupoConta": "Passivo Não Circulante",
@@ -4699,7 +4675,7 @@
   },
   {
     "nomeOriginal": "Impostos Parcelados - LP",
-    "contaDestino": "Tributos Diferidos - LP",
+    "contaDestino": "Obrigações Tributárias - LP",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
   },
@@ -4771,7 +4747,7 @@
   },
   {
     "nomeOriginal": "Parcelamento Simples - LP",
-    "contaDestino": "Tributos Diferidos - LP",
+    "contaDestino": "Obrigações Tributárias - LP",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
   },
@@ -4868,12 +4844,6 @@
   {
     "nomeOriginal": "Passivos com Partes Relacionadas",
     "contaDestino": "Passivos com Partes Relacionadas - LP",
-    "grupoConta": "Passivo Não Circulante",
-    "tipo": "BP"
-  },
-  {
-    "nomeOriginal": "Pronampe - Cp",
-    "contaDestino": "Empréstimos e Financiamentos - LP",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
   },
