@@ -79,6 +79,16 @@ export interface FluxoCaixaIndireto {
 
 const TOL_FECHA = 1; // R$1 — mesma régua do AT=PT
 
+/** Ordena períodos cronologicamente ("31/12/2022" ou "2022"). O array guardado em
+ *  dadosEstruturados pode vir na ordem dos DOCUMENTOS — parear sem ordenar cruzaria
+ *  as variações entre anos errados (ex.: 2022→2020). */
+const ordPeriodo = (p: string): number => {
+  const m = p.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return Number(`${m[3]}${m[2]}${m[1]}`);
+  const y = p.match(/\d{4}/);
+  return y ? Number(`${y[0]}0000`) : 0;
+};
+
 /**
  * Monta o FC indireto. Retorna null quando há menos de 2 períodos (sem variação
  * não há método indireto — o chamador exibe o aviso de período curto).
@@ -86,9 +96,10 @@ const TOL_FECHA = 1; // R$1 — mesma régua do AT=PT
 export function buildIndirectCashFlow(
   bp: BPLineItem[],
   dre: DRELineItem[],
-  periodos: string[],
+  periodosBrutos: string[],
 ): FluxoCaixaIndireto | null {
-  if (!periodos || periodos.length < 2) return null;
+  if (!periodosBrutos || periodosBrutos.length < 2) return null;
+  const periodos = [...periodosBrutos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
 
   const avisos: string[] = [];
   const bpVal = (conta: string, p: string): number => bp.find((l) => l.conta === conta)?.valores[p] ?? 0;

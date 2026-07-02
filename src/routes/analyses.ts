@@ -1336,8 +1336,14 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
     };
   });
 
-  // Overall summary
-  const allPeriodos = dados?.periodos || [];
+  // Overall summary — períodos SEMPRE em ordem cronológica na exibição
+  const ordPer = (p: string): number => {
+    const m = p.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (m) return Number(`${m[3]}${m[2]}${m[1]}`);
+    const y = p.match(/\d{4}/);
+    return y ? Number(`${y[0]}0000`) : 0;
+  };
+  const allPeriodos = [...(dados?.periodos || [])].sort((a, b) => ordPer(a) - ordPer(b));
   const totalMapeadas = documents.reduce((sum, d) => sum + d.stats.contasMapeadas, 0);
   const totalLinhas = documents.reduce((sum, d) => sum + d.stats.linhasExtraidas, 0);
   const taxaClassificacao = totalLinhas > 0 ? Math.round((totalMapeadas / totalLinhas) * 1000) / 10 : 0;

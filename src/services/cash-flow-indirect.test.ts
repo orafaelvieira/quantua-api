@@ -60,6 +60,22 @@ describe("buildIndirectCashFlow", () => {
     expect(capex?.valores["2023"]).toBeCloseTo(-100, 2);
   });
 
+  it("períodos FORA DE ORDEM (ordem dos documentos) → pareia cronologicamente, nunca cruza anos", () => {
+    // dados de produção reais vieram como ["31/12/2022","31/12/2020","31/12/2021"]
+    const bp3 = BP.map((l) => ({
+      ...l,
+      valores: { "31/12/2020": l.valores["2022"], "31/12/2021": l.valores["2023"], "31/12/2022": l.valores["2023"] },
+    }));
+    const dre3: DRELineItem[] = [
+      { conta: "Lucro Líquido", subtotal: false, editado: false, valores: { "31/12/2021": 170, "31/12/2022": 0 } },
+      { conta: "Depreciação e Amortização", subtotal: false, editado: false, valores: { "31/12/2021": -40, "31/12/2022": 0 } },
+    ];
+    const fc = buildIndirectCashFlow(bp3, dre3, ["31/12/2022", "31/12/2020", "31/12/2021"])!;
+    expect(fc.colunas).toEqual(["31/12/2021", "31/12/2022"]); // cronológico, não a ordem de entrada
+    expect(fc.totais.geracaoTotal["31/12/2021"]).toBeCloseTo(160, 2); // variação 2020→2021 (mesma do caso base)
+    expect(fc.prova.every((p) => p.fecha)).toBe(true);
+  });
+
   it("menos de 2 períodos → null (chamador exibe aviso de período curto)", () => {
     expect(buildIndirectCashFlow(BP, DRE, ["2023"])).toBeNull();
     expect(buildIndirectCashFlow(BP, DRE, [])).toBeNull();
