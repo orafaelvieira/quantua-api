@@ -21,8 +21,10 @@ const dreInputsSet = new Set(dreInputs);
 export interface DRESecaoItem { nome: string; valor: number; destino?: string }
 export type ArvoreOriginalDRE = Record<string, DRESecaoItem[]>;
 
-// ── Tipos da árvore N3 do BP ──
-export interface BPN3Item { nome: string; valor: number; destino?: string }
+// ── Tipos da árvore do BP ──
+// `filhos` (opcional): hierarquia COMPLETA do documento (1-7 níveis). Capturas antigas
+// (flat, sem filhos) continuam válidas — o fold trata os dois formatos.
+export interface BPN3Item { nome: string; valor: number; destino?: string; filhos?: BPN3Item[] }
 export interface BPN3Periodo { grupos: Record<string, BPN3Item[]>; totais?: Record<string, number> }
 /** Árvore original do BP até o nível 3, por período (auditoria). */
 export type ArvoreOriginalBP = Record<string, BPN3Periodo>;
@@ -40,6 +42,8 @@ export interface AIExtractionResult {
   arvoreOriginalDRE: ArvoreOriginalDRE;
   /** contas N3/seções que o de-para não reconheceu (foram p/ "Outros" ou sinalizadas) */
   naoMapeados: NaoMapeado[];
+  /** nós cujo subtotal declarado não bate com a soma dos filhos (prova de composição) */
+  alertasComposicao: AlertaComposicaoBP[];
   /** custo da chamada de IA (tokens + USD) — para medir o custo por processo */
   custo: CustoIA;
 }
@@ -65,7 +69,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // input: ou um PDF (visão, caro) ou texto já extraído pelo parser (barato).
 // Devolve os dados + os tokens consumidos (para medir custo por processo).
 interface AskResult { data: any; inTok: number; outTok: number }
-async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, model: string = AI_MODEL, attempt = 0): Promise<AskResult> {
+async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, model: string = AI_MODEL, attempt = 0, maxTokens = 4000): Promise<AskResult> {
   const content: any[] = input.text
     ? [{ type: "text", text: `${prompt}\n\nCONTEÚDO EXTRAÍDO DO DOCUMENTO:\n${input.text}` }]
     : [
@@ -74,12 +78,12 @@ async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, mo
       ];
   let msg;
   try {
-    msg = await client.messages.create({ model, max_tokens: 4000, messages: [{ role: "user", content }] });
+    msg = await client.messages.create({ model, max_tokens: maxTokens, messages: [{ role: "user", content }] });
   } catch (e: any) {
     // 429 (rate limit) ou 529 (overloaded): espera e tenta de novo (uploads multi-doc)
     if ((e?.status === 429 || e?.status === 529) && attempt < 4) {
       await sleep(7000 * (attempt + 1));
-      return ask(input, prompt, model, attempt + 1);
+      return ask(input, prompt, model, attempt + 1, maxTokens);
     }
     throw e;
   }
@@ -197,18 +201,23 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
   return { dre, naoMapeados };
 }
 
-// ───────────────────────── BP (captura N3 = árvore original) ─────────────────────────
-function bpN3Prompt(periodos: string[]): string {
-  return `Você é especialista em contabilidade brasileira. Extraia o BALANÇO PATRIMONIAL deste PDF até o NÍVEL 3 SEMÂNTICO.
-Para cada um dos 5 grupos, liste as contas da PRIMEIRA QUEBRA SEMÂNTICA (ex.: Fornecedores, Empréstimos, Obrigações Tributárias, Disponível, Clientes…), com o NOME ORIGINAL EXATO do documento e o VALOR LÍQUIDO (filhos já somados).
-- PULE wrappers redundantes (valor = subtotal do grupo, ex.: "Exigível a Curto Prazo").
-- Se a primeira quebra for um AGRUPADOR GENÉRICO sem semântica de conta (ex.: "Obrigações a Longo Prazo", "Outras Obrigações", "Obrigações", "Créditos", "Valores a Receber"), DESÇA UM NÍVEL e liste os filhos semânticos (Empréstimos Instituições Financeiras, Obrigações Tributárias, Adiantamentos…) — NUNCA retorne o agrupador genérico como se fosse conta, e NUNCA retorne o agrupador E os filhos juntos (duplicaria).
-- NÃO desça para contas individuais (bancos, empréstimos específicos, parcelamentos).
-- Negativos negativos.
+// ───────────────────────── BP (captura da ÁRVORE COMPLETA) ─────────────────────────
+// Filosofia: a IA NÃO julga qual é "o nível certo" (isso não existe globalmente num doc
+// de 1-7 níveis) — ela TRANSCREVE a hierarquia fielmente. Todo julgamento estrutural
+// (subtotal, absorção, classificação) é do fold, determinístico e auditável.
+function bpTreePrompt(periodos: string[]): string {
+  return `Você é especialista em contabilidade brasileira. TRANSCREVA a HIERARQUIA COMPLETA do BALANÇO PATRIMONIAL deste documento — fielmente, nível por nível, sem julgar nem resumir.
+
+Para cada um dos 5 grupos, retorne a ÁRVORE de contas como aparece no documento: cada nó com o NOME ORIGINAL EXATO, o VALOR IMPRESSO ao lado dele, e seus filhos aninhados em "filhos".
+- Um nó PAI leva o valor impresso na linha dele (o subtotal declarado) E os filhos aninhados — NÃO some nada por conta própria, NÃO pule níveis, NÃO invente nomes.
+- PARE de descer quando os filhos deixarem de ser CONTAS e virarem lançamentos individuais (bancos específicos, contratos, parcelas numeradas, CNPJs, nomes de pessoas/clientes): nesse caso retorne só o nó pai com seu valor, sem "filhos".
+- Wrappers que são o PRÓPRIO grupo (ex.: "CIRCULANTE", "NÃO CIRCULANTE", "EXIGÍVEL A CURTO PRAZO" como primeiro nível) NÃO entram como nó — o grupo já é a chave.
+- Valores negativos com sinal negativo (ex.: depreciação, encargos, retificadoras "(-)").
 - COLUNAS: se o documento (ex.: ECF/ECD/SPED, "Período da Escrituração DD/MM a DD/MM") trouxer "Saldo Inicial" e "Saldo Final" do MESMO período, use SEMPRE o Saldo FINAL (fechamento) — nunca o inicial. (Não confundir com colunas de ANOS diferentes, que são períodos distintos e cada um vale.)
 - ${periodKeyInstruction(periodos)}
 Grupos: "Ativo Circulante", "Ativo Não Circulante", "Passivo Circulante", "Passivo Não Circulante", "Patrimônio Líquido".
-Retorne APENAS JSON: { "<periodo>": { "grupos": { "Ativo Circulante": [ {"nome":"<original>","valor":<n>} ], ... }, "totais": { "Ativo Total": <n>, "Passivo Total": <n> } } }`;
+Retorne APENAS JSON:
+{ "<periodo>": { "grupos": { "Passivo Circulante": [ {"nome":"<original>","valor":<n>,"filhos":[ {"nome":"<original>","valor":<n>} ]} ], ... }, "totais": { "Ativo Total": <n>, "Passivo Total": <n> } } }`;
 }
 
 const GRP: Record<string, string> = {
@@ -275,7 +284,16 @@ function detectaSubtotaisBP(itens: BPN3Item[]): Set<BPN3Item> {
   return out;
 }
 
-export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryEntry[], model: BPModel = DEFAULT_BP_MODEL): { bp: BPLineItem[]; naoMapeados: NaoMapeado[] } {
+/** Divergência de COMPOSIÇÃO: um nó declara um subtotal que não bate com a soma dos
+ *  filhos capturados/classificados. O total não quebra (o delta é preservado), mas a
+ *  composição precisa de revisão — é o alarme que faltava ("verde só com prova"). */
+export interface AlertaComposicaoBP {
+  periodo: string; grupo: string; caminho: string;
+  declarado: number; somaFilhos: number; delta: number;
+}
+
+export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryEntry[], model: BPModel = DEFAULT_BP_MODEL): { bp: BPLineItem[]; naoMapeados: NaoMapeado[]; alertasComposicao: AlertaComposicaoBP[] } {
+  const alertasComposicao: AlertaComposicaoBP[] = [];
   const detalhe: Record<string, Record<string, number>> = {}; // conta → periodo → valor
   const subtotal: Record<string, Record<string, number>> = {}; // grupoCode → periodo → valor
   const naoMapeados: NaoMapeado[] = [];
@@ -300,29 +318,78 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
     for (const [grupoNome, itens] of Object.entries(cap.grupos ?? {})) {
       const g = GRP[grupoNome]; if (!g) continue;
       const fator = flipPassivo && (g === "PC" || g === "PNC" || g === "PL") ? -1 : 1;
-      // Rede de segurança AUTOMÁTICA: linha cujo valor = soma de outras linhas do grupo
-      // é subtotal (filhos já capturados) — descarta sem intervenção do analista.
-      const subtotaisAuto = detectaSubtotaisBP(itens);
-      for (const it of itens) {
-        if (typeof it.valor !== "number") continue;
-        if (isCompensacao(it.nome)) { it.destino = "(compensação — excluída)"; continue; }
-        if (subtotaisAuto.has(it)) { it.destino = "(subtotal — filhos já contabilizados)"; continue; }
-        // IGNORAR (analista): pula ANTES de somar no subtotal — uma linha de subtotal
-        // redundante não pode inflar o grupo nem virar "não mapeada".
-        if (isContaIgnorada(it.nome, dict)) { it.destino = "(ignorada pelo analista)"; continue; }
-        const v = it.valor * fator;
-        add(subtotal, g, p, v);
-        const dest = mapAccountToBPGroup(it.nome, g, dict, model);
+      // Fallback p/ capturas FLAT antigas (sem `filhos`): detecção de subtotal POR VALOR.
+      // Com hierarquia capturada, a verdade é ESTRUTURAL — subset-sum desnecessário.
+      const temHierarquia = itens.some((it) => it.filhos && it.filhos.length > 0);
+      const subtotaisAuto = temHierarquia ? new Set<BPN3Item>() : detectaSubtotaisBP(itens);
+
+      const somaDireta = (filhos: BPN3Item[]): number =>
+        filhos.reduce((s, f) => s + (typeof f.valor === "number" && !isCompensacao(f.nome) ? f.valor : 0), 0);
+      const tolDe = (v: number) => Math.max(0.05, Math.abs(v) * 0.001);
+      const marcaAbsorvidos = (filhos: BPN3Item[], dest: string): void => {
+        for (const f of filhos) { f.destino = `(absorvido em ${dest})`; if (f.filhos?.length) marcaAbsorvidos(f.filhos, dest); }
+      };
+
+      // ÁRVORE: classifica no nó MAIS ALTO que mapeia (a subárvore é absorvida — usa o
+      // subtotal DECLARADO do nó, fiel ao documento); pai que não mapeia é ESTRUTURAL e
+      // desce para os filhos, com o valor declarado virando PROVA de composição; folha
+      // ambígua tenta o contexto do pai ("Obrigações Trabalhistas Provisões") antes do balde.
+      const processa = (it: BPN3Item, caminho: string[]): void => {
+        if (isCompensacao(it.nome)) { it.destino = "(compensação — excluída)"; return; }
+        if (subtotaisAuto.has(it)) { it.destino = "(subtotal — filhos já contabilizados)"; return; }
+        if (isContaIgnorada(it.nome, dict)) { it.destino = "(ignorada pelo analista)"; return; }
+        const temValor = typeof it.valor === "number";
+        const filhos = it.filhos ?? [];
+
+        const destBruto = temValor ? mapAccountToBPGroup(it.nome, g, dict, model) : null;
+        // Se o pai só mapeia para um balde "Outros ..." mas TEM filhos, prefira descer:
+        // os filhos podem classificar mais específico (pior caso, caem no mesmo balde).
+        const destEhBalde = destBruto != null && Object.values(OUTROS_GRUPO).includes(destBruto);
+        const dest = destEhBalde && filhos.length > 0 ? null : destBruto;
         if (dest) {
+          const v = it.valor * fator;
+          add(subtotal, g, p, v);
           add(detalhe, dest, p, v);
           it.destino = dest; // anota a trilha original → padrão
-        } else {
-          const balde = OUTROS_GRUPO[g];
-          if (balde) add(detalhe, balde, p, v);
-          it.destino = balde ?? "(não classificado)";
-          naoMapeados.push({ nome: it.nome, grupo: grupoNome, destino: it.destino, valor: v, periodo: p, tipo: "BP" });
+          if (filhos.length) {
+            marcaAbsorvidos(filhos, dest);
+            const s = somaDireta(filhos);
+            if (Math.abs(s - it.valor) > tolDe(it.valor)) {
+              alertasComposicao.push({ periodo: p, grupo: grupoNome, caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta: it.valor - s });
+            }
+          }
+          return;
         }
-      }
+        if (filhos.length) {
+          it.destino = "(estrutural — filhos classificados)";
+          for (const f of filhos) processa(f, [...caminho, it.nome]);
+          if (temValor) {
+            const s = somaDireta(filhos);
+            if (Math.abs(s - it.valor) > tolDe(it.valor)) {
+              // Delta preservado no balde (o total NUNCA se perde) + alerta apontando o nó.
+              const delta = (it.valor - s) * fator;
+              const balde = OUTROS_GRUPO[g];
+              if (balde) { add(detalhe, balde, p, delta); add(subtotal, g, p, delta); }
+              alertasComposicao.push({ periodo: p, grupo: grupoNome, caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta: it.valor - s });
+            }
+          }
+          return;
+        }
+        if (!temValor) return; // nó sem valor e sem filhos — nada a somar
+        const v = it.valor * fator;
+        add(subtotal, g, p, v);
+        // Folha sem mapa direto: tenta com o CONTEXTO do pai (keyword herda a semântica
+        // da hierarquia — ex.: "Provisões" sob "Obrigações Trabalhistas" → Obrig. Trab. - CP).
+        const comContexto = caminho.length
+          ? mapAccountToBPGroup(`${caminho[caminho.length - 1]} ${it.nome}`, g, undefined, model)
+          : null;
+        if (comContexto) { add(detalhe, comContexto, p, v); it.destino = comContexto; return; }
+        const balde = OUTROS_GRUPO[g];
+        if (balde) add(detalhe, balde, p, v);
+        it.destino = balde ?? "(não classificado)";
+        naoMapeados.push({ nome: it.nome, grupo: caminho.length ? `${grupoNome} > ${caminho.join(" > ")}` : grupoNome, destino: it.destino, valor: v, periodo: p, tipo: "BP" });
+      };
+      for (const it of itens) processa(it, []);
     }
   }
 
@@ -340,7 +407,7 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
     }
     return { classificacao: t.classificacao, conta: t.conta, valores, nivel: t.nivel, editado: false };
   });
-  return { bp, naoMapeados };
+  return { bp, naoMapeados, alertasComposicao };
 }
 
 export async function extractFinancialsWithAI(
@@ -367,7 +434,8 @@ export async function extractFinancialsWithAI(
     const promptPeriodos = docPeriodos.length ? docPeriodos : periodos;
     const out: Array<() => Promise<{ kind: "dre" | "bp"; data: any; ctx: DocCtx; inTok: number; outTok: number }>> = [];
     if (isDRE || !isBP) out.push(() => ask(input, dreSecoesPrompt(promptPeriodos), model).then((r) => ({ kind: "dre" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
-    if (isBP || (!isDRE && !isBP)) out.push(() => ask(input, bpN3Prompt(promptPeriodos), model).then((r) => ({ kind: "bp" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
+    // Árvore completa pode ser funda (1-7 níveis) → teto de saída maior que o padrão.
+    if (isBP || (!isDRE && !isBP)) out.push(() => ask(input, bpTreePrompt(promptPeriodos), model, 0, 8000).then((r) => ({ kind: "bp" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
     return out;
   });
   // Paralelo com CONCORRÊNCIA LIMITADA (4): muito mais rápido em uploads multi-documento que
@@ -432,13 +500,14 @@ export async function extractFinancialsWithAI(
   }
 
   const allPeriodos = Array.from(periodSet);
-  const { bp, naoMapeados: naoMapBP } = foldBP(arvoreOriginalBP, allPeriodos, dict, bpModel);
+  const { bp, naoMapeados: naoMapBP, alertasComposicao } = foldBP(arvoreOriginalBP, allPeriodos, dict, bpModel);
   const { dre, naoMapeados: naoMapDRE } = foldDRE(arvoreOriginalDRE, allPeriodos, dict);
 
   return {
     bp, dre, periodos: allPeriodos, declarados,
     arvoreOriginalBP, arvoreOriginalDRE,
     naoMapeados: [...naoMapBP, ...naoMapDRE],
+    alertasComposicao,
     custo,
   };
 }
