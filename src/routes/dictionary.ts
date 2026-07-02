@@ -273,9 +273,27 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
 
   const created = [];
   const autor = await nomeUsuario(req.userId);
+  const rejeitadas: Array<{ nomeOriginal: string; contaDestino: string; motivo: string }> = [];
   for (const entry of entries) {
     if (!entry.nomeOriginal || !entry.contaDestino || !entry.grupoConta) continue;
     const tipoE = entry.tipo || "BP";
+
+    // VALIDAÇÃO CRUZADA (BP): o destino precisa ser do MESMO grupo em que a conta foi
+    // vista no documento — nunca cruza Ativo/Passivo nem CP/LP. Protege o dicionário
+    // (e os demais IBRs) de um clique errado do analista. __IGNORAR__ passa sempre.
+    if (tipoE === "BP" && entry.contaDestino !== IGNORAR_DESTINO) {
+      const classif = DEFAULT_BP_MODEL.classifMap.get(entry.contaDestino);
+      const grupoDestino = classif ? CLASSIF_TO_GRUPO[classif] : undefined;
+      const grupoEntrada = GRUPO_ALIASES[normGrp(entry.grupoConta)];
+      if (grupoDestino && grupoEntrada && grupoDestino !== grupoEntrada) {
+        rejeitadas.push({
+          nomeOriginal: entry.nomeOriginal,
+          contaDestino: entry.contaDestino,
+          motivo: `"${entry.contaDestino}" pertence a ${grupoDestino}, mas a conta está em ${grupoEntrada} no documento — classificação bloqueada para proteger os demais IBRs.`,
+        });
+        continue;
+      }
+    }
 
     try {
       const chave = { nomeOriginal: entry.nomeOriginal, tipo: tipoE, grupoConta: entry.grupoConta, userId: req.userId! };
@@ -307,7 +325,7 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
     }
   }
 
-  res.json({ classified: created.length, entries: created });
+  res.json({ classified: created.length, entries: created, rejeitadas });
 });
 
 export default router;

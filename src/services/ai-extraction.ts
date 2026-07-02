@@ -147,6 +147,9 @@ function dreTreePrompt(periodos: string[]): string {
 Retorne APENAS JSON: { "secoes": { "<periodo>": [ {"nome":"<original>","valor":<n>,"filhos":[ {"nome":"<original>","valor":<n>} ]} ] }, "declarados": { "<periodo>": { "Receita Líquida": <exibido>, "Lucro Bruto": <exibido>, "Lucro Líquido": <exibido> } } }`;
 }
 
+/** Nome genérico ("Outras Obrigações", "Outros Créditos", "Diversos"…): quando cai no balde
+ *  "Outros ..." do grupo, o balde É a classificação correta — não pede ação do analista. */
+const ehNomeGenerico = (nome: string): boolean => /^(outros|outras|demais|diversos|diversas)( |$)/.test(nome.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().trim());
 const normNome = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 /** Seções que são SUBTOTAIS/pais na DRE. Se vierem na captura, seus filhos também
  *  vêm — então NÃO podem ser somadas na cascata (dupla contagem). */
@@ -274,6 +277,7 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       const balde = it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
       addAcc(balde, p, it.valor);
       it.destino = balde;
+      if (ehNomeGenerico(it.nome)) return; // genérico no balde = classificação correta (sem âmbar)
       naoMapeados.push({ nome: it.nome, grupo: caminho.length ? `DRE > ${caminho.join(" > ")}` : "DRE", destino: balde, valor: it.valor, periodo: p, tipo: "DRE" });
     };
     for (const it of secoes) processa(it, []);
@@ -488,6 +492,10 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
         const balde = OUTROS_GRUPO[g];
         if (balde) add(detalhe, balde, p, v);
         it.destino = balde ?? "(não classificado)";
+        // Nome GENÉRICO ("Outras Obrigações", "Outros Créditos"...) que caiu no balde
+        // "Outros ..." do próprio grupo: o balde É a classificação correta por definição —
+        // não pede ação do analista (nada de âmbar).
+        if (balde && ehNomeGenerico(it.nome)) return;
         naoMapeados.push({ nome: it.nome, grupo: caminho.length ? `${grupoNome} > ${caminho.join(" > ")}` : grupoNome, destino: it.destino, valor: v, periodo: p, tipo: "BP" });
       };
       for (const it of itensNivel0) processa(it, []);

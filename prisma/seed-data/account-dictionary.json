@@ -7420,5 +7420,17 @@
     "contaDestino": "Imobilizado",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outras Obrigações",
+    "contaDestino": "Outros Passivos não Circulantes",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Outros Créditos",
+    "contaDestino": "Outros Créditos a Receber - LP",
+    "grupoConta": "Ativo Não Circulante",
+    "tipo": "BP"
   }
 ]
