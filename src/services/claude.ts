@@ -65,7 +65,7 @@ interface IndicadorLite {
 const numOf = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
 /** Monta os 8 KPIs + métricas secundárias a partir dos indicadores DETERMINÍSTICOS (a IA
- *  NÃO recalcula). Razão→pontos percentuais nos KPIs de %; EBITDA = Margem Operacional ×
+ *  NÃO recalcula). Razão→pontos percentuais nos KPIs de %; EBITDA = Margem EBITDA ×
  *  Receita Líquida (ambos indicadores); variação = mudança relativa vs período anterior. */
 /** Ordena períodos cronologicamente: "31/12/2022" ou "2022" → chave numérica. */
 function ordPeriodo(p: string): number {
@@ -75,19 +75,30 @@ function ordPeriodo(p: string): number {
   return y ? Number(`${y[0]}0000`) : 0;
 }
 
+/** Renomeações de indicador — IBRs antigos guardam o nome anterior em dadosEstruturados;
+ *  a busca tenta o nome novo e cai no antigo (regerar análise de IBR antigo segue OK). */
+const NOME_ANTIGO_INDICADOR: Record<string, string> = {
+  "Margem EBITDA": "Margem Operacional",
+  "Dívida Líquida/EBITDA": "Dívida Líquida/Lucro Operacional",
+};
+function achaIndicador(indicadores: IndicadorLite[], nome: string): IndicadorLite | undefined {
+  return indicadores.find((i) => i.nome === nome)
+    ?? (NOME_ANTIGO_INDICADOR[nome] ? indicadores.find((i) => i.nome === NOME_ANTIGO_INDICADOR[nome]) : undefined);
+}
+
 function kpisDeterministicos(indicadores: IndicadorLite[], periodos: string[]) {
   const ord = [...periodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b)); // mais recente por último
   const ult = ord[ord.length - 1], ant = ord[ord.length - 2];
-  const ind = (nome: string) => indicadores.find((i) => i.nome === nome);
+  const ind = (nome: string) => achaIndicador(indicadores, nome);
   const raw = (nome: string, p?: string) => { const i = ind(nome); return i && p ? numOf(i.valores[p]) : null; };
   const stat = (nome: string): "ok" | "atencao" | "critico" => { const i = ind(nome); return (i && ult ? i.status?.[ult] : null) ?? "atencao"; };
   const variOf = (a: number | null, b: number | null) => (a != null && b != null && b !== 0 ? ((a - b) / Math.abs(b)) * 100 : 0);
-  const ebitdaDe = (p?: string) => { const rec = raw("Receita Líquida", p), mop = raw("Margem Operacional", p); return rec != null && mop != null ? mop * rec : null; };
+  const ebitdaDe = (p?: string) => { const rec = raw("Receita Líquida", p), mop = raw("Margem EBITDA", p); return rec != null && mop != null ? mop * rec : null; };
 
   const MAP: Record<string, { nome: string; pct: boolean }> = {
     receita: { nome: "Receita Líquida", pct: false },
     margemBruta: { nome: "Margem Bruta", pct: true },
-    margemEbitda: { nome: "Margem Operacional", pct: true },
+    margemEbitda: { nome: "Margem EBITDA", pct: true },
     liquidezCorrente: { nome: "Liquidez Corrente", pct: false },
     endividamento: { nome: "Endividamento Geral", pct: false },
     roe: { nome: "ROE (Retorno sobre Patrimônio Líquido)", pct: true },
@@ -101,7 +112,7 @@ function kpisDeterministicos(indicadores: IndicadorLite[], periodos: string[]) {
   };
   const ebitda = (() => {
     const e = ebitdaDe(ult);
-    return { valor: e ?? 0, variacao: variOf(e, ebitdaDe(ant)) || 0, status: stat("Margem Operacional") };
+    return { valor: e ?? 0, variacao: variOf(e, ebitdaDe(ant)) || 0, status: stat("Margem EBITDA") };
   })();
 
   const kpis = {
@@ -136,12 +147,12 @@ export interface EstagioResult { estagio: string; justificativa: string }
 function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]): EstagioResult | null {
   const ord = [...periodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
   if (ord.length < 2) return null; // período insuficiente p/ tendência
-  const ind = (nome: string) => indicadores.find((i) => i.nome === nome);
+  const ind = (nome: string) => achaIndicador(indicadores, nome);
   const val = (nome: string, p: string): number | null => { const i = ind(nome); return i ? numOf(i.valores[p]) : null; };
   const ult = ord[ord.length - 1];
 
   const receita = ord.map((p) => val("Receita Líquida", p)).filter((x): x is number => x != null);
-  const margemOp = val("Margem Operacional", ult); // razão (negativo = prejuízo operacional)
+  const margemOp = val("Margem EBITDA", ult); // razão (negativo = prejuízo operacional)
   const liqCorr = val("Liquidez Corrente", ult);
   const liqImed = val("Liquidez Imediata", ult);
   const pct = (r: number) => `${(r * 100).toFixed(0)}%`;

@@ -9,6 +9,8 @@
  */
 export const PEER_INDICATOR_MAP: Record<string, string> = {
   "Margem Bruta": "MARGEM BRUTA",
+  // "Margem EBITDA" é o nome atual; "Margem Operacional" fica como alias p/ IBRs antigos
+  "Margem EBITDA": "MARGEM OPERACIONAL",
   "Margem Operacional": "MARGEM OPERACIONAL",
   "Margem Líquida": "MARGEM LIQUIDA",
   "Liquidez Corrente": "LIQUIDEZ CORRENTE",
@@ -23,6 +25,7 @@ export const PEER_INDICATOR_MAP: Record<string, string> = {
   "ROE (Retorno sobre Patrimônio Líquido)": "ROE - RETORNO S/ PL",
   "Giro do Ativo": "GIRO DO ATIVO",
   "Índice de Cobertura de Juros": "ÍNDICE DE COBERTURA DE JUROS (ICJ)",
+  "Dívida Líquida/EBITDA": "DÍVIDA LÍQUIDA / LUCRO OPERACIONAL",
   "Dívida Líquida/Lucro Operacional": "DÍVIDA LÍQUIDA / LUCRO OPERACIONAL",
   "Endividamento Geral": "% PARTIC CAPITAL TERCEIROS",
 };
@@ -34,6 +37,7 @@ export const PEER_INDICATOR_MAP: Record<string, string> = {
  */
 export const PEER_HIGHER_IS_BETTER: Record<string, boolean> = {
   "Margem Bruta": true,
+  "Margem EBITDA": true,
   "Margem Operacional": true,
   "Margem Líquida": true,
   "Liquidez Corrente": true,
@@ -51,6 +55,7 @@ export const PEER_HIGHER_IS_BETTER: Record<string, boolean> = {
   "ROE (Retorno sobre Patrimônio Líquido)": true,
   "Giro do Ativo": true,
   "Índice de Cobertura de Juros": true,
+  "Dívida Líquida/EBITDA": false,
   "Dívida Líquida/Lucro Operacional": false,
   "Endividamento Geral": false,
 };

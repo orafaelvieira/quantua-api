@@ -39,7 +39,7 @@ export const SEMAFORO_DEFAULTS: Record<string, SemaforoDef> = {
   "Liquidez Corrente": { direcao: "menor_ruim", critico: 1.0, atencao: 1.5 },
   "Liquidez Geral": { direcao: "menor_ruim", critico: 0.8, atencao: 1.2 },
   "Margem Bruta": { direcao: "menor_ruim", critico: 0.10, atencao: 0.30 },
-  "Margem Operacional": { direcao: "menor_ruim", critico: 0, atencao: 0.05 },
+  "Margem EBITDA": { direcao: "menor_ruim", critico: 0, atencao: 0.05 },
   "Margem Líquida": { direcao: "menor_ruim", critico: 0, atencao: 0.05 },
   "Endividamento Geral": { direcao: "maior_ruim", critico: 0.80, atencao: 0.50 },
   "Endividamento de Curto Prazo": { direcao: "maior_ruim", critico: 0.70, atencao: 0.50 },
@@ -163,7 +163,7 @@ function computeIndicator(
 
     // Margens
     case "Margem Bruta": return div(lucroBruto, receitaLiquida);
-    case "Margem Operacional": return div(ebitda, receitaLiquida);
+    case "Margem EBITDA": return div(ebitda, receitaLiquida);
     case "Margem Líquida": return div(lucroLiquido, receitaLiquida);
 
     // Liquidez
@@ -207,7 +207,7 @@ function computeIndicator(
     case "Endividamento de Curto Prazo": return div(passivoCirculante, passivoTotal);
     case "Patrimônio Líquido": return patrimonioLiquido;
     case "Capital Terceiros s/ PL": return div(capitalTerceiros, patrimonioLiquido);
-    case "Dívida Líquida/Lucro Operacional": return div(dividaLiquida, ebitda);
+    case "Dívida Líquida/EBITDA": return div(dividaLiquida, ebitda);
     case "Índice de Cobertura de Juros":
       return despesasFinanceiras !== 0 ? div(ebitda, Math.abs(despesasFinanceiras)) : null;
     case "Despesa Financeira / Rec. Líquida":

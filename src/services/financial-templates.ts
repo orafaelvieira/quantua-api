@@ -121,7 +121,7 @@ export const INDICADORES_TEMPLATE: Array<{
 
   // Indicadores de Margens
   { tipo: "Indicadores de Margens", nome: "Margem Bruta", formula: "Lucro Bruto / Receita Líquida", tipoDado: "%" },
-  { tipo: "Indicadores de Margens", nome: "Margem Operacional", formula: "EBITDA / Receita Líquida", tipoDado: "%" },
+  { tipo: "Indicadores de Margens", nome: "Margem EBITDA", formula: "EBITDA / Receita Líquida", tipoDado: "%" },
   { tipo: "Indicadores de Margens", nome: "Margem Líquida", formula: "Lucro Líquido / Receita Líquida", tipoDado: "%" },
 
   // Indicadores de Liquidez
@@ -148,7 +148,7 @@ export const INDICADORES_TEMPLATE: Array<{
   { tipo: "Indicadores de Endividamento", nome: "Endividamento de Curto Prazo", formula: "Passivo Circulante / Passivo Total", tipoDado: "%" },
   { tipo: "Indicadores de Endividamento", nome: "Patrimônio Líquido", formula: "Patrimônio Líquido", tipoDado: "R$" },
   { tipo: "Indicadores de Endividamento", nome: "Capital Terceiros s/ PL", formula: "Capital de Terceiros / Patrimônio Líquido", tipoDado: "Índice" },
-  { tipo: "Indicadores de Endividamento", nome: "Dívida Líquida/Lucro Operacional", formula: "Dívida Líquida / EBITDA", tipoDado: "Índice" },
+  { tipo: "Indicadores de Endividamento", nome: "Dívida Líquida/EBITDA", formula: "Dívida Líquida / EBITDA", tipoDado: "Índice" },
   { tipo: "Indicadores de Endividamento", nome: "Índice de Cobertura de Juros", formula: "EBITDA / Despesas Financeiras", tipoDado: "Índice" },
   { tipo: "Indicadores de Endividamento", nome: "Despesa Financeira / Rec. Líquida", formula: "Despesas Financeiras / Receita Líquida", tipoDado: "%" },
 

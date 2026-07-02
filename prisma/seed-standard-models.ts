@@ -107,6 +107,23 @@ async function backfillGuia(): Promise<void> {
 async function seedIndicatorConfigs(): Promise<void> {
   const { INDICADORES_TEMPLATE } = await import("../src/services/financial-templates");
   const { SEMAFORO_DEFAULTS } = await import("../src/services/indicator-calculator");
+
+  // Renomeações de indicador de sistema: RENOMEIA a linha existente (preserva semáforo
+  // editado/exibição do usuário); se o nome novo já existir (seed antigo criou os dois),
+  // remove a linha antiga. Roda ANTES do create-only.
+  const RENOMEADOS: Record<string, string> = {
+    "Margem Operacional": "Margem EBITDA",
+    "Dívida Líquida/Lucro Operacional": "Dívida Líquida/EBITDA",
+  };
+  for (const [antigo, novo] of Object.entries(RENOMEADOS)) {
+    const rowAntigo = await prisma.indicatorConfig.findUnique({ where: { nome: antigo } });
+    if (!rowAntigo) continue;
+    const rowNovo = await prisma.indicatorConfig.findUnique({ where: { nome: novo } });
+    if (rowNovo) await prisma.indicatorConfig.delete({ where: { id: rowAntigo.id } });
+    else await prisma.indicatorConfig.update({ where: { id: rowAntigo.id }, data: { nome: novo } });
+    console.log(`  indicadores: "${antigo}" → "${novo}".`);
+  }
+
   let created = 0;
   let ordem = 0;
   for (const t of INDICADORES_TEMPLATE) {
