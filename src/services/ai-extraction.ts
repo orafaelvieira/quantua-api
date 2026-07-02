@@ -200,8 +200,9 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
 // ───────────────────────── BP (captura N3 = árvore original) ─────────────────────────
 function bpN3Prompt(periodos: string[]): string {
   return `Você é especialista em contabilidade brasileira. Extraia o BALANÇO PATRIMONIAL deste PDF até o NÍVEL 3 SEMÂNTICO.
-Para cada um dos 5 grupos, liste as contas da PRIMEIRA QUEBRA REAL (ex.: Fornecedores, Empréstimos, Obrigações Tributárias, Disponível, Clientes…), com o NOME ORIGINAL EXATO do documento e o VALOR LÍQUIDO (filhos já somados).
+Para cada um dos 5 grupos, liste as contas da PRIMEIRA QUEBRA SEMÂNTICA (ex.: Fornecedores, Empréstimos, Obrigações Tributárias, Disponível, Clientes…), com o NOME ORIGINAL EXATO do documento e o VALOR LÍQUIDO (filhos já somados).
 - PULE wrappers redundantes (valor = subtotal do grupo, ex.: "Exigível a Curto Prazo").
+- Se a primeira quebra for um AGRUPADOR GENÉRICO sem semântica de conta (ex.: "Obrigações a Longo Prazo", "Outras Obrigações", "Obrigações", "Créditos", "Valores a Receber"), DESÇA UM NÍVEL e liste os filhos semânticos (Empréstimos Instituições Financeiras, Obrigações Tributárias, Adiantamentos…) — NUNCA retorne o agrupador genérico como se fosse conta, e NUNCA retorne o agrupador E os filhos juntos (duplicaria).
 - NÃO desça para contas individuais (bancos, empréstimos específicos, parcelamentos).
 - Negativos negativos.
 - COLUNAS: se o documento (ex.: ECF/ECD/SPED, "Período da Escrituração DD/MM a DD/MM") trouxer "Saldo Inicial" e "Saldo Final" do MESMO período, use SEMPRE o Saldo FINAL (fechamento) — nunca o inicial. (Não confundir com colunas de ANOS diferentes, que são períodos distintos e cada um vale.)
@@ -222,6 +223,57 @@ const OUTROS_GRUPO: Record<string, string | null> = {
   ANC: "Outros Ativos Não Circulantes", PNC: "Outros Passivos não Circulantes",
   PL: null, // PL sem balde limpo → vira gap sinalizado (integridade)
 };
+
+/** Busca um SUBCONJUNTO de `vals` que some ≈ `alvo` (DFS com poda e teto de nós).
+ *  Retorna os índices do subconjunto, ou null. Tolerância apertada (centavos) —
+ *  subtotal duplicado bate exato; coincidência de contas reais quase nunca. */
+function achaSubsetSoma(vals: number[], alvo: number, tol: number): number[] | null {
+  const ordem = vals.map((_, i) => i).sort((a, b) => Math.abs(vals[b]) - Math.abs(vals[a]));
+  const sufAbs: number[] = new Array(ordem.length + 1).fill(0);
+  for (let i = ordem.length - 1; i >= 0; i--) sufAbs[i] = sufAbs[i + 1] + Math.abs(vals[ordem[i]]);
+  let nos = 0;
+  const caminho: number[] = [];
+  const dfs = (i: number, resto: number): number[] | null => {
+    if (caminho.length > 0 && Math.abs(resto) <= tol) return [...caminho];
+    if (i >= ordem.length || ++nos > 20000) return null;
+    if (Math.abs(resto) - sufAbs[i] > tol) return null; // inalcançável mesmo com tudo
+    caminho.push(ordem[i]);
+    const com = dfs(i + 1, resto - vals[ordem[i]]);
+    caminho.pop();
+    if (com) return com;
+    return dfs(i + 1, resto);
+  };
+  return dfs(0, alvo);
+}
+
+/** Detecta SUBTOTAIS POR VALOR no BP (espelha o descarte da DRE): uma linha cujo valor
+ *  é a soma de OUTRAS linhas capturadas do mesmo grupo/período é um cabeçalho cujos
+ *  filhos já vieram — descartar evita dupla contagem (ex.: "Obrigações a Longo Prazo" =
+ *  Empréstimos LP + Obrigações Tributárias LP). Regras de segurança: match a centavos
+ *  (tol ≤ R$0,05); pareamento 1-para-1 só quando um nome contém o outro. */
+function detectaSubtotaisBP(itens: BPN3Item[]): Set<BPN3Item> {
+  const out = new Set<BPN3Item>();
+  const validos = itens.filter((it) => typeof it.valor === "number" && it.valor !== 0 && !isCompensacao(it.nome));
+  if (validos.length < 2) return out;
+  const usadoComoFilho = new Set<BPN3Item>();
+  const ordenados = [...validos].sort((a, b) => Math.abs(b.valor) - Math.abs(a.valor)); // pais tendem a ser maiores
+  for (const cand of ordenados) {
+    if (out.has(cand) || usadoComoFilho.has(cand)) continue;
+    const outros = validos.filter((o) => o !== cand && !out.has(o) && !usadoComoFilho.has(o));
+    if (!outros.length) continue;
+    const subset = achaSubsetSoma(outros.map((o) => o.valor), cand.valor, 0.05);
+    if (!subset) continue;
+    if (subset.length === 1) {
+      // Valores iguais de contas DISTINTAS não são duplicação — exige nomes contidos
+      // (ex.: "OUTRAS OBRIGAÇÕES A LONGO PRAZO" ⊃ "OUTRAS OBRIGAÇÕES").
+      const a = normNome(cand.nome), b = normNome(outros[subset[0]].nome);
+      if (!(a.includes(b) || b.includes(a))) continue;
+    }
+    out.add(cand);
+    for (const idx of subset) usadoComoFilho.add(outros[idx]);
+  }
+  return out;
+}
 
 export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryEntry[], model: BPModel = DEFAULT_BP_MODEL): { bp: BPLineItem[]; naoMapeados: NaoMapeado[] } {
   const detalhe: Record<string, Record<string, number>> = {}; // conta → periodo → valor
@@ -248,9 +300,13 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
     for (const [grupoNome, itens] of Object.entries(cap.grupos ?? {})) {
       const g = GRP[grupoNome]; if (!g) continue;
       const fator = flipPassivo && (g === "PC" || g === "PNC" || g === "PL") ? -1 : 1;
+      // Rede de segurança AUTOMÁTICA: linha cujo valor = soma de outras linhas do grupo
+      // é subtotal (filhos já capturados) — descarta sem intervenção do analista.
+      const subtotaisAuto = detectaSubtotaisBP(itens);
       for (const it of itens) {
         if (typeof it.valor !== "number") continue;
         if (isCompensacao(it.nome)) { it.destino = "(compensação — excluída)"; continue; }
+        if (subtotaisAuto.has(it)) { it.destino = "(subtotal — filhos já contabilizados)"; continue; }
         // IGNORAR (analista): pula ANTES de somar no subtotal — uma linha de subtotal
         // redundante não pode inflar o grupo nem virar "não mapeada".
         if (isContaIgnorada(it.nome, dict)) { it.destino = "(ignorada pelo analista)"; continue; }

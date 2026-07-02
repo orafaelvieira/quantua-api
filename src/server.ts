@@ -56,7 +56,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-01.ignorar-conta-audit-dict";
+const BUILD_VERSION = "2026-07-01.subtotal-bp-por-valor";
 app.get("/version", async (_req, res) => {
   try {
     const [peerCompanies, pmPagamentoLines, sectorsActive] = await Promise.all([
