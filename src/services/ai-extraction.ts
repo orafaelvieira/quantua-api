@@ -3,7 +3,7 @@ import { env } from "../config/env";
 import { DRE_TEMPLATE } from "./financial-templates";
 import type { BPLineItem, DRELineItem } from "../types/financial";
 import type { DREModel } from "./model-version";
-import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, isContaIgnorada, DEFAULT_BP_MODEL, type BPModel, type DictionaryEntry } from "./account-mapper";
+import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, isContaIgnorada, blocoDoCaminhoDRE, CONFLITO_CONTEXTO_DRE, DEFAULT_BP_MODEL, type BPModel, type DictionaryEntry } from "./account-mapper";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
 const AI_MODEL = "claude-sonnet-4-6";        // visão (lê o PDF) — caro
@@ -242,13 +242,30 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       const filhos = it.filhos ?? [];
       // Wrapper conhecido ("Despesas Operacionais" etc.) nunca mapeia — é estrutural.
       const ehWrapper = DRE_SUBTOTAIS.has(normNome(it.nome));
-      let dest = !ehWrapper && temValor ? mapAccountToDRE(it.nome, dict, candidatosDRE) : null;
-      if (dest && !inputsSet.has(dest)) dest = null;
+      // Blindagem contextual: o bloco declarado pelo caminho (CUSTOS × DESPESAS) participa
+      // da consulta ao dicionário — a POSIÇÃO no documento tem prioridade sobre o nome.
+      const blocoCtx = blocoDoCaminhoDRE(caminho);
+      let dest = !ehWrapper && temValor ? mapAccountToDRE(it.nome, dict, candidatosDRE, blocoCtx) : null;
+      let conflitoCtx = false;
+      if (dest === CONFLITO_CONTEXTO_DRE) {
+        // O dicionário só conhece esta conta em OUTRO bloco (ex.: cadastrada como despesa,
+        // mas aqui está debaixo de CUSTOS). A posição manda: classifica pelo bloco do
+        // documento e abre âmbar — o analista confirma e nasce a entrada CONTEXTUAL,
+        // que passa a coexistir com a original (mesma garantia do BP para CP/LP).
+        conflitoCtx = true;
+        dest = blocoCtx === "custo"
+          ? "Custo Operacional"
+          : it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
+      }
+      if (dest && !inputsSet.has(dest)) { dest = null; conflitoCtx = false; }
       if (!dest && !ehWrapper && temValor) dest = fallbackSemanticoDRE(it.nome);
-      if (dest && BALDES_DRE.has(dest) && filhos.length > 0) dest = null; // filhos podem ser mais específicos
+      if (dest && BALDES_DRE.has(dest) && filhos.length > 0) { dest = null; conflitoCtx = false; } // filhos podem ser mais específicos
       if (dest) {
         addAcc(dest, p, it.valor);
         it.destino = dest;
+        if (conflitoCtx) {
+          naoMapeados.push({ nome: it.nome, grupo: caminho.length ? `DRE > ${caminho.join(" > ")}` : "DRE", destino: dest, valor: it.valor, periodo: p, tipo: "DRE" });
+        }
         if (filhos.length) {
           marcaAbsorvidos(filhos, dest);
           const s = somaDireta(filhos);

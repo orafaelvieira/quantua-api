@@ -277,11 +277,59 @@ export function mapAccountToBPGroup(
 
 const DRE_TEMPLATE_NAMES = DRE_TEMPLATE.map(t => t.conta);
 
+/* ── Blindagem CONTEXTUAL da DRE (espelho da blindagem de grupo do BP) ──
+ * O dicionário DRE mapeia por NOME; sem isto, uma conta cadastrada como despesa
+ * (ex.: "Combustíveis e Lubrificantes" → Outras Despesas Operacionais) seria aplicada
+ * EM SILÊNCIO mesmo quando o documento a coloca debaixo de CUSTOS. Regra: a POSIÇÃO
+ * no documento manda; entradas contextuais coexistem (chave única inclui grupoConta). */
+export const CONFLITO_CONTEXTO_DRE = "__CONFLITO_CONTEXTO__";
+
+/** Bloco do DESTINO: "custo" | "despesa" operacional | null (neutro — receitas,
+ *  financeiras, não-operacionais, IR, D&A ficam FORA da blindagem). Determinístico. */
+export function blocoDoDestinoDRE(destino: string): "custo" | "despesa" | null {
+  if (destino === "Custo Operacional") return "custo";
+  const n = normalize(destino);
+  if (/financeir|nao operacion/.test(n)) return null;
+  if (/^(outras )?despesas /.test(n)) return "despesa";
+  return null;
+}
+
+/** Bloco declarado pelo CAMINHO no documento: ancestral mais próximo cujo nome diz
+ *  custo ou despesa (sem ambiguidade). Null quando o caminho não decide. */
+export function blocoDoCaminhoDRE(caminho: string[]): "custo" | "despesa" | null {
+  for (let i = caminho.length - 1; i >= 0; i--) {
+    const n = normalize(caminho[i]);
+    const temCusto = /\bcustos?\b/.test(n);
+    const temDespesa = /\bdespes/.test(n);
+    if (temCusto && !temDespesa) return "custo";
+    if (temDespesa && !temCusto) return "despesa";
+  }
+  return null;
+}
+
 /** Mapeia uma seção original da DRE para uma conta do DRE padrão (input ou subtotal). */
-export function mapAccountToDRE(nome: string, dictionaryEntries?: DictionaryEntry[], candidatos?: string[]): string | null {
+export function mapAccountToDRE(nome: string, dictionaryEntries?: DictionaryEntry[], candidatos?: string[], blocoCaminho?: "custo" | "despesa" | null): string | null {
   // candidatos opcionais = contas do MODELO DRE vigente do banco (bridge) — inclui as
   // contas adicionadas pelo usuário no editor; default = template do código.
-  return findBestMatch(nome, candidatos ?? DRE_TEMPLATE_NAMES, dictionaryEntries);
+  const cands = candidatos ?? DRE_TEMPLATE_NAMES;
+  // Pré-passe CONTEXTUAL: quando o caminho declara o bloco (custo/despesa), entre as
+  // entradas EXATAS do dicionário vale a do MESMO bloco; entrada neutra passa normal;
+  // se só existem entradas do bloco OPOSTO, retorna o sentinela — o fold classifica
+  // pela posição e abre âmbar para o analista confirmar (cria a entrada contextual).
+  if (blocoCaminho && dictionaryEntries?.length) {
+    const norm = normalize(cleanAccountName(nome));
+    const exatas = dictionaryEntries.filter(
+      (e) => e.contaDestino !== IGNORAR_DESTINO && normalize(e.nomeOriginal) === norm && cands.includes(e.contaDestino)
+    );
+    if (exatas.length) {
+      const compat = exatas.find((e) => blocoDoDestinoDRE(e.contaDestino) === blocoCaminho);
+      if (compat) return compat.contaDestino;
+      const neutra = exatas.find((e) => blocoDoDestinoDRE(e.contaDestino) === null);
+      if (neutra) return neutra.contaDestino;
+      return CONFLITO_CONTEXTO_DRE;
+    }
+  }
+  return findBestMatch(nome, cands, dictionaryEntries);
 }
 
 export function mapExtractedToBP(

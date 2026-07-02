@@ -262,6 +262,54 @@ describe("foldBP — contexto do pai não pode inflar o keyword-match (palavra d
   });
 });
 
+describe("foldDRE — blindagem contextual (posição no documento × dicionário)", () => {
+  const RECEITA = { nome: "RECEITA OPERACIONAL BRUTA", valor: 1000 };
+  const arvoreCom = (paiNome: string) => ({
+    "2023": [
+      RECEITA,
+      { nome: paiNome, filhos: [{ nome: "Combustíveis e Lubrificantes", valor: -100 }] }, // pai-cabeçalho SEM valor
+    ],
+  }) as any;
+  const entradaDespesa = { nomeOriginal: "Combustíveis e Lubrificantes", contaDestino: "Outras Despesas Operacionais", grupoConta: "Outras Despesas Operacionais", tipo: "DRE" };
+  const entradaCusto = { nomeOriginal: "Combustíveis e Lubrificantes", contaDestino: "Custo Operacional", grupoConta: "Custo Operacional", tipo: "DRE" };
+  const val = (dre: any[], c: string) => dre.find((l) => l.conta === c)?.valores["2023"] ?? 0;
+
+  it("cadastrada como despesa mas debaixo de CUSTOS → posição manda (Custo Operacional) + âmbar p/ confirmar", async () => {
+    const { foldDRE } = await import("./ai-extraction");
+    const { dre, naoMapeados } = foldDRE(arvoreCom("CUSTOS DE PRODUÇÃO"), ["2023"], [entradaDespesa]);
+    expect(val(dre, "Custo Operacional")).toBeCloseTo(-100, 1);
+    expect(val(dre, "Outras Despesas Operacionais")).toBeCloseTo(0, 1);
+    expect(val(dre, "Lucro Bruto")).toBeCloseTo(900, 1);
+    expect(naoMapeados.map((n) => n.nome)).toContain("Combustíveis e Lubrificantes"); // âmbar
+    expect(naoMapeados[0]?.destino).toBe("Custo Operacional");
+  });
+
+  it("com as DUAS entradas contextuais no dicionário → escolhe a do bloco certo, SEM âmbar", async () => {
+    const { foldDRE } = await import("./ai-extraction");
+    const custos = foldDRE(arvoreCom("CUSTOS DE PRODUÇÃO"), ["2023"], [entradaDespesa, entradaCusto]);
+    expect(val(custos.dre, "Custo Operacional")).toBeCloseTo(-100, 1);
+    expect(custos.naoMapeados.length).toBe(0);
+    const despesas = foldDRE(arvoreCom("DESPESAS OPERACIONAIS COM VEÍCULOS"), ["2023"], [entradaDespesa, entradaCusto]);
+    expect(val(despesas.dre, "Outras Despesas Operacionais")).toBeCloseTo(-100, 1);
+    expect(val(despesas.dre, "Custo Operacional")).toBeCloseTo(0, 1);
+    expect(despesas.naoMapeados.length).toBe(0);
+  });
+
+  it("REGRESSÃO: debaixo de bloco de despesas, a entrada de despesa aplica em silêncio (como antes)", async () => {
+    const { foldDRE } = await import("./ai-extraction");
+    const { dre, naoMapeados } = foldDRE(arvoreCom("DESPESAS OPERACIONAIS COM VEÍCULOS"), ["2023"], [entradaDespesa]);
+    expect(val(dre, "Outras Despesas Operacionais")).toBeCloseTo(-100, 1);
+    expect(naoMapeados.length).toBe(0);
+  });
+
+  it("REGRESSÃO: caminho neutro (não declara custo nem despesa) → dicionário aplica como antes", async () => {
+    const { foldDRE } = await import("./ai-extraction");
+    const { dre, naoMapeados } = foldDRE(arvoreCom("GASTOS GERAIS XPTO"), ["2023"], [entradaDespesa]);
+    expect(val(dre, "Outras Despesas Operacionais")).toBeCloseTo(-100, 1);
+    expect(naoMapeados.length).toBe(0);
+  });
+});
+
 describe("DRE — bridge do modelo do banco (conta adicionada pelo usuário)", () => {
   it("'Despesas com Pessoas' entra no fold e na cascata do Lucro Líquido (bloco EBITDA)", async () => {
     const { foldDRE } = await import("./ai-extraction");
