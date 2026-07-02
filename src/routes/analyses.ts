@@ -1218,6 +1218,20 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
 
   const dados = analysis.dadosEstruturados as any as DadosEstruturados | null;
 
+  // Pendências VIVAS do motor árvore: `naoMapeados` é atualizado pelo /refold quando o
+  // analista classifica (o legado `unmatchedAccounts` fica congelado na extração — usá-lo
+  // deixava o relatório defasado após reclassificações).
+  const normRel = (s: string) => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
+  const temArvore = !!((dados as any)?.arvoreOriginalBP || (dados as any)?.arvoreOriginalDRE);
+  const naoMapList: Array<{ nome: string; periodo?: string; tipo?: string }> =
+    Array.isArray((dados as any)?.naoMapeados) ? (dados as any).naoMapeados : [];
+  // Nomes de linhas por tipo de documento (para atribuir pendência órfã só onde faz sentido)
+  const nomesPorTipo: Record<"BP" | "DRE", Set<string>> = { BP: new Set(), DRE: new Set() };
+  for (const doc of analysis.documents) {
+    const t = doc.tipo.toLowerCase().includes("balan") ? "BP" : "DRE";
+    for (const l of ((doc.dadosExtraidos as any)?.linhas ?? []) as Array<{ conta: string }>) nomesPorTipo[t].add(normRel(l.conta));
+  }
+
   // Build per-document stats
   const documents = analysis.documents.map((doc) => {
     const dadosExtraidos = doc.dadosExtraidos as any;
@@ -1226,24 +1240,41 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
 
     // Detect how many accounts were classified vs unmatched
     const totalLinhas = linhas.length;
-    const contasNaoClassificadas = dados?.unmatchedAccounts?.filter((u) => {
-      // Check if this unmatched account came from this document's linhas
-      if (!linhas.some((l) => l.conta === u.conta)) return false;
-      // Só conta se a pendência tem VALOR num período DESTE documento — o filtro por
-      // nome sozinho gera contagem fantasma quando a mesma conta só ficou pendente
-      // em outro ano (ex.: "1 conta não classificada" no doc onde ela está zerada).
-      const vals = u.valores ?? {};
-      const pers = Object.keys(vals);
-      if (periodos.length === 0 || pers.length === 0) return true;
-      return pers.some((p) => periodos.includes(p) && Math.abs(vals[p] ?? 0) > 0.005);
-    }).length ?? 0;
+    const tipoBP = doc.tipo.toLowerCase().includes("balan") || doc.tipo.toLowerCase().includes("balancete");
+    const tipoDoc: "BP" | "DRE" = tipoBP ? "BP" : "DRE";
+    const linhasNorm = new Set(linhas.map((l) => normRel(l.conta)));
+    let contasNaoClassificadas = 0;
+    if (totalLinhas > 0) {
+      if (temArvore) {
+        // Motor árvore: lista viva, distinct por nome, atribuída pelo TIPO (BP/DRE) e
+        // PERÍODO do documento. Pendência cujo nome não está em NENHUM doc do tipo
+        // (divergência de captura) ainda conta no doc do período certo — nunca some.
+        contasNaoClassificadas = new Set(
+          naoMapList
+            .filter((n) => (n.tipo ?? "BP") === tipoDoc)
+            .filter((n) => !n.periodo || periodos.length === 0 || periodos.includes(n.periodo))
+            .filter((n) => { const nn = normRel(n.nome); return linhasNorm.has(nn) || !nomesPorTipo[tipoDoc].has(nn); })
+            .map((n) => normRel(n.nome))
+        ).size;
+      } else {
+        // Legado (fluxo parser, sem árvore): unmatchedAccounts. Só conta se a pendência
+        // tem VALOR num período DESTE documento — nome sozinho gera contagem fantasma
+        // quando a mesma conta só ficou pendente em outro ano.
+        contasNaoClassificadas = dados?.unmatchedAccounts?.filter((u) => {
+          if (!linhas.some((l) => l.conta === u.conta)) return false;
+          const vals = u.valores ?? {};
+          const pers = Object.keys(vals);
+          if (periodos.length === 0 || pers.length === 0) return true;
+          return pers.some((p) => periodos.includes(p) && Math.abs(vals[p] ?? 0) > 0.005);
+        }).length ?? 0;
+      }
+    }
     const contasMapeadas = totalLinhas - contasNaoClassificadas;
 
     // For BP documents, check if AT === PT (balance equation)
     let balanceia: boolean | null = null;
     let totalAtivo: number | null = null;
     let totalPassivo: number | null = null;
-    const tipoBP = doc.tipo.toLowerCase().includes("balan") || doc.tipo.toLowerCase().includes("balancete");
 
     if (tipoBP && dados?.bp && dados.bp.length > 0) {
       const allPeriodos = dados.periodos || [];
