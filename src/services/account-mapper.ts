@@ -179,8 +179,11 @@ function findBestMatch(
   }
   // (sem fallback de contains que ignore grupo)
 
-  // 4. Keyword match — só candidatos compatíveis com o grupo
-  const normWords = norm.split(/\s+/).filter(w => w.length > 2);
+  // 4. Keyword match — só candidatos compatíveis com o grupo.
+  // DEDUP das palavras: sem isso, uma palavra repetida no nome (ex.: o fallback de contexto
+  // "OUTRAS OBRIGAÇÕES A LONGO PRAZO OUTRAS OBRIGAÇÕES") conta 2x no overlap e infla o score,
+  // casando falsamente com candidatos de 1 palavra em comum ("Obrigações Trabalhistas - LP").
+  const normWords = [...new Set(norm.split(/\s+/).filter(w => w.length > 2))];
   let bestScore = 0;
   let bestCandidate: string | null = null;
   for (const c of candidates) {

@@ -239,3 +239,25 @@ describe("foldBP — captura FLAT do caso REAL de produção (pai+filhos no mesm
     expect(ot.filhos?.length).toBe(3);
   });
 });
+
+describe("foldBP — contexto do pai não pode inflar o keyword-match (palavra duplicada)", () => {
+  it("OUTRAS OBRIGAÇÕES sob OUTRAS OBRIGAÇÕES A LONGO PRAZO cai no balde, NUNCA em Trabalhistas", () => {
+    const arvore = {
+      "2020": {
+        grupos: {
+          "Passivo Não Circulante": [
+            { nome: "OUTRAS OBRIGAÇÕES A LONGO PRAZO", valor: 1163842.99, filhos: [
+              { nome: "OUTRAS OBRIGAÇÕES", valor: 1163842.99 },
+            ]},
+          ],
+        },
+      },
+    } as any;
+    // Dicionário real: pai mapeia para o balde (bucket + filhos → desce p/ o filho)
+    const dict = [{ nomeOriginal: "Outras Obrigações a Longo Prazo", contaDestino: "Outros Passivos não Circulantes", grupoConta: "Passivo Não Circulante" }];
+    const { bp } = foldBP(arvore, ["2020"], dict);
+    // Bug real de produção: caía em Obrigações Trabalhistas - LP (score inflado por duplicata)
+    expect(valorDe(bp, "Obrigações Trabalhistas - LP", "2020")).toBeCloseTo(0, 1);
+    expect(valorDe(bp, "Outros Passivos não Circulantes", "2020")).toBeCloseTo(1163842.99, 1);
+  });
+});
