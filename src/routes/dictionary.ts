@@ -131,14 +131,15 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
   const dreGrouped: Record<string, string[]> = {
     "Resultado (DRE)": dreModel.lines.filter((l: { subtotal: boolean }) => !l.subtotal).map((l: { conta: string }) => l.conta),
   };
+  // 2) Complementa com destinos usados no dicionário, mas SÓ os que são alvos VÁLIDOS
+  //    para o analista: inputs do modelo DRE vigente (o dicionário também mapeia nomes
+  //    de documento para SUBTOTAIS — "Lucro Bruto", "EBITDA"… — que servem ao
+  //    reconhecimento, nunca ao dropdown). Sentinela __IGNORAR__ nunca aparece.
+  const dreInputsModelo = new Set(dreGrouped["Resultado (DRE)"]);
   const addDRE = (conta: string): void => {
-    if (!conta) return;
-    if (!dreGrouped["Resultado (DRE)"].includes(conta)) dreGrouped["Resultado (DRE)"].push(conta);
+    if (!conta || conta === IGNORAR_DESTINO || !dreInputsModelo.has(conta)) return;
+    // já está na lista (a lista É o modelo) — mantido por clareza caso o modelo mude
   };
-
-  // 2) Contas-destino efetivamente usadas no dicionário (mantém o dropdown em sincronia
-  //    com os dados). Roteia por TIPO: entradas de BP vão p/ `grouped`, de DRE p/ `dreGrouped`
-  //    — assim o dropdown de BP nunca mostra conta de DRE e vice-versa.
   const used = await prisma.accountDictionary.findMany({
     where: {
       OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }],
@@ -147,6 +148,7 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
     distinct: ["tipo", "grupoConta", "contaDestino"],
   });
   for (const u of used) {
+    if (u.contaDestino === IGNORAR_DESTINO) continue; // sentinela — nunca é opção
     if (u.tipo === "DRE") addDRE(u.contaDestino);
     else add(u.grupoConta, u.contaDestino);
   }

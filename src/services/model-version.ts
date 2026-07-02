@@ -45,6 +45,9 @@ export function buildDREModel(lines: Array<{ conta: string; subtotal: boolean }>
     let bloco: string | null = null;
     if (acima === "Resultado Financeiro" || acima === "Resultado Não Operacional") bloco = acima;
     else for (let j = i + 1; j < lines.length; j++) if (lines[j].subtotal) { bloco = lines[j].conta; break; }
+    // Rede de segurança: conta posicionada DEPOIS do último subtotal (fim do modelo)
+    // ancora no subtotal acima (Lucro Líquido) — o valor NUNCA fica fora da cascata.
+    if (!bloco) bloco = acima;
     if (bloco) (extrasPorBloco[bloco] ??= []).push(l.conta);
   }
   return { lines, inputs: new Set(lines.filter((l) => !l.subtotal).map((l) => l.conta)), extrasPorBloco };
