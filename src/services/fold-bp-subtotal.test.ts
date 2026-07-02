@@ -261,3 +261,31 @@ describe("foldBP — contexto do pai não pode inflar o keyword-match (palavra d
     expect(valorDe(bp, "Outros Passivos não Circulantes", "2020")).toBeCloseTo(1163842.99, 1);
   });
 });
+
+describe("DRE — bridge do modelo do banco (conta adicionada pelo usuário)", () => {
+  it("'Despesas com Pessoas' entra no fold e na cascata do Lucro Líquido (bloco EBITDA)", async () => {
+    const { foldDRE } = await import("./ai-extraction");
+    const { buildDREModel } = await import("./model-version");
+    const { DRE_TEMPLATE } = await import("./financial-templates");
+    // Modelo do banco = template + "Despesas com Pessoas" inserida no bloco operacional
+    const lines = DRE_TEMPLATE.map((t) => ({ conta: t.conta, subtotal: t.subtotal }));
+    const idx = lines.findIndex((l) => l.conta === "Despesas Gerais e Administrativas");
+    lines.splice(idx + 1, 0, { conta: "Despesas com Pessoas", subtotal: false });
+    const model = buildDREModel(lines);
+    expect(model.inputs.has("Despesas com Pessoas")).toBe(true);
+    expect(model.extrasPorBloco["EBITDA"]).toContain("Despesas com Pessoas");
+
+    const arvore = {
+      "2023": [
+        { nome: "RECEITA OPERACIONAL BRUTA", valor: 1000 },
+        { nome: "FOLHA E ENCARGOS XPTO", valor: -200 }, // classificada p/ a conta nova via dicionário
+      ],
+    } as any;
+    const dict = [{ nomeOriginal: "FOLHA E ENCARGOS XPTO", contaDestino: "Despesas com Pessoas", grupoConta: "Despesas com Pessoas" }];
+    const { dre } = foldDRE(arvore, ["2023"], dict, model);
+    const val = (c: string) => dre.find((l) => l.conta === c)?.valores["2023"] ?? 0;
+    expect(val("Despesas com Pessoas")).toBeCloseTo(-200, 1); // linha existe e recebeu o valor
+    expect(val("EBITDA")).toBeCloseTo(800, 1);                // entrou na cascata
+    expect(val("Lucro Líquido")).toBeCloseTo(800, 1);         // fluiu até o LL
+  });
+});

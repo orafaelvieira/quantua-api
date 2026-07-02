@@ -16,7 +16,7 @@ import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESub
 import { DRE_TEMPLATE } from "../services/financial-templates";
 import { calculateIndicators } from "../services/indicator-calculator";
 import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
-import { getActiveModelVersions, loadActiveBPModel } from "../services/model-version";
+import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
 import { getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
@@ -556,6 +556,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const dictForBP = buildDictForType("BP");
     const dictForDRE = buildDictForType("DRE");
     const bpModel = await loadActiveBPModel(); // bridge: BP padrão vem do banco (editável), não do template do código
+    const dreModel = await loadActiveDREModel(); // bridge: DRE padrão idem (contas do editor entram no dropdown e na cascata)
 
     // Auto-detect document type — content-first, tipo as fallback
     function detectDocType(doc: ParsedDocument): "BP" | "DRE" | "BOTH" | "UNKNOWN" {
@@ -658,7 +659,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // um resultado VAZIO não pode "fechar" nem vencer um parcial. Vazio → score 0.
     const avalia = (c: Omit<Candidato, "validacao" | "score" | "fecha">): Candidato => {
       normalizeDRESigns(c.dre, c.periodos);
-      recomputeDRESubtotals(c.dre, c.periodos);
+      recomputeDRESubtotals(c.dre, c.periodos, dreModel.extrasPorBloco);
       const v = validateFinancialData(c.bp, c.dre, c.periodos, c.declarados);
       const temDados = c.periodos.some((p) => totalBP(c.bp, "Ativo Total", p) !== 0 && totalBP(c.bp, "Passivo Total", p) !== 0);
       const score = temDados ? scoreDe(v) : 0;
@@ -726,7 +727,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const rodaHibrido = async (): Promise<Candidato | null> => {
       const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), tipo: d.tipo, periodos: d.periodos }));
       if (!aiDocs.length) return null;
-      const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel);
+      const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel, { dreModel });
       if (!temDadosIA(r)) return null;
       return avalia({ fonte: "hibrido", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: naoMapeadosParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, alertasComposicao: r.alertasComposicao, custoUsd: r.custo.usd });
     };
@@ -743,7 +744,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         visDocs.push({ buffer, tipo: doc.tipo, periodos: parsedDocs[i]?.periodos ?? [] });
       }
       if (!visDocs.length) return null;
-      const r = await extractFinancialsWithAI(visDocs, [], dictAll, bpModel); // buffer → Sonnet visão
+      const r = await extractFinancialsWithAI(visDocs, [], dictAll, bpModel, { dreModel }); // buffer → Sonnet visão
       if (!temDadosIA(r)) return null;
       return avalia({ fonte: "visao", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: naoMapeadosParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, alertasComposicao: r.alertasComposicao, custoUsd: r.custo.usd });
     };
@@ -978,9 +979,10 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const periodos: string[] = dados.periodos ?? Object.keys(arvoreBP ?? arvoreDRE ?? {});
   const naoMapeados: any[] = [];
   const bpModelRefold = await loadActiveBPModel(); // bridge: re-dobra com o modelo de BP vigente do banco
+  const dreModelRefold = await loadActiveDREModel();
   const alertasComp: any[] = [];
   if (arvoreBP) { const r = foldBP(arvoreBP, periodos, dictRows, bpModelRefold); dados.bp = r.bp; dados.arvoreOriginalBP = arvoreBP; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
-  if (arvoreDRE) { const r = foldDRE(arvoreDRE, periodos, dictRows); dados.dre = r.dre; dados.arvoreOriginalDRE = arvoreDRE; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
+  if (arvoreDRE) { const r = foldDRE(arvoreDRE, periodos, dictRows, dreModelRefold); dados.dre = r.dre; dados.arvoreOriginalDRE = arvoreDRE; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
   dados.alertasComposicao = alertasComp;
   dados.naoMapeados = naoMapeados;
   dados.indicadores = calculateIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
@@ -1101,8 +1103,9 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
     });
 
     const bpModel = await loadActiveBPModel(); // bridge: usa o modelo de BP vigente do banco
+    const dreModelIA = await loadActiveDREModel();
     const { bp, dre, periodos, declarados, arvoreOriginalBP, arvoreOriginalDRE, naoMapeados } =
-      await extractFinancialsWithAI(buffers, periodosAlvo, dictRows, bpModel);
+      await extractFinancialsWithAI(buffers, periodosAlvo, dictRows, bpModel, { dreModel: dreModelIA });
     const indicadores = calculateIndicators(bp, dre, periodos);
 
     // Reconciliação: subtotal computado vs DECLARADO no PDF (vindo da própria IA),

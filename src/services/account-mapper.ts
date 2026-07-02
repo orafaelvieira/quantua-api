@@ -278,8 +278,10 @@ export function mapAccountToBPGroup(
 const DRE_TEMPLATE_NAMES = DRE_TEMPLATE.map(t => t.conta);
 
 /** Mapeia uma seção original da DRE para uma conta do DRE padrão (input ou subtotal). */
-export function mapAccountToDRE(nome: string, dictionaryEntries?: DictionaryEntry[]): string | null {
-  return findBestMatch(nome, DRE_TEMPLATE_NAMES, dictionaryEntries);
+export function mapAccountToDRE(nome: string, dictionaryEntries?: DictionaryEntry[], candidatos?: string[]): string | null {
+  // candidatos opcionais = contas do MODELO DRE vigente do banco (bridge) — inclui as
+  // contas adicionadas pelo usuário no editor; default = template do código.
+  return findBestMatch(nome, candidatos ?? DRE_TEMPLATE_NAMES, dictionaryEntries);
 }
 
 export function mapExtractedToBP(
@@ -465,9 +467,13 @@ export function normalizeDRESigns(dre: DRELineItem[], periodos: string[]): void 
  *   Resultado Antes do IR     = EBIT + Resultado Financeiro + Resultado Não Operacional
  *   Lucro Líquido             = Resultado Antes do IR e CSLL + IR e CSLL
  */
-export function recomputeDRESubtotals(dre: DRELineItem[], periodos: string[]): void {
+export function recomputeDRESubtotals(dre: DRELineItem[], periodos: string[], extrasPorBloco?: Record<string, string[]>): void {
   const get = (conta: string, p: string): number =>
     dre.find(d => d.conta === conta)?.valores[p] ?? 0;
+  // Contas ADICIONADAS pelo usuário no modelo padrão (fora do template do código) entram
+  // na cascata pelo SUBTOTAL do bloco onde foram posicionadas no editor de modelos.
+  const extras = (bloco: string, p: string): number =>
+    (extrasPorBloco?.[bloco] ?? []).reduce((soma, conta) => soma + get(conta, p), 0);
   const set = (conta: string, p: string, val: number): void => {
     const item = dre.find(d => d.conta === conta);
     if (item) item.valores[p] = val;
@@ -478,44 +484,45 @@ export function recomputeDRESubtotals(dre: DRELineItem[], periodos: string[]): v
 
   for (const p of periodos) {
     const receitaLiquida = resolve(
-      get("Receita Bruta", p) + get("Deduções da Receita Bruta", p) + get("Impostos s/ Faturamento", p),
+      get("Receita Bruta", p) + get("Deduções da Receita Bruta", p) + get("Impostos s/ Faturamento", p) + extras("Receita Líquida", p),
       "Receita Líquida", p
     );
     set("Receita Líquida", p, receitaLiquida);
 
-    const lucroBruto = resolve(receitaLiquida + get("Custo Operacional", p), "Lucro Bruto", p);
+    const lucroBruto = resolve(receitaLiquida + get("Custo Operacional", p) + extras("Lucro Bruto", p), "Lucro Bruto", p);
     set("Lucro Bruto", p, lucroBruto);
 
     const ebitda = resolve(
       lucroBruto + get("Despesas Gerais e Administrativas", p) + get("Despesas com Vendas", p) +
         get("Despesas com Marketing", p) + get("Despesas com P&D", p) +
-        get("Outras Receitas Operacionais", p) + get("Outras Despesas Operacionais", p),
+        get("Outras Receitas Operacionais", p) + get("Outras Despesas Operacionais", p) +
+        extras("EBITDA", p),
       "EBITDA", p
     );
     set("EBITDA", p, ebitda);
 
-    const ebit = resolve(ebitda + get("Depreciação e Amortização", p) + get("Equivalência Patrimonial", p), "EBIT", p);
+    const ebit = resolve(ebitda + get("Depreciação e Amortização", p) + get("Equivalência Patrimonial", p) + extras("EBIT", p), "EBIT", p);
     set("EBIT", p, ebit);
 
     const resultadoFinanceiro = resolve(
-      get("Receitas Financeiras", p) + get("Despesas Financeiras", p),
+      get("Receitas Financeiras", p) + get("Despesas Financeiras", p) + extras("Resultado Financeiro", p),
       "Resultado Financeiro", p
     );
     set("Resultado Financeiro", p, resultadoFinanceiro);
 
     const resultadoNaoOp = resolve(
-      get("Outras Receitas Não Operacionais", p) + get("Outras Despesas Não Operacionais", p),
+      get("Outras Receitas Não Operacionais", p) + get("Outras Despesas Não Operacionais", p) + extras("Resultado Não Operacional", p),
       "Resultado Não Operacional", p
     );
     set("Resultado Não Operacional", p, resultadoNaoOp);
 
     const resultadoAntesIR = resolve(
-      ebit + resultadoFinanceiro + resultadoNaoOp,
+      ebit + resultadoFinanceiro + resultadoNaoOp + extras("Resultado Antes do IR e CSLL", p),
       "Resultado Antes do IR e CSLL", p
     );
     set("Resultado Antes do IR e CSLL", p, resultadoAntesIR);
 
-    set("Lucro Líquido", p, resolve(resultadoAntesIR + get("IR e CSLL", p), "Lucro Líquido", p));
+    set("Lucro Líquido", p, resolve(resultadoAntesIR + get("IR e CSLL", p) + extras("Lucro Líquido", p), "Lucro Líquido", p));
   }
 }
 

@@ -107,7 +107,11 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
 // workspace). Assim cobre BP e DRE, e garante que qualquer entrada existente
 // seja re-selecionável ao ser editada (o valor sempre está entre as opções).
 router.get("/template", async (req: AuthRequest, res: Response): Promise<void> => {
-  const { BP_TEMPLATE, DRE_TEMPLATE } = require("../services/financial-templates");
+  const { BP_TEMPLATE } = require("../services/financial-templates");
+  const { loadActiveDREModel } = require("../services/model-version");
+  // Bridge: o dropdown da DRE reflete o MODELO VIGENTE do banco (contas adicionadas no
+  // editor de modelos aparecem aqui na hora).
+  const dreModel = await loadActiveDREModel();
 
   const grouped: Record<string, string[]> = {};
   const add = (grupo: string, conta: string): void => {
@@ -125,7 +129,7 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
   // reclassificar uma linha da DRE (ex.: custo que caiu em "Outras Despesas" → "Custo
   // Operacional"). Agrupado sob "Resultado (DRE)" para o <optgroup>.
   const dreGrouped: Record<string, string[]> = {
-    "Resultado (DRE)": DRE_TEMPLATE.filter((t: { subtotal?: boolean }) => !t.subtotal).map((t: { conta: string }) => t.conta),
+    "Resultado (DRE)": dreModel.lines.filter((l: { subtotal: boolean }) => !l.subtotal).map((l: { conta: string }) => l.conta),
   };
   const addDRE = (conta: string): void => {
     if (!conta) return;
@@ -147,7 +151,7 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
     else add(u.grupoConta, u.contaDestino);
   }
 
-  res.json({ template: BP_TEMPLATE, dreTemplate: DRE_TEMPLATE, grouped, dreGrouped });
+  res.json({ template: BP_TEMPLATE, dreTemplate: dreModel.lines, grouped, dreGrouped });
 });
 
 // Helper to determine parent group based on classificacao

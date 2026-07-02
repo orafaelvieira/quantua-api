@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { env } from "../config/env";
 import { DRE_TEMPLATE } from "./financial-templates";
 import type { BPLineItem, DRELineItem } from "../types/financial";
+import type { DREModel } from "./model-version";
 import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, isContaIgnorada, DEFAULT_BP_MODEL, type BPModel, type DictionaryEntry } from "./account-mapper";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
@@ -179,7 +180,11 @@ function fallbackSemanticoDRE(nome: string): string | null {
   return null;
 }
 
-export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: DictionaryEntry[]): { dre: DRELineItem[]; naoMapeados: NaoMapeado[]; alertasComposicao: AlertaComposicaoBP[] } {
+export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: DictionaryEntry[], dreModel?: DREModel): { dre: DRELineItem[]; naoMapeados: NaoMapeado[]; alertasComposicao: AlertaComposicaoBP[] } {
+  // Bridge: usa o modelo DRE do banco (contas do editor) quando fornecido; senão, o template do código.
+  const inputsSet = dreModel ? dreModel.inputs : dreInputsSet;
+  const candidatosDRE = dreModel ? [...dreModel.inputs] : dreInputs;
+  const templateLines: Array<{ conta: string; subtotal: boolean }> = dreModel ? dreModel.lines : DRE_TEMPLATE;
   const acc: Record<string, Record<string, number>> = {};
   const naoMapeados: NaoMapeado[] = [];
   const alertasComposicao: AlertaComposicaoBP[] = [];
@@ -197,9 +202,9 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       for (const it of inputs) {
         if (typeof it.valor !== "number" || it.valor === 0) continue;
         if (isContaIgnorada(it.nome, dict)) { it.destino = "(ignorada pelo analista)"; continue; }
-        let dest = mapAccountToDRE(it.nome, dict);
-        if (!dest || !dreInputsSet.has(dest)) dest = fallbackSemanticoDRE(it.nome);
-        if (!dest || !dreInputsSet.has(dest)) {
+        let dest = mapAccountToDRE(it.nome, dict, candidatosDRE);
+        if (!dest || !inputsSet.has(dest)) dest = fallbackSemanticoDRE(it.nome);
+        if (!dest || !inputsSet.has(dest)) {
           dest = it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
           naoMapeados.push({ nome: it.nome, grupo: "DRE", destino: dest, valor: it.valor, periodo: p, tipo: "DRE" });
         }
@@ -237,8 +242,8 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       const filhos = it.filhos ?? [];
       // Wrapper conhecido ("Despesas Operacionais" etc.) nunca mapeia — é estrutural.
       const ehWrapper = DRE_SUBTOTAIS.has(normNome(it.nome));
-      let dest = !ehWrapper && temValor ? mapAccountToDRE(it.nome, dict) : null;
-      if (dest && !dreInputsSet.has(dest)) dest = null;
+      let dest = !ehWrapper && temValor ? mapAccountToDRE(it.nome, dict, candidatosDRE) : null;
+      if (dest && !inputsSet.has(dest)) dest = null;
       if (!dest && !ehWrapper && temValor) dest = fallbackSemanticoDRE(it.nome);
       if (dest && BALDES_DRE.has(dest) && filhos.length > 0) dest = null; // filhos podem ser mais específicos
       if (dest) {
@@ -270,8 +275,8 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       }
       if (!temValor) return;
       // Folha sem mapa direto: contexto do pai ("Receita Operacional Bruta Vendas de Produtos…").
-      const ctx = caminho.length ? mapAccountToDRE(`${caminho[caminho.length - 1]} ${it.nome}`, undefined) : null;
-      if (ctx && dreInputsSet.has(ctx)) { addAcc(ctx, p, it.valor); it.destino = ctx; return; }
+      const ctx = caminho.length ? mapAccountToDRE(`${caminho[caminho.length - 1]} ${it.nome}`, undefined, candidatosDRE) : null;
+      if (ctx && inputsSet.has(ctx)) { addAcc(ctx, p, it.valor); it.destino = ctx; return; }
       const fb = fallbackSemanticoDRE(it.nome) ?? (caminho.length ? fallbackSemanticoDRE(caminho[caminho.length - 1]) : null);
       if (fb) { addAcc(fb, p, it.valor); it.destino = fb; return; }
       const balde = it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
@@ -283,11 +288,11 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
     for (const it of secoes) processa(it, []);
   }
 
-  const dre: DRELineItem[] = DRE_TEMPLATE.map((t) => ({
+  const dre: DRELineItem[] = templateLines.map((t) => ({
     conta: t.conta, valores: t.subtotal ? {} : (acc[t.conta] ?? {}), subtotal: t.subtotal, editado: false,
   }));
   normalizeDRESigns(dre, periodos);
-  recomputeDRESubtotals(dre, periodos);
+  recomputeDRESubtotals(dre, periodos, dreModel?.extrasPorBloco);
   return { dre, naoMapeados, alertasComposicao };
 }
 
@@ -524,7 +529,7 @@ export async function extractFinancialsWithAI(
   periodos: string[],
   dict?: DictionaryEntry[],
   bpModel: BPModel = DEFAULT_BP_MODEL,
-  opts: { model?: string } = {}
+  opts: { model?: string; dreModel?: DREModel } = {}
 ): Promise<AIExtractionResult> {
   // Texto do parser → Haiku (barato); PDF → Sonnet visão (caro). Default: visão.
   const model = opts.model ?? (docs.some((d) => d.raw) ? AI_MODEL_FAST : AI_MODEL);
@@ -637,7 +642,7 @@ export async function extractFinancialsWithAI(
 
   const allPeriodos = Array.from(periodSet);
   const { bp, naoMapeados: naoMapBP, alertasComposicao } = foldBP(arvoreOriginalBP, allPeriodos, dict, bpModel);
-  const { dre, naoMapeados: naoMapDRE, alertasComposicao: alertasDRE } = foldDRE(arvoreOriginalDRE, allPeriodos, dict);
+  const { dre, naoMapeados: naoMapDRE, alertasComposicao: alertasDRE } = foldDRE(arvoreOriginalDRE, allPeriodos, dict, opts.dreModel);
 
   return {
     bp, dre, periodos: allPeriodos, declarados,
