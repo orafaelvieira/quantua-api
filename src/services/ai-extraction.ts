@@ -78,7 +78,7 @@ async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, mo
       ];
   let msg;
   try {
-    msg = await client.messages.create({ model, max_tokens: maxTokens, messages: [{ role: "user", content }] });
+    msg = await client.messages.create({ model, max_tokens: maxTokens, temperature: 0, messages: [{ role: "user", content }] });
   } catch (e: any) {
     // 429 (rate limit) ou 529 (overloaded): espera e tenta de novo (uploads multi-doc)
     if ((e?.status === 429 || e?.status === 529) && attempt < 4) {
@@ -87,6 +87,7 @@ async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, mo
     }
     throw e;
   }
+  if (msg.stop_reason === "max_tokens") console.warn(`[ask] SAÍDA TRUNCADA em ${maxTokens} tokens (${model}) — captura pode estar incompleta`);
   let txt = msg.content[0]?.type === "text" ? msg.content[0].text.trim() : "";
   if (txt.startsWith("```")) txt = txt.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
   const inTok = msg.usage?.input_tokens ?? 0;
@@ -164,6 +165,17 @@ const DESP_OP_DESTINOS = new Set([
   "Receitas Financeiras", "Despesas Financeiras",
 ]);
 
+/** Rede semântica mínima ANTES do balde: "Custo(s) …" é CUSTO (acima do Lucro Bruto),
+ *  nunca despesa — cair no balde de despesas desloca o Lucro Bruto (visto no sweep:
+ *  TECHWAY/AçãoCorretora/OCEANDROP). E "Impostos s/ vendas…" é DEDUÇÃO da receita. */
+function fallbackSemanticoDRE(nome: string): string | null {
+  const n = normNome(nome);
+  if (/^\(?\s*-?\s*\)?\s*custos?\b/.test(n) && !/despes/.test(n)) return "Custo Operacional";
+  if (/\bcustos? (de|dos|da|das|com) /.test(n) && !/despes/.test(n)) return "Custo Operacional";
+  if (/impostos? (s |s\/|sobre |incidentes)/.test(n) && /venda|servic|faturamento/.test(n)) return "Deduções da Receita Bruta";
+  return null;
+}
+
 export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: DictionaryEntry[]): { dre: DRELineItem[]; naoMapeados: NaoMapeado[]; alertasComposicao: AlertaComposicaoBP[] } {
   const acc: Record<string, Record<string, number>> = {};
   const naoMapeados: NaoMapeado[] = [];
@@ -183,6 +195,7 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
         if (typeof it.valor !== "number" || it.valor === 0) continue;
         if (isContaIgnorada(it.nome, dict)) { it.destino = "(ignorada pelo analista)"; continue; }
         let dest = mapAccountToDRE(it.nome, dict);
+        if (!dest || !dreInputsSet.has(dest)) dest = fallbackSemanticoDRE(it.nome);
         if (!dest || !dreInputsSet.has(dest)) {
           dest = it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
           naoMapeados.push({ nome: it.nome, grupo: "DRE", destino: dest, valor: it.valor, periodo: p, tipo: "DRE" });
@@ -223,6 +236,7 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       const ehWrapper = DRE_SUBTOTAIS.has(normNome(it.nome));
       let dest = !ehWrapper && temValor ? mapAccountToDRE(it.nome, dict) : null;
       if (dest && !dreInputsSet.has(dest)) dest = null;
+      if (!dest && !ehWrapper && temValor) dest = fallbackSemanticoDRE(it.nome);
       if (dest && BALDES_DRE.has(dest) && filhos.length > 0) dest = null; // filhos podem ser mais específicos
       if (dest) {
         addAcc(dest, p, it.valor);
@@ -253,6 +267,8 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       // Folha sem mapa direto: contexto do pai ("Receita Operacional Bruta Vendas de Produtos…").
       const ctx = caminho.length ? mapAccountToDRE(`${caminho[caminho.length - 1]} ${it.nome}`, undefined) : null;
       if (ctx && dreInputsSet.has(ctx)) { addAcc(ctx, p, it.valor); it.destino = ctx; return; }
+      const fb = fallbackSemanticoDRE(it.nome) ?? (caminho.length ? fallbackSemanticoDRE(caminho[caminho.length - 1]) : null);
+      if (fb) { addAcc(fb, p, it.valor); it.destino = fb; return; }
       const balde = it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
       addAcc(balde, p, it.valor);
       it.destino = balde;
@@ -501,9 +517,9 @@ export async function extractFinancialsWithAI(
     const ctx: DocCtx = { pin: docPeriodos.length === 1 ? docPeriodos[0] : null, docPeriodos };
     const promptPeriodos = docPeriodos.length ? docPeriodos : periodos;
     const out: Array<() => Promise<{ kind: "dre" | "bp"; data: any; ctx: DocCtx; inTok: number; outTok: number }>> = [];
-    if (isDRE || !isBP) out.push(() => ask(input, dreTreePrompt(promptPeriodos), model, 0, 8000).then((r) => ({ kind: "dre" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
+    if (isDRE || !isBP) out.push(() => ask(input, dreTreePrompt(promptPeriodos), model, 0, 16000).then((r) => ({ kind: "dre" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
     // Árvore completa pode ser funda (1-7 níveis) → teto de saída maior que o padrão.
-    if (isBP || (!isDRE && !isBP)) out.push(() => ask(input, bpTreePrompt(promptPeriodos), model, 0, 8000).then((r) => ({ kind: "bp" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
+    if (isBP || (!isDRE && !isBP)) out.push(() => ask(input, bpTreePrompt(promptPeriodos), model, 0, 16000).then((r) => ({ kind: "bp" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
     return out;
   });
   // Paralelo com CONCORRÊNCIA LIMITADA (4): muito mais rápido em uploads multi-documento que
@@ -565,6 +581,33 @@ export async function extractFinancialsWithAI(
   for (const r of results) {
     if (r.kind === "bp") mergeBP(r.data, r.ctx);
     else { mergeDRE(r.data, r.ctx); storeDeclarados(r.data?.declarados, r.ctx); }
+  }
+
+  // UNIFICA períodos do MESMO ANO com formatos diferentes entre docs ("2022" no DRE vs
+  // "31/12/2022" no BP dividia o período em dois — BP num, DRE noutro — e quebrava a
+  // reconciliação e os indicadores). Canônico: a forma datada (31/12/AAAA) quando existir.
+  {
+    const porAno = new Map<string, string[]>();
+    for (const k of periodSet) { const y = yearOf(k); if (y) (porAno.get(y) ?? porAno.set(y, []).get(y)!).push(k); }
+    for (const [, keys] of porAno) {
+      if (keys.length < 2) continue;
+      const canonico = keys.find((k) => /\d{2}\/\d{2}\/\d{4}/.test(k)) ?? keys[0];
+      for (const k of keys) {
+        if (k === canonico) continue;
+        // BP
+        if (arvoreOriginalBP[k]) {
+          const destBP = (arvoreOriginalBP[canonico] ??= { grupos: {}, totais: {} });
+          for (const [g, itens] of Object.entries(arvoreOriginalBP[k].grupos ?? {})) (destBP.grupos[g] ??= []).push(...itens);
+          destBP.totais = { ...destBP.totais, ...arvoreOriginalBP[k].totais };
+          delete arvoreOriginalBP[k];
+        }
+        // DRE
+        if (arvoreOriginalDRE[k]) { (arvoreOriginalDRE[canonico] ??= []).push(...arvoreOriginalDRE[k]); delete arvoreOriginalDRE[k]; }
+        // Declarados
+        if (declarados[k]) { declarados[canonico] = { ...declarados[canonico], ...declarados[k] }; delete declarados[k]; }
+        periodSet.delete(k);
+      }
+    }
   }
 
   const allPeriodos = Array.from(periodSet);
