@@ -15,7 +15,7 @@ import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-conte
 import { sugerirClassificacoesIA, chaveNM } from "../services/classification-suggest";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta, ordPeriodo } from "../services/account-mapper";
 import { DRE_TEMPLATE } from "../services/financial-templates";
-import { calculateIndicators } from "../services/indicator-calculator";
+import { buildIndicators } from "../services/indicator-config";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
@@ -792,7 +792,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const custoExtracaoUsd = custoTotalUsd;
 
     // DRE já normalizada/recalculada e validada na cascata (avalia) → só os indicadores.
-    const indicadores = calculateIndicators(structuredBP, structuredDRE, allPeriodos);
+    const indicadores = await buildIndicators(structuredBP, structuredDRE, allPeriodos);
     console.log(`[process] Validação: confiança=${validacao.confiancaGeral}%, equação=${validacao.equacaoPatrimonial}, alertas=${validacao.alertas.length}`);
     for (const alerta of validacao.alertas) {
       console.log(`[process]   [${alerta.tipo}] ${alerta.area}: ${alerta.mensagem}`);
@@ -1026,7 +1026,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   for (const nm of naoMapeados) { const k = chaveNM(nm as any); if (sugAntigas[k]) sugNovas[k] = sugAntigas[k]; }
   (dados as any).sugestoesIA = sugNovas;
   dados.naoMapeados = naoMapeados;
-  dados.indicadores = calculateIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
+  dados.indicadores = await buildIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
   dados.fluxoCaixa = buildIndirectCashFlow(dados.bp ?? [], dados.dre ?? [], periodos); // FC acompanha o refold (grátis)
 
   await prisma.analysis.update({ where: { id }, data: { dadosEstruturados: dados } });
@@ -1093,7 +1093,7 @@ router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Respons
   if (!analysis.dadosEstruturados) { res.status(400).json({ error: "Sem dados estruturados" }); return; }
 
   const dados = analysis.dadosEstruturados as any as DadosEstruturados;
-  const newIndicadores = calculateIndicators(dados.bp, dados.dre, dados.periodos);
+  const newIndicadores = await buildIndicators(dados.bp, dados.dre, dados.periodos);
 
   // Preserve user overrides from old indicators
   for (const newInd of newIndicadores) {
@@ -1148,7 +1148,7 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
     const dreModelIA = await loadActiveDREModel();
     const { bp, dre, periodos, declarados, arvoreOriginalBP, arvoreOriginalDRE, naoMapeados } =
       await extractFinancialsWithAI(buffers, periodosAlvo, dictRows, bpModel, { dreModel: dreModelIA });
-    const indicadores = calculateIndicators(bp, dre, periodos);
+    const indicadores = await buildIndicators(bp, dre, periodos);
 
     // Reconciliação: subtotal computado vs DECLARADO no PDF (vindo da própria IA),
     // para TODOS os períodos (não só o primeiro).

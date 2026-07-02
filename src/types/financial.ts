@@ -21,6 +21,9 @@ export interface Indicador {
   valores: Record<string, number | string | null>;
   status: Record<string, "ok" | "atencao" | "critico" | null>;
   overrides: Record<string, number | null>;
+  /** true = desativado na tela "Indicadores" — segue CALCULADO (IA/estágio/pares), mas
+   *  não aparece na aba/PDF/CSV. Nunca se aplica a valores, só à exibição. */
+  oculto?: boolean;
 }
 
 export interface UnmatchedAccount {

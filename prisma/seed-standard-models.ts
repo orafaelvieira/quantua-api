@@ -101,11 +101,37 @@ async function backfillGuia(): Promise<void> {
   if (filled > 0) console.log(`  guia: ${filled} descrição(ões) preenchida(s) (só onde estava vazio).`);
 }
 
+/** Seed da CONFIG DE INDICADORES (tela "Indicadores"): cria os canônicos do código com
+ *  semáforo default — CREATE-ONLY (indicador já existente nunca é tocado: limiar editado,
+ *  exibição desativada e ordem do usuário são preservados em todo deploy). */
+async function seedIndicatorConfigs(): Promise<void> {
+  const { INDICADORES_TEMPLATE } = await import("../src/services/financial-templates");
+  const { SEMAFORO_DEFAULTS } = await import("../src/services/indicator-calculator");
+  let created = 0;
+  let ordem = 0;
+  for (const t of INDICADORES_TEMPLATE) {
+    ordem += 1;
+    const existe = await prisma.indicatorConfig.findUnique({ where: { nome: t.nome } });
+    if (existe) continue;
+    const sem = SEMAFORO_DEFAULTS[t.nome];
+    await prisma.indicatorConfig.create({
+      data: {
+        nome: t.nome, sistema: true, ativo: true, grupo: t.tipo, tipoDado: t.tipoDado,
+        formula: t.formula, ordem,
+        ...(sem ? { semDirecao: sem.direcao, semCritico: sem.critico, semAtencao: sem.atencao } : {}),
+      },
+    });
+    created += 1;
+  }
+  if (created > 0) console.log(`  indicadores: ${created} config(s) de sistema criada(s).`);
+}
+
 async function main() {
   console.log("Seed dos modelos padrão (BP/DRE):");
   await seedTipo("BP");
   await seedTipo("DRE");
   await backfillGuia();
+  await seedIndicatorConfigs();
   const total = await prisma.standardModelLine.count();
   console.log(`Concluído. Total de linhas de modelo no banco: ${total}.`);
 }

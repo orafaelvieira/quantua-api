@@ -28,36 +28,45 @@ function div(a: number, b: number): number | null {
 
 type StatusLevel = "ok" | "atencao" | "critico" | null;
 
-interface ThresholdConfig {
-  critico: (v: number) => boolean;
-  atencao: (v: number) => boolean;
-}
+/** Semáforo DECLARATIVO (editável na tela "Indicadores" — a tabela IndicatorConfig
+ *  sobrepõe estes defaults). direcao "menor_ruim": crítico se v < critico, atenção se
+ *  v < atencao. "maior_ruim": crítico se v > critico, atenção se v > atencao. */
+export interface SemaforoDef { direcao: "menor_ruim" | "maior_ruim"; critico: number; atencao: number }
 
-const THRESHOLDS: Record<string, ThresholdConfig> = {
-  "Liquidez Imediata": { critico: v => v < 0.2, atencao: v => v < 0.5 },
-  "Liquidez Seca": { critico: v => v < 0.7, atencao: v => v < 1.0 },
-  "Liquidez Corrente": { critico: v => v < 1.0, atencao: v => v < 1.5 },
-  "Liquidez Geral": { critico: v => v < 0.8, atencao: v => v < 1.2 },
-  "Margem Bruta": { critico: v => v < 0.10, atencao: v => v < 0.30 },
-  "Margem Operacional": { critico: v => v < 0, atencao: v => v < 0.05 },
-  "Margem Líquida": { critico: v => v < 0, atencao: v => v < 0.05 },
-  "Endividamento Geral": { critico: v => v > 0.80, atencao: v => v > 0.50 },
-  "Endividamento de Curto Prazo": { critico: v => v > 0.70, atencao: v => v > 0.50 },
-  "ROA (Retorno sobre Ativos)": { critico: v => v < 0, atencao: v => v < 0.05 },
-  "ROIC (Retorno sobre Capital Investido)": { critico: v => v < 0, atencao: v => v < 0.08 },
-  "ROE (Retorno sobre Patrimônio Líquido)": { critico: v => v < 0, atencao: v => v < 0.10 },
-  "Índice de Cobertura de Juros": { critico: v => v < 1.5, atencao: v => v < 3.0 },
-  "Capital Terceiros s/ PL": { critico: v => v > 2.0, atencao: v => v > 1.0 },
-  "Despesa Financeira / Rec. Líquida": { critico: v => v > 0.10, atencao: v => v > 0.05 },
+export const SEMAFORO_DEFAULTS: Record<string, SemaforoDef> = {
+  "Liquidez Imediata": { direcao: "menor_ruim", critico: 0.2, atencao: 0.5 },
+  "Liquidez Seca": { direcao: "menor_ruim", critico: 0.7, atencao: 1.0 },
+  "Liquidez Corrente": { direcao: "menor_ruim", critico: 1.0, atencao: 1.5 },
+  "Liquidez Geral": { direcao: "menor_ruim", critico: 0.8, atencao: 1.2 },
+  "Margem Bruta": { direcao: "menor_ruim", critico: 0.10, atencao: 0.30 },
+  "Margem Operacional": { direcao: "menor_ruim", critico: 0, atencao: 0.05 },
+  "Margem Líquida": { direcao: "menor_ruim", critico: 0, atencao: 0.05 },
+  "Endividamento Geral": { direcao: "maior_ruim", critico: 0.80, atencao: 0.50 },
+  "Endividamento de Curto Prazo": { direcao: "maior_ruim", critico: 0.70, atencao: 0.50 },
+  "ROA (Retorno sobre Ativos)": { direcao: "menor_ruim", critico: 0, atencao: 0.05 },
+  "ROIC (Retorno sobre Capital Investido)": { direcao: "menor_ruim", critico: 0, atencao: 0.08 },
+  "ROE (Retorno sobre Patrimônio Líquido)": { direcao: "menor_ruim", critico: 0, atencao: 0.10 },
+  "Índice de Cobertura de Juros": { direcao: "menor_ruim", critico: 1.5, atencao: 3.0 },
+  "Capital Terceiros s/ PL": { direcao: "maior_ruim", critico: 2.0, atencao: 1.0 },
+  "Despesa Financeira / Rec. Líquida": { direcao: "maior_ruim", critico: 0.10, atencao: 0.05 },
+  // Kanitz: FI < −3 = risco de insolvência; −3 a 0 = penumbra; > 0 = solvente
+  "Termômetro de Kanitz": { direcao: "menor_ruim", critico: -3, atencao: 0 },
 };
 
-function getStatus(nome: string, value: number | null): StatusLevel {
-  if (value === null) return null;
-  const threshold = THRESHOLDS[nome];
-  if (!threshold) return null;
-  if (threshold.critico(value)) return "critico";
-  if (threshold.atencao(value)) return "atencao";
+export function statusPorSemaforo(def: SemaforoDef | undefined, value: number | null): StatusLevel {
+  if (value === null || !def) return null;
+  if (def.direcao === "maior_ruim") {
+    if (value > def.critico) return "critico";
+    if (value > def.atencao) return "atencao";
+    return "ok";
+  }
+  if (value < def.critico) return "critico";
+  if (value < def.atencao) return "atencao";
   return "ok";
+}
+
+function getStatus(nome: string, value: number | null, overrides?: Record<string, SemaforoDef>): StatusLevel {
+  return statusPorSemaforo(overrides?.[nome] ?? SEMAFORO_DEFAULTS[nome], value);
 }
 
 function computeIndicator(
@@ -214,6 +223,20 @@ function computeIndicator(
     case "Giro do Ativo": return div(receitaLiquida, ativoTotal);
     case "Alavancagem": return div(passivoTotal, patrimonioLiquido);
 
+    // Solvência — Termômetro de Kanitz (1978):
+    //   FI = 0,05·(LL/PL) + 1,65·LG + 3,55·LS − 1,06·LC − 0,33·(Exigível/PL)
+    //   FI > 0 solvente · 0 a −3 penumbra · < −3 risco de insolvência
+    case "Termômetro de Kanitz": {
+      const exigivelTotal = passivoCirculante + passivoNaoCirculante;
+      const x1 = div(lucroLiquido, patrimonioLiquido);
+      const x2 = div(ativoCirculante + realizavelLP, exigivelTotal);
+      const x3 = div(ativoCirculante - estoques, passivoCirculante);
+      const x4 = div(ativoCirculante, passivoCirculante);
+      const x5 = div(exigivelTotal, patrimonioLiquido);
+      if (x1 === null || x2 === null || x3 === null || x4 === null || x5 === null) return null;
+      return 0.05 * x1 + 1.65 * x2 + 3.55 * x3 - 1.06 * x4 - 0.33 * x5;
+    }
+
     default: return null;
   }
 }
@@ -221,7 +244,8 @@ function computeIndicator(
 export function calculateIndicators(
   bp: BPLineItem[],
   dre: DRELineItem[],
-  periodos: string[]
+  periodos: string[],
+  semaforoOverrides?: Record<string, SemaforoDef>
 ): Indicador[] {
   return INDICADORES_TEMPLATE.map(template => {
     const valores: Record<string, number | string | null> = {};
@@ -234,7 +258,7 @@ export function calculateIndicators(
 
       // Status only for numeric values
       if (typeof val === "number") {
-        status[periodo] = getStatus(template.nome, val);
+        status[periodo] = getStatus(template.nome, val, semaforoOverrides);
       } else {
         status[periodo] = null;
       }

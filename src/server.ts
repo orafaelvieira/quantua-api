@@ -22,6 +22,7 @@ import teamRouter from "./routes/team";
 import sectorsRouter from "./routes/sectors";
 import adminRouter from "./routes/admin";
 import peersRouter from "./routes/peers";
+import indicatorsRouter from "./routes/indicators";
 import { startJobs } from "./jobs";
 import { prisma } from "./db/client";
 import { exec } from "node:child_process";
@@ -56,7 +57,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-02.periodos-ordem-fonte";
+const BUILD_VERSION = "2026-07-02.tela-indicadores-kanitz";
 app.get("/version", async (_req, res) => {
   try {
     const [peerCompanies, pmPagamentoLines, sectorsActive] = await Promise.all([
@@ -91,6 +92,7 @@ app.use("/team", teamRouter);
 app.use("/sectors", sectorsRouter);
 app.use("/admin", adminRouter);
 app.use("/peers", peersRouter);
+app.use("/indicators", indicatorsRouter);
 
 /**
  * Seeds rodam APÓS o `listen` (não no `start`, antes do server) — senão um seed

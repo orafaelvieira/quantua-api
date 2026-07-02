@@ -155,6 +155,38 @@ model StandardModel {
   @@map("standard_models")
 }
 
+// Configuração dos INDICADORES — a tela "Indicadores" do menu edita esta tabela.
+// Sistema (sistema=true): os 36+ canônicos do código — NÃO deletáveis (IA/estágio/pares
+// dependem deles); podem ter semáforo editado e exibição desativada (ativo=false, o
+// motor CONTINUA calculando). Personalizados (sistema=false): fórmula estruturada
+// numerador/denominador como somas de linhas do modelo padrão — aditivos, deletáveis.
+model IndicatorConfig {
+  id       String  @id @default(uuid())
+  nome     String  @unique
+  sistema  Boolean @default(false)
+  ativo    Boolean @default(true) // exibição (aba/PDF/CSV); cálculo do sistema não para
+  grupo    String
+  tipoDado String  @default("Índice") // R$ | % | Índice | Dias | Texto
+  formula  String? // texto exibido (tooltip/PDF)
+
+  // Fórmula estruturada (SÓ personalizados): (Σ numerador) / (Σ denominador) × multiplicador
+  numerador     Json? // Array<{ origem: "BP"|"DRE", conta: string, sinal: 1|-1, abs?: boolean }>
+  denominador   Json? // idem; ausente = só numerador
+  multiplicador Float? // ex.: 365 para prazos
+
+  // Semáforo (opcional): direção "menor_ruim" (crítico se v < limiar) | "maior_ruim" (v > limiar)
+  semDirecao String? @map("sem_direcao")
+  semCritico Float?  @map("sem_critico")
+  semAtencao Float?  @map("sem_atencao")
+
+  ordem     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([grupo, ordem])
+  @@map("indicator_configs")
+}
+
 // Versionamento do dicionário (controle INTERNO — não aparece em relatórios). O dicionário
 // é uma tabela viva/autoalimentada, não um template; então "versão" = contador monotônico
 // global + changelog (cada mudança = uma linha). A análise carimba a versão usada no fold.

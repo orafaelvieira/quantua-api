@@ -161,6 +161,9 @@ export const INDICADORES_TEMPLATE: Array<{
   { tipo: "Indicadores de Rentabilidade - Modelo Dupont", nome: "Margem Líquida", formula: "Lucro Líquido / Receita Líquida", tipoDado: "%" },
   { tipo: "Indicadores de Rentabilidade - Modelo Dupont", nome: "Giro do Ativo", formula: "Receita Líquida / Ativo Total", tipoDado: "Índice" },
   { tipo: "Indicadores de Rentabilidade - Modelo Dupont", nome: "Alavancagem", formula: "Passivo Total / Patrimônio Líquido", tipoDado: "Índice" },
+
+  // Indicadores de Solvência (modelos de previsão de insolvência)
+  { tipo: "Indicadores de Solvência", nome: "Termômetro de Kanitz", formula: "FI = 0,05×(LL/PL) + 1,65×Liquidez Geral + 3,55×Liquidez Seca − 1,06×Liquidez Corrente − 0,33×(Exigível Total/PL). FI > 0: solvente · 0 a −3: penumbra · < −3: risco de insolvência", tipoDado: "Índice" },
 ];
 
 // Account name aliases for normalization
