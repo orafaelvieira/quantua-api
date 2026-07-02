@@ -1228,7 +1228,14 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
     const totalLinhas = linhas.length;
     const contasNaoClassificadas = dados?.unmatchedAccounts?.filter((u) => {
       // Check if this unmatched account came from this document's linhas
-      return linhas.some((l) => l.conta === u.conta);
+      if (!linhas.some((l) => l.conta === u.conta)) return false;
+      // Só conta se a pendência tem VALOR num período DESTE documento — o filtro por
+      // nome sozinho gera contagem fantasma quando a mesma conta só ficou pendente
+      // em outro ano (ex.: "1 conta não classificada" no doc onde ela está zerada).
+      const vals = u.valores ?? {};
+      const pers = Object.keys(vals);
+      if (periodos.length === 0 || pers.length === 0) return true;
+      return pers.some((p) => periodos.includes(p) && Math.abs(vals[p] ?? 0) > 0.005);
     }).length ?? 0;
     const contasMapeadas = totalLinhas - contasNaoClassificadas;
 
