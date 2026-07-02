@@ -16,6 +16,7 @@ import { sugerirClassificacoesIA, chaveNM } from "../services/classification-sug
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta } from "../services/account-mapper";
 import { DRE_TEMPLATE } from "../services/financial-templates";
 import { calculateIndicators } from "../services/indicator-calculator";
+import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
 import { getCurrentDictionaryVersion } from "../services/dictionary-version";
@@ -858,6 +859,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       modeloVersaoBP: modeloVersoes.bp,
       modeloVersaoDRE: modeloVersoes.dre,
       dicionarioVersao,
+      fluxoCaixa: buildIndirectCashFlow(structuredBP, structuredDRE, allPeriodos),
       version: 2,
       custoExtracao: { usd: custoExtracaoUsd, fonte: escolhido.fonte, fecha: escolhido.fecha, niveis: custos },
     } as DadosEstruturados;
@@ -1019,6 +1021,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   (dados as any).sugestoesIA = sugNovas;
   dados.naoMapeados = naoMapeados;
   dados.indicadores = calculateIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
+  dados.fluxoCaixa = buildIndirectCashFlow(dados.bp ?? [], dados.dre ?? [], periodos); // FC acompanha o refold (grátis)
 
   await prisma.analysis.update({ where: { id }, data: { dadosEstruturados: dados } });
   res.json({ ok: true, naoMapeados: naoMapeados.length });

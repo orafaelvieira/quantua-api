@@ -40,5 +40,7 @@ export interface DadosEstruturados {
   modeloVersaoBP?: number | null;
   modeloVersaoDRE?: number | null;
   dicionarioVersao?: number; // versão do dicionário usada no fold (pinagem interna)
+  /** FC método indireto (determinístico, BP+DRE, ≥2 períodos) — ver cash-flow-indirect.ts */
+  fluxoCaixa?: import("../services/cash-flow-indirect").FluxoCaixaIndireto | null;
   version: number;
 }
