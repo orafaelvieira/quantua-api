@@ -18,7 +18,7 @@ export function modeloAnaliseId(key?: string | null): string {
 const dreInputs = DRE_TEMPLATE.filter((t) => !t.subtotal).map((t) => t.conta);
 const dreInputsSet = new Set(dreInputs);
 
-export interface DRESecaoItem { nome: string; valor: number; destino?: string }
+export interface DRESecaoItem { nome: string; valor: number; destino?: string; filhos?: DRESecaoItem[] }
 export type ArvoreOriginalDRE = Record<string, DRESecaoItem[]>;
 
 // ── Tipos da árvore do BP ──
@@ -92,7 +92,12 @@ async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, mo
   const inTok = msg.usage?.input_tokens ?? 0;
   const outTok = msg.usage?.output_tokens ?? 0;
   let data: any = {};
-  try { data = JSON.parse(txt); } catch { data = {}; }
+  try { data = JSON.parse(txt); } catch {
+    // JSON quebrado (preâmbulo, truncamento): tenta o maior objeto plausível antes de desistir.
+    const ini = txt.indexOf("{"), fim = txt.lastIndexOf("}");
+    if (ini >= 0 && fim > ini) { try { data = JSON.parse(txt.slice(ini, fim + 1)); } catch { data = {}; } }
+    if (!Object.keys(data).length) console.warn(`[ask] resposta não-JSON (${outTok} tk out): "${txt.slice(0, 220).replace(/\n/g, " ")}…"`);
+  }
   return { data, inTok, outTok };
 }
 
@@ -127,16 +132,18 @@ export async function createWithRetry(params: any, attempt = 0): Promise<any> {
   }
 }
 
-// ───────────────────────── DRE (captura de seções = árvore original) ─────────────────────────
-function dreSecoesPrompt(periodos: string[]): string {
-  return `Você é especialista em contabilidade brasileira. Extraia a DRE deste PDF até as SEÇÕES DE INPUT (primeira quebra real), com o NOME ORIGINAL EXATO + VALOR LÍQUIDO.
-- Para o bloco de DESPESAS OPERACIONAIS, retorne suas SUBCATEGORIAS (ex.: De Vendas, Administrativas, Com Veículos, Despesas Financeiras, Receitas Financeiras, Despesas Tributárias) — NÃO as folhas (salários, fgts, etc.).
-- Para Receita/Deduções/Custos, o total da seção basta (ou subseções como "Impostos Incidentes sobre Vendas").
-- NÃO retorne subtotais calculados (Receita Líquida, Lucro Bruto, EBITDA, EBIT, Resultado/Lucro/Prejuízo Líquido).
-- Sinais: RECEITAS positivas; DEDUÇÕES, CUSTOS, DESPESAS e IR/CSLL NEGATIVOS.
+// ───────────────────────── DRE (captura da ÁRVORE de seções) ─────────────────────────
+// Mesma filosofia do BP: a IA TRANSCREVE a hierarquia (seção → subseção → conta) sem
+// julgar o nível; o fold classifica no nó mais alto que mapeia, com contexto do pai.
+function dreTreePrompt(periodos: string[]): string {
+  return `Você é especialista em contabilidade brasileira. TRANSCREVA a HIERARQUIA da DRE deste documento — fielmente, nível por nível, com o NOME ORIGINAL EXATO e o VALOR IMPRESSO de cada nó; filhos aninhados em "filhos".
+- Um nó PAI (seção como "RECEITA OPERACIONAL BRUTA", "DESPESAS ADMINISTRATIVAS") leva o valor impresso na linha dele E os filhos aninhados — NÃO some nada por conta própria, NÃO pule níveis.
+- PARE de descer quando os filhos virarem lançamentos individuais (notas, nomes de clientes/fornecedores, contratos) — retorne só o nó pai com o valor.
+- NÃO retorne como nó as linhas de RESULTADO/subtotal CALCULADO entre seções (Receita Líquida, Lucro Bruto, EBITDA, EBIT, Resultado/Lucro/Prejuízo Líquido) — elas vão em "declarados".
+- Sinais como impressos: RECEITAS positivas; DEDUÇÕES, CUSTOS, DESPESAS e IR/CSLL NEGATIVOS.
 - COLUNAS: se houver "do mês"/"no período" e "acumulado"/"até a data", use o ACUMULADO do exercício (fechamento), nunca o mensal.
 - ${periodKeyInstruction(periodos)}
-Retorne APENAS JSON: { "secoes": { "<periodo>": [ {"nome":"<original>","valor":<n>} ] }, "declarados": { "<periodo>": { "Receita Líquida": <exibido>, "Lucro Bruto": <exibido>, "Lucro Líquido": <exibido> } } }`;
+Retorne APENAS JSON: { "secoes": { "<periodo>": [ {"nome":"<original>","valor":<n>,"filhos":[ {"nome":"<original>","valor":<n>} ]} ] }, "declarados": { "<periodo>": { "Receita Líquida": <exibido>, "Lucro Bruto": <exibido>, "Lucro Líquido": <exibido> } } }`;
 }
 
 const normNome = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -157,48 +164,109 @@ const DESP_OP_DESTINOS = new Set([
   "Receitas Financeiras", "Despesas Financeiras",
 ]);
 
-export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: DictionaryEntry[]): { dre: DRELineItem[]; naoMapeados: NaoMapeado[] } {
+export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: DictionaryEntry[]): { dre: DRELineItem[]; naoMapeados: NaoMapeado[]; alertasComposicao: AlertaComposicaoBP[] } {
   const acc: Record<string, Record<string, number>> = {};
   const naoMapeados: NaoMapeado[] = [];
+  const alertasComposicao: AlertaComposicaoBP[] = [];
+  const addAcc = (dest: string, p: string, v: number) => { (acc[dest] ??= {})[p] = (acc[dest][p] ?? 0) + v; };
+  const BALDES_DRE = new Set(["Outras Despesas Operacionais", "Outras Receitas Operacionais"]);
+
   for (const p of periodos) {
     const secoes = arvore[p] ?? [];
-    const subtotais = secoes.filter((it) => DRE_SUBTOTAIS.has(normNome(it.nome)));
-    const inputs = secoes.filter((it) => !DRE_SUBTOTAIS.has(normNome(it.nome)));
-    for (const it of inputs) {
-      if (typeof it.valor !== "number" || it.valor === 0) continue;
-      if (isContaIgnorada(it.nome, dict)) { it.destino = "(ignorada pelo analista)"; continue; }
-      let dest = mapAccountToDRE(it.nome, dict);
-      if (!dest || !dreInputsSet.has(dest)) {
-        dest = it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
-        naoMapeados.push({ nome: it.nome, grupo: "DRE", destino: dest, valor: it.valor, periodo: p, tipo: "DRE" });
+    const temHierarquia = secoes.some((it) => it.filhos && it.filhos.length > 0);
+
+    if (!temHierarquia) {
+      // ── Caminho FLAT (capturas legadas): comportamento anterior, intacto ──
+      const subtotais = secoes.filter((it) => DRE_SUBTOTAIS.has(normNome(it.nome)));
+      const inputs = secoes.filter((it) => !DRE_SUBTOTAIS.has(normNome(it.nome)));
+      for (const it of inputs) {
+        if (typeof it.valor !== "number" || it.valor === 0) continue;
+        if (isContaIgnorada(it.nome, dict)) { it.destino = "(ignorada pelo analista)"; continue; }
+        let dest = mapAccountToDRE(it.nome, dict);
+        if (!dest || !dreInputsSet.has(dest)) {
+          dest = it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
+          naoMapeados.push({ nome: it.nome, grupo: "DRE", destino: dest, valor: it.valor, periodo: p, tipo: "DRE" });
+        }
+        it.destino = dest;
+        addAcc(dest, p, it.valor);
       }
-      it.destino = dest;
-      (acc[dest] ??= {})[p] = (acc[dest][p] ?? 0) + it.valor;
+      // Subtotais estruturais (pais) — descarte POR VALOR (só é pai se os filhos capturados
+      // somarem ≈ o valor dele; senão é INPUT real e precisa entrar na cascata).
+      const childSum = inputs
+        .filter((it) => it.destino && DESP_OP_DESTINOS.has(it.destino))
+        .reduce((s, it) => s + (it.valor || 0), 0);
+      for (const st of subtotais) {
+        if (typeof st.valor !== "number" || st.valor === 0) { st.destino = "(subtotal)"; continue; }
+        const cobre = Math.abs(childSum) > 1 &&
+          Math.abs(Math.abs(childSum) - Math.abs(st.valor)) / Math.abs(st.valor) < 0.12;
+        if (cobre) { st.destino = "(subtotal — filhos já contabilizados)"; continue; }
+        const dest = st.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
+        st.destino = dest;
+        naoMapeados.push({ nome: st.nome, grupo: "DRE", destino: dest, valor: st.valor, periodo: p, tipo: "DRE" });
+        addAcc(dest, p, st.valor);
+      }
+      continue;
     }
-    // Subtotais estruturais (pais) — descarte POR VALOR, não por nome: só é pai se os
-    // filhos capturados (bloco operacional/financeiro) SOMAREM ≈ o valor dele. Senão é
-    // um INPUT real (ex.: Fibracabos "Despesas Operacionais" 1.434.351 ≠ filhos 822.330)
-    // e precisa entrar na cascata — descartá-lo perderia o valor e quebraria o Lucro Líquido.
-    const childSum = inputs
-      .filter((it) => it.destino && DESP_OP_DESTINOS.has(it.destino))
-      .reduce((s, it) => s + (it.valor || 0), 0);
-    for (const st of subtotais) {
-      if (typeof st.valor !== "number" || st.valor === 0) { st.destino = "(subtotal)"; continue; }
-      const cobre = Math.abs(childSum) > 1 &&
-        Math.abs(Math.abs(childSum) - Math.abs(st.valor)) / Math.abs(st.valor) < 0.12;
-      if (cobre) { st.destino = "(subtotal — filhos já contabilizados)"; continue; }
-      const dest = st.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
-      st.destino = dest;
-      naoMapeados.push({ nome: st.nome, grupo: "DRE", destino: dest, valor: st.valor, periodo: p, tipo: "DRE" });
-      (acc[dest] ??= {})[p] = (acc[dest][p] ?? 0) + st.valor;
-    }
+
+    // ── Caminho ÁRVORE (mesma filosofia do foldBP v2) ──
+    const tolDe = (v: number) => Math.max(0.05, Math.abs(v) * 0.001);
+    const somaDireta = (filhos: DRESecaoItem[]): number =>
+      filhos.reduce((s, f) => s + (typeof f.valor === "number" ? f.valor : 0), 0);
+    const marcaAbsorvidos = (filhos: DRESecaoItem[], dest: string): void => {
+      for (const f of filhos) { f.destino = `(absorvido em ${dest})`; if (f.filhos?.length) marcaAbsorvidos(f.filhos, dest); }
+    };
+    const processa = (it: DRESecaoItem, caminho: string[]): void => {
+      if (isContaIgnorada(it.nome, dict)) { it.destino = "(ignorada pelo analista)"; return; }
+      const temValor = typeof it.valor === "number" && it.valor !== 0;
+      const filhos = it.filhos ?? [];
+      // Wrapper conhecido ("Despesas Operacionais" etc.) nunca mapeia — é estrutural.
+      const ehWrapper = DRE_SUBTOTAIS.has(normNome(it.nome));
+      let dest = !ehWrapper && temValor ? mapAccountToDRE(it.nome, dict) : null;
+      if (dest && !dreInputsSet.has(dest)) dest = null;
+      if (dest && BALDES_DRE.has(dest) && filhos.length > 0) dest = null; // filhos podem ser mais específicos
+      if (dest) {
+        addAcc(dest, p, it.valor);
+        it.destino = dest;
+        if (filhos.length) {
+          marcaAbsorvidos(filhos, dest);
+          const s = somaDireta(filhos);
+          if (Math.abs(s - it.valor) > tolDe(it.valor)) {
+            alertasComposicao.push({ periodo: p, grupo: "DRE", caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta: it.valor - s });
+          }
+        }
+        return;
+      }
+      if (filhos.length) {
+        it.destino = "(estrutural — filhos classificados)";
+        for (const f of filhos) processa(f, [...caminho, it.nome]);
+        if (temValor) {
+          const s = somaDireta(filhos);
+          if (Math.abs(s - it.valor) > tolDe(it.valor)) {
+            const delta = it.valor - s;
+            addAcc(delta < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais", p, delta);
+            alertasComposicao.push({ periodo: p, grupo: "DRE", caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta });
+          }
+        }
+        return;
+      }
+      if (!temValor) return;
+      // Folha sem mapa direto: contexto do pai ("Receita Operacional Bruta Vendas de Produtos…").
+      const ctx = caminho.length ? mapAccountToDRE(`${caminho[caminho.length - 1]} ${it.nome}`, undefined) : null;
+      if (ctx && dreInputsSet.has(ctx)) { addAcc(ctx, p, it.valor); it.destino = ctx; return; }
+      const balde = it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
+      addAcc(balde, p, it.valor);
+      it.destino = balde;
+      naoMapeados.push({ nome: it.nome, grupo: caminho.length ? `DRE > ${caminho.join(" > ")}` : "DRE", destino: balde, valor: it.valor, periodo: p, tipo: "DRE" });
+    };
+    for (const it of secoes) processa(it, []);
   }
+
   const dre: DRELineItem[] = DRE_TEMPLATE.map((t) => ({
     conta: t.conta, valores: t.subtotal ? {} : (acc[t.conta] ?? {}), subtotal: t.subtotal, editado: false,
   }));
   normalizeDRESigns(dre, periodos);
   recomputeDRESubtotals(dre, periodos);
-  return { dre, naoMapeados };
+  return { dre, naoMapeados, alertasComposicao };
 }
 
 // ───────────────────────── BP (captura da ÁRVORE COMPLETA) ─────────────────────────
@@ -433,7 +501,7 @@ export async function extractFinancialsWithAI(
     const ctx: DocCtx = { pin: docPeriodos.length === 1 ? docPeriodos[0] : null, docPeriodos };
     const promptPeriodos = docPeriodos.length ? docPeriodos : periodos;
     const out: Array<() => Promise<{ kind: "dre" | "bp"; data: any; ctx: DocCtx; inTok: number; outTok: number }>> = [];
-    if (isDRE || !isBP) out.push(() => ask(input, dreSecoesPrompt(promptPeriodos), model).then((r) => ({ kind: "dre" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
+    if (isDRE || !isBP) out.push(() => ask(input, dreTreePrompt(promptPeriodos), model, 0, 8000).then((r) => ({ kind: "dre" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
     // Árvore completa pode ser funda (1-7 níveis) → teto de saída maior que o padrão.
     if (isBP || (!isDRE && !isBP)) out.push(() => ask(input, bpTreePrompt(promptPeriodos), model, 0, 8000).then((r) => ({ kind: "bp" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
     return out;
@@ -501,13 +569,13 @@ export async function extractFinancialsWithAI(
 
   const allPeriodos = Array.from(periodSet);
   const { bp, naoMapeados: naoMapBP, alertasComposicao } = foldBP(arvoreOriginalBP, allPeriodos, dict, bpModel);
-  const { dre, naoMapeados: naoMapDRE } = foldDRE(arvoreOriginalDRE, allPeriodos, dict);
+  const { dre, naoMapeados: naoMapDRE, alertasComposicao: alertasDRE } = foldDRE(arvoreOriginalDRE, allPeriodos, dict);
 
   return {
     bp, dre, periodos: allPeriodos, declarados,
     arvoreOriginalBP, arvoreOriginalDRE,
     naoMapeados: [...naoMapBP, ...naoMapDRE],
-    alertasComposicao,
+    alertasComposicao: [...alertasComposicao, ...alertasDRE],
     custo,
   };
 }

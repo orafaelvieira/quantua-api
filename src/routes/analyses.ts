@@ -978,8 +978,10 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const periodos: string[] = dados.periodos ?? Object.keys(arvoreBP ?? arvoreDRE ?? {});
   const naoMapeados: any[] = [];
   const bpModelRefold = await loadActiveBPModel(); // bridge: re-dobra com o modelo de BP vigente do banco
-  if (arvoreBP) { const r = foldBP(arvoreBP, periodos, dictRows, bpModelRefold); dados.bp = r.bp; dados.arvoreOriginalBP = arvoreBP; dados.alertasComposicao = r.alertasComposicao; naoMapeados.push(...r.naoMapeados); }
-  if (arvoreDRE) { const r = foldDRE(arvoreDRE, periodos, dictRows); dados.dre = r.dre; dados.arvoreOriginalDRE = arvoreDRE; naoMapeados.push(...r.naoMapeados); }
+  const alertasComp: any[] = [];
+  if (arvoreBP) { const r = foldBP(arvoreBP, periodos, dictRows, bpModelRefold); dados.bp = r.bp; dados.arvoreOriginalBP = arvoreBP; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
+  if (arvoreDRE) { const r = foldDRE(arvoreDRE, periodos, dictRows); dados.dre = r.dre; dados.arvoreOriginalDRE = arvoreDRE; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
+  dados.alertasComposicao = alertasComp;
   dados.naoMapeados = naoMapeados;
   dados.indicadores = calculateIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
 
