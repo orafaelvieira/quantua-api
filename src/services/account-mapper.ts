@@ -639,21 +639,21 @@ export function normalizePeriods(parsedDocs: Array<{ periodos: string[]; linhas:
   }
 }
 
-/** Detect all unique periods across extracted documents */
+/** Chave cronológica de um período: "31/12/2022" → 20221231; "2022" → 20220000.
+ *  (parseFloat em "31/12/2022" lê 31 — o DIA — e empatava todas as datas, deixando
+ *  o array na ordem dos DOCUMENTOS; foi a causa de colunas/PDF fora de ordem.) */
+export function ordPeriodo(p: string): number {
+  const m = p.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return Number(`${m[3]}${m[2]}${m[1]}`);
+  const y = p.match(/20\d{2}/);
+  return y ? Number(`${y[0]}0000`) : 0;
+}
+
+/** Detect all unique periods across extracted documents — SEMPRE em ordem cronológica. */
 export function detectPeriodos(parsedDocs: Array<{ periodos: string[] }>): string[] {
   const set = new Set<string>();
   for (const doc of parsedDocs) {
     for (const p of doc.periodos) set.add(p);
   }
-  // Sort: try numeric (years) first, then alphabetical
-  return Array.from(set).sort((a, b) => {
-    const na = parseFloat(a);
-    const nb = parseFloat(b);
-    if (!isNaN(na) && !isNaN(nb)) return na - nb;
-    // Sort dates by year
-    const ya = a.match(/20\d{2}/)?.[0];
-    const yb = b.match(/20\d{2}/)?.[0];
-    if (ya && yb) return parseInt(ya) - parseInt(yb);
-    return a.localeCompare(b);
-  });
+  return Array.from(set).sort((a, b) => ordPeriodo(a) - ordPeriodo(b) || a.localeCompare(b));
 }

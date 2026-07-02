@@ -267,7 +267,7 @@ ${linhasInternas ? linhasInternas + "\n" : ""}${linhasExternas ? "REFERÊNCIA EX
  */
 export async function generateAnalysis(
   indicadores: IndicadorLite[],
-  periodos: string[],
+  periodosBrutos: string[],
   empresa: { razaoSocial: string; setor: string; porte: string },
   periodo: string,
   modelKey?: string | null,
@@ -276,6 +276,9 @@ export async function generateAnalysis(
   materiais?: Array<{ nome: string; resumo: string }> | null,
   dre?: Array<{ conta: string; valores: Record<string, number>; subtotal?: boolean }> | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
+  // Ordem CRONOLÓGICA uma vez, para TODO o prompt (séries de indicadores, bloco da DRE,
+  // KPIs, estágio) — dados.periodos pode vir na ordem dos documentos (ex.: 2022, 2020, 2021).
+  const periodos = [...periodosBrutos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
   const model = modeloAnaliseId(modelKey);
   const det = kpisDeterministicos(indicadores, periodos);
   const peerBlock = buildPeerBlock(peer);

@@ -13,7 +13,7 @@ import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
 import { researchCompanyWeb } from "../services/web-research";
 import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-context";
 import { sugerirClassificacoesIA, chaveNM } from "../services/classification-suggest";
-import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta } from "../services/account-mapper";
+import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta, ordPeriodo } from "../services/account-mapper";
 import { DRE_TEMPLATE } from "../services/financial-templates";
 import { calculateIndicators } from "../services/indicator-calculator";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
@@ -780,7 +780,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // texto OU visão = a captura N3) — NÃO gatear por "híbrido" senão a visão perde a árvore.
     structuredBP = escolhido.bp;
     structuredDRE = escolhido.dre;
-    allPeriodos = escolhido.periodos;
+    // Ordem CRONOLÓGICA sempre — o vencedor da cascata traz os períodos na ordem dos
+    // DOCUMENTOS (ex.: 2022, 2020, 2021), o que desordenava FC, PDF e séries da análise.
+    allPeriodos = [...escolhido.periodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
     const usouIA = escolhido.fonte !== "heuristico";
     const arvoreOriginalBP = escolhido.arvoreBP;
     const arvoreOriginalDRE = escolhido.arvoreDRE;
@@ -825,7 +827,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         const dreModelAtivo = await loadActiveDREModel();
         const dreInputs = dreModelAtivo.lines.filter((l: { subtotal: boolean }) => !l.subtotal).map((l: { conta: string }) => l.conta);
         const receitaLinha = structuredDRE.find((l) => l.conta === "Receita Bruta");
-        const ultimoP = [...allPeriodos].sort().slice(-1)[0];
+        const ultimoP = [...allPeriodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b)).slice(-1)[0];
         const r = await sugerirClassificacoesIA(
           nmParaSugerir,
           { setor: analysis.sectorCustom ?? analysis.company.setor ?? null, receitaUltimoAno: receitaLinha && ultimoP ? receitaLinha.valores[ultimoP] ?? null : null },
@@ -1006,7 +1008,11 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
     where: { OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }] },
     select: { nomeOriginal: true, contaDestino: true, grupoConta: true },
   });
-  const periodos: string[] = dados.periodos ?? Object.keys(arvoreBP ?? arvoreDRE ?? {});
+  // Ordena e PERSISTE em ordem cronológica — o refold é o caminho que conserta os
+  // IBRs antigos gravados com períodos na ordem dos documentos.
+  const periodos: string[] = [...(dados.periodos ?? Object.keys(arvoreBP ?? arvoreDRE ?? {}))]
+    .sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
+  dados.periodos = periodos;
   const naoMapeados: any[] = [];
   const bpModelRefold = await loadActiveBPModel(); // bridge: re-dobra com o modelo de BP vigente do banco
   const dreModelRefold = await loadActiveDREModel();
@@ -1337,13 +1343,7 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
   });
 
   // Overall summary — períodos SEMPRE em ordem cronológica na exibição
-  const ordPer = (p: string): number => {
-    const m = p.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-    if (m) return Number(`${m[3]}${m[2]}${m[1]}`);
-    const y = p.match(/\d{4}/);
-    return y ? Number(`${y[0]}0000`) : 0;
-  };
-  const allPeriodos = [...(dados?.periodos || [])].sort((a, b) => ordPer(a) - ordPer(b));
+  const allPeriodos = [...(dados?.periodos || [])].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
   const totalMapeadas = documents.reduce((sum, d) => sum + d.stats.contasMapeadas, 0);
   const totalLinhas = documents.reduce((sum, d) => sum + d.stats.linhasExtraidas, 0);
   const taxaClassificacao = totalLinhas > 0 ? Math.round((totalMapeadas / totalLinhas) * 1000) / 10 : 0;
