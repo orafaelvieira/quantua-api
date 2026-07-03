@@ -117,6 +117,9 @@ async function seedIndicatorConfigs(): Promise<void> {
     // O antigo "Capital de Terceiros" incluía partes relacionadas → ganha o nome explícito;
     // o create-only abaixo cria o NOVO "Capital de Terceiros" (só empréstimos CP+LP).
     "Capital de Terceiros": "Capital de Terceiros + Partes Relacionadas",
+    // Fleuriet promovido ao bloco de Solvência com nome explícito (grupo/fórmula
+    // acompanham o template no sync abaixo).
+    "Situação da empresa": "Situação de Liquidez (Fleuriet)",
   };
   for (const [antigo, novo] of Object.entries(RENOMEADOS)) {
     const rowAntigo = await prisma.indicatorConfig.findUnique({ where: { nome: antigo } });

@@ -135,7 +135,6 @@ export const INDICADORES_TEMPLATE: Array<{
   { tipo: "Indicadores de Capital de Giro", nome: "Capital de Giro (CDG)", formula: "(Patrimônio Líquido + Passivo Não Circulante) - Ativo Não Circulante", tipoDado: "R$" },
   { tipo: "Indicadores de Capital de Giro", nome: "Necessidade de Capital de Giro (NCG)", formula: "Ativo Operacional - Passivo Operacional", tipoDado: "R$" },
   { tipo: "Indicadores de Capital de Giro", nome: "Saldo em Tesouraria (ST)", formula: "Capital de Giro (CDG) - Necessidade de Capital de Giro (NCG)", tipoDado: "R$" },
-  { tipo: "Indicadores de Capital de Giro", nome: "Situação da empresa", formula: "Classificação baseada em CDG, NCG e ST", tipoDado: "Texto" },
   { tipo: "Indicadores de Capital de Giro", nome: "Prazo Médio Contas a Receber", formula: "(Contas a Receber × dias do período) / Receita Líquida — 365 anual, 90 trimestral, 30 mensal", tipoDado: "Dias" },
   { tipo: "Indicadores de Capital de Giro", nome: "Prazo Médio Estoque", formula: "(Estoques × dias do período) / Custo Operacional — 365 anual, 90 trimestral, 30 mensal", tipoDado: "Dias" },
   { tipo: "Indicadores de Capital de Giro", nome: "Prazo Médio Fornecedores", formula: "(Fornecedores × dias do período) / Custo Operacional — 365 anual, 90 trimestral, 30 mensal", tipoDado: "Dias" },
@@ -163,7 +162,9 @@ export const INDICADORES_TEMPLATE: Array<{
   { tipo: "Indicadores de Rentabilidade", nome: "ROE (Retorno sobre Patrimônio Líquido)", formula: "DuPont: ROA × Alavancagem (= Lucro Líquido / Patrimônio Líquido)", tipoDado: "%" },
   { tipo: "Indicadores de Rentabilidade", nome: "ROIC (Retorno sobre Capital Investido)", formula: "NOPAT / (Patrimônio Líquido + Capital de Terceiros + Partes Relacionadas)", tipoDado: "%" },
 
-  // Indicadores de Solvência (modelos de previsão de insolvência)
+  // Indicadores de Solvência — três lentes: Fleuriet (liquidez dinâmica) ·
+  // Kanitz (liquidez estática) · Altman (sustentação econômica)
+  { tipo: "Indicadores de Solvência", nome: "Situação de Liquidez (Fleuriet)", formula: "Modelo Fleuriet: combinação dos sinais de CDG (capital de giro), NCG (necessidade de capital de giro) e ST (saldo em tesouraria). Excelente: CDG+ e NCG− · Sólida: CDG+ > NCG+ · Insuficiente: CDG+ < NCG+ · Muito Ruim: CDG− com NCG+ · Alto Risco: CDG− e NCG−", tipoDado: "Texto" },
   { tipo: "Indicadores de Solvência", nome: "Termômetro de Kanitz", formula: "FI = 0,05×(LL/PL) + 1,65×Liquidez Geral + 3,55×Liquidez Seca − 1,06×Liquidez Corrente − 0,33×(Exigível Total/PL). FI > 0: solvente · 0 a −3: penumbra · < −3: risco de insolvência", tipoDado: "Índice" },
   { tipo: "Indicadores de Solvência", nome: "Altman Z-Score (EM)", formula: "Z'' = 6,56×(CDG/Ativo Total) + 3,26×(Lucros Acumulados/Ativo Total) + 6,72×(EBIT/Ativo Total) + 1,05×(PL/Exigível Total). > 2,6: zona segura · 1,1 a 2,6: zona cinzenta · < 1,1: zona de perigo", tipoDado: "Índice" },
 ];

@@ -221,7 +221,7 @@ function computeIndicator(
     case "Capital de Giro (CDG)": return cdg;
     case "Necessidade de Capital de Giro (NCG)": return ncg;
     case "Saldo em Tesouraria (ST)": return cdg - ncg;
-    case "Situação da empresa": {
+    case "Situação de Liquidez (Fleuriet)": {
       if (cdg > 0 && ncg > 0 && cdg > ncg) return "Sólida";
       if (cdg > 0 && ncg > 0 && cdg < ncg) return "Insuficiente";
       if (cdg < 0 && ncg < 0) return "Alto Risco";

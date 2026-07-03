@@ -99,6 +99,7 @@ const NOME_ANTIGO_INDICADOR: Record<string, string> = {
   "Margem EBITDA": "Margem Operacional",
   "Dívida Líquida/EBITDA": "Dívida Líquida/Lucro Operacional",
   "Capital de Terceiros + Partes Relacionadas": "Capital de Terceiros",
+  "Situação de Liquidez (Fleuriet)": "Situação da empresa",
 };
 function achaIndicador(indicadores: IndicadorLite[], nome: string): IndicadorLite | undefined {
   return indicadores.find((i) => i.nome === nome)
