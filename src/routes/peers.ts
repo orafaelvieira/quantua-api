@@ -37,12 +37,13 @@ router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void
 // POST /peers/cvm/sync-historico — seed completo (DFP 2010 + ITR 2011 → hoje),
 // intercalado por ano, em background NO SERVIDOR. Retomável (pula o que já foi
 // processado). O painel acompanha o progresso pelo GET /status.
-router.post("/cvm/sync-historico", async (_req: AuthRequest, res: Response): Promise<void> => {
+router.post("/cvm/sync-historico", async (req: AuthRequest, res: Response): Promise<void> => {
   const prog = getProgressoHistorico();
   if (prog.emAndamento) { res.status(409).json({ error: "Sincronização do histórico já em andamento" }); return; }
   if (runtimeState.seedsRodando) { res.status(409).json({ error: "O servidor acabou de reiniciar e está carregando os dados de boot (~2 min). Tente de novo em instantes." }); return; }
-  sincronizarHistoricoCvm().catch((e) => console.error("[peers/cvm/sync-historico] falhou:", e));
-  res.status(202).json({ ok: true, total: planoHistorico().length });
+  const reprocessar = req.body?.reprocessar === true; // recalibração: re-roda TODOS os arquivos
+  sincronizarHistoricoCvm(reprocessar).catch((e) => console.error("[peers/cvm/sync-historico] falhou:", e));
+  res.status(202).json({ ok: true, total: planoHistorico().length, reprocessar });
 });
 
 // POST /peers/cvm/sync { tipo: "itr"|"dfp", ano } — baixa da CVM NO SERVIDOR e processa.

@@ -89,18 +89,32 @@ export const CVM_BP_NIVEL: Record<string, number> = {
 };
 
 /** DRE: CD_CONTA da CVM → conta do modelo. ATENÇÃO: 3.01 da CVM já é receita LÍQUIDA —
- *  entra como "Receita Bruta" com deduções zero (a cascata resolve RL = RB). */
+ *  entra como "Receita Bruta" com deduções zero (a cascata resolve RL = RB).
+ *
+ *  SUBTOTAIS OFICIAIS (3.03/3.05/3.09/3.11) são mapeados de propósito: o motor
+ *  PREFERE subtotal explícito e só cai na cascata quando ausente. Sem eles, a
+ *  cascata subtraía a D&A (injetada do DFC p/ EBITDA) de um custo que JÁ a embute
+ *  — dupla contagem que subestimava o LL exatamente pela D&A (pego na validação
+ *  cruzada vs planilha independente: Petrobras 2025 LL 26bi vs 110,6bi oficial).
+ *  Com os subtotais oficiais, LL/EBIT/Lucro Bruto = CVM, e o EBITDA verdadeiro é
+ *  derivado na ingestão (EBIT + |D&A|). 3.09 e 3.11 apontam ambos p/ Lucro Líquido:
+ *  o arquivo lista 3.09 antes de 3.11, então 3.11 (consolidado, incl. operações
+ *  descontinuadas) sobrescreve; se 3.11 faltar, fica o 3.09 — fallback natural. */
 export const CVM_DRE_MAP: Record<string, string> = {
   "3.01": "Receita Bruta",
   "3.02": "Custo Operacional",
+  "3.03": "Lucro Bruto",
   "3.04.01": "Despesas com Vendas",
   "3.04.02": "Despesas Gerais e Administrativas",
   "3.04.04": "Outras Receitas Operacionais",
   "3.04.05": "Outras Despesas Operacionais",
   "3.04.06": "Equivalência Patrimonial",
+  "3.05": "EBIT",
   "3.06.01": "Receitas Financeiras",
   "3.06.02": "Despesas Financeiras",
   "3.08": "IR e CSLL",
+  "3.09": "Lucro Líquido",
+  "3.11": "Lucro Líquido",
 };
 
 /** DFC (método indireto): totais dos três fluxos — alimentam Dickinson dos pares. */

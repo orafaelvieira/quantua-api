@@ -184,9 +184,9 @@ export async function parseCvmZip(zipSource: string | Buffer, opts?: ParseCvmOpt
     await opts?.onFase?.(`${dem} ind`);
     const ind = await extraiLinhas(zip, `${prefixo}_${dem}_ind_${ano}.csv`, ACEITA_CONTA[dem]);
     const temCon = new Set(con.map((l) => l.cnpj));
-    const linhas = [...con, ...ind.filter((l) => !temCon.has(l.cnpj))];
+    const linhasDem = [...con, ...ind.filter((l) => !temCon.has(l.cnpj))];
 
-    for (const l of linhas) {
+    for (const l of linhasDem) {
       if (!opts?.incluirFinanceiras && CVM_EXCLUIR_DENOM.test(l.denom)) continue;
       const per = garante(l);
       if (dem === "BPA" || dem === "BPP") {
@@ -207,6 +207,19 @@ export async function parseCvmZip(zipSource: string | Buffer, opts?: ParseCvmOpt
         if (l.cd.startsWith("6.01") && /deprecia|amortiza/i.test(l.ds) && per.dreYtd["Depreciação e Amortização"] === undefined) {
           per.dreYtd["Depreciação e Amortização"] = -Math.abs(l.valor); // convenção do motor
           if (ehDfp) per.dreTri["Depreciação e Amortização"] = -Math.abs(l.valor);
+        }
+      }
+    }
+  }
+
+  // EBITDA verdadeiro = EBIT oficial (3.05) + |D&A do DFC|. Derivado AQUI (não na
+  // cascata do motor) porque o custo da CVM embute a D&A — a cascata dupla-contava.
+  // Sem D&A disponível, o EBITDA fica ausente e o motor cai no fallback (≈ EBIT).
+  for (const emp of empresas.values()) {
+    for (const per of Object.values(emp.periodos)) {
+      for (const dre of [per.dreYtd, per.dreTri]) {
+        if (dre["EBIT"] !== undefined && dre["Depreciação e Amortização"] !== undefined) {
+          dre["EBITDA"] = dre["EBIT"] - dre["Depreciação e Amortização"]; // D&A é negativa
         }
       }
     }

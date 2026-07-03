@@ -27,7 +27,9 @@ export const PEER_INDICATOR_MAP: Record<string, string> = {
   "Índice de Cobertura de Juros": "ÍNDICE DE COBERTURA DE JUROS (ICJ)",
   "Dívida Líquida/EBITDA": "DÍVIDA LÍQUIDA / LUCRO OPERACIONAL",
   "Dívida Líquida/Lucro Operacional": "DÍVIDA LÍQUIDA / LUCRO OPERACIONAL",
-  "Endividamento Geral": "% PARTIC CAPITAL TERCEIROS",
+  // "Endividamento Geral" ↔ "% PARTIC CAPITAL TERCEIROS" REMOVIDO (validação 2025):
+  // conceitos diferentes — o nosso é passivo total/ativo (ABEV 38,8%), o da planilha
+  // é dívida onerosa (ABEV 4,9%). Par comparava alhos com bugalhos.
 };
 
 /**

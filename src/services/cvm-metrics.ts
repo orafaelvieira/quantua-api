@@ -66,12 +66,15 @@ export function dreTrimestre(emp: CvmEmpresa, dtFim: string): Record<string, num
   const per = emp.periodos[dtFim];
   if (!per) return null;
   const fechamento = dtFim.endsWith("12-31");
-  if (!fechamento && Object.keys(per.dreTri).length >= 3) return per.dreTri; // isolado direto da fonte
   if (Object.keys(per.dreYtd).length >= 3) {
     if (dtFim.slice(5) === "03-31") return per.dreYtd; // 1T: acumulado = trimestre
+    // 2T/3T/4T: PREFERIR a diferença de acumulados — só o YTD carrega D&A/EBITDA
+    // (vêm do DFC, que a CVM publica apenas acumulado) e os subtotais oficiais;
+    // e trimestres por diferença telescopam exato no LTM.
     const ant = emp.periodos[triAnterior(dtFim)];
     if (ant && Object.keys(ant.dreYtd).length >= 3) return subtraiDre(per.dreYtd, ant.dreYtd);
   }
+  if (!fechamento && Object.keys(per.dreTri).length >= 3) return per.dreTri; // fallback: isolado da fonte
   return null;
 }
 

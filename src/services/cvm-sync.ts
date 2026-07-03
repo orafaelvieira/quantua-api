@@ -281,8 +281,14 @@ export async function estadoHistorico(): Promise<ProgressoHistorico> {
  * RETOMÁVEL: arquivo com CvmSyncState existente é pulado — se o processo cair
  * no meio (deploy/restart), basta disparar de novo que continua de onde parou.
  */
-export async function sincronizarHistoricoCvm(): Promise<void> {
+export async function sincronizarHistoricoCvm(reprocessar = false): Promise<void> {
   if (progHist.emAndamento) throw new Error("Sincronização do histórico já em andamento");
+  if (reprocessar) {
+    // Recalibração (ex.: mapa de contas novo): apaga só os MARCOS de sincronização —
+    // os dados ficam; cada arquivo re-roda e sobrescreve via upsert. Retomável igual.
+    await prisma.cvmSyncState.deleteMany({ where: { arquivo: { not: SNAPSHOT_ARQUIVO } } });
+    console.log("[cvm-sync] reprocesso: marcos de sincronização limpos — histórico completo será re-executado");
+  }
   const plano = planoHistorico();
   Object.assign(progHist, {
     emAndamento: true, total: plano.length, feitos: 0, atual: null,
