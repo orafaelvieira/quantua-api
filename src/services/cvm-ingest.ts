@@ -79,6 +79,12 @@ async function extraiLinhas(zip: AdmZip, nomeArquivo: string, aceitaConta: (cd: 
   let idx: Record<string, number> | null = null;
   let n = 0;
 
+  // Cópia PLANA de string: substrings de split/slice no V8 guardam referência à
+  // string-mãe — cada linha aceita "pinava" seu chunk de ~64KB inteiro no heap
+  // (evidência: morte em "parse DRE ind" com heap 241MB). Buffer roundtrip força
+  // uma alocação nova do tamanho real do campo. Só roda nas ~5% de linhas aceitas.
+  const flat = (s: string): string => Buffer.from(s, "latin1").toString("latin1");
+
   const processaLinha = (linha: string): void => {
     if (!linha.trim()) return;
     if (!idx) { // 1ª linha = cabeçalho
@@ -97,12 +103,12 @@ async function extraiLinhas(zip: AdmZip, nomeArquivo: string, aceitaConta: (cd: 
     const escala = get("ESCALA_MOEDA").toUpperCase().includes("MIL") ? 1000 : 1;
     out.push({
       cnpj: normCnpj(get("CNPJ_CIA")),
-      denom: get("DENOM_CIA"),
-      cdCvm: get("CD_CVM"),
-      dtIni: get("DT_INI_EXERC"),
-      dtFim: get("DT_FIM_EXERC"),
-      cd,
-      ds: get("DS_CONTA"),
+      denom: flat(get("DENOM_CIA")),
+      cdCvm: flat(get("CD_CVM")),
+      dtIni: flat(get("DT_INI_EXERC")),
+      dtFim: flat(get("DT_FIM_EXERC")),
+      cd: flat(cd),
+      ds: flat(get("DS_CONTA")),
       valor: vl * escala,
     });
   };
