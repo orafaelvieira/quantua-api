@@ -55,15 +55,38 @@ async function recalculaIndicadores(cnpjs: string[], dtFims: string[]): Promise<
   const minDt = new Date(`${[...dtFims].sort()[0]}T00:00:00Z`);
   const dtFimMin = new Date(Date.UTC(minDt.getUTCFullYear(), minDt.getUTCMonth() - 16, 1));
   const empresas = await carregaEmpresasDoBanco(cnpjs, dtFimMin);
-  const registros: Array<{ cnpj: string; dtFim: Date; visao: string; nome: string; valor: number | null; texto: string | null }> = [];
+
+  // apaga o range recalculado antes; regrava em lotes conforme acumula (memória bounded)
+  const dts = dtFims.map((d) => new Date(`${d}T00:00:00Z`));
+  await prisma.cvmIndicator.deleteMany({ where: { cnpj: { in: cnpjs }, dtFim: { in: dts } } });
+
+  type Registro = { cnpj: string; dtFim: Date; visao: string; nome: string; valor: number | null; texto: string | null };
+  let lote: Registro[] = [];
+  let gravados = 0;
+  const grava = async () => {
+    if (lote.length === 0) return;
+    await prisma.cvmIndicator.createMany({ data: lote });
+    gravados += lote.length;
+    lote = [];
+  };
+
   for (const emp of empresas.values()) {
+    // calculateIndicators é CPU-síncrono — cede o event loop a cada empresa para o
+    // /health do DO continuar respondendo (era isso que derrubava o container).
+    await new Promise<void>((r) => setImmediate(r));
     for (const dtFim of dtFims) {
       if (!emp.periodos[dtFim]) continue;
+      // A UI replica indicadores de propósito (ex.: Margem Líquida repetida na cascata
+      // DuPont) — na persistência a chave cnpj+dtFim+visão+nome é única, então dedupe.
+      const vistos = new Set<string>();
       for (const visao of indicadoresDaEmpresa(emp, dtFim)) {
         const label = Object.keys(visao.indicadores[0]?.valores ?? {})[0];
         for (const ind of visao.indicadores as Indicador[]) {
+          const chave = `${visao.visao}|${ind.nome}`;
+          if (vistos.has(chave)) continue;
+          vistos.add(chave);
           const v = ind.valores[label];
-          registros.push({
+          lote.push({
             cnpj: emp.cnpj,
             dtFim: new Date(`${dtFim}T00:00:00Z`),
             visao: visao.visao,
@@ -74,14 +97,10 @@ async function recalculaIndicadores(cnpjs: string[], dtFims: string[]): Promise<
         }
       }
     }
+    if (lote.length >= 5000) await grava();
   }
-  // troca atômica por janela: apaga o range recalculado e regrava em lotes
-  const dts = dtFims.map((d) => new Date(`${d}T00:00:00Z`));
-  await prisma.cvmIndicator.deleteMany({ where: { cnpj: { in: cnpjs }, dtFim: { in: dts } } });
-  for (let i = 0; i < registros.length; i += 5000) {
-    await prisma.cvmIndicator.createMany({ data: registros.slice(i, i + 5000) });
-  }
-  return registros.length;
+  await grava();
+  return gravados;
 }
 
 export interface ResultadoSync {
