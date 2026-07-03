@@ -267,13 +267,6 @@ function computeIndicator(
     case "ROE (Retorno sobre Patrimônio Líquido)": return div(lucroLiquido, patrimonioLiquido);
     case "Giro do Ativo": return div(receitaLiquida, ativoTotal);
     case "Alavancagem": return div(passivoTotal, patrimonioLiquido);
-    case "ROA (Giro × Margem)": {
-      // Decomposição DuPont: Giro × Margem Líquida ≡ LL/AT; × Alavancagem chega ao ROE.
-      const giro = div(receitaLiquida, ativoTotal);
-      const margem = div(lucroLiquido, receitaLiquida);
-      return giro !== null && margem !== null ? giro * margem : null;
-    }
-
     // Estrutura
     case "Imobilização do Patrimônio Líquido":
       return div(imobilizado + investimentosBP + intangivel, patrimonioLiquido);

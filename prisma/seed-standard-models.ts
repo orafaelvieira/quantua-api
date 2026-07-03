@@ -134,11 +134,20 @@ async function seedIndicatorConfigs(): Promise<void> {
     data: { grupo: "Indicadores de Rentabilidade" },
   });
   if (fusao.count > 0) console.log(`  indicadores: ${fusao.count} movido(s) do grupo DuPont para Rentabilidade.`);
-  // Fórmulas/grupos das linhas de SISTEMA acompanham o template do código (texto
+  // Fórmulas/grupos/ordem das linhas de SISTEMA acompanham o template do código (texto
   // exibido; semáforo/exibição do usuário ficam intactos).
+  let ordemSync = 0;
+  const nomesTemplate = new Set<string>();
   for (const t of INDICADORES_TEMPLATE) {
-    await prisma.indicatorConfig.updateMany({ where: { nome: t.nome, sistema: true }, data: { formula: t.formula, grupo: t.tipo } });
+    ordemSync += 1;
+    if (nomesTemplate.has(t.nome)) continue; // nome duplicado no template (ex.: Margem Líquida em 2 grupos)
+    nomesTemplate.add(t.nome);
+    await prisma.indicatorConfig.updateMany({ where: { nome: t.nome, sistema: true }, data: { formula: t.formula, grupo: t.tipo, ordem: ordemSync } });
   }
+  // Linhas de SISTEMA que saíram do template (ex.: indicador removido/renomeado) não
+  // são mais calculadas — remove para não virarem fantasmas na tela de configuração.
+  const orfaos = await prisma.indicatorConfig.deleteMany({ where: { sistema: true, nome: { notIn: [...nomesTemplate] } } });
+  if (orfaos.count > 0) console.log(`  indicadores: ${orfaos.count} config(s) de sistema órfã(s) removida(s).`);
 
   let created = 0;
   let ordem = 0;

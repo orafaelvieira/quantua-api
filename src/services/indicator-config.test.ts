@@ -100,10 +100,14 @@ describe("correções e novos indicadores (jul/2026)", () => {
     expect(val("Capital de Terceiros + Partes Relacionadas")).toBeCloseTo(80 + 40 + 120, 2);
   });
 
-  it("ROA (Giro × Margem) = Giro do Ativo × Margem Líquida = ROA", () => {
-    const roaDupont = val("ROA (Giro × Margem)") as number;
-    const roa = val("ROA (Retorno sobre Ativos)") as number;
-    expect(roaDupont).toBeCloseTo(roa, 10);
+  it("identidade DuPont: Margem Líquida × Giro do Ativo = ROA (na cascata da Rentabilidade)", () => {
+    const inds = calculateIndicators(BP2, DRE2, ["2023"]);
+    const rent = inds.filter((i) => i.tipo === "Indicadores de Rentabilidade").map((i) => i.nome);
+    // cascata na ordem: Margem, Giro, ROA, Alavancagem, ROE, ROIC
+    expect(rent).toEqual(["Margem Líquida", "Giro do Ativo", "ROA (Retorno sobre Ativos)", "Alavancagem", "ROE (Retorno sobre Patrimônio Líquido)", "ROIC (Retorno sobre Capital Investido)"]);
+    const de = (nome: string) => inds.find((i) => i.tipo === "Indicadores de Rentabilidade" && i.nome === nome)?.valores["2023"] as number;
+    expect(de("Margem Líquida") * de("Giro do Ativo")).toBeCloseTo(de("ROA (Retorno sobre Ativos)"), 10);
+    expect(de("ROA (Retorno sobre Ativos)") * de("Alavancagem")).toBeCloseTo(de("ROE (Retorno sobre Patrimônio Líquido)"), 10);
   });
 
   it("Imobilização do PL = (Imobilizado + Investimentos + Intangível) / PL", () => {

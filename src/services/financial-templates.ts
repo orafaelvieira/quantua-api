@@ -114,11 +114,11 @@ export const INDICADORES_TEMPLATE: Array<{
 }> = [
   // Indicadores Operacionais
   { tipo: "Indicadores Operacionais", nome: "Receita Líquida", formula: "Receita Bruta (-) Impostos (-) Cancelamentos", tipoDado: "R$" },
+  { tipo: "Indicadores Operacionais", nome: "Crescimento da Receita (YoY)", formula: "Receita Líquida do período / Receita Líquida do período anterior − 1", tipoDado: "%" },
   { tipo: "Indicadores Operacionais", nome: "Lucro Bruto", formula: "Receita Líquida (-) Custo Operacional", tipoDado: "R$" },
   { tipo: "Indicadores Operacionais", nome: "Lucro Operacional", formula: "EBIT = EBITDA (-) Depreciação e Amortização (+) Equivalência Patrimonial", tipoDado: "R$" },
   { tipo: "Indicadores Operacionais", nome: "Lucro Líquido", formula: "Resultado Antes do IR e CSLL (-) IR e CSLL", tipoDado: "R$" },
   { tipo: "Indicadores Operacionais", nome: "NOPAT", formula: "EBIT × (1 - Impostos (34%))", tipoDado: "R$" },
-  { tipo: "Indicadores Operacionais", nome: "Crescimento da Receita (YoY)", formula: "Receita Líquida do período / Receita Líquida do período anterior − 1", tipoDado: "%" },
 
   // Indicadores de Margens
   { tipo: "Indicadores de Margens", nome: "Margem Bruta", formula: "Lucro Bruto / Receita Líquida", tipoDado: "%" },
@@ -155,13 +155,13 @@ export const INDICADORES_TEMPLATE: Array<{
   { tipo: "Indicadores de Endividamento", nome: "Despesa Financeira / Rec. Líquida", formula: "Despesas Financeiras / Receita Líquida", tipoDado: "%" },
   { tipo: "Indicadores de Endividamento", nome: "Imobilização do Patrimônio Líquido", formula: "(Imobilizado + Investimentos + Intangível) / Patrimônio Líquido — acima de 100% o PL não cobre o ativo fixo (capital de giro próprio negativo)", tipoDado: "%" },
 
-  // Indicadores de Rentabilidade (inclui o Modelo DuPont: Margem × Giro = ROA; ROA × Alavancagem = ROE)
-  { tipo: "Indicadores de Rentabilidade", nome: "ROA (Retorno sobre Ativos)", formula: "Lucro Líquido / Ativo Total", tipoDado: "%" },
-  { tipo: "Indicadores de Rentabilidade", nome: "ROIC (Retorno sobre Capital Investido)", formula: "NOPAT / (Patrimônio Líquido + Capital de Terceiros + Partes Relacionadas)", tipoDado: "%" },
+  // Indicadores de Rentabilidade — cascata DuPont: Margem × Giro = ROA; ROA × Alavancagem = ROE
+  { tipo: "Indicadores de Rentabilidade", nome: "Margem Líquida", formula: "Lucro Líquido / Receita Líquida", tipoDado: "%" },
   { tipo: "Indicadores de Rentabilidade", nome: "Giro do Ativo", formula: "Receita Líquida / Ativo Total", tipoDado: "Índice" },
-  { tipo: "Indicadores de Rentabilidade", nome: "ROA (Giro × Margem)", formula: "DuPont: Giro do Ativo × Margem Líquida (= Lucro Líquido / Ativo Total)", tipoDado: "%" },
+  { tipo: "Indicadores de Rentabilidade", nome: "ROA (Retorno sobre Ativos)", formula: "DuPont: Margem Líquida × Giro do Ativo (= Lucro Líquido / Ativo Total)", tipoDado: "%" },
   { tipo: "Indicadores de Rentabilidade", nome: "Alavancagem", formula: "Passivo Total / Patrimônio Líquido", tipoDado: "Índice" },
   { tipo: "Indicadores de Rentabilidade", nome: "ROE (Retorno sobre Patrimônio Líquido)", formula: "DuPont: ROA × Alavancagem (= Lucro Líquido / Patrimônio Líquido)", tipoDado: "%" },
+  { tipo: "Indicadores de Rentabilidade", nome: "ROIC (Retorno sobre Capital Investido)", formula: "NOPAT / (Patrimônio Líquido + Capital de Terceiros + Partes Relacionadas)", tipoDado: "%" },
 
   // Indicadores de Solvência (modelos de previsão de insolvência)
   { tipo: "Indicadores de Solvência", nome: "Termômetro de Kanitz", formula: "FI = 0,05×(LL/PL) + 1,65×Liquidez Geral + 3,55×Liquidez Seca − 1,06×Liquidez Corrente − 0,33×(Exigível Total/PL). FI > 0: solvente · 0 a −3: penumbra · < −3: risco de insolvência", tipoDado: "Índice" },
