@@ -119,7 +119,8 @@ async function extraiLinhas(zip: AdmZip, nomeArquivo: string, aceitaConta: (cd: 
     const linhas = (resto + chunk.toString("latin1")).split("\n");
     resto = linhas.pop() ?? "";
     for (const linha of linhas) {
-      if ((++n & 8191) === 0) await new Promise<void>((r) => setImmediate(r));
+      // pausa real a cada 8k linhas — CPU compartilhada precisa de folga p/ o /health
+      if ((++n & 8191) === 0) await new Promise<void>((r) => setTimeout(r, 10));
       processaLinha(linha);
     }
   };

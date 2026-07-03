@@ -77,9 +77,11 @@ async function recalculaIndicadores(
 
   let feitas = 0;
   for (const emp of empresas.values()) {
-    // calculateIndicators é CPU-síncrono — cede o event loop a cada empresa para o
-    // /health do DO continuar respondendo (era isso que derrubava o container).
-    await new Promise<void>((r) => setImmediate(r));
+    // calculateIndicators é CPU-síncrono. Pausa REAL (não só yield) a cada empresa:
+    // a vCPU compartilhada do plano básico estrangula sob 100% contínuo e o health
+    // check atrasa → DO reinicia o container (mortes com memória limpa em recalc).
+    // ~20ms/empresa ≈ CPU a 50-60% — o seed fica ~15s/arquivo mais lento e estável.
+    await new Promise<void>((r) => setTimeout(r, 20));
     feitas++;
     if (feitas % 25 === 0) await onProgresso?.(feitas, empresas.size);
     for (const dtFim of dtFims) {
