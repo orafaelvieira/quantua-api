@@ -204,6 +204,22 @@ model CvmIndicator {
   @@map("cvm_indicators")
 }
 
+/// Aviso de sistema no Inbox (ex.: "base CVM atualizada — sincronize os pares").
+/// `chave` deduplica (mesmo arquivo+versão nunca avisa duas vezes).
+model SystemNotice {
+  id        String   @id @default(uuid())
+  tipo      String // "cvm_update"
+  titulo    String
+  corpo     String?
+  href      String?
+  chave     String?  @unique
+  lida      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([lida, createdAt])
+  @@map("system_notices")
+}
+
 /// Estado de sincronização por arquivo da CVM (ETag/Last-Modified) — o cron compara
 /// com o publicado e avisa no Inbox quando houver versão nova.
 model CvmSyncState {

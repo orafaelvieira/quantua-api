@@ -4,6 +4,7 @@ import { runScanDueReviews } from "./scan-due-reviews";
 import { runFetchDamodaranBenchmarks } from "./fetch-damodaran-benchmarks";
 import { runFetchIbgePia } from "./fetch-ibge-pia";
 import { runFetchBcbSgs } from "./fetch-bcb-sgs";
+import { runCheckCvmUpdates } from "./check-cvm-updates";
 
 /**
  * Bootstrap dos jobs schedulados. Chamado de `server.ts` no boot.
@@ -74,6 +75,19 @@ export function startJobs(): void {
   );
 
   console.log("[jobs] registrado: fetch-bcb-sgs (0 3 1 1,4,7,10 *)");
+
+  // Semanal — segunda 6h, checa se a CVM publicou versão nova de ITR/DFP e avisa no Inbox.
+  cron.schedule(
+    "0 6 * * 1",
+    () => {
+      runCheckCvmUpdates().catch((err) => {
+        console.error("[jobs] check-cvm-updates: erro não capturado", err);
+      });
+    },
+    { timezone: tz },
+  );
+
+  console.log("[jobs] registrado: check-cvm-updates (0 6 * * 1)");
 }
 
 /**
@@ -85,4 +99,5 @@ export const TRIGGERABLE_JOBS: Record<string, () => Promise<void>> = {
   "fetch-damodaran-benchmarks": runFetchDamodaranBenchmarks,
   "fetch-ibge-pia": runFetchIbgePia,
   "fetch-bcb-sgs": runFetchBcbSgs,
+  "check-cvm-updates": runCheckCvmUpdates,
 };

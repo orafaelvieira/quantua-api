@@ -4,10 +4,56 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/permissions";
 import { getPeerDistribution } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
+import { sincronizarCvm, checarAtualizacoesCvm, arquivosVigiados } from "../services/cvm-sync";
 
 const router = Router();
 router.use(requireAuth);
 router.use(requireRole("partner")); // base de comparáveis = consulta interna (sócio)
+
+/* ───────── Fonte CVM (dados abertos) — sincronização server-side ───────── */
+
+// GET /peers/cvm/status — estado por arquivo vigiado + totais da base CVM.
+router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void> => {
+  const [estados, empresas, periodos, indicadores, avisos] = await Promise.all([
+    prisma.cvmSyncState.findMany({ orderBy: { arquivo: "asc" } }),
+    prisma.cvmCompany.count(),
+    prisma.cvmPeriod.count(),
+    prisma.cvmIndicator.count(),
+    prisma.systemNotice.findMany({ where: { tipo: "cvm_update", lida: false }, orderBy: { createdAt: "desc" } }),
+  ]);
+  res.json({
+    vigiados: arquivosVigiados().map(({ tipo, ano }) => `${tipo}_${ano}`),
+    estados,
+    totais: { empresas, periodos, indicadores },
+    avisos,
+  });
+});
+
+// POST /peers/cvm/sync { tipo: "itr"|"dfp", ano } — baixa da CVM NO SERVIDOR e processa.
+// Operação longa (download + ~600 empresas) — o frontend usa timeout estendido.
+router.post("/cvm/sync", async (req: AuthRequest, res: Response): Promise<void> => {
+  const tipo = req.body?.tipo === "dfp" ? "dfp" : "itr";
+  const ano = parseInt(String(req.body?.ano ?? new Date().getUTCFullYear()), 10);
+  if (!Number.isFinite(ano) || ano < 2010 || ano > 2100) { res.status(400).json({ error: "ano inválido" }); return; }
+  try {
+    const resultado = await sincronizarCvm(tipo, ano);
+    // Sincronizou → avisos desta fonte deixam de ser pendência.
+    await prisma.systemNotice.updateMany({
+      where: { tipo: "cvm_update", chave: { startsWith: `cvm:${tipo}_${ano}:` }, lida: false },
+      data: { lida: true },
+    });
+    res.json({ ok: true, ...resultado });
+  } catch (e) {
+    console.error("[peers/cvm/sync] falhou:", e);
+    res.status(502).json({ error: e instanceof Error ? e.message : "Falha ao sincronizar com a CVM" });
+  }
+});
+
+// POST /peers/cvm/check — checagem manual imediata (mesma rotina do cron semanal).
+router.post("/cvm/check", async (_req: AuthRequest, res: Response): Promise<void> => {
+  const resultados = await checarAtualizacoesCvm();
+  res.json({ resultados });
+});
 
 // GET /peers/meta — opções de filtro + totais + data-base.
 router.get("/meta", async (_req: AuthRequest, res: Response): Promise<void> => {

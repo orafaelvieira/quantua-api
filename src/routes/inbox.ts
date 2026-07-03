@@ -5,7 +5,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 const router = Router();
 router.use(requireAuth);
 
-type InboxItemType = "lead" | "engagement" | "analysis" | "due_review";
+type InboxItemType = "lead" | "engagement" | "analysis" | "due_review" | "notice";
 
 interface InboxItem {
   id: string;
@@ -242,6 +242,28 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     });
   }
 
+  // Avisos de sistema (ex.: base CVM atualizada) — não lidos entram no feed.
+  const wantNotices = !includeTypes || includeTypes.has("notice");
+  if (wantNotices) {
+    const notices = await prisma.systemNotice.findMany({
+      where: { lida: false, ...(q ? { titulo: { contains: q, mode: "insensitive" } } : {}) },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+    for (const n of notices) {
+      items.push({
+        id: n.id,
+        type: "notice",
+        ref: "AVISO",
+        requestedBy: "Sistema",
+        targetCompany: n.titulo,
+        sector: n.corpo ?? undefined,
+        receivedAt: n.createdAt.toISOString(),
+        href: n.href ?? "/inbox",
+      });
+    }
+  }
+
   // Due reviews vencidas vão pro topo; depois ordem decrescente por data.
   items.sort((a, b) => {
     if (a.type === "due_review" && b.type !== "due_review") return -1;
@@ -253,6 +275,16 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   });
 
   res.json({ items, total: items.length });
+});
+
+// POST /inbox/notices/:id/lida — marca o aviso de sistema como lido.
+router.post("/notices/:id/lida", async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    await prisma.systemNotice.update({ where: { id: req.params.id as string }, data: { lida: true } });
+    res.json({ ok: true });
+  } catch {
+    res.status(404).json({ error: "Aviso não encontrado" });
+  }
 });
 
 export default router;
