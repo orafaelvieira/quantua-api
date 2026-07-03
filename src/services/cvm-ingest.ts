@@ -47,6 +47,16 @@ export interface CvmEmpresa {
 
 const normCnpj = (s: string) => s.replace(/[^\d]/g, "");
 
+/**
+ * Coleta de lixo EXPLÍCITA (requer node --expose-gc). Buffers (zlib/download) são
+ * memória EXTERNA — não pressionam o heap do V8, então o GC não roda sozinho e o
+ * RSS cresce até o teto do container (evidência: morte com heap 94MB / rss 505MB).
+ * Entre etapas de I/O pesado, forçamos a coleta para devolver essa memória.
+ */
+export function coletaLixo(): void {
+  (globalThis as { gc?: () => void }).gc?.();
+}
+
 interface LinhaCvm {
   cnpj: string; denom: string; cdCvm: string;
   dtIni: string; dtFim: string; cd: string; ds: string; valor: number;
@@ -161,6 +171,7 @@ export async function parseCvmZip(zipSource: string | Buffer, opts?: ParseCvmOpt
   };
 
   for (const dem of ["BPA", "BPP", "DRE", "DFC_MI"]) {
+    coletaLixo(); // devolve buffers zlib/linhas do demonstrativo anterior antes do próximo
     await opts?.onFase?.(`${dem} con`);
     const con = await extraiLinhas(zip, `${prefixo}_${dem}_con_${ano}.csv`, ACEITA_CONTA[dem]);
     await opts?.onFase?.(`${dem} ind`);

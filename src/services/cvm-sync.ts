@@ -10,7 +10,7 @@
 import { promises as fs } from "node:fs";
 import { prisma } from "../db/client";
 import type { Indicador } from "../types/financial";
-import { CVM_URLS, baixarCvmZipParaDisco, checarCvmAtualizacao, parseCvmZip, persistirCvm, type CvmEmpresa, type CvmPeriodoDados } from "./cvm-ingest";
+import { CVM_URLS, baixarCvmZipParaDisco, checarCvmAtualizacao, coletaLixo, parseCvmZip, persistirCvm, type CvmEmpresa, type CvmPeriodoDados } from "./cvm-ingest";
 import { indicadoresDaEmpresa } from "./cvm-metrics";
 
 const arquivoId = (tipo: "itr" | "dfp", ano: number) => `${tipo}_${ano}`;
@@ -137,6 +137,7 @@ export async function sincronizarCvm(tipo: "itr" | "dfp", ano: number): Promise<
     });
   } finally {
     await fs.unlink(baixado.caminho).catch(() => {});
+    coletaLixo(); // devolve os buffers do ZIP/download antes de seguir
   }
   const { etag, lastModified } = baixado;
   const { empresas, periodos } = await persistirCvm(parsed, tipo.toUpperCase() as "ITR" | "DFP", {
@@ -147,6 +148,7 @@ export async function sincronizarCvm(tipo: "itr" | "dfp", ano: number): Promise<
   const dtFims = [...new Set([...parsed.values()].flatMap((e) => Object.keys(e.periodos)))].sort();
   const cnpjs = [...parsed.keys()];
   parsed = new Map(); // solta o parse antes do recálculo (container de 1GB)
+  coletaLixo();
   const indicadores = await recalculaIndicadores(cnpjs, dtFims, (i, n) => marcaFase(`${arquivo}: recalculando ${i}/${n} empresas`));
   await marcaFase(`${arquivo}: gravando estado`);
 
@@ -286,7 +288,8 @@ export async function sincronizarHistoricoCvm(): Promise<void> {
           progHist.erros.push({ arquivo, erro });
           console.warn(`[cvm-sync] histórico: ${arquivo} falhou (${erro}) — seguindo para o próximo`);
         }
-        // pausa entre arquivos: dá fôlego pro GC e pro health check num container de 1GB
+        // pausa entre arquivos + coleta explícita: devolve a memória externa (buffers)
+        coletaLixo();
         await new Promise((r) => setTimeout(r, 1500));
       }
       progHist.feitos++;
