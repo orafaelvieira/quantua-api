@@ -1,38 +1,47 @@
 /**
- * INGESTÃO CVM (DFP/ITR) — Fase 1 da atualização automática de pares.
+ * INGESTÃO CVM (DFP/ITR) — pipeline automático de pares.
  *
- * Lê os ZIPs de dados abertos da CVM (itr_cia_aberta_AAAA.zip / dfp_cia_aberta_AAAA.zip),
- * monta BP/DRE/DFC por empresa/período usando o plano de contas PADRONIZADO (cvm-map)
- * e produz BPLineItem/DRELineItem no formato do motor — os pares passam pelo MESMO
- * `calculateIndicators` da empresa do IBR. Determinístico, sem IA.
+ * Lê os ZIPs de dados abertos da CVM, monta BP/DRE/DFC por empresa/período no plano
+ * de contas do MODELO QUANTUA (cvm-map) e persiste em CvmCompany/CvmPeriod. Os
+ * indicadores saem do MESMO `calculateIndicators` do motor (cvm-metrics), nas três
+ * visões: TRI (trimestre isolado) · ANO (exercício) · LTM (últimos 12 meses).
  *
- * Regras (herdadas do estudo Automatizacao_ITRs_Bovespa validado pelo usuário):
+ * Regras (validadas com dados reais — estudo Automatizacao_ITRs_Bovespa + PoC 1T26):
  * - Consolidado preferido; individual como fallback por empresa/demonstrativo.
  * - ORDEM_EXERC = ÚLTIMO (pega reapresentações automaticamente).
- * - ESCALA_MOEDA MIL → valores gravados em R$ (×1000), mesma unidade do motor.
- * - D&A: não existe na DRE da CVM (embutida no custo) — extraída do DFC_MI (adição
- *   não-caixa sob 6.01 com descrição de depreciação/amortização).
+ * - ESCALA_MOEDA MIL → valores em R$ (mesma unidade do motor).
+ * - DRE do ITR vem em DUAS visões (a CVM publica ambas): acumulada no ano
+ *   (DT_INI = 01/01) e TRIMESTRE ISOLADO (DT_INI = início do tri) — capturamos as duas.
+ * - D&A não existe na DRE da CVM (embutida no custo) — extraída do DFC_MI (adição
+ *   não-caixa sob 6.01 com descrição de depreciação/amortização), visão acumulada.
+ * - Em PRODUÇÃO o download é feito PELO SERVIDOR direto da CVM (baixarCvmZip) —
+ *   nenhuma máquina pessoal no circuito; o ZIP é descartado após o processamento.
  */
 import AdmZip from "adm-zip";
-import type { BPLineItem, DRELineItem } from "../types/financial";
-import { CVM_BP_MAP, CVM_BP_CLASSIF, CVM_BP_NIVEL, CVM_DRE_MAP, CVM_DFC_MAP, CVM_EXCLUIR_DENOM } from "./cvm-map";
+import { prisma } from "../db/client";
+import { CVM_BP_MAP, CVM_DRE_MAP, CVM_DFC_MAP, CVM_EXCLUIR_DENOM } from "./cvm-map";
 
-export interface CvmPeriodo {
-  bp: Record<string, number>;   // conta do modelo → R$
-  dre: Record<string, number>;
-  dfc: { fco?: number; fci?: number; fcf?: number };
+export const CVM_URLS = {
+  itr: (ano: number) => `https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/ITR/DADOS/itr_cia_aberta_${ano}.zip`,
+  dfp: (ano: number) => `https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFP/DADOS/dfp_cia_aberta_${ano}.zip`,
+};
+
+export interface CvmPeriodoDados {
+  bp: Record<string, number>;
+  dreTri: Record<string, number>; // DRE DISCRETA do trimestre (no DFP = ano inteiro)
+  dreYtd: Record<string, number>; // DRE acumulada no ano até dtFim
+  dfcYtd: { fco?: number; fci?: number; fcf?: number };
 }
 export interface CvmEmpresa {
   cnpj: string;
   denom: string;
   cdCvm: string;
-  periodos: Record<string, CvmPeriodo>; // DT_FIM_EXERC (AAAA-MM-DD) → dados
+  periodos: Record<string, CvmPeriodoDados>; // DT_FIM (AAAA-MM-DD) → dados
 }
 
 const normCnpj = (s: string) => s.replace(/[^\d]/g, "");
 
 function parseCsv(texto: string): Array<Record<string, string>> {
-  // CSV da CVM: latin-1, ';' como separador, sem aspas aninhadas relevantes.
   const linhas = texto.split("\n").filter((l) => l.trim());
   if (linhas.length < 2) return [];
   const cab = linhas[0].split(";").map((c) => c.trim());
@@ -46,7 +55,10 @@ function parseCsv(texto: string): Array<Record<string, string>> {
   return out;
 }
 
-interface LinhaCvm { cnpj: string; denom: string; cdCvm: string; dtFim: string; cd: string; ds: string; valor: number }
+interface LinhaCvm {
+  cnpj: string; denom: string; cdCvm: string;
+  dtIni: string; dtFim: string; cd: string; ds: string; valor: number;
+}
 
 function extraiLinhas(zip: AdmZip, nomeArquivo: string): LinhaCvm[] {
   const entry = zip.getEntry(nomeArquivo);
@@ -63,6 +75,7 @@ function extraiLinhas(zip: AdmZip, nomeArquivo: string): LinhaCvm[] {
       cnpj: normCnpj(r.CNPJ_CIA ?? ""),
       denom: r.DENOM_CIA ?? "",
       cdCvm: r.CD_CVM ?? "",
+      dtIni: r.DT_INI_EXERC ?? "",
       dtFim: r.DT_FIM_EXERC ?? "",
       cd: (r.CD_CONTA ?? "").trim(),
       ds: r.DS_CONTA ?? "",
@@ -72,22 +85,27 @@ function extraiLinhas(zip: AdmZip, nomeArquivo: string): LinhaCvm[] {
   return out;
 }
 
-/** Lê um ZIP da CVM e monta o mapa empresa → períodos → contas do modelo Quantua. */
-export function parseCvmZip(zipPath: string, opts?: { incluirFinanceiras?: boolean }): Map<string, CvmEmpresa> {
-  const zip = new AdmZip(zipPath);
+/** DT_INI 01/01 do mesmo ano do DT_FIM = visão ACUMULADA (YTD). */
+const ehYtd = (l: LinhaCvm) => l.dtIni.endsWith("-01-01") && l.dtIni.slice(0, 4) === l.dtFim.slice(0, 4);
+/** 1º trimestre: acumulado E discreto são a mesma janela. */
+const ehPrimeiroTri = (l: LinhaCvm) => ehYtd(l) && l.dtFim.slice(5, 7) === "03";
+
+/** Lê um ZIP da CVM (ITR ou DFP) e monta empresa → períodos nas contas do modelo. */
+export function parseCvmZip(zipSource: string | Buffer, opts?: { incluirFinanceiras?: boolean }): Map<string, CvmEmpresa> {
+  const zip = new AdmZip(zipSource as never);
   const nomes = zip.getEntries().map((e) => e.entryName);
-  const prefixo = nomes.some((n) => n.startsWith("dfp_")) ? "dfp_cia_aberta" : "itr_cia_aberta";
-  const ano = (nomes[0]?.match(/(\d{4})\.csv$/) ?? [])[1] ?? "";
+  const ehDfp = nomes.some((n) => n.startsWith("dfp_"));
+  const prefixo = ehDfp ? "dfp_cia_aberta" : "itr_cia_aberta";
+  const ano = (nomes.find((n) => /_\d{4}\.csv$/.test(n))?.match(/(\d{4})\.csv$/) ?? [])[1] ?? "";
 
   const empresas = new Map<string, CvmEmpresa>();
-  const garante = (l: LinhaCvm): CvmEmpresa => {
+  const garante = (l: LinhaCvm): CvmPeriodoDados => {
     let e = empresas.get(l.cnpj);
     if (!e) { e = { cnpj: l.cnpj, denom: l.denom, cdCvm: l.cdCvm, periodos: {} }; empresas.set(l.cnpj, e); }
-    if (!e.periodos[l.dtFim]) e.periodos[l.dtFim] = { bp: {}, dre: {}, dfc: {} };
-    return e;
+    if (!e.periodos[l.dtFim]) e.periodos[l.dtFim] = { bp: {}, dreTri: {}, dreYtd: {}, dfcYtd: {} };
+    return e.periodos[l.dtFim];
   };
 
-  // Consolidado primeiro; individual só preenche empresa/demonstrativo ausente no con.
   for (const dem of ["BPA", "BPP", "DRE", "DFC_MI"]) {
     const con = extraiLinhas(zip, `${prefixo}_${dem}_con_${ano}.csv`);
     const ind = extraiLinhas(zip, `${prefixo}_${dem}_ind_${ano}.csv`);
@@ -96,19 +114,25 @@ export function parseCvmZip(zipPath: string, opts?: { incluirFinanceiras?: boole
 
     for (const l of linhas) {
       if (!opts?.incluirFinanceiras && CVM_EXCLUIR_DENOM.test(l.denom)) continue;
-      const per = garante(l).periodos[l.dtFim];
+      const per = garante(l);
       if (dem === "BPA" || dem === "BPP") {
         const conta = CVM_BP_MAP[l.cd];
         if (conta) per.bp[conta] = l.valor;
       } else if (dem === "DRE") {
         const conta = CVM_DRE_MAP[l.cd];
-        if (conta) per.dre[conta] = l.valor;
+        if (!conta) continue;
+        // DFP: a DRE do ano entra nas DUAS visões (tri = ano no fechamento).
+        if (ehDfp) { per.dreTri[conta] = l.valor; per.dreYtd[conta] = l.valor; continue; }
+        if (ehYtd(l)) { per.dreYtd[conta] = l.valor; if (ehPrimeiroTri(l)) per.dreTri[conta] = l.valor; }
+        else per.dreTri[conta] = l.valor; // DT_INI = início do tri → trimestre isolado
       } else if (dem === "DFC_MI") {
+        if (!ehDfp && !ehYtd(l)) continue; // DFC: usamos a visão acumulada
         const fluxo = CVM_DFC_MAP[l.cd];
-        if (fluxo) per.dfc[fluxo] = l.valor;
-        // D&A: adição não-caixa sob 6.01.* — pela DESCRIÇÃO (o CD varia entre empresas).
-        if (l.cd.startsWith("6.01") && /deprecia|amortiza/i.test(l.ds) && per.dre["Depreciação e Amortização"] === undefined) {
-          per.dre["Depreciação e Amortização"] = -Math.abs(l.valor); // convenção do motor: redutora negativa
+        if (fluxo) per.dfcYtd[fluxo] = l.valor;
+        // D&A (p/ EBITDA): adição não-caixa sob 6.01.* — pela DESCRIÇÃO (CD varia).
+        if (l.cd.startsWith("6.01") && /deprecia|amortiza/i.test(l.ds) && per.dreYtd["Depreciação e Amortização"] === undefined) {
+          per.dreYtd["Depreciação e Amortização"] = -Math.abs(l.valor); // convenção do motor
+          if (ehDfp) per.dreTri["Depreciação e Amortização"] = -Math.abs(l.valor);
         }
       }
     }
@@ -116,32 +140,46 @@ export function parseCvmZip(zipPath: string, opts?: { incluirFinanceiras?: boole
   return empresas;
 }
 
-/** Converte um período CVM em BPLineItem/DRELineItem no formato do motor. */
-export function buildStatements(empresa: CvmEmpresa, dtsFim: string[]): { bp: BPLineItem[]; dre: DRELineItem[]; periodos: string[] } {
-  const periodos = dtsFim.filter((d) => empresa.periodos[d]);
-  // "31/12/2025" no formato do motor (diasDoPeriodo entende dd/mm/aaaa)
-  const rotulo = (d: string) => { const [a, m, dd] = d.split("-"); return `${dd}/${m}/${a}`; };
-  const rot = periodos.map(rotulo);
+/** Download server-side direto da CVM (produção: roda no backend, ZIP descartável). */
+export async function baixarCvmZip(url: string): Promise<{ buffer: Buffer; etag: string | null; lastModified: string | null }> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`CVM ${url}: HTTP ${res.status}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return { buffer, etag: res.headers.get("etag"), lastModified: res.headers.get("last-modified") };
+}
 
-  const contasBP = new Set<string>();
-  const contasDRE = new Set<string>();
-  for (const d of periodos) {
-    for (const c of Object.keys(empresa.periodos[d].bp)) contasBP.add(c);
-    for (const c of Object.keys(empresa.periodos[d].dre)) contasDRE.add(c);
+/** HEAD na CVM — o cron compara ETag/Last-Modified com o CvmSyncState para avisar. */
+export async function checarCvmAtualizacao(url: string): Promise<{ etag: string | null; lastModified: string | null } | null> {
+  const res = await fetch(url, { method: "HEAD" });
+  if (!res.ok) return null;
+  return { etag: res.headers.get("etag"), lastModified: res.headers.get("last-modified") };
+}
+
+/** Persiste o resultado do parse em CvmCompany/CvmPeriod (upsert idempotente). */
+export async function persistirCvm(
+  empresas: Map<string, CvmEmpresa>,
+  origem: "ITR" | "DFP",
+): Promise<{ empresas: number; periodos: number }> {
+  let nPeriodos = 0;
+  for (const emp of empresas.values()) {
+    if (!emp.cnpj) continue;
+    await prisma.cvmCompany.upsert({
+      where: { cnpj: emp.cnpj },
+      update: { denom: emp.denom, cdCvm: emp.cdCvm },
+      create: { cnpj: emp.cnpj, denom: emp.denom, cdCvm: emp.cdCvm },
+    });
+    for (const [dtFim, dados] of Object.entries(emp.periodos)) {
+      // Só persiste período com o mínimo utilizável (BP ou DRE com conteúdo).
+      if (Object.keys(dados.bp).length < 4 && Object.keys(dados.dreYtd).length < 3) continue;
+      const dt = new Date(`${dtFim}T00:00:00Z`);
+      if (Number.isNaN(dt.getTime())) continue;
+      await prisma.cvmPeriod.upsert({
+        where: { cnpj_dtFim_origem: { cnpj: emp.cnpj, dtFim: dt, origem } },
+        update: { bp: dados.bp, dreTri: dados.dreTri, dreYtd: dados.dreYtd, dfcYtd: dados.dfcYtd },
+        create: { cnpj: emp.cnpj, dtFim: dt, origem, bp: dados.bp, dreTri: dados.dreTri, dreYtd: dados.dreYtd, dfcYtd: dados.dfcYtd },
+      });
+      nPeriodos++;
+    }
   }
-
-  const bp: BPLineItem[] = [...contasBP].map((conta) => ({
-    conta,
-    classificacao: CVM_BP_CLASSIF[conta] ?? "AF",
-    nivel: CVM_BP_NIVEL[conta] ?? 2,
-    editado: false,
-    valores: Object.fromEntries(periodos.map((d, i) => [rot[i], empresa.periodos[d].bp[conta] ?? 0])),
-  }));
-  const dre: DRELineItem[] = [...contasDRE].map((conta) => ({
-    conta,
-    subtotal: false,
-    editado: false,
-    valores: Object.fromEntries(periodos.map((d, i) => [rot[i], empresa.periodos[d].dre[conta] ?? 0])),
-  }));
-  return { bp, dre, periodos: rot };
+  return { empresas: empresas.size, periodos: nPeriodos };
 }

@@ -305,12 +305,13 @@ export function calculateIndicators(
   bp: BPLineItem[],
   dre: DRELineItem[],
   periodos: string[],
-  semaforoOverrides?: Record<string, SemaforoDef>
+  semaforoOverrides?: Record<string, SemaforoDef>,
+  diasOverride?: number // força a base dos prazos (ex.: pares CVM — TRI=90, LTM=365)
 ): Indicador[] {
   // Ordem cronológica p/ os indicadores MULTI-PERÍODO (YoY) e dias-base dos prazos.
   const periodosOrd = [...periodos].sort((a, b) => diasKey(a) - diasKey(b));
   const diasPorPeriodo: Record<string, number> = {};
-  for (const p of periodos) diasPorPeriodo[p] = diasDoPeriodo(p, periodos);
+  for (const p of periodos) diasPorPeriodo[p] = diasOverride ?? diasDoPeriodo(p, periodos);
   // Receita Líquida por período (base do Crescimento YoY)
   const rlPor: Record<string, number | null> = {};
   for (const p of periodos) {
