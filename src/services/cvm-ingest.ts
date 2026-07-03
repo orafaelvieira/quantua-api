@@ -18,6 +18,7 @@
  *   nenhuma máquina pessoal no circuito; o ZIP é descartado após o processamento.
  */
 import AdmZip from "adm-zip";
+import { createInflateRaw } from "node:zlib";
 import { createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
@@ -53,38 +54,36 @@ interface LinhaCvm {
 
 /**
  * Extrai as linhas de UM CSV do ZIP, filtrando CEDO pelo CD_CONTA (aceitaConta).
- * MEMÓRIA (produção roda num container de 1GB): os CSVs da CVM têm centenas de
- * milhares de linhas e só ~5% das contas nos interessam — materializar tudo como
- * objetos (versão anterior) estourava a RAM e o DO reiniciava o container no meio
- * do seed. Aqui caminhamos o texto linha a linha (sem array de linhas) e só as
- * aprovadas viram objeto. A cada 8k linhas cedemos o event loop, para o /health
- * do DigitalOcean continuar respondendo durante o parse.
+ * MEMÓRIA (o teto efetivo do container de produção é ~500MB): os CSVs da CVM têm
+ * até 80-160MB DESCOMPRIMIDOS — materializar o texto inteiro (getData().toString())
+ * matava o container (evidência do heartbeat: morte em "parse BPA con", heap 34MB,
+ * rss 394MB). Aqui inflamos o DEFLATE em STREAMING: só o comprimido (1-4MB) fica em
+ * memória e o texto passa em pedaços de ~64KB, linha a linha; só as ~5% de linhas
+ * aprovadas viram objeto. O event loop respira entre chunks (o /health responde).
  */
 async function extraiLinhas(zip: AdmZip, nomeArquivo: string, aceitaConta: (cd: string) => boolean): Promise<LinhaCvm[]> {
   const entry = zip.getEntry(nomeArquivo);
   if (!entry) return [];
-  const texto = entry.getData().toString("latin1");
-  const fimCab = texto.indexOf("\n");
-  if (fimCab < 0) return [];
-  const idx: Record<string, number> = {};
-  texto.slice(0, fimCab).split(";").forEach((c, i) => { idx[c.trim()] = i; });
 
   const out: LinhaCvm[] = [];
-  let pos = fimCab + 1;
+  let idx: Record<string, number> | null = null;
   let n = 0;
-  while (pos < texto.length) {
-    let fim = texto.indexOf("\n", pos);
-    if (fim < 0) fim = texto.length;
-    const partes = texto.slice(pos, fim).split(";");
-    pos = fim + 1;
-    if ((++n & 8191) === 0) await new Promise<void>((r) => setImmediate(r));
-    const get = (col: string) => (partes[idx[col]] ?? "").trim();
+
+  const processaLinha = (linha: string): void => {
+    if (!linha.trim()) return;
+    if (!idx) { // 1ª linha = cabeçalho
+      idx = {};
+      linha.split(";").forEach((c, i) => { idx![c.trim()] = i; });
+      return;
+    }
+    const partes = linha.split(";");
+    const get = (col: string) => (partes[idx![col]] ?? "").trim();
     const cd = get("CD_CONTA");
-    if (!cd || !aceitaConta(cd)) continue; // filtro cedo — descarta ~95% das linhas
+    if (!cd || !aceitaConta(cd)) return; // filtro cedo — descarta ~95% das linhas
     const ordem = get("ORDEM_EXERC").toUpperCase();
-    if (!ordem.includes("LTIMO") || ordem.includes("PEN")) continue; // só ÚLTIMO
+    if (!ordem.includes("LTIMO") || ordem.includes("PEN")) return; // só ÚLTIMO
     const vl = parseFloat(get("VL_CONTA").replace(",", "."));
-    if (!Number.isFinite(vl)) continue;
+    if (!Number.isFinite(vl)) return;
     const escala = get("ESCALA_MOEDA").toUpperCase().includes("MIL") ? 1000 : 1;
     out.push({
       cnpj: normCnpj(get("CNPJ_CIA")),
@@ -96,7 +95,33 @@ async function extraiLinhas(zip: AdmZip, nomeArquivo: string, aceitaConta: (cd: 
       ds: get("DS_CONTA"),
       valor: vl * escala,
     });
+  };
+
+  // latin1 = 1 byte/char — chunk nunca corta um caractere; só a linha, tratada via `resto`.
+  let resto = "";
+  const processaChunk = async (chunk: Buffer): Promise<void> => {
+    const linhas = (resto + chunk.toString("latin1")).split("\n");
+    resto = linhas.pop() ?? "";
+    for (const linha of linhas) {
+      if ((++n & 8191) === 0) await new Promise<void>((r) => setImmediate(r));
+      processaLinha(linha);
+    }
+  };
+
+  if (entry.header.method === 8) {
+    // DEFLATE (padrão dos ZIPs da CVM): infla em streaming a partir do comprimido.
+    const inflate = createInflateRaw();
+    inflate.end(entry.getCompressedData());
+    for await (const chunk of inflate) await processaChunk(chunk as Buffer);
+  } else {
+    // STORED (ou outro): sem streaming possível — processa o buffer em fatias.
+    const dados = entry.getData();
+    for (let p = 0; p < dados.length; p += 1 << 16) {
+      await processaChunk(dados.subarray(p, Math.min(p + (1 << 16), dados.length)));
+    }
   }
+  if (resto) processaLinha(resto); // última linha sem \n final
+
   return out;
 }
 
