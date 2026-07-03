@@ -54,6 +54,20 @@ export interface AnalysisResult {
     confianca: "alta" | "media" | "baixa" | string;
     verificar: string;
   }>;
+  /** REVELAÇÕES — o "não tinha noção disso": descobertas que exigem cruzamento de fontes,
+   *  quantificadas em DINHEIRO EM CAIXA. O coração do diferencial do IBR. */
+  revelacoes?: Array<{
+    titulo: string;
+    dadoEscondido: string;
+    porQueInvisivel: string;
+    valorEmCaixa: number | null;
+    comoChegou: string;
+    perguntaAmanha: string;
+  }>;
+  /** Placar agregado: quanto dinheiro está na mesa (sem dupla contagem). */
+  valorNaMesa?: { total: number; caixaLiberavel: number; margemRecuperavel: number; leitura: string };
+  /** O que PROTEGER — forças que sustentam o resultado e como blindá-las. */
+  protecoes?: Array<{ oQueProteger: string; ameaca: string; acaoDefensiva: string }>;
 }
 
 interface IndicadorLite {
@@ -242,6 +256,28 @@ LINHAS DA DRE (valores em R$ por período; "»" = subtotal — use para a árvor
 ${linhas}`;
 }
 
+/** Formata o FLUXO DE CAIXA INDIRETO pro prompt — a ponte lucro→caixa (para onde o
+ *  dinheiro FOI) é a maior fonte de revelações. Só entra quando a prova FECHA. */
+function buildFluxoCaixaBlock(fc?: FluxoCaixaLite & { fco?: Array<{ nome: string; valores: Record<string, number> }>; fci?: Array<{ nome: string; valores: Record<string, number> }>; fcf?: Array<{ nome: string; valores: Record<string, number> }> } | null): string {
+  if (!fc || !fc.colunas?.length) return "";
+  const provaOk = (fc.prova ?? []).length > 0 && (fc.prova ?? []).every((p) => p.fecha);
+  if (!provaOk) return "";
+  const fmtL = (l: { nome: string; valores: Record<string, number> }) =>
+    `- ${l.nome}: ${fc.colunas.map((c) => `${c}=${Math.round(l.valores[c] ?? 0).toLocaleString("pt-BR")}`).join(" · ")}`;
+  const tot = (nome: string, t: Record<string, number>) =>
+    `» ${nome}: ${fc.colunas.map((c) => `${c}=${Math.round(t[c] ?? 0).toLocaleString("pt-BR")}`).join(" · ")}`;
+  const linhas = [
+    ...(fc.fco ?? []).map(fmtL), tot("FCO — Fluxo de Caixa Operacional", fc.totais.fco),
+    ...(fc.fci ?? []).map(fmtL), tot("FCI — Fluxo de Caixa de Investimento", fc.totais.fci),
+    ...(fc.fcf ?? []).map(fmtL), tot("FCF — Fluxo de Caixa de Financiamento", fc.totais.fcf),
+  ].join("\n");
+  return `
+
+[FC] FLUXO DE CAIXA — MÉTODO INDIRETO (determinístico, PROVADO contra o ΔCaixa do balanço; cada coluna = variação vs período anterior, em R$):
+${linhas}
+Use este bloco para contar PARA ONDE O DINHEIRO FOI — a ponte lucro→caixa (lucro que virou estoque/prazo, dívida que financiou queima, capex engolindo geração) é onde nascem as maiores revelações.`;
+}
+
 /** Formata o bloco dos MATERIAIS COMPLEMENTARES (Input 4) pro prompt — resumos de
  *  docs não-financeiros (notas de reunião, apresentações). Vazio se não houver. */
 function buildMateriaisBlock(materiais?: Array<{ nome: string; resumo: string }> | null): string {
@@ -327,6 +363,7 @@ export async function generateAnalysis(
   const webBlock = buildWebBlock(web);
   const materiaisBlock = buildMateriaisBlock(materiais);
   const dreBlock = buildDreBlock(dre, periodos);
+  const fcBlock = buildFluxoCaixaBlock(fluxoCaixa);
   // Estágio DETERMINÍSTICO (motor, multi-ano; Dickinson quando o FC fecha) — a IA recebe
   // como fato e não reclassifica.
   const estagioDet = classifyEstagio(indicadores, periodos, fluxoCaixa);
@@ -348,7 +385,7 @@ Você recebe VÁRIAS fontes. USE TODAS e CRUZE-AS — o valor está em conectar 
 
 [1] INDICADORES JÁ CALCULADOS E AUDITADOS (determinísticos — NÃO recalcule, apenas INTERPRETE):
 ${det.tabela || "(indicadores indisponíveis)"}
-${dreBlock}${peerBlock}${webBlock}${materiaisBlock}${estagioBlock}
+${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${estagioBlock}
 
 IMPORTANTE — olhe o HISTÓRICO: leia SEMPRE a evolução multi-ano (tendência entre os períodos), nunca um ano isolado. A força de um IBR está na trajetória.
 
@@ -358,6 +395,7 @@ MÉTODO DE RACIOCÍNIO (siga NESTA ordem — cada etapa condiciona a próxima):
 3. SAÚDE FINANCEIRA × CAIXA: liquidez, dívida e geração de caixa são compatíveis com o estágio? Estime meses de caixa. Para empresa boa, avalie capacidade de investir/distribuir; para empresa apertada, avalie runway (sinalize se caixa < 3 meses).
 4. FATORES-CHAVE (sempre HIPÓTESE, nunca afirmação — "a causa não está nas demonstrações"): os vetores que explicam o desempenho — POSITIVOS e negativos. Regra de natureza: indicador acima/abaixo E os pares no mesmo sentido → provável causa EXTERNA (mercado); divergente dos pares → provável causa INTERNA (gestão). Cada fator com evidência (número/par/fato), confiança e O QUE VERIFICAR (pergunta de entrevista ou documento a pedir).
 5. OPÇÕES por LENTE analítica, condicionadas ao estágio: Reposicionamento → 5 Forças de Porter (rivalidade, entrantes, substitutos, poder de fornecedor e de cliente) ancoradas no contexto da web; Excelência Operacional → ÁRVORE DE CUSTOS da DRE (qual rubrica pesa na margem, da bruta para a operacional); Reestruturação/Estrutura Financeira → capital, dívida, liquidez, giro, alocação de caixa; Modelo de Negócio orientado a Valor → onde se CRIA e onde se CAPTURA valor (proposta, pricing, mix, canais).
+6. REVELAÇÕES — a etapa mais importante. Depois do diagnóstico, garimpe 3 a 5 DESCOBERTAS que o dono provavelmente NÃO SABE. TESTE DO DONO (elimine o que falhar): se o dono do negócio provavelmente já sabe ("a margem caiu", "a dívida subiu", "o setor está difícil"), NÃO é revelação — descarte. Revelação de verdade EXIGE um CRUZAMENTO que ele não faz no dia a dia (≥2 fontes diferentes: DRE × fluxo de caixa, indicador × pares, ciclo financeiro × crescimento, trajetória multi-ano × caixa). Classes que costumam render: (a) a ponte lucro→caixa ("o lucro existiu mas virou estoque/prazo — para onde o dinheiro FOI"); (b) o custo em R$ de 1 dia de ciclo financeiro (receita/365 × dias) e quanto caixa 10-30 dias liberariam; (c) o contrafactual vs pares ("na mediana do setor, teriam sobrado +R$X no ano"); (d) crescimento que CONSOME caixa (NCG/receita — quanto cada R$1 de venda nova exige de giro); (e) trajetória projetada ("no ritmo dos últimos períodos, o caixa acaba/dobra em N meses"); (f) ativo parado ou estrutura ociosa quantificada. SEMPRE que possível, o valor da revelação em R$ DE CAIXA (não % abstrato), com a memória de cálculo — e a PERGUNTA que o dono deve fazer à equipe amanhã de manhã.
 
 Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta estrutura. Evite REPETIR conteúdo entre seções — cada uma tem um papel distinto (veja as regras):
 {
@@ -381,6 +419,16 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
       "effort": "low|medium|high", "priority": "p0|p1|p2" }
   ],
   "recomendacoes": [ { "titulo": "<qual OPÇÃO priorizar>", "prioridade": "Alta|Média|Baixa", "impacto": "Alto|Médio|Baixo", "esforco": "Alto|Médio|Baixo", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<por que primeiro e como sequenciar; referencia uma opção acima>" } ],
+  "revelacoes": [
+    { "titulo": "<a descoberta em 1 frase direta e forte — tom 'você não sabia disso'>",
+      "dadoEscondido": "<o CRUZAMENTO que revela: quais números, de quais fontes, conectados>",
+      "porQueInvisivel": "<por que o dono não enxerga isso no dia a dia (contabilidade não mostra, número diluído, efeito entre relatórios)>",
+      "valorEmCaixa": <R$ se endereçado, ou null quando for alerta sem valor direto>,
+      "comoChegou": "<memória de cálculo em 1 linha, ex.: 'receita 6,6M/365 = R$18k/dia × 80 dias de PMR acima dos pares ≈ R$1,45M parados'>",
+      "perguntaAmanha": "<a pergunta que o dono deve fazer à equipe amanhã de manhã>" }
+  ],
+  "valorNaMesa": { "total": <R$>, "caixaLiberavel": <R$ de caixa que pode ser liberado (giro/ativos)>, "margemRecuperavel": <R$ ANUAIS de resultado recuperável (custo/preço/mix)>, "leitura": "<1-2 frases: o número-manchete e de onde vem; deixe claro que é ordem de grandeza a validar>" },
+  "protecoes": [ { "oQueProteger": "<força que SUSTENTA o resultado atual>", "ameaca": "<o que pode destruí-la>", "acaoDefensiva": "<como blindar, concreto>" } ],
   "destaques": ["<insight 1>", "<insight 2>", "<insight 3>", "<insight 4>"],
   "confianca": <0-100>
 }
@@ -392,13 +440,16 @@ PAPÉIS DAS SEÇÕES (NÃO haja overlap — cada uma responde a uma pergunta dif
 - swot = POSIÇÃO ESTRATÉGICA/COMPETITIVA ("como se posiciona no mercado"). Use Porter, pares e contexto (web/materiais). NÃO re-liste índices financeiros aqui — força/fraqueza aqui é de mercado, modelo, marca, capacidade, dependência, canal.
 - opcoesEstrategicas = o LEQUE de movimentos possíveis por pilar ("o que dá para fazer").
 - recomendacoes = o PLANO PRIORIZADO ("por onde começar"): escolha e SEQUENCIE as melhores opcoesEstrategicas em horizontes (0–30d/30–90d/90–180d). NÃO invente ações novas fora das opções — priorize e ordene as que você propôs.
+- revelacoes = "O QUE VOCÊ NÃO SABIA" — a seção que faz o dono falar "uau". Só entra o que passa no TESTE DO DONO (etapa 6). É diferente de destaques (resumo) e de fatoresChave (hipóteses de causa): revelação é DESCOBERTA quantificada em caixa. Uma revelação pode alimentar uma opção estratégica — mas aqui o papel é REVELAR, não recomendar.
+- valorNaMesa = o PLACAR: soma honesta do valor endereçável (caixaLiberavel = giro/ativos, uma vez; margemRecuperavel = resultado anual). SEM DUPLA CONTAGEM entre opções e revelações que apontam para a mesma alavanca; ordem de grandeza, não promessa.
+- protecoes = O QUE NÃO PODE QUEBRAR: 2-3 forças que sustentam o resultado atual e como blindá-las (pessoa-chave, contrato, canal, licença, cliente-âncora). Em empresa saudável esta seção é TÃO importante quanto as opções — manter o que funciona também é resultado.
 
 PRINCÍPIOS (inegociáveis):
 - Hipótese e FATO sempre separados. A IA NÃO inventa nem recalcula número — cita os números já prontos (indicadores, DRE, pares).
 - Lente PME-Brasil: gestão familiar/pessoa-chave, peso tributário, custo do capital de giro, informalidade de mercado.
 - Toda afirmação relevante ancorada em NÚMERO (R$, %, dias, percentil) e, quando houver, no GAP vs pares e no contexto web/materiais. Nada de generalidade vazia.
 - POSICIONAMENTO VS PARES: com o bloco de pares presente, o semáforo é RELATIVO ao setor (status pela posição vs mediana/faixa, respeitando a polaridade "maior/menor é melhor"); cite percentil/mediana. RESPEITE A COBERTURA: "direta" = confiável; "aproximada" = nível superior, direcional; "ausente" = NÃO invente percentil, use referência externa da web + conhecimento do setor e seja explícito.
-- fatoresChave: 3 a 6, priorizando os que mais explicam o desempenho. opcoesEstrategicas: 4 a 8 pelos pilares conforme o diagnóstico. recomendacoes: 4 a 6, todas derivadas das opções. destaques: frases ≤15 palavras. priority p0=urgente, p1=importante, p2=oportuno.
+- fatoresChave: 3 a 6, priorizando os que mais explicam o desempenho. opcoesEstrategicas: 4 a 8 pelos pilares conforme o diagnóstico. recomendacoes: 4 a 6, todas derivadas das opções. revelacoes: 3 a 5, TODAS aprovadas no teste do dono (melhor 3 fortes que 5 mornas). protecoes: 2 a 3. destaques: frases ≤15 palavras. priority p0=urgente, p1=importante, p2=oportuno.
 - confianca: maior com 2+ períodos e indicadores/DRE completos.
 - Responda APENAS com o JSON.`;
 
@@ -439,6 +490,9 @@ PRINCÍPIOS (inegociáveis):
     situacao: ai.situacao && typeof ai.situacao === "object" ? ai.situacao : undefined,
     saudeFinanceira: ai.saudeFinanceira && typeof ai.saudeFinanceira === "object" ? ai.saudeFinanceira : undefined,
     fatoresChave: Array.isArray(ai.fatoresChave) ? ai.fatoresChave : [],
+    revelacoes: Array.isArray(ai.revelacoes) ? ai.revelacoes.filter((r: any) => r && r.titulo) : [],
+    valorNaMesa: ai.valorNaMesa && typeof ai.valorNaMesa === "object" && typeof ai.valorNaMesa.total === "number" ? ai.valorNaMesa : undefined,
+    protecoes: Array.isArray(ai.protecoes) ? ai.protecoes.filter((p: any) => p && p.oQueProteger) : [],
   };
 
   // Estágio: o MOTOR manda. Sobrescreve o que a IA disser (rótulo estável, "verde só com prova").
