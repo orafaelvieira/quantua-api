@@ -109,6 +109,91 @@ export async function sincronizarCvm(tipo: "itr" | "dfp", ano: number): Promise<
   return { arquivo, empresas, periodos, indicadores, etag, lastModified };
 }
 
+/* ───────── Histórico completo (seed 2010→hoje) ───────── */
+
+// Dados abertos da CVM começam em DFP 2010 e ITR 2011.
+const HISTORICO_INICIO = { dfp: 2010, itr: 2011 } as const;
+
+/**
+ * Plano do seed histórico — INTERCALADO por ano (DFP 2010, ITR 2011, DFP 2011,
+ * ITR 2012, …). A ordem importa: o 4T de cada ano é derivado por diferença
+ * (DFP 12M − ITR 3T) e o LTM cruza a virada de ano, então quando o ITR do ano N
+ * é processado o DFP do ano N−1 já precisa estar no banco — senão os LTMs de
+ * 1T/2T/3T do ano N sairiam nulos e nunca seriam recalculados.
+ */
+export function planoHistorico(hoje = new Date()): Array<{ tipo: "itr" | "dfp"; ano: number }> {
+  const anoCorrente = hoje.getUTCFullYear();
+  const plano: Array<{ tipo: "itr" | "dfp"; ano: number }> = [{ tipo: "dfp", ano: HISTORICO_INICIO.dfp }];
+  for (let ano = HISTORICO_INICIO.itr; ano <= anoCorrente; ano++) {
+    plano.push({ tipo: "itr", ano });
+    if (ano < anoCorrente) plano.push({ tipo: "dfp", ano }); // DFP só existe p/ ano fechado
+  }
+  return plano;
+}
+
+export interface ProgressoHistorico {
+  emAndamento: boolean;
+  total: number;
+  feitos: number;
+  atual: string | null;
+  ok: string[];
+  pulados: string[]; // já sincronizados antes (retomada)
+  erros: Array<{ arquivo: string; erro: string }>;
+  iniciadoEm: string | null;
+  terminadoEm: string | null;
+}
+
+// Estado em memória do seed (1 por processo — a rota bloqueia disparo duplo).
+const progHist: ProgressoHistorico = {
+  emAndamento: false, total: 0, feitos: 0, atual: null,
+  ok: [], pulados: [], erros: [], iniciadoEm: null, terminadoEm: null,
+};
+
+export function getProgressoHistorico(): ProgressoHistorico {
+  return progHist;
+}
+
+/**
+ * Seed histórico completo — roda TODO o plano em sequência, no servidor.
+ * Fire-and-forget (a rota devolve 202 e o painel acompanha pelo /status).
+ * RETOMÁVEL: arquivo com CvmSyncState existente é pulado — se o processo cair
+ * no meio (deploy/restart), basta disparar de novo que continua de onde parou.
+ */
+export async function sincronizarHistoricoCvm(): Promise<void> {
+  if (progHist.emAndamento) throw new Error("Sincronização do histórico já em andamento");
+  const plano = planoHistorico();
+  Object.assign(progHist, {
+    emAndamento: true, total: plano.length, feitos: 0, atual: null,
+    ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null,
+  });
+  console.log(`[cvm-sync] seed histórico iniciado — ${plano.length} arquivos (${plano[0].tipo}_${plano[0].ano} → ${plano[plano.length - 1].tipo}_${plano[plano.length - 1].ano})`);
+  try {
+    for (const { tipo, ano } of plano) {
+      const arquivo = arquivoId(tipo, ano);
+      progHist.atual = arquivo;
+      const jaFeito = await prisma.cvmSyncState.findUnique({ where: { arquivo } });
+      if (jaFeito) {
+        progHist.pulados.push(arquivo);
+      } else {
+        try {
+          await sincronizarCvm(tipo, ano);
+          progHist.ok.push(arquivo);
+        } catch (e) {
+          const erro = e instanceof Error ? e.message : String(e);
+          progHist.erros.push({ arquivo, erro });
+          console.warn(`[cvm-sync] histórico: ${arquivo} falhou (${erro}) — seguindo para o próximo`);
+        }
+      }
+      progHist.feitos++;
+    }
+  } finally {
+    progHist.emAndamento = false;
+    progHist.atual = null;
+    progHist.terminadoEm = new Date().toISOString();
+    console.log(`[cvm-sync] seed histórico terminou: ${progHist.ok.length} sincronizados · ${progHist.pulados.length} pulados · ${progHist.erros.length} erros`);
+  }
+}
+
 /** Arquivos que o cron vigia: ITR do ano corrente e do anterior + DFP do ano anterior
  *  (reapresentações são comuns meses depois da entrega). */
 export function arquivosVigiados(hoje = new Date()): Array<{ tipo: "itr" | "dfp"; ano: number }> {

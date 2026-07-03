@@ -4,7 +4,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/permissions";
 import { getPeerDistribution } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
-import { sincronizarCvm, checarAtualizacoesCvm, arquivosVigiados } from "../services/cvm-sync";
+import { sincronizarCvm, sincronizarHistoricoCvm, getProgressoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados } from "../services/cvm-sync";
 
 const router = Router();
 router.use(requireAuth);
@@ -26,7 +26,18 @@ router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void
     estados,
     totais: { empresas, periodos, indicadores },
     avisos,
+    historico: { ...getProgressoHistorico(), planoTotal: planoHistorico().length },
   });
+});
+
+// POST /peers/cvm/sync-historico — seed completo (DFP 2010 + ITR 2011 → hoje),
+// intercalado por ano, em background NO SERVIDOR. Retomável (pula o que já foi
+// processado). O painel acompanha o progresso pelo GET /status.
+router.post("/cvm/sync-historico", async (_req: AuthRequest, res: Response): Promise<void> => {
+  const prog = getProgressoHistorico();
+  if (prog.emAndamento) { res.status(409).json({ error: "Sincronização do histórico já em andamento" }); return; }
+  sincronizarHistoricoCvm().catch((e) => console.error("[peers/cvm/sync-historico] falhou:", e));
+  res.status(202).json({ ok: true, total: planoHistorico().length });
 });
 
 // POST /peers/cvm/sync { tipo: "itr"|"dfp", ano } — baixa da CVM NO SERVIDOR e processa.
@@ -35,6 +46,7 @@ router.post("/cvm/sync", async (req: AuthRequest, res: Response): Promise<void> 
   const tipo = req.body?.tipo === "dfp" ? "dfp" : "itr";
   const ano = parseInt(String(req.body?.ano ?? new Date().getUTCFullYear()), 10);
   if (!Number.isFinite(ano) || ano < 2010 || ano > 2100) { res.status(400).json({ error: "ano inválido" }); return; }
+  if (getProgressoHistorico().emAndamento) { res.status(409).json({ error: "Aguarde a sincronização do histórico terminar" }); return; }
   try {
     const resultado = await sincronizarCvm(tipo, ano);
     // Sincronizou → avisos desta fonte deixam de ser pendência.
