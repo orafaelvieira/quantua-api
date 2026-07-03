@@ -4,7 +4,8 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/permissions";
 import { getPeerDistribution } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
-import { sincronizarCvm, sincronizarHistoricoCvm, getProgressoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados } from "../services/cvm-sync";
+import { sincronizarCvm, sincronizarHistoricoCvm, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados } from "../services/cvm-sync";
+import { runtimeState } from "../services/runtime-state";
 
 const router = Router();
 router.use(requireAuth);
@@ -14,19 +15,22 @@ router.use(requireRole("partner")); // base de comparáveis = consulta interna (
 
 // GET /peers/cvm/status — estado por arquivo vigiado + totais da base CVM.
 router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void> => {
-  const [estados, empresas, periodos, indicadores, avisos] = await Promise.all([
-    prisma.cvmSyncState.findMany({ orderBy: { arquivo: "asc" } }),
+  const [estados, empresas, periodos, indicadores, avisos, historico] = await Promise.all([
+    // "_historico" é a linha-reservada do snapshot de progresso, não um arquivo da CVM
+    prisma.cvmSyncState.findMany({ where: { arquivo: { not: "_historico" } }, orderBy: { arquivo: "asc" } }),
     prisma.cvmCompany.count(),
     prisma.cvmPeriod.count(),
     prisma.cvmIndicator.count(),
     prisma.systemNotice.findMany({ where: { tipo: "cvm_update", lida: false }, orderBy: { createdAt: "desc" } }),
+    estadoHistorico(),
   ]);
   res.json({
     vigiados: arquivosVigiados().map(({ tipo, ano }) => `${tipo}_${ano}`),
     estados,
     totais: { empresas, periodos, indicadores },
     avisos,
-    historico: { ...getProgressoHistorico(), planoTotal: planoHistorico().length },
+    historico: { ...historico, planoTotal: planoHistorico().length },
+    seedsRodando: runtimeState.seedsRodando,
   });
 });
 
@@ -36,6 +40,7 @@ router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void
 router.post("/cvm/sync-historico", async (_req: AuthRequest, res: Response): Promise<void> => {
   const prog = getProgressoHistorico();
   if (prog.emAndamento) { res.status(409).json({ error: "Sincronização do histórico já em andamento" }); return; }
+  if (runtimeState.seedsRodando) { res.status(409).json({ error: "O servidor acabou de reiniciar e está carregando os dados de boot (~2 min). Tente de novo em instantes." }); return; }
   sincronizarHistoricoCvm().catch((e) => console.error("[peers/cvm/sync-historico] falhou:", e));
   res.status(202).json({ ok: true, total: planoHistorico().length });
 });
@@ -47,6 +52,7 @@ router.post("/cvm/sync", async (req: AuthRequest, res: Response): Promise<void> 
   const ano = parseInt(String(req.body?.ano ?? new Date().getUTCFullYear()), 10);
   if (!Number.isFinite(ano) || ano < 2010 || ano > 2100) { res.status(400).json({ error: "ano inválido" }); return; }
   if (getProgressoHistorico().emAndamento) { res.status(409).json({ error: "Aguarde a sincronização do histórico terminar" }); return; }
+  if (runtimeState.seedsRodando) { res.status(409).json({ error: "O servidor acabou de reiniciar e está carregando os dados de boot (~2 min). Tente de novo em instantes." }); return; }
   try {
     const resultado = await sincronizarCvm(tipo, ano);
     // Sincronizou → avisos desta fonte deixam de ser pendência.

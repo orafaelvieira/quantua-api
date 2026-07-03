@@ -14,11 +14,16 @@ import { indicadoresDaEmpresa } from "./cvm-metrics";
 
 const arquivoId = (tipo: "itr" | "dfp", ano: number) => `${tipo}_${ano}`;
 
-/** Reconstrói CvmEmpresa a partir do banco (períodos já persistidos) — base p/ LTM. */
-async function carregaEmpresasDoBanco(cnpjs: string[]): Promise<Map<string, CvmEmpresa>> {
+/** Reconstrói CvmEmpresa a partir do banco (períodos já persistidos) — base p/ LTM.
+ *  dtFimMin limita a janela carregada (memória: container de 1GB) — o LTM olha no
+ *  máximo 4 trimestres p/ trás e a média de BP 12 meses, então 16 meses bastam. */
+async function carregaEmpresasDoBanco(cnpjs: string[], dtFimMin?: Date): Promise<Map<string, CvmEmpresa>> {
   const out = new Map<string, CvmEmpresa>();
   const companies = await prisma.cvmCompany.findMany({ where: { cnpj: { in: cnpjs } } });
-  const periods = await prisma.cvmPeriod.findMany({ where: { cnpj: { in: cnpjs } }, orderBy: { dtFim: "asc" } });
+  const periods = await prisma.cvmPeriod.findMany({
+    where: { cnpj: { in: cnpjs }, ...(dtFimMin ? { dtFim: { gte: dtFimMin } } : {}) },
+    orderBy: { dtFim: "asc" },
+  });
   for (const c of companies) out.set(c.cnpj, { cnpj: c.cnpj, denom: c.denom, cdCvm: c.cdCvm, periodos: {} });
   for (const p of periods) {
     const emp = out.get(p.cnpj);
@@ -45,7 +50,11 @@ function numOuNull(v: number | string | null | undefined): number | null {
 
 /** Recalcula e persiste CvmIndicator (3 visões) para os dtFims informados. */
 async function recalculaIndicadores(cnpjs: string[], dtFims: string[]): Promise<number> {
-  const empresas = await carregaEmpresasDoBanco(cnpjs);
+  if (dtFims.length === 0 || cnpjs.length === 0) return 0;
+  // janela: do dtFim mais antigo recalculado, 16 meses p/ trás (LTM = 4 tri + BP médio 12m)
+  const minDt = new Date(`${[...dtFims].sort()[0]}T00:00:00Z`);
+  const dtFimMin = new Date(Date.UTC(minDt.getUTCFullYear(), minDt.getUTCMonth() - 16, 1));
+  const empresas = await carregaEmpresasDoBanco(cnpjs, dtFimMin);
   const registros: Array<{ cnpj: string; dtFim: Date; visao: string; nome: string; valor: number | null; texto: string | null }> = [];
   for (const emp of empresas.values()) {
     for (const dtFim of dtFims) {
@@ -143,6 +152,8 @@ export interface ProgressoHistorico {
   erros: Array<{ arquivo: string; erro: string }>;
   iniciadoEm: string | null;
   terminadoEm: string | null;
+  /** true quando a última execução morreu no meio (restart do container) — retomável. */
+  interrompido?: boolean;
 }
 
 // Estado em memória do seed (1 por processo — a rota bloqueia disparo duplo).
@@ -152,6 +163,41 @@ const progHist: ProgressoHistorico = {
 };
 
 export function getProgressoHistorico(): ProgressoHistorico {
+  return progHist;
+}
+
+/** Snapshot do progresso persistido no banco (linha reservada "_historico" do
+ *  CvmSyncState, JSON no campo etag) — sobrevive a restart do container. */
+const SNAPSHOT_ARQUIVO = "_historico";
+
+async function salvaSnapshotHistorico(): Promise<void> {
+  try {
+    const json = JSON.stringify(progHist);
+    await prisma.cvmSyncState.upsert({
+      where: { arquivo: SNAPSHOT_ARQUIVO },
+      update: { etag: json, processadoEm: new Date() },
+      create: { arquivo: SNAPSHOT_ARQUIVO, etag: json, processadoEm: new Date(), empresas: 0, periodos: 0 },
+    });
+  } catch (e) {
+    console.warn("[cvm-sync] snapshot do histórico não persistiu:", e instanceof Error ? e.message : e);
+  }
+}
+
+/**
+ * Estado do histórico p/ a tela: memória quando este processo tem dados; senão o
+ * snapshot do banco. Snapshot com emAndamento=true vindo do banco significa que a
+ * execução MORREU no meio (restart) — devolve interrompido=true p/ a UI oferecer retomada.
+ */
+export async function estadoHistorico(): Promise<ProgressoHistorico> {
+  if (progHist.emAndamento || progHist.total > 0) return progHist;
+  try {
+    const row = await prisma.cvmSyncState.findUnique({ where: { arquivo: SNAPSHOT_ARQUIVO } });
+    if (row?.etag) {
+      const snap = JSON.parse(row.etag) as ProgressoHistorico;
+      if (snap.emAndamento) return { ...snap, emAndamento: false, interrompido: true };
+      return snap;
+    }
+  } catch { /* snapshot ilegível → segue com a memória vazia */ }
   return progHist;
 }
 
@@ -169,10 +215,12 @@ export async function sincronizarHistoricoCvm(): Promise<void> {
     ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null,
   });
   console.log(`[cvm-sync] seed histórico iniciado — ${plano.length} arquivos (${plano[0].tipo}_${plano[0].ano} → ${plano[plano.length - 1].tipo}_${plano[plano.length - 1].ano})`);
+  await salvaSnapshotHistorico();
   try {
     for (const { tipo, ano } of plano) {
       const arquivo = arquivoId(tipo, ano);
       progHist.atual = arquivo;
+      await salvaSnapshotHistorico();
       const jaFeito = await prisma.cvmSyncState.findUnique({ where: { arquivo } });
       if (jaFeito) {
         progHist.pulados.push(arquivo);
@@ -194,6 +242,7 @@ export async function sincronizarHistoricoCvm(): Promise<void> {
     progHist.emAndamento = false;
     progHist.atual = null;
     progHist.terminadoEm = new Date().toISOString();
+    await salvaSnapshotHistorico();
     console.log(`[cvm-sync] seed histórico terminou: ${progHist.ok.length} sincronizados · ${progHist.pulados.length} pulados · ${progHist.erros.length} erros`);
   }
 }

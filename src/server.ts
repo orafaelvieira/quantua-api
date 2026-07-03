@@ -24,7 +24,8 @@ import adminRouter from "./routes/admin";
 import peersRouter from "./routes/peers";
 import indicatorsRouter from "./routes/indicators";
 import { startJobs } from "./jobs";
-import { getProgressoHistorico } from "./services/cvm-sync";
+import { estadoHistorico } from "./services/cvm-sync";
+import { runtimeState } from "./services/runtime-state";
 import { prisma } from "./db/client";
 import { exec } from "node:child_process";
 
@@ -58,15 +59,20 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-03.cvm-historico-v2";
+const BUILD_VERSION = "2026-07-03.cvm-historico-v3";
 app.get("/version", async (_req, res) => {
   // uptime/rss/cvm: diagnóstico sem painel DO — uptime baixo repetido = container
-  // reiniciando (OOM/health check); cvm mostra o progresso do seed histórico.
-  const h = getProgressoHistorico();
+  // reiniciando (OOM/health check); cvm mostra o progresso do seed histórico
+  // (do banco quando o processo reiniciou — inclui os erros da última execução).
+  const h = await estadoHistorico().catch(() => null);
   const runtime = {
     uptimeSec: Math.round(process.uptime()),
     rssMB: Math.round(process.memoryUsage().rss / 1e6),
-    cvmHistorico: { emAndamento: h.emAndamento, feitos: h.feitos, total: h.total, atual: h.atual, erros: h.erros.length },
+    seedsRodando: runtimeState.seedsRodando,
+    cvmHistorico: h && {
+      emAndamento: h.emAndamento, interrompido: h.interrompido ?? false, feitos: h.feitos, total: h.total,
+      atual: h.atual, erros: h.erros.map((e) => `${e.arquivo}: ${e.erro.slice(0, 180)}`),
+    },
   };
   try {
     const [peerCompanies, pmPagamentoLines, sectorsActive, cvmSyncFiles] = await Promise.all([
@@ -121,12 +127,14 @@ function runStartupSeeds(): void {
   const cmd =
     "npm run db:seed:sectors && npm run db:seed:b3 && npm run db:seed:dictionary && npm run db:seed:models && npm run db:seed:peers";
   console.log("[startup] rodando seeds em background (server já escutando)…");
+  runtimeState.seedsRodando = true;
   const child = exec(cmd, { maxBuffer: 32 * 1024 * 1024 });
   child.stdout?.on("data", (d) => process.stdout.write(String(d)));
   child.stderr?.on("data", (d) => process.stderr.write(String(d)));
-  child.on("exit", (code) =>
-    console.log(`[startup] seeds finalizados (exit ${code})${code ? " — VERIFICAR LOG" : ""}`),
-  );
+  child.on("exit", (code) => {
+    runtimeState.seedsRodando = false;
+    console.log(`[startup] seeds finalizados (exit ${code})${code ? " — VERIFICAR LOG" : ""}`);
+  });
 }
 
 app.listen(env.port, () => {
