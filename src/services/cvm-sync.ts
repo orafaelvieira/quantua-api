@@ -210,7 +210,8 @@ const progHist: ProgressoHistorico = {
 let ultimaFaseGravada = 0;
 async function marcaFase(fase: string): Promise<void> {
   if (!progHist.emAndamento) return;
-  progHist.fase = `${fase} · heap ${Math.round(process.memoryUsage().heapUsed / 1e6)}MB · rss ${Math.round(process.memoryUsage().rss / 1e6)}MB`;
+  const m = process.memoryUsage();
+  progHist.fase = `${fase} · heap ${Math.round(m.heapUsed / 1e6)}MB · ext ${Math.round(m.external / 1e6)}MB · rss ${Math.round(m.rss / 1e6)}MB`;
   const agora = Date.now();
   if (agora - ultimaFaseGravada < 3000) return;
   ultimaFaseGravada = agora;
