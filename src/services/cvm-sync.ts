@@ -89,10 +89,12 @@ export async function sincronizarCvm(tipo: "itr" | "dfp", ano: number): Promise<
   const url = CVM_URLS[tipo](ano);
   const arquivo = arquivoId(tipo, ano);
   console.log(`[cvm-sync] baixando ${url}…`);
-  const { buffer, etag, lastModified } = await baixarCvmZip(url);
-  console.log(`[cvm-sync] ${arquivo}: ${(buffer.length / 1e6).toFixed(1)}MB — processando…`);
+  const baixado = await baixarCvmZip(url);
+  const { etag, lastModified } = baixado;
+  console.log(`[cvm-sync] ${arquivo}: ${(baixado.buffer.length / 1e6).toFixed(1)}MB — processando…`);
 
-  const parsed = parseCvmZip(buffer);
+  const parsed = await parseCvmZip(baixado.buffer);
+  baixado.buffer = Buffer.alloc(0); // solta o ZIP antes do recálculo (container de 1GB)
   const { empresas, periodos } = await persistirCvm(parsed, tipo.toUpperCase() as "ITR" | "DFP");
 
   // Recalcula indicadores só para os dtFims presentes no arquivo (LTM puxa histórico do banco).
@@ -183,6 +185,8 @@ export async function sincronizarHistoricoCvm(): Promise<void> {
           progHist.erros.push({ arquivo, erro });
           console.warn(`[cvm-sync] histórico: ${arquivo} falhou (${erro}) — seguindo para o próximo`);
         }
+        // pausa entre arquivos: dá fôlego pro GC e pro health check num container de 1GB
+        await new Promise((r) => setTimeout(r, 1500));
       }
       progHist.feitos++;
     }

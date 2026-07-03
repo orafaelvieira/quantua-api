@@ -11,15 +11,16 @@ import { mesclaEmpresas, indicadoresDaEmpresa, dreLtm, dreTrimestre } from "../s
 const pasta = process.argv[2] ?? "C:/Users/Emerson/Documents/Automação_B3/itr_cvm";
 const filtro = new RegExp(process.argv[3] ?? "AMBEV", "i");
 
-const fontes = ["itr_2025.zip", "itr_2026.zip", "dfp_2025.zip"].map((f) => join(pasta, f)).filter(existsSync);
-console.log("Fontes:", fontes.map((f) => f.split(/[\\/]/).pop()).join(", "));
-const t0 = Date.now();
-const empresas = mesclaEmpresas(fontes.map((f) => parseCvmZip(f)));
-console.log(`${empresas.size} empresas em ${((Date.now() - t0) / 1000).toFixed(1)}s\n`);
-
 const CHAVE = ["Receita Líquida", "Margem Bruta", "Margem EBITDA", "Margem Líquida", "Liquidez Corrente",
   "Prazo Médio Contas a Receber", "ROE (Retorno sobre Patrimônio Líquido)", "ROA (Retorno sobre Ativos)",
   "Dívida Líquida/EBITDA", "Termômetro de Kanitz", "Altman Z-Score (EM)", "Situação de Liquidez (Fleuriet)"];
+
+async function main(): Promise<void> {
+const fontes = ["itr_2025.zip", "itr_2026.zip", "dfp_2025.zip"].map((f) => join(pasta, f)).filter(existsSync);
+console.log("Fontes:", fontes.map((f) => f.split(/[\\/]/).pop()).join(", "));
+const t0 = Date.now();
+const empresas = mesclaEmpresas(await Promise.all(fontes.map((f) => parseCvmZip(f))));
+console.log(`${empresas.size} empresas em ${((Date.now() - t0) / 1000).toFixed(1)}s\n`);
 
 for (const emp of empresas.values()) {
   if (!filtro.test(emp.denom)) continue;
@@ -51,3 +52,5 @@ for (const emp of empresas.values()) {
   }
   break;
 }
+}
+void main();

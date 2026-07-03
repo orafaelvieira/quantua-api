@@ -24,6 +24,7 @@ import adminRouter from "./routes/admin";
 import peersRouter from "./routes/peers";
 import indicatorsRouter from "./routes/indicators";
 import { startJobs } from "./jobs";
+import { getProgressoHistorico } from "./services/cvm-sync";
 import { prisma } from "./db/client";
 import { exec } from "node:child_process";
 
@@ -57,17 +58,26 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-03.cvm-historico";
+const BUILD_VERSION = "2026-07-03.cvm-historico-v2";
 app.get("/version", async (_req, res) => {
+  // uptime/rss/cvm: diagnóstico sem painel DO — uptime baixo repetido = container
+  // reiniciando (OOM/health check); cvm mostra o progresso do seed histórico.
+  const h = getProgressoHistorico();
+  const runtime = {
+    uptimeSec: Math.round(process.uptime()),
+    rssMB: Math.round(process.memoryUsage().rss / 1e6),
+    cvmHistorico: { emAndamento: h.emAndamento, feitos: h.feitos, total: h.total, atual: h.atual, erros: h.erros.length },
+  };
   try {
-    const [peerCompanies, pmPagamentoLines, sectorsActive] = await Promise.all([
+    const [peerCompanies, pmPagamentoLines, sectorsActive, cvmSyncFiles] = await Promise.all([
       prisma.peerCompany.count(),
       prisma.peerLine.count({ where: { documento: "INDICADOR", conta: "PM - PAGAMENTO" } }),
       prisma.sector.count({ where: { active: true } }),
+      prisma.cvmSyncState.count(),
     ]);
-    res.json({ ok: true, build: BUILD_VERSION, peers: { peerCompanies, pmPagamentoLines }, sectorsActive });
+    res.json({ ok: true, build: BUILD_VERSION, ...runtime, cvmSyncFiles, peers: { peerCompanies, pmPagamentoLines }, sectorsActive });
   } catch {
-    res.json({ ok: true, build: BUILD_VERSION, peers: null });
+    res.json({ ok: true, build: BUILD_VERSION, ...runtime, peers: null });
   }
 });
 

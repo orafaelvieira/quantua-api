@@ -41,49 +41,67 @@ export interface CvmEmpresa {
 
 const normCnpj = (s: string) => s.replace(/[^\d]/g, "");
 
-function parseCsv(texto: string): Array<Record<string, string>> {
-  const linhas = texto.split("\n").filter((l) => l.trim());
-  if (linhas.length < 2) return [];
-  const cab = linhas[0].split(";").map((c) => c.trim());
-  const out: Array<Record<string, string>> = [];
-  for (let i = 1; i < linhas.length; i++) {
-    const partes = linhas[i].split(";");
-    const r: Record<string, string> = {};
-    for (let j = 0; j < cab.length; j++) r[cab[j]] = (partes[j] ?? "").trim();
-    out.push(r);
-  }
-  return out;
-}
-
 interface LinhaCvm {
   cnpj: string; denom: string; cdCvm: string;
   dtIni: string; dtFim: string; cd: string; ds: string; valor: number;
 }
 
-function extraiLinhas(zip: AdmZip, nomeArquivo: string): LinhaCvm[] {
+/**
+ * Extrai as linhas de UM CSV do ZIP, filtrando CEDO pelo CD_CONTA (aceitaConta).
+ * MEMÓRIA (produção roda num container de 1GB): os CSVs da CVM têm centenas de
+ * milhares de linhas e só ~5% das contas nos interessam — materializar tudo como
+ * objetos (versão anterior) estourava a RAM e o DO reiniciava o container no meio
+ * do seed. Aqui caminhamos o texto linha a linha (sem array de linhas) e só as
+ * aprovadas viram objeto. A cada 8k linhas cedemos o event loop, para o /health
+ * do DigitalOcean continuar respondendo durante o parse.
+ */
+async function extraiLinhas(zip: AdmZip, nomeArquivo: string, aceitaConta: (cd: string) => boolean): Promise<LinhaCvm[]> {
   const entry = zip.getEntry(nomeArquivo);
   if (!entry) return [];
-  const rows = parseCsv(entry.getData().toString("latin1"));
+  const texto = entry.getData().toString("latin1");
+  const fimCab = texto.indexOf("\n");
+  if (fimCab < 0) return [];
+  const idx: Record<string, number> = {};
+  texto.slice(0, fimCab).split(";").forEach((c, i) => { idx[c.trim()] = i; });
+
   const out: LinhaCvm[] = [];
-  for (const r of rows) {
-    const ordem = (r.ORDEM_EXERC ?? "").toUpperCase();
+  let pos = fimCab + 1;
+  let n = 0;
+  while (pos < texto.length) {
+    let fim = texto.indexOf("\n", pos);
+    if (fim < 0) fim = texto.length;
+    const partes = texto.slice(pos, fim).split(";");
+    pos = fim + 1;
+    if ((++n & 8191) === 0) await new Promise<void>((r) => setImmediate(r));
+    const get = (col: string) => (partes[idx[col]] ?? "").trim();
+    const cd = get("CD_CONTA");
+    if (!cd || !aceitaConta(cd)) continue; // filtro cedo — descarta ~95% das linhas
+    const ordem = get("ORDEM_EXERC").toUpperCase();
     if (!ordem.includes("LTIMO") || ordem.includes("PEN")) continue; // só ÚLTIMO
-    const vl = parseFloat((r.VL_CONTA ?? "").replace(",", "."));
+    const vl = parseFloat(get("VL_CONTA").replace(",", "."));
     if (!Number.isFinite(vl)) continue;
-    const escala = (r.ESCALA_MOEDA ?? "").toUpperCase().includes("MIL") ? 1000 : 1;
+    const escala = get("ESCALA_MOEDA").toUpperCase().includes("MIL") ? 1000 : 1;
     out.push({
-      cnpj: normCnpj(r.CNPJ_CIA ?? ""),
-      denom: r.DENOM_CIA ?? "",
-      cdCvm: r.CD_CVM ?? "",
-      dtIni: r.DT_INI_EXERC ?? "",
-      dtFim: r.DT_FIM_EXERC ?? "",
-      cd: (r.CD_CONTA ?? "").trim(),
-      ds: r.DS_CONTA ?? "",
+      cnpj: normCnpj(get("CNPJ_CIA")),
+      denom: get("DENOM_CIA"),
+      cdCvm: get("CD_CVM"),
+      dtIni: get("DT_INI_EXERC"),
+      dtFim: get("DT_FIM_EXERC"),
+      cd,
+      ds: get("DS_CONTA"),
       valor: vl * escala,
     });
   }
   return out;
 }
+
+/** Contas que interessam por demonstrativo — o resto é descartado no parse. */
+const ACEITA_CONTA: Record<string, (cd: string) => boolean> = {
+  BPA: (cd) => !!CVM_BP_MAP[cd],
+  BPP: (cd) => !!CVM_BP_MAP[cd],
+  DRE: (cd) => !!CVM_DRE_MAP[cd],
+  DFC_MI: (cd) => !!CVM_DFC_MAP[cd] || cd.startsWith("6.01"), // 6.01.* p/ D&A (por descrição)
+};
 
 /** DT_INI 01/01 do mesmo ano do DT_FIM = visão ACUMULADA (YTD). */
 const ehYtd = (l: LinhaCvm) => l.dtIni.endsWith("-01-01") && l.dtIni.slice(0, 4) === l.dtFim.slice(0, 4);
@@ -91,7 +109,7 @@ const ehYtd = (l: LinhaCvm) => l.dtIni.endsWith("-01-01") && l.dtIni.slice(0, 4)
 const ehPrimeiroTri = (l: LinhaCvm) => ehYtd(l) && l.dtFim.slice(5, 7) === "03";
 
 /** Lê um ZIP da CVM (ITR ou DFP) e monta empresa → períodos nas contas do modelo. */
-export function parseCvmZip(zipSource: string | Buffer, opts?: { incluirFinanceiras?: boolean }): Map<string, CvmEmpresa> {
+export async function parseCvmZip(zipSource: string | Buffer, opts?: { incluirFinanceiras?: boolean }): Promise<Map<string, CvmEmpresa>> {
   const zip = new AdmZip(zipSource as never);
   const nomes = zip.getEntries().map((e) => e.entryName);
   const ehDfp = nomes.some((n) => n.startsWith("dfp_"));
@@ -107,8 +125,8 @@ export function parseCvmZip(zipSource: string | Buffer, opts?: { incluirFinancei
   };
 
   for (const dem of ["BPA", "BPP", "DRE", "DFC_MI"]) {
-    const con = extraiLinhas(zip, `${prefixo}_${dem}_con_${ano}.csv`);
-    const ind = extraiLinhas(zip, `${prefixo}_${dem}_ind_${ano}.csv`);
+    const con = await extraiLinhas(zip, `${prefixo}_${dem}_con_${ano}.csv`, ACEITA_CONTA[dem]);
+    const ind = await extraiLinhas(zip, `${prefixo}_${dem}_ind_${ano}.csv`, ACEITA_CONTA[dem]);
     const temCon = new Set(con.map((l) => l.cnpj));
     const linhas = [...con, ...ind.filter((l) => !temCon.has(l.cnpj))];
 
