@@ -114,6 +114,9 @@ async function seedIndicatorConfigs(): Promise<void> {
   const RENOMEADOS: Record<string, string> = {
     "Margem Operacional": "Margem EBITDA",
     "Dívida Líquida/Lucro Operacional": "Dívida Líquida/EBITDA",
+    // O antigo "Capital de Terceiros" incluía partes relacionadas → ganha o nome explícito;
+    // o create-only abaixo cria o NOVO "Capital de Terceiros" (só empréstimos CP+LP).
+    "Capital de Terceiros": "Capital de Terceiros + Partes Relacionadas",
   };
   for (const [antigo, novo] of Object.entries(RENOMEADOS)) {
     const rowAntigo = await prisma.indicatorConfig.findUnique({ where: { nome: antigo } });
@@ -122,6 +125,19 @@ async function seedIndicatorConfigs(): Promise<void> {
     if (rowNovo) await prisma.indicatorConfig.delete({ where: { id: rowAntigo.id } });
     else await prisma.indicatorConfig.update({ where: { id: rowAntigo.id }, data: { nome: novo } });
     console.log(`  indicadores: "${antigo}" → "${novo}".`);
+  }
+
+  // Fusão de grupos: "Rentabilidade - Modelo Dupont" incorporado a "Indicadores de
+  // Rentabilidade" (a fórmula de cada linha já conta a história do DuPont).
+  const fusao = await prisma.indicatorConfig.updateMany({
+    where: { grupo: "Indicadores de Rentabilidade - Modelo Dupont" },
+    data: { grupo: "Indicadores de Rentabilidade" },
+  });
+  if (fusao.count > 0) console.log(`  indicadores: ${fusao.count} movido(s) do grupo DuPont para Rentabilidade.`);
+  // Fórmulas/grupos das linhas de SISTEMA acompanham o template do código (texto
+  // exibido; semáforo/exibição do usuário ficam intactos).
+  for (const t of INDICADORES_TEMPLATE) {
+    await prisma.indicatorConfig.updateMany({ where: { nome: t.nome, sistema: true }, data: { formula: t.formula, grupo: t.tipo } });
   }
 
   let created = 0;

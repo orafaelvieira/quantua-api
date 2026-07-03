@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calculateIndicators, statusPorSemaforo, SEMAFORO_DEFAULTS } from "./indicator-calculator";
+import { calculateIndicators, statusPorSemaforo, SEMAFORO_DEFAULTS, diasDoPeriodo } from "./indicator-calculator";
 import type { BPLineItem, DRELineItem } from "../types/financial";
 
 const bpLine = (classificacao: string, conta: string, nivel: number, v: number): BPLineItem =>
@@ -60,5 +60,78 @@ describe("semáforo configurável", () => {
     expect(statusPorSemaforo(def, 0.9)).toBe("critico");
     expect(statusPorSemaforo(def, 0.6)).toBe("atencao");
     expect(statusPorSemaforo(def, 0.3)).toBe("ok");
+  });
+});
+
+describe("correções e novos indicadores (jul/2026)", () => {
+  // BP com ANC para o CDG pela ótica do financiamento
+  const BP2: BPLineItem[] = [
+    bpLine("AT", "Ativo Total", 0, 1000),
+    bpLine("AC", "Ativo Circulante", 1, 500),
+    bpLine("AF", "Caixa e Equivalentes de Caixa", 2, 100),
+    bpLine("AO", "Contas a Receber - CP", 2, 200),
+    bpLine("AO", "Estoques - CP", 2, 200),
+    bpLine("ANC", "Ativo Não Circulante", 1, 500),
+    bpLine("ANC", "Imobilizado", 2, 300),
+    bpLine("ANC", "Investimentos", 2, 100),
+    bpLine("ANC", "Intangível", 2, 100),
+    bpLine("PT", "Passivo Total", 0, 1000),
+    bpLine("PC", "Passivo Circulante", 1, 250),
+    bpLine("PF", "Empréstimos e Financiamentos - CP", 2, 80),
+    bpLine("PF", "Passivos com Partes Relacionadas - CP", 2, 40),
+    bpLine("PNC", "Passivo Não Circulante", 1, 150),
+    bpLine("PNC", "Empréstimos e Financiamentos - LP", 2, 120),
+    bpLine("PL", "Patrimônio Líquido", 1, 600),
+    bpLine("PL", "Lucros/Prejuízos Acumulados", 2, 150),
+    bpLine("PL", "Reservas de Lucros", 2, 50),
+  ];
+  const DRE2: DRELineItem[] = [dreLine("Receita Bruta", 1000), dreLine("Custo Operacional", -600)];
+  const val = (nome: string) => {
+    const i = calculateIndicators(BP2, DRE2, ["2023"]).find((x) => x.nome === nome);
+    return i?.valores["2023"];
+  };
+
+  it("CDG = (PL + PNC) − ANC (ótica do financiamento; = AC − PC quando o balanço fecha)", () => {
+    expect(val("Capital de Giro (CDG)")).toBeCloseTo(600 + 150 - 500, 2); // 250 = 500-250 ✓
+  });
+
+  it("Capital de Terceiros = só empréstimos CP+LP; a versão + Partes Relacionadas inclui tudo", () => {
+    expect(val("Capital de Terceiros")).toBeCloseTo(80 + 120, 2);
+    expect(val("Capital de Terceiros + Partes Relacionadas")).toBeCloseTo(80 + 40 + 120, 2);
+  });
+
+  it("ROA (Giro × Margem) = Giro do Ativo × Margem Líquida = ROA", () => {
+    const roaDupont = val("ROA (Giro × Margem)") as number;
+    const roa = val("ROA (Retorno sobre Ativos)") as number;
+    expect(roaDupont).toBeCloseTo(roa, 10);
+  });
+
+  it("Imobilização do PL = (Imobilizado + Investimentos + Intangível) / PL", () => {
+    expect(val("Imobilização do Patrimônio Líquido")).toBeCloseTo(500 / 600, 4);
+  });
+
+  it("Altman Z-Score (EM) = 6,56·X1 + 3,26·X2 + 6,72·X3 + 1,05·X4", () => {
+    // X1 = (500−250)/1000 = 0,25 · X2 = 200/1000 = 0,2 · X3 = EBIT 400/1000 = 0,4 · X4 = 600/400 = 1,5
+    const esperado = 6.56 * 0.25 + 3.26 * 0.2 + 6.72 * 0.4 + 1.05 * 1.5;
+    expect(val("Altman Z-Score (EM)")).toBeCloseTo(esperado, 4);
+  });
+
+  it("Crescimento da Receita (YoY) compara com o período anterior cronológico", () => {
+    const bp3 = BP2.map((l) => ({ ...l, valores: { "2022": l.valores["2023"], "2023": l.valores["2023"] } }));
+    const dre3: DRELineItem[] = [
+      { conta: "Receita Bruta", subtotal: false, editado: false, valores: { "2022": 800, "2023": 1000 } },
+    ];
+    const inds = calculateIndicators(bp3, dre3, ["2023", "2022"]); // fora de ordem de propósito
+    const g = inds.find((x) => x.nome === "Crescimento da Receita (YoY)");
+    expect(g?.valores["2023"]).toBeCloseTo(0.25, 4); // 1000/800 − 1
+    expect(g?.valores["2022"]).toBeNull();           // sem período anterior
+  });
+
+  it("dias do período: anual 365, mensal 30, trimestral 90, único intermediário = YTD (mês×30)", () => {
+    expect(diasDoPeriodo("31/12/2022", ["31/12/2021", "31/12/2022"])).toBe(365);
+    expect(diasDoPeriodo("31/03/2024", ["31/01/2024", "28/02/2024", "31/03/2024"])).toBe(30);
+    expect(diasDoPeriodo("30/06/2024", ["31/03/2024", "30/06/2024", "30/09/2024"])).toBe(90);
+    expect(diasDoPeriodo("31/03/2024", ["31/03/2024"])).toBe(90);  // balancete até março = 3 meses
+    expect(diasDoPeriodo("31/12/2024", ["31/12/2024"])).toBe(365); // fechamento anual
   });
 });

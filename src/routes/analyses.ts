@@ -404,6 +404,7 @@ async function runAnalysisBackground(
       web ? { resumo: web.resumo, fontes: web.fontes } : null,
       materiais ? materiais.blocos : null,
       dados?.dre ?? null,
+      dados?.fluxoCaixa ?? null, // estágio Dickinson pelos sinais de FCO/FCI/FCF (quando a prova fecha)
     );
     const resultado = {
       ...analise.result,

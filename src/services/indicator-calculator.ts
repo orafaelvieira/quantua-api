@@ -51,7 +51,43 @@ export const SEMAFORO_DEFAULTS: Record<string, SemaforoDef> = {
   "Despesa Financeira / Rec. Líquida": { direcao: "maior_ruim", critico: 0.10, atencao: 0.05 },
   // Kanitz: FI < −3 = risco de insolvência; −3 a 0 = penumbra; > 0 = solvente
   "Termômetro de Kanitz": { direcao: "menor_ruim", critico: -3, atencao: 0 },
+  // Altman Z''-score (mercados emergentes): < 1,1 perigo; 1,1–2,6 zona cinzenta; > 2,6 seguro
+  "Altman Z-Score (EM)": { direcao: "menor_ruim", critico: 1.1, atencao: 2.6 },
+  // Imobilização do PL: > 100% = PL não cobre o ativo fixo (capital de giro próprio negativo)
+  "Imobilização do Patrimônio Líquido": { direcao: "maior_ruim", critico: 1.0, atencao: 0.8 },
 };
+
+/** Dias-base dos PRAZOS MÉDIOS conforme a periodicidade dos documentos: anual = 365,
+ *  trimestral = 90, mensal = 30 etc. Com ≥2 períodos usa o espaçamento (mediana) entre
+ *  eles; com 1 período intermediário (balancete até 31/03), assume acumulado no ano
+ *  (mês × 30). Determinístico. */
+export function diasDoPeriodo(periodo: string, periodos: string[]): number {
+  const chaveMes = (p: string): number => {
+    const m = p.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    const y = p.match(/20\d{2}/);
+    const ano = y ? parseInt(y[0]) : 0;
+    return ano * 12 + (m ? parseInt(m[2]) : 12);
+  };
+  const unicos = [...new Set(periodos)].sort((a, b) => chaveMes(a) - chaveMes(b));
+  if (unicos.length >= 2) {
+    const gaps: number[] = [];
+    for (let i = 1; i < unicos.length; i++) gaps.push(chaveMes(unicos[i]) - chaveMes(unicos[i - 1]));
+    const gap = gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)]; // mediana
+    if (gap >= 1 && gap < 12) return gap * 30;
+    return 365;
+  }
+  const m = periodo.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  const mes = m ? parseInt(m[2]) : 12;
+  return mes === 12 ? 365 : mes * 30;
+}
+
+/** Chave cronológica de um período ("31/12/2022" → 20221231; "2022" → 20220000). */
+function diasKey(p: string): number {
+  const m = p.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return Number(`${m[3]}${m[2]}${m[1]}`);
+  const y = p.match(/20\d{2}/);
+  return y ? Number(`${y[0]}0000`) : 0;
+}
 
 export function statusPorSemaforo(def: SemaforoDef | undefined, value: number | null): StatusLevel {
   if (value === null || !def) return null;
@@ -74,11 +110,17 @@ function computeIndicator(
   bp: BPLineItem[],
   dre: DRELineItem[],
   periodo: string,
-  computed: Record<string, number | null>
+  computed: Record<string, number | null>,
+  diasPeriodo = 365
 ): number | string | null {
   // BP values — Ativo (always positive)
   const ativoTotal = bpVal(bp, "Ativo Total", periodo);
   const ativoCirculante = bpVal(bp, "Ativo Circulante", periodo);
+  const ativoNaoCirculante = bpVal(bp, "Ativo Não Circulante", periodo);
+  const imobilizado = bpVal(bp, "Imobilizado", periodo);
+  const investimentosBP = bpVal(bp, "Investimentos", periodo);
+  const intangivel = bpVal(bp, "Intangível", periodo);
+  const lucrosAcumulados = bpVal(bp, "Lucros/Prejuízos Acumulados", periodo) + bpVal(bp, "Reservas de Lucros", periodo);
   const caixa = bpVal(bp, "Caixa e Equivalentes de Caixa", periodo);
   const contasReceber = bpVal(bp, "Contas a Receber - CP", periodo);
   const estoques = bpVal(bp, "Estoques - CP", periodo);
@@ -132,11 +174,13 @@ function computeIndicator(
   const custoOperacional = Math.abs(custoOp);
 
   // Computed intermediate values
-  const capitalTerceiros = empFinCP + passPartRelCP + empFinLP + passPartRelLP;
+  const capitalTerceirosEmprestimos = empFinCP + empFinLP; // só onerosos bancários
+  const capitalTerceiros = empFinCP + passPartRelCP + empFinLP + passPartRelLP; // + partes relacionadas
   const caixaEquivalentes = caixa;
   const dividaLiquida = capitalTerceiros - caixaEquivalentes;
   const nopat = ebit * (1 - 0.34);
-  const cdg = ativoCirculante - passivoCirculante;
+  // CDG pela ótica do FINANCIAMENTO (= AC − PC quando o balanço fecha)
+  const cdg = patrimonioLiquido + passivoNaoCirculante - ativoNaoCirculante;
   const ncg = ativoOperacional - passivoOperacional;
 
   // Store computed values for cross-reference
@@ -186,22 +230,23 @@ function computeIndicator(
       return "Indefinida";
     }
     case "Prazo Médio Contas a Receber":
-      return receitaLiquida ? Math.round((contasReceber * 365) / receitaLiquida) : null;
+      return receitaLiquida ? Math.round((contasReceber * diasPeriodo) / receitaLiquida) : null;
     case "Prazo Médio Estoque":
-      return custoOperacional ? Math.round((estoques * 365) / custoOperacional) : null;
+      return custoOperacional ? Math.round((estoques * diasPeriodo) / custoOperacional) : null;
     case "Prazo Médio Fornecedores":
-      return custoOperacional ? Math.round((fornecedores * 365) / custoOperacional) : null;
+      return custoOperacional ? Math.round((fornecedores * diasPeriodo) / custoOperacional) : null;
     case "Ciclo Financeiro": {
-      const pmr = receitaLiquida ? Math.round((contasReceber * 365) / receitaLiquida) : null;
-      const pme = custoOperacional ? Math.round((estoques * 365) / custoOperacional) : null;
-      const pmf = custoOperacional ? Math.round((fornecedores * 365) / custoOperacional) : null;
+      const pmr = receitaLiquida ? Math.round((contasReceber * diasPeriodo) / receitaLiquida) : null;
+      const pme = custoOperacional ? Math.round((estoques * diasPeriodo) / custoOperacional) : null;
+      const pmf = custoOperacional ? Math.round((fornecedores * diasPeriodo) / custoOperacional) : null;
       if (pmr !== null && pme !== null && pmf !== null) return pmr + pme - pmf;
       return null;
     }
 
     // Endividamento
     case "Caixa e Equivalentes": return caixaEquivalentes;
-    case "Capital de Terceiros": return capitalTerceiros;
+    case "Capital de Terceiros": return capitalTerceirosEmprestimos;
+    case "Capital de Terceiros + Partes Relacionadas": return capitalTerceiros;
     case "Dívida Líquida": return dividaLiquida;
     case "Endividamento Geral": return div(passivoTotal - patrimonioLiquido, passivoTotal);
     case "Endividamento de Curto Prazo": return div(passivoCirculante, passivoTotal);
@@ -222,6 +267,16 @@ function computeIndicator(
     case "ROE (Retorno sobre Patrimônio Líquido)": return div(lucroLiquido, patrimonioLiquido);
     case "Giro do Ativo": return div(receitaLiquida, ativoTotal);
     case "Alavancagem": return div(passivoTotal, patrimonioLiquido);
+    case "ROA (Giro × Margem)": {
+      // Decomposição DuPont: Giro × Margem Líquida ≡ LL/AT; × Alavancagem chega ao ROE.
+      const giro = div(receitaLiquida, ativoTotal);
+      const margem = div(lucroLiquido, receitaLiquida);
+      return giro !== null && margem !== null ? giro * margem : null;
+    }
+
+    // Estrutura
+    case "Imobilização do Patrimônio Líquido":
+      return div(imobilizado + investimentosBP + intangivel, patrimonioLiquido);
 
     // Solvência — Termômetro de Kanitz (1978):
     //   FI = 0,05·(LL/PL) + 1,65·LG + 3,55·LS − 1,06·LC − 0,33·(Exigível/PL)
@@ -237,6 +292,18 @@ function computeIndicator(
       return 0.05 * x1 + 1.65 * x2 + 3.55 * x3 - 1.06 * x4 - 0.33 * x5;
     }
 
+    // Solvência — Altman Z''-score p/ mercados emergentes (Altman, Hartzell & Peck 1995,
+    // sem a constante 3,25): > 2,6 seguro · 1,1–2,6 zona cinzenta · < 1,1 perigo
+    case "Altman Z-Score (EM)": {
+      const exigivelTotal = passivoCirculante + passivoNaoCirculante;
+      const x1 = div(ativoCirculante - passivoCirculante, ativoTotal);
+      const x2 = div(lucrosAcumulados, ativoTotal);
+      const x3 = div(ebit, ativoTotal);
+      const x4 = div(patrimonioLiquido, exigivelTotal);
+      if (x1 === null || x2 === null || x3 === null || x4 === null) return null;
+      return 6.56 * x1 + 3.26 * x2 + 6.72 * x3 + 1.05 * x4;
+    }
+
     default: return null;
   }
 }
@@ -247,13 +314,33 @@ export function calculateIndicators(
   periodos: string[],
   semaforoOverrides?: Record<string, SemaforoDef>
 ): Indicador[] {
+  // Ordem cronológica p/ os indicadores MULTI-PERÍODO (YoY) e dias-base dos prazos.
+  const periodosOrd = [...periodos].sort((a, b) => diasKey(a) - diasKey(b));
+  const diasPorPeriodo: Record<string, number> = {};
+  for (const p of periodos) diasPorPeriodo[p] = diasDoPeriodo(p, periodos);
+  // Receita Líquida por período (base do Crescimento YoY)
+  const rlPor: Record<string, number | null> = {};
+  for (const p of periodos) {
+    const v = computeIndicator("Receita Líquida", bp, dre, p, {});
+    rlPor[p] = typeof v === "number" ? v : null;
+  }
+
   return INDICADORES_TEMPLATE.map(template => {
     const valores: Record<string, number | string | null> = {};
     const status: Record<string, StatusLevel> = {};
     const computed: Record<string, number | null> = {};
 
     for (const periodo of periodos) {
-      const val = computeIndicator(template.nome, bp, dre, periodo, computed);
+      let val: number | string | null;
+      if (template.nome === "Crescimento da Receita (YoY)") {
+        // multi-período: compara com o período IMEDIATAMENTE anterior (cronológico)
+        const idx = periodosOrd.indexOf(periodo);
+        const antP = idx > 0 ? periodosOrd[idx - 1] : null;
+        const cur = rlPor[periodo], antV = antP ? rlPor[antP] : null;
+        val = cur != null && antV != null && antV !== 0 ? (cur - antV) / Math.abs(antV) : null;
+      } else {
+        val = computeIndicator(template.nome, bp, dre, periodo, computed, diasPorPeriodo[periodo]);
+      }
       valores[periodo] = val;
 
       // Status only for numeric values

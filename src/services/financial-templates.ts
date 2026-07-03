@@ -118,6 +118,7 @@ export const INDICADORES_TEMPLATE: Array<{
   { tipo: "Indicadores Operacionais", nome: "Lucro Operacional", formula: "EBIT = EBITDA (-) Depreciação e Amortização (+) Equivalência Patrimonial", tipoDado: "R$" },
   { tipo: "Indicadores Operacionais", nome: "Lucro Líquido", formula: "Resultado Antes do IR e CSLL (-) IR e CSLL", tipoDado: "R$" },
   { tipo: "Indicadores Operacionais", nome: "NOPAT", formula: "EBIT × (1 - Impostos (34%))", tipoDado: "R$" },
+  { tipo: "Indicadores Operacionais", nome: "Crescimento da Receita (YoY)", formula: "Receita Líquida do período / Receita Líquida do período anterior − 1", tipoDado: "%" },
 
   // Indicadores de Margens
   { tipo: "Indicadores de Margens", nome: "Margem Bruta", formula: "Lucro Bruto / Receita Líquida", tipoDado: "%" },
@@ -131,39 +132,40 @@ export const INDICADORES_TEMPLATE: Array<{
   { tipo: "Indicadores de Liquidez", nome: "Liquidez Geral", formula: "(Ativo Circulante + Ativo Realizável a Longo Prazo) / (Passivo Circulante + Passivo Não Circulante)", tipoDado: "Índice" },
 
   // Indicadores de Capital de Giro
-  { tipo: "Indicadores de Capital de Giro", nome: "Capital de Giro (CDG)", formula: "Ativo Circulante - Passivo Circulante", tipoDado: "R$" },
+  { tipo: "Indicadores de Capital de Giro", nome: "Capital de Giro (CDG)", formula: "(Patrimônio Líquido + Passivo Não Circulante) - Ativo Não Circulante", tipoDado: "R$" },
   { tipo: "Indicadores de Capital de Giro", nome: "Necessidade de Capital de Giro (NCG)", formula: "Ativo Operacional - Passivo Operacional", tipoDado: "R$" },
   { tipo: "Indicadores de Capital de Giro", nome: "Saldo em Tesouraria (ST)", formula: "Capital de Giro (CDG) - Necessidade de Capital de Giro (NCG)", tipoDado: "R$" },
   { tipo: "Indicadores de Capital de Giro", nome: "Situação da empresa", formula: "Classificação baseada em CDG, NCG e ST", tipoDado: "Texto" },
-  { tipo: "Indicadores de Capital de Giro", nome: "Prazo Médio Contas a Receber", formula: "(Contas a Receber × 365) / Receita Líquida", tipoDado: "Dias" },
-  { tipo: "Indicadores de Capital de Giro", nome: "Prazo Médio Estoque", formula: "(Estoques × 365) / Custo Operacional", tipoDado: "Dias" },
-  { tipo: "Indicadores de Capital de Giro", nome: "Prazo Médio Fornecedores", formula: "(Fornecedores × 365) / Custo Operacional", tipoDado: "Dias" },
+  { tipo: "Indicadores de Capital de Giro", nome: "Prazo Médio Contas a Receber", formula: "(Contas a Receber × dias do período) / Receita Líquida — 365 anual, 90 trimestral, 30 mensal", tipoDado: "Dias" },
+  { tipo: "Indicadores de Capital de Giro", nome: "Prazo Médio Estoque", formula: "(Estoques × dias do período) / Custo Operacional — 365 anual, 90 trimestral, 30 mensal", tipoDado: "Dias" },
+  { tipo: "Indicadores de Capital de Giro", nome: "Prazo Médio Fornecedores", formula: "(Fornecedores × dias do período) / Custo Operacional — 365 anual, 90 trimestral, 30 mensal", tipoDado: "Dias" },
   { tipo: "Indicadores de Capital de Giro", nome: "Ciclo Financeiro", formula: "Prazo Médio Contas a Receber + Prazo Médio Estoque - Prazo Médio Fornecedores", tipoDado: "Dias" },
 
   // Indicadores de Endividamento
   { tipo: "Indicadores de Endividamento", nome: "Caixa e Equivalentes", formula: "Caixa e Equivalentes de Caixa", tipoDado: "R$" },
-  { tipo: "Indicadores de Endividamento", nome: "Capital de Terceiros", formula: "Empréstimos e Financiamentos - Curto Prazo + Passivos com Partes Relacionadas - Curto Prazo + Empréstimos e Financiamentos - Longo Prazo + Passivos com Partes Relacionadas - Longo Prazo", tipoDado: "R$" },
-  { tipo: "Indicadores de Endividamento", nome: "Dívida Líquida", formula: "Capital de Terceiros - Caixa e Equivalentes", tipoDado: "R$" },
+  { tipo: "Indicadores de Endividamento", nome: "Capital de Terceiros", formula: "Empréstimos e Financiamentos - Curto Prazo + Empréstimos e Financiamentos - Longo Prazo", tipoDado: "R$" },
+  { tipo: "Indicadores de Endividamento", nome: "Capital de Terceiros + Partes Relacionadas", formula: "Empréstimos e Financiamentos (CP + LP) + Passivos com Partes Relacionadas (CP + LP)", tipoDado: "R$" },
+  { tipo: "Indicadores de Endividamento", nome: "Dívida Líquida", formula: "Capital de Terceiros + Partes Relacionadas - Caixa e Equivalentes", tipoDado: "R$" },
   { tipo: "Indicadores de Endividamento", nome: "Endividamento Geral", formula: "(Passivo Total - Patrimônio Líquido) / Passivo Total", tipoDado: "%" },
   { tipo: "Indicadores de Endividamento", nome: "Endividamento de Curto Prazo", formula: "Passivo Circulante / Passivo Total", tipoDado: "%" },
   { tipo: "Indicadores de Endividamento", nome: "Patrimônio Líquido", formula: "Patrimônio Líquido", tipoDado: "R$" },
-  { tipo: "Indicadores de Endividamento", nome: "Capital Terceiros s/ PL", formula: "Capital de Terceiros / Patrimônio Líquido", tipoDado: "Índice" },
+  { tipo: "Indicadores de Endividamento", nome: "Capital Terceiros s/ PL", formula: "Capital de Terceiros + Partes Relacionadas / Patrimônio Líquido", tipoDado: "Índice" },
   { tipo: "Indicadores de Endividamento", nome: "Dívida Líquida/EBITDA", formula: "Dívida Líquida / EBITDA", tipoDado: "Índice" },
   { tipo: "Indicadores de Endividamento", nome: "Índice de Cobertura de Juros", formula: "EBITDA / Despesas Financeiras", tipoDado: "Índice" },
   { tipo: "Indicadores de Endividamento", nome: "Despesa Financeira / Rec. Líquida", formula: "Despesas Financeiras / Receita Líquida", tipoDado: "%" },
+  { tipo: "Indicadores de Endividamento", nome: "Imobilização do Patrimônio Líquido", formula: "(Imobilizado + Investimentos + Intangível) / Patrimônio Líquido — acima de 100% o PL não cobre o ativo fixo (capital de giro próprio negativo)", tipoDado: "%" },
 
-  // Indicadores de Rentabilidade
+  // Indicadores de Rentabilidade (inclui o Modelo DuPont: Margem × Giro = ROA; ROA × Alavancagem = ROE)
   { tipo: "Indicadores de Rentabilidade", nome: "ROA (Retorno sobre Ativos)", formula: "Lucro Líquido / Ativo Total", tipoDado: "%" },
-  { tipo: "Indicadores de Rentabilidade", nome: "ROIC (Retorno sobre Capital Investido)", formula: "NOPAT / (Patrimônio Líquido + Capital de Terceiros)", tipoDado: "%" },
-
-  // Indicadores de Rentabilidade - Modelo Dupont
-  { tipo: "Indicadores de Rentabilidade - Modelo Dupont", nome: "ROE (Retorno sobre Patrimônio Líquido)", formula: "Lucro Líquido / Patrimônio Líquido", tipoDado: "%" },
-  { tipo: "Indicadores de Rentabilidade - Modelo Dupont", nome: "Margem Líquida", formula: "Lucro Líquido / Receita Líquida", tipoDado: "%" },
-  { tipo: "Indicadores de Rentabilidade - Modelo Dupont", nome: "Giro do Ativo", formula: "Receita Líquida / Ativo Total", tipoDado: "Índice" },
-  { tipo: "Indicadores de Rentabilidade - Modelo Dupont", nome: "Alavancagem", formula: "Passivo Total / Patrimônio Líquido", tipoDado: "Índice" },
+  { tipo: "Indicadores de Rentabilidade", nome: "ROIC (Retorno sobre Capital Investido)", formula: "NOPAT / (Patrimônio Líquido + Capital de Terceiros + Partes Relacionadas)", tipoDado: "%" },
+  { tipo: "Indicadores de Rentabilidade", nome: "Giro do Ativo", formula: "Receita Líquida / Ativo Total", tipoDado: "Índice" },
+  { tipo: "Indicadores de Rentabilidade", nome: "ROA (Giro × Margem)", formula: "DuPont: Giro do Ativo × Margem Líquida (= Lucro Líquido / Ativo Total)", tipoDado: "%" },
+  { tipo: "Indicadores de Rentabilidade", nome: "Alavancagem", formula: "Passivo Total / Patrimônio Líquido", tipoDado: "Índice" },
+  { tipo: "Indicadores de Rentabilidade", nome: "ROE (Retorno sobre Patrimônio Líquido)", formula: "DuPont: ROA × Alavancagem (= Lucro Líquido / Patrimônio Líquido)", tipoDado: "%" },
 
   // Indicadores de Solvência (modelos de previsão de insolvência)
   { tipo: "Indicadores de Solvência", nome: "Termômetro de Kanitz", formula: "FI = 0,05×(LL/PL) + 1,65×Liquidez Geral + 3,55×Liquidez Seca − 1,06×Liquidez Corrente − 0,33×(Exigível Total/PL). FI > 0: solvente · 0 a −3: penumbra · < −3: risco de insolvência", tipoDado: "Índice" },
+  { tipo: "Indicadores de Solvência", nome: "Altman Z-Score (EM)", formula: "Z'' = 6,56×(CDG/Ativo Total) + 3,26×(Lucros Acumulados/Ativo Total) + 6,72×(EBIT/Ativo Total) + 1,05×(PL/Exigível Total). > 2,6: zona segura · 1,1 a 2,6: zona cinzenta · < 1,1: zona de perigo", tipoDado: "Índice" },
 ];
 
 // Account name aliases for normalization

@@ -80,6 +80,7 @@ function ordPeriodo(p: string): number {
 const NOME_ANTIGO_INDICADOR: Record<string, string> = {
   "Margem EBITDA": "Margem Operacional",
   "Dívida Líquida/EBITDA": "Dívida Líquida/Lucro Operacional",
+  "Capital de Terceiros + Partes Relacionadas": "Capital de Terceiros",
 };
 function achaIndicador(indicadores: IndicadorLite[], nome: string): IndicadorLite | undefined {
   return indicadores.find((i) => i.nome === nome)
@@ -144,7 +145,14 @@ export interface EstagioResult { estagio: string; justificativa: string }
  * Rótulo-chave não pode variar entre regerações ("verde só com prova"); a IA recebe isto como
  * FATO e só narra. Retorna null se houver < 2 períodos (sem base para tendência).
  */
-function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]): EstagioResult | null {
+/** Recorte mínimo do FC indireto que o estágio Dickinson consome (evita acoplar o tipo inteiro). */
+export interface FluxoCaixaLite {
+  colunas: string[];
+  totais: { fco: Record<string, number>; fci: Record<string, number>; fcf: Record<string, number> };
+  prova?: Array<{ periodo: string; fecha: boolean }>;
+}
+
+export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[], fluxoCaixa?: FluxoCaixaLite | null): EstagioResult | null {
   const ord = [...periodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
   if (ord.length < 2) return null; // período insuficiente p/ tendência
   const ind = (nome: string) => achaIndicador(indicadores, nome);
@@ -170,7 +178,29 @@ function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]): Esta
     return { estagio: "Crise de caixa", justificativa: `Aperto agudo de liquidez (${partes}).` };
   }
 
-  // Tendência de RECEITA no histórico completo.
+  // 2) DICKINSON (2011) — padrão-ouro: os SINAIS de FCO/FCI/FCF do FC indireto classificam
+  //    o estágio. Só quando o FC existe E a prova de fechamento bate ("verde só com prova");
+  //    senão cai na heurística de receita/margem abaixo.
+  const cols = fluxoCaixa?.colunas ?? [];
+  const provaOk = (fluxoCaixa?.prova ?? []).length > 0 && (fluxoCaixa!.prova!).every((p) => p.fecha);
+  if (fluxoCaixa && cols.length > 0 && provaOk) {
+    const c = cols[cols.length - 1]; // variação mais recente
+    const fco = fluxoCaixa.totais.fco[c] ?? 0;
+    const fci = fluxoCaixa.totais.fci[c] ?? 0;
+    const fcf = fluxoCaixa.totais.fcf[c] ?? 0;
+    const fmt = (v: number) => `${v < 0 ? "−" : "+"}R$ ${Math.abs(Math.round(v)).toLocaleString("pt-BR")}`;
+    const sinais = `FCO ${fmt(fco)}, FCI ${fmt(fci)}, FCF ${fmt(fcf)} em ${c}`;
+    const base = `Sinais do fluxo de caixa (Dickinson): ${sinais} — `;
+    if (fco > 0 && fci < 0 && fcf > 0) return { estagio: "Crescimento", justificativa: base + "operação gera caixa, a empresa investe e ainda capta para acelerar (padrão de crescimento)." };
+    if (fco < 0 && fci < 0 && fcf > 0) return { estagio: "Crescimento", justificativa: base + "operação ainda queima caixa mas investe com captação — fase inicial/expansão financiada." };
+    if (fco > 0 && fci < 0 && fcf < 0) return { estagio: "Maturidade", justificativa: base + "operação financia os investimentos e ainda amortiza dívida/remunera sócios (padrão maduro)." };
+    if (fco > 0 && fci > 0 && fcf < 0) return { estagio: "Platô", justificativa: base + "gera caixa mas desinveste e devolve capital — sem novas frentes de crescimento (shake-out)." };
+    if (fco < 0 && fci > 0) return { estagio: "Declínio", justificativa: base + "operação queima caixa coberta por venda de ativos — padrão típico de declínio." };
+    if (fco < 0 && fci < 0 && fcf < 0) return { estagio: "Declínio", justificativa: base + "caixa consumido em todas as frentes." };
+    // combinação ambígua (ex.: tudo positivo) → segue para a heurística de receita/margem
+  }
+
+  // 3) Fallback: tendência de RECEITA no histórico completo (sem FC confiável).
   if (receita.length >= 2) {
     const first = receita[0], last = receita[receita.length - 1], n = receita.length;
     const cresc = first !== 0 ? (last - first) / Math.abs(first) : 0; // crescimento acumulado do período
@@ -286,6 +316,7 @@ export async function generateAnalysis(
   web?: { resumo: string; fontes: { titulo: string; url: string }[] } | null,
   materiais?: Array<{ nome: string; resumo: string }> | null,
   dre?: Array<{ conta: string; valores: Record<string, number>; subtotal?: boolean }> | null,
+  fluxoCaixa?: FluxoCaixaLite | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
   // Ordem CRONOLÓGICA uma vez, para TODO o prompt (séries de indicadores, bloco da DRE,
   // KPIs, estágio) — dados.periodos pode vir na ordem dos documentos (ex.: 2022, 2020, 2021).
@@ -296,8 +327,9 @@ export async function generateAnalysis(
   const webBlock = buildWebBlock(web);
   const materiaisBlock = buildMateriaisBlock(materiais);
   const dreBlock = buildDreBlock(dre, periodos);
-  // Estágio DETERMINÍSTICO (motor, multi-ano) — a IA recebe como fato e não reclassifica.
-  const estagioDet = classifyEstagio(indicadores, periodos);
+  // Estágio DETERMINÍSTICO (motor, multi-ano; Dickinson quando o FC fecha) — a IA recebe
+  // como fato e não reclassifica.
+  const estagioDet = classifyEstagio(indicadores, periodos, fluxoCaixa);
   const nPeriodos = new Set(periodos).size;
   const periodoInsuficiente = nPeriodos < 2;
   const estagioBlock = estagioDet
