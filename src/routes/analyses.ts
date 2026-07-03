@@ -952,7 +952,25 @@ router.get("/:id/dados-estruturados", async (req: AuthRequest, res: Response): P
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   if (!analysis.dadosEstruturados) { res.json({ bp: [], dre: [], indicadores: [], periodos: [], version: 1 }); return; }
-  res.json(analysis.dadosEstruturados);
+  const dadosOut = analysis.dadosEstruturados as any;
+  // Ocultação de indicadores aplicada NA LEITURA (config atual, não a do momento do
+  // cálculo) — desativar na tela "Indicadores" reflete na hora em qualquer IBR, sem
+  // precisar recalcular. Best-effort: erro na config nunca bloqueia os dados.
+  try {
+    if (Array.isArray(dadosOut?.indicadores) && dadosOut.indicadores.length > 0) {
+      const inativos = await prisma.indicatorConfig.findMany({ where: { ativo: false }, select: { nome: true } });
+      if (inativos.length > 0) {
+        const off = new Set(inativos.map((i) => i.nome));
+        dadosOut.indicadores = dadosOut.indicadores.map((ind: { nome: string; oculto?: boolean }) =>
+          off.has(ind.nome) ? { ...ind, oculto: true } : ind.oculto ? { ...ind, oculto: false } : ind
+        );
+      } else if (dadosOut.indicadores.some((i: { oculto?: boolean }) => i.oculto)) {
+        // ninguém mais desativado → limpa flags antigas gravadas no cálculo
+        dadosOut.indicadores = dadosOut.indicadores.map((i: { oculto?: boolean }) => (i.oculto ? { ...i, oculto: false } : i));
+      }
+    }
+  } catch { /* config indisponível — serve os dados como estão */ }
+  res.json(dadosOut);
 });
 
 router.put("/:id/dados-estruturados/bp", async (req: AuthRequest, res: Response): Promise<void> => {
