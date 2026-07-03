@@ -281,6 +281,10 @@ model Analysis {
   reviewMeta        Json?    @map("review_meta")
   signature         Json?
   questionnaire     Json?
+  /// DORES declaradas pelo dono/gestão (entrevista): Array<{categoria, descricao,
+  /// severidade}>. Fonte [5] do prompt da análise — confronto declarado×observado
+  /// gera confrontoDores e pontosCegos (número ruim SEM dor declarada).
+  dores             Json?
   createdAt         DateTime @default(now()) @map("created_at")
 
   /// Próxima revisão agendada (apenas mode=recurring). Cron diário varre

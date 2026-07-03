@@ -68,6 +68,10 @@ export interface AnalysisResult {
   valorNaMesa?: { total: number; caixaLiberavel: number; margemRecuperavel: number; leitura: string };
   /** O que PROTEGER — forças que sustentam o resultado e como blindá-las. */
   protecoes?: Array<{ oQueProteger: string; ameaca: string; acaoDefensiva: string }>;
+  /** Confronto declarado×observado: cada dor julgada pelos números. Só com dores preenchidas. */
+  confrontoDores?: Array<{ dor: string; veredicto: "confirmada" | "desmentida" | "parcial" | string; evidencia: string; leitura: string }>;
+  /** Número ruim SEM dor declarada — ninguém na empresa está olhando. Só com dores preenchidas. */
+  pontosCegos?: Array<{ titulo: string; evidencia: string; porQueImporta: string; acaoSugerida: string }>;
 }
 
 interface IndicadorLite {
@@ -278,6 +282,21 @@ ${linhas}
 Use este bloco para contar PARA ONDE O DINHEIRO FOI — a ponte lucro→caixa (lucro que virou estoque/prazo, dívida que financiou queima, capex engolindo geração) é onde nascem as maiores revelações.`;
 }
 
+/** Dor declarada pelo dono/gestão na entrevista (input humano, tela "Dores"). */
+export interface DorDeclarada { categoria: string; descricao: string; severidade: string }
+
+/** Formata o bloco de DORES DECLARADAS pro prompt — a metade humana do confronto
+ *  declarado×observado. Vazio se não houver. */
+function buildDoresBlock(dores?: DorDeclarada[] | null): string {
+  if (!dores || dores.length === 0) return "";
+  const linhas = dores.map((d) => `- [${d.categoria} · severidade ${d.severidade}] ${d.descricao}`).join("\n");
+  return `
+
+[5] DORES DECLARADAS pelo dono/gestão na entrevista (percepção DELES — não é fato contábil):
+${linhas}
+CONFRONTO OBRIGATÓRIO declarado×observado — para CADA dor, os números confirmam, desmentem ou nuançam? E o inverso: número RUIM sem dor declarada = PONTO CEGO (ninguém na empresa está olhando — o achado mais valioso). Use também as dores como contexto dos fatoresChave e das revelações.`;
+}
+
 /** Formata o bloco dos MATERIAIS COMPLEMENTARES (Input 4) pro prompt — resumos de
  *  docs não-financeiros (notas de reunião, apresentações). Vazio se não houver. */
 function buildMateriaisBlock(materiais?: Array<{ nome: string; resumo: string }> | null): string {
@@ -353,6 +372,7 @@ export async function generateAnalysis(
   materiais?: Array<{ nome: string; resumo: string }> | null,
   dre?: Array<{ conta: string; valores: Record<string, number>; subtotal?: boolean }> | null,
   fluxoCaixa?: FluxoCaixaLite | null,
+  dores?: DorDeclarada[] | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
   // Ordem CRONOLÓGICA uma vez, para TODO o prompt (séries de indicadores, bloco da DRE,
   // KPIs, estágio) — dados.periodos pode vir na ordem dos documentos (ex.: 2022, 2020, 2021).
@@ -364,6 +384,7 @@ export async function generateAnalysis(
   const materiaisBlock = buildMateriaisBlock(materiais);
   const dreBlock = buildDreBlock(dre, periodos);
   const fcBlock = buildFluxoCaixaBlock(fluxoCaixa);
+  const doresBlock = buildDoresBlock(dores);
   // Estágio DETERMINÍSTICO (motor, multi-ano; Dickinson quando o FC fecha) — a IA recebe
   // como fato e não reclassifica.
   const estagioDet = classifyEstagio(indicadores, periodos, fluxoCaixa);
@@ -385,7 +406,7 @@ Você recebe VÁRIAS fontes. USE TODAS e CRUZE-AS — o valor está em conectar 
 
 [1] INDICADORES JÁ CALCULADOS E AUDITADOS (determinísticos — NÃO recalcule, apenas INTERPRETE):
 ${det.tabela || "(indicadores indisponíveis)"}
-${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${estagioBlock}
+${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${doresBlock}${estagioBlock}
 
 IMPORTANTE — olhe o HISTÓRICO: leia SEMPRE a evolução multi-ano (tendência entre os períodos), nunca um ano isolado. A força de um IBR está na trajetória.
 
@@ -429,9 +450,12 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
   ],
   "valorNaMesa": { "total": <R$>, "caixaLiberavel": <R$ de caixa que pode ser liberado (giro/ativos)>, "margemRecuperavel": <R$ ANUAIS de resultado recuperável (custo/preço/mix)>, "leitura": "<1-2 frases: o número-manchete e de onde vem; deixe claro que é ordem de grandeza a validar>" },
   "protecoes": [ { "oQueProteger": "<força que SUSTENTA o resultado atual>", "ameaca": "<o que pode destruí-la>", "acaoDefensiva": "<como blindar, concreto>" } ],
+  "confrontoDores": [ { "dor": "<a dor declarada, resumida>", "veredicto": "confirmada|desmentida|parcial", "evidencia": "<os números que confirmam/desmentem>", "leitura": "<o que isso muda na prioridade — 1-2 frases diretas>" } ],
+  "pontosCegos": [ { "titulo": "<problema que os números mostram e NINGUÉM declarou como dor>", "evidencia": "<número/tendência>", "porQueImporta": "<consequência em R$/caixa se continuar invisível>", "acaoSugerida": "<primeiro passo concreto>" } ],
   "destaques": ["<insight 1>", "<insight 2>", "<insight 3>", "<insight 4>"],
   "confianca": <0-100>
 }
+(confrontoDores e pontosCegos: SÓ quando o bloco [5] DORES DECLARADAS estiver presente — sem dores, omita os dois campos.)
 
 Pilares das opções (quatro frentes de valor): strategic_repositioning = Reposicionamento Estratégico (onde competir/como vencer) · value_focused_business_model = Modelo de Negócio orientado a Valor (proposta e captura de valor) · operational_excellence = Excelência Operacional (custos/processos/eficiência) · financial_restructuring = Estrutura Financeira (capital/dívida/liquidez/alocação).
 
@@ -443,6 +467,7 @@ PAPÉIS DAS SEÇÕES (NÃO haja overlap — cada uma responde a uma pergunta dif
 - revelacoes = "O QUE VOCÊ NÃO SABIA" — a seção que faz o dono falar "uau". Só entra o que passa no TESTE DO DONO (etapa 6). É diferente de destaques (resumo) e de fatoresChave (hipóteses de causa): revelação é DESCOBERTA quantificada em caixa. Uma revelação pode alimentar uma opção estratégica — mas aqui o papel é REVELAR, não recomendar.
 - valorNaMesa = o PLACAR: soma honesta do valor endereçável (caixaLiberavel = giro/ativos, uma vez; margemRecuperavel = resultado anual). SEM DUPLA CONTAGEM entre opções e revelações que apontam para a mesma alavanca; ordem de grandeza, não promessa.
 - protecoes = O QUE NÃO PODE QUEBRAR: 2-3 forças que sustentam o resultado atual e como blindá-las (pessoa-chave, contrato, canal, licença, cliente-âncora). Em empresa saudável esta seção é TÃO importante quanto as opções — manter o que funciona também é resultado.
+- confrontoDores = REALIDADE × PERCEPÇÃO: cada dor declarada julgada pelos números (confirmada/desmentida/parcial) com honestidade — desmentir uma dor liberta energia da gestão; confirmar dá prioridade. pontosCegos = o INVERSO: problema numérico relevante que NINGUÉM declarou — apresente com respeito, mas sem suavizar.
 
 PRINCÍPIOS (inegociáveis):
 - Hipótese e FATO sempre separados. A IA NÃO inventa nem recalcula número — cita os números já prontos (indicadores, DRE, pares).
@@ -493,6 +518,8 @@ PRINCÍPIOS (inegociáveis):
     revelacoes: Array.isArray(ai.revelacoes) ? ai.revelacoes.filter((r: any) => r && r.titulo) : [],
     valorNaMesa: ai.valorNaMesa && typeof ai.valorNaMesa === "object" && typeof ai.valorNaMesa.total === "number" ? ai.valorNaMesa : undefined,
     protecoes: Array.isArray(ai.protecoes) ? ai.protecoes.filter((p: any) => p && p.oQueProteger) : [],
+    confrontoDores: Array.isArray(ai.confrontoDores) ? ai.confrontoDores.filter((c: any) => c && c.dor) : [],
+    pontosCegos: Array.isArray(ai.pontosCegos) ? ai.pontosCegos.filter((p: any) => p && p.titulo) : [],
   };
 
   // Estágio: o MOTOR manda. Sobrescreve o que a IA disser (rótulo estável, "verde só com prova").

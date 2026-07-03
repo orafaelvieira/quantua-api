@@ -405,6 +405,7 @@ async function runAnalysisBackground(
       materiais ? materiais.blocos : null,
       dados?.dre ?? null,
       dados?.fluxoCaixa ?? null, // estágio Dickinson pelos sinais de FCO/FCI/FCF (quando a prova fecha)
+      Array.isArray(analysis.dores) ? (analysis.dores as never[]) : null, // fonte [5]: confronto declarado×observado
     );
     const resultado = {
       ...analise.result,
@@ -1007,6 +1008,31 @@ router.put("/:id/dados-estruturados/dre", async (req: AuthRequest, res: Response
     data: { dadosEstruturados: dados },
   });
   res.json({ ok: true });
+});
+
+// DORES declaradas (entrevista com o dono) — fonte [5] da análise. O confronto
+// declarado×observado (confirmada / desmentida / ponto cego) nasce daqui.
+router.put("/:id/dores", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: { in: req.scopeUserIds! } },
+    select: { id: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const raw = req.body?.dores;
+  if (!Array.isArray(raw)) { res.status(400).json({ error: "dores deve ser um array" }); return; }
+  const SEVERIDADES = new Set(["alta", "media", "leve"]);
+  const dores = raw
+    .filter((d: unknown) => d && typeof d === "object")
+    .map((d: Record<string, unknown>) => ({
+      categoria: typeof d.categoria === "string" ? d.categoria.slice(0, 60) : "Geral",
+      descricao: typeof d.descricao === "string" ? d.descricao.slice(0, 500) : "",
+      severidade: SEVERIDADES.has(String(d.severidade)) ? String(d.severidade) : "media",
+    }))
+    .filter((d) => d.descricao.trim().length > 0)
+    .slice(0, 30);
+  await prisma.analysis.update({ where: { id }, data: { dores: dores as object[] } });
+  res.json({ ok: true, total: dores.length });
 });
 
 // Re-dobra (fold) a árvore original guardada com o dicionário ATUAL — sem IA.
