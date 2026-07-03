@@ -18,6 +18,11 @@
  *   nenhuma máquina pessoal no circuito; o ZIP é descartado após o processamento.
  */
 import AdmZip from "adm-zip";
+import { createWriteStream } from "node:fs";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { prisma } from "../db/client";
 import { CVM_BP_MAP, CVM_DRE_MAP, CVM_DFC_MAP, CVM_EXCLUIR_DENOM } from "./cvm-map";
 
@@ -108,8 +113,14 @@ const ehYtd = (l: LinhaCvm) => l.dtIni.endsWith("-01-01") && l.dtIni.slice(0, 4)
 /** 1º trimestre: acumulado E discreto são a mesma janela. */
 const ehPrimeiroTri = (l: LinhaCvm) => ehYtd(l) && l.dtFim.slice(5, 7) === "03";
 
+export interface ParseCvmOpts {
+  incluirFinanceiras?: boolean;
+  /** Heartbeat por demonstrativo (diagnóstico de morte abrupta em produção). */
+  onFase?: (fase: string) => void | Promise<void>;
+}
+
 /** Lê um ZIP da CVM (ITR ou DFP) e monta empresa → períodos nas contas do modelo. */
-export async function parseCvmZip(zipSource: string | Buffer, opts?: { incluirFinanceiras?: boolean }): Promise<Map<string, CvmEmpresa>> {
+export async function parseCvmZip(zipSource: string | Buffer, opts?: ParseCvmOpts): Promise<Map<string, CvmEmpresa>> {
   const zip = new AdmZip(zipSource as never);
   const nomes = zip.getEntries().map((e) => e.entryName);
   const ehDfp = nomes.some((n) => n.startsWith("dfp_"));
@@ -125,7 +136,9 @@ export async function parseCvmZip(zipSource: string | Buffer, opts?: { incluirFi
   };
 
   for (const dem of ["BPA", "BPP", "DRE", "DFC_MI"]) {
+    await opts?.onFase?.(`${dem} con`);
     const con = await extraiLinhas(zip, `${prefixo}_${dem}_con_${ano}.csv`, ACEITA_CONTA[dem]);
+    await opts?.onFase?.(`${dem} ind`);
     const ind = await extraiLinhas(zip, `${prefixo}_${dem}_ind_${ano}.csv`, ACEITA_CONTA[dem]);
     const temCon = new Set(con.map((l) => l.cnpj));
     const linhas = [...con, ...ind.filter((l) => !temCon.has(l.cnpj))];
@@ -166,6 +179,17 @@ export async function baixarCvmZip(url: string): Promise<{ buffer: Buffer; etag:
   return { buffer, etag: res.headers.get("etag"), lastModified: res.headers.get("last-modified") };
 }
 
+/** Download em STREAMING para arquivo temporário — não segura o ZIP em RAM
+ *  (container de produção tem 1GB; fetch+arrayBuffer duplicava o ZIP na memória). */
+export async function baixarCvmZipParaDisco(url: string): Promise<{ caminho: string; tamanho: number; etag: string | null; lastModified: string | null }> {
+  const res = await fetch(url);
+  if (!res.ok || !res.body) throw new Error(`CVM ${url}: HTTP ${res.status}`);
+  const caminho = join(tmpdir(), `cvm-${Date.now()}-${url.split("/").pop()}`);
+  await pipeline(Readable.fromWeb(res.body as import("node:stream/web").ReadableStream), createWriteStream(caminho));
+  const { size } = await import("node:fs/promises").then((fs) => fs.stat(caminho));
+  return { caminho, tamanho: size, etag: res.headers.get("etag"), lastModified: res.headers.get("last-modified") };
+}
+
 /** HEAD na CVM — o cron compara ETag/Last-Modified com o CvmSyncState para avisar. */
 export async function checarCvmAtualizacao(url: string): Promise<{ etag: string | null; lastModified: string | null } | null> {
   const res = await fetch(url, { method: "HEAD" });
@@ -177,9 +201,13 @@ export async function checarCvmAtualizacao(url: string): Promise<{ etag: string 
 export async function persistirCvm(
   empresas: Map<string, CvmEmpresa>,
   origem: "ITR" | "DFP",
+  opts?: { onProgresso?: (feitas: number, total: number) => void | Promise<void> },
 ): Promise<{ empresas: number; periodos: number }> {
   let nPeriodos = 0;
+  let feitas = 0;
   for (const emp of empresas.values()) {
+    feitas++;
+    if (feitas % 100 === 0) await opts?.onProgresso?.(feitas, empresas.size);
     if (!emp.cnpj) continue;
     await prisma.cvmCompany.upsert({
       where: { cnpj: emp.cnpj },

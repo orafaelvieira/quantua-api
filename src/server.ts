@@ -59,7 +59,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-03.cvm-historico-v4";
+const BUILD_VERSION = "2026-07-03.cvm-historico-v5";
 app.get("/version", async (_req, res) => {
   // uptime/rss/cvm: diagnóstico sem painel DO — uptime baixo repetido = container
   // reiniciando (OOM/health check); cvm mostra o progresso do seed histórico
@@ -71,7 +71,7 @@ app.get("/version", async (_req, res) => {
     seedsRodando: runtimeState.seedsRodando,
     cvmHistorico: h && {
       emAndamento: h.emAndamento, interrompido: h.interrompido ?? false, feitos: h.feitos, total: h.total,
-      atual: h.atual, erros: h.erros.map((e) => `${e.arquivo}: ${e.erro.slice(0, 180)}`),
+      atual: h.atual, fase: h.fase ?? null, erros: h.erros.map((e) => `${e.arquivo}: ${e.erro.slice(0, 180)}`),
     },
   };
   try {

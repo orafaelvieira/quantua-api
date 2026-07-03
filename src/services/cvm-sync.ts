@@ -7,9 +7,10 @@
  * processado e cria um SystemNotice no Inbox quando há versão nova — a sincronização
  * em si é disparada pelo botão da tela de pares (ou futuramente automática).
  */
+import { promises as fs } from "node:fs";
 import { prisma } from "../db/client";
 import type { Indicador } from "../types/financial";
-import { CVM_URLS, baixarCvmZip, checarCvmAtualizacao, parseCvmZip, persistirCvm, type CvmEmpresa, type CvmPeriodoDados } from "./cvm-ingest";
+import { CVM_URLS, baixarCvmZipParaDisco, checarCvmAtualizacao, parseCvmZip, persistirCvm, type CvmEmpresa, type CvmPeriodoDados } from "./cvm-ingest";
 import { indicadoresDaEmpresa } from "./cvm-metrics";
 
 const arquivoId = (tipo: "itr" | "dfp", ano: number) => `${tipo}_${ano}`;
@@ -49,7 +50,11 @@ function numOuNull(v: number | string | null | undefined): number | null {
 }
 
 /** Recalcula e persiste CvmIndicator (3 visões) para os dtFims informados. */
-async function recalculaIndicadores(cnpjs: string[], dtFims: string[]): Promise<number> {
+async function recalculaIndicadores(
+  cnpjs: string[],
+  dtFims: string[],
+  onProgresso?: (feitas: number, total: number) => void | Promise<void>,
+): Promise<number> {
   if (dtFims.length === 0 || cnpjs.length === 0) return 0;
   // janela: do dtFim mais antigo recalculado, 16 meses p/ trás (LTM = 4 tri + BP médio 12m)
   const minDt = new Date(`${[...dtFims].sort()[0]}T00:00:00Z`);
@@ -70,10 +75,13 @@ async function recalculaIndicadores(cnpjs: string[], dtFims: string[]): Promise<
     lote = [];
   };
 
+  let feitas = 0;
   for (const emp of empresas.values()) {
     // calculateIndicators é CPU-síncrono — cede o event loop a cada empresa para o
     // /health do DO continuar respondendo (era isso que derrubava o container).
     await new Promise<void>((r) => setImmediate(r));
+    feitas++;
+    if (feitas % 25 === 0) await onProgresso?.(feitas, empresas.size);
     for (const dtFim of dtFims) {
       if (!emp.periodos[dtFim]) continue;
       // A UI replica indicadores de propósito (ex.: Margem Líquida repetida na cascata
@@ -117,18 +125,30 @@ export async function sincronizarCvm(tipo: "itr" | "dfp", ano: number): Promise<
   const url = CVM_URLS[tipo](ano);
   const arquivo = arquivoId(tipo, ano);
   console.log(`[cvm-sync] baixando ${url}…`);
-  const baixado = await baixarCvmZip(url);
-  const { etag, lastModified } = baixado;
-  console.log(`[cvm-sync] ${arquivo}: ${(baixado.buffer.length / 1e6).toFixed(1)}MB — processando…`);
+  await marcaFase(`${arquivo}: baixando`);
+  // Download em STREAMING para disco (não segura o ZIP em RAM duas vezes).
+  const baixado = await baixarCvmZipParaDisco(url);
+  console.log(`[cvm-sync] ${arquivo}: ${(baixado.tamanho / 1e6).toFixed(1)}MB — processando…`);
 
-  const parsed = await parseCvmZip(baixado.buffer);
-  baixado.buffer = Buffer.alloc(0); // solta o ZIP antes do recálculo (container de 1GB)
-  const { empresas, periodos } = await persistirCvm(parsed, tipo.toUpperCase() as "ITR" | "DFP");
+  let parsed: Awaited<ReturnType<typeof parseCvmZip>>;
+  try {
+    parsed = await parseCvmZip(baixado.caminho, {
+      onFase: (f) => marcaFase(`${arquivo}: parse ${f}`),
+    });
+  } finally {
+    await fs.unlink(baixado.caminho).catch(() => {});
+  }
+  const { etag, lastModified } = baixado;
+  const { empresas, periodos } = await persistirCvm(parsed, tipo.toUpperCase() as "ITR" | "DFP", {
+    onProgresso: (i, n) => marcaFase(`${arquivo}: persistindo ${i}/${n} empresas`),
+  });
 
   // Recalcula indicadores só para os dtFims presentes no arquivo (LTM puxa histórico do banco).
   const dtFims = [...new Set([...parsed.values()].flatMap((e) => Object.keys(e.periodos)))].sort();
   const cnpjs = [...parsed.keys()];
-  const indicadores = await recalculaIndicadores(cnpjs, dtFims);
+  parsed = new Map(); // solta o parse antes do recálculo (container de 1GB)
+  const indicadores = await recalculaIndicadores(cnpjs, dtFims, (i, n) => marcaFase(`${arquivo}: recalculando ${i}/${n} empresas`));
+  await marcaFase(`${arquivo}: gravando estado`);
 
   await prisma.cvmSyncState.upsert({
     where: { arquivo },
@@ -173,13 +193,27 @@ export interface ProgressoHistorico {
   terminadoEm: string | null;
   /** true quando a última execução morreu no meio (restart do container) — retomável. */
   interrompido?: boolean;
+  /** heartbeat: última fase executada (com heap) — numa morte abrupta, aponta ONDE. */
+  fase?: string | null;
 }
 
 // Estado em memória do seed (1 por processo — a rota bloqueia disparo duplo).
 const progHist: ProgressoHistorico = {
   emAndamento: false, total: 0, feitos: 0, atual: null,
-  ok: [], pulados: [], erros: [], iniciadoEm: null, terminadoEm: null,
+  ok: [], pulados: [], erros: [], iniciadoEm: null, terminadoEm: null, fase: null,
 };
+
+// Heartbeat de fase: grava no snapshot no MÁXIMO a cada 3s (barato, mas suficiente
+// p/ apontar onde uma morte abrupta aconteceu). Só atua durante o seed histórico.
+let ultimaFaseGravada = 0;
+async function marcaFase(fase: string): Promise<void> {
+  if (!progHist.emAndamento) return;
+  progHist.fase = `${fase} · heap ${Math.round(process.memoryUsage().heapUsed / 1e6)}MB · rss ${Math.round(process.memoryUsage().rss / 1e6)}MB`;
+  const agora = Date.now();
+  if (agora - ultimaFaseGravada < 3000) return;
+  ultimaFaseGravada = agora;
+  await salvaSnapshotHistorico();
+}
 
 export function getProgressoHistorico(): ProgressoHistorico {
   return progHist;
