@@ -24,7 +24,7 @@ import adminRouter from "./routes/admin";
 import peersRouter from "./routes/peers";
 import indicatorsRouter from "./routes/indicators";
 import { startJobs } from "./jobs";
-import { estadoHistorico } from "./services/cvm-sync";
+import { estadoHistorico, anotaSinal } from "./services/cvm-sync";
 import { runtimeState } from "./services/runtime-state";
 import { prisma } from "./db/client";
 import { exec } from "node:child_process";
@@ -59,7 +59,16 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-03.cvm-historico-v10";
+const BUILD_VERSION = "2026-07-03.cvm-historico-v11";
+
+// Sonda de diagnóstico dos restarts: health-check/deploy manda SIGTERM (dá tempo de
+// anotar no snapshot); OOM manda SIGKILL (não aparece). A anotação só ocorre com o
+// seed CVM em andamento; em seguida o shutdown segue normal.
+for (const sinal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(sinal, () => {
+    anotaSinal(sinal).finally(() => process.exit(0));
+  });
+}
 app.get("/version", async (_req, res) => {
   // uptime/rss/cvm: diagnóstico sem painel DO — uptime baixo repetido = container
   // reiniciando (OOM/health check); cvm mostra o progresso do seed histórico

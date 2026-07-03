@@ -78,12 +78,17 @@ async function recalculaIndicadores(
   let feitas = 0;
   for (const emp of empresas.values()) {
     // calculateIndicators é CPU-síncrono. Pausa REAL (não só yield) a cada empresa:
-    // a vCPU compartilhada do plano básico estrangula sob 100% contínuo e o health
-    // check atrasa → DO reinicia o container (mortes com memória limpa em recalc).
-    // ~20ms/empresa ≈ CPU a 50-60% — o seed fica ~15s/arquivo mais lento e estável.
-    await new Promise<void>((r) => setTimeout(r, 20));
+    // a vCPU compartilhada do plano básico estrangula sob carga contínua e o health
+    // check atrasa → DO reinicia o container (mortes com memória limpa em recalc;
+    // perfil local: 0,3ms/empresa — em prod chega a 0,5s = throttling de ~1000×).
+    // Ciclo de trabalho ~25%: 75ms/empresa + 1s a cada 25 — janelas generosas p/ o
+    // scheduler e o /health, ao custo de ~1 min a mais por arquivo de fechamento.
+    await new Promise<void>((r) => setTimeout(r, 75));
     feitas++;
-    if (feitas % 25 === 0) await onProgresso?.(feitas, empresas.size);
+    if (feitas % 25 === 0) {
+      await new Promise<void>((r) => setTimeout(r, 1000));
+      await onProgresso?.(feitas, empresas.size);
+    }
     for (const dtFim of dtFims) {
       if (!emp.periodos[dtFim]) continue;
       // A UI replica indicadores de propósito (ex.: Margem Líquida repetida na cascata
@@ -239,6 +244,17 @@ async function salvaSnapshotHistorico(): Promise<void> {
   } catch (e) {
     console.warn("[cvm-sync] snapshot do histórico não persistiu:", e instanceof Error ? e.message : e);
   }
+}
+
+/**
+ * Sonda de diagnóstico: o DO manda SIGTERM antes de reiniciar por health check
+ * (deploy também), mas um kill por OOM (SIGKILL) não avisa. Anotar o sinal no
+ * snapshot diferencia os dois tipos de morte — só relevante com seed em andamento.
+ */
+export async function anotaSinal(sinal: string): Promise<void> {
+  if (!progHist.emAndamento) return;
+  progHist.fase = `${progHist.fase ?? ""} ⚡${sinal} recebido`;
+  await salvaSnapshotHistorico().catch(() => {});
 }
 
 /**
