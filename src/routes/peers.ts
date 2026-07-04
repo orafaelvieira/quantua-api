@@ -186,6 +186,13 @@ router.get("/cvm/empresa", async (req: AuthRequest, res: Response): Promise<void
   if (!emp || !per) { res.status(404).json({ error: "Empresa/período não encontrado" }); return; }
 
   const dre = visao === "ANO" ? per.dreYtd : visao === "TRI" ? dreTrimestre(emp, dtFim) : dreLtm(emp, dtFim);
+  // Rótulo fiel à CVM: a 3.01 é receita LÍQUIDA (a CVM não publica bruta) — internamente
+  // ela ocupa a conta "Receita Bruta" do modelo gerencial (deduções zero), mas exibir
+  // esse nome interno confunde a auditoria (flagrado pelo usuário).
+  if (dre && dre["Receita Bruta"] !== undefined && dre["Receita Líquida"] === undefined) {
+    dre["Receita Líquida"] = dre["Receita Bruta"];
+    delete dre["Receita Bruta"];
+  }
   // Indicadores DIRETO do motor (mesmos valores dos persistidos, mas com grupo/
   // tipo/fórmula/status) — permite à tela agrupar igual à aba Indicadores do IBR.
   const { indicadoresDaEmpresa } = await import("../services/cvm-metrics");
