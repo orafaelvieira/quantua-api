@@ -82,7 +82,9 @@ router.post("/cvm/recalcular", async (_req: AuthRequest, res: Response): Promise
 router.post("/cvm/setores", async (_req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { atualizarSetoresCvm } = await import("../services/b3-empresas");
-    res.json(await atualizarSetoresCvm());
+    const resultado = await atualizarSetoresCvm();
+    metaEstudoCache = null; // os dropdowns de estudo devem refletir a taxonomia nova já
+    res.json(resultado);
   } catch (e) {
     res.status(502).json({ error: e instanceof Error ? e.message : "Falha ao consultar a B3" });
   }
