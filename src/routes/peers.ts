@@ -95,13 +95,13 @@ router.get("/cvm/estudo/meta", async (_req: AuthRequest, res: Response): Promise
   const [nomes, dts, classifs] = await Promise.all([
     prisma.cvmIndicator.findMany({ where: { visao: "ANO" }, distinct: ["nome"], select: { nome: true } }),
     prisma.cvmPeriod.findMany({ distinct: ["dtFim"], select: { dtFim: true }, orderBy: { dtFim: "desc" } }),
-    prisma.cvmCompany.findMany({ where: { classificacao: { not: null } }, distinct: ["classificacao", "setor"], select: { classificacao: true, setor: true } }),
+    prisma.cvmCompany.findMany({ where: { classificacao: { not: null } }, distinct: ["classificacao", "setor", "subsetor"], select: { classificacao: true, setor: true, subsetor: true } }),
   ]);
   const dados = {
     indicadores: nomes.map((n) => n.nome).sort(),
     periodos: dts.map((d) => d.dtFim.toISOString().slice(0, 10)),
-    classificacoes: [...new Set(classifs.map((c) => c.classificacao))].sort(),
-    setores: classifs.map((c) => ({ classificacao: c.classificacao, setor: c.setor })).filter((c) => c.setor),
+    // árvore da taxonomia B3 p/ a cascata Classificação → Setor → Subsetor
+    arvore: classifs.map((c) => ({ classificacao: c.classificacao, setor: c.setor, subsetor: c.subsetor })),
   };
   metaEstudoCache = { em: Date.now(), dados };
   res.json(dados);
@@ -116,6 +116,7 @@ router.get("/cvm/estudo", async (req: AuthRequest, res: Response): Promise<void>
   if (!nome || !/^\d{4}-\d{2}-\d{2}$/.test(dtFim)) { res.status(400).json({ error: "nome e dtFim são obrigatórios" }); return; }
   const classificacao = req.query.classificacao ? String(req.query.classificacao) : null;
   const setor = req.query.setor ? String(req.query.setor) : null;
+  const subsetor = req.query.subsetor ? String(req.query.subsetor) : null;
   const ordem = req.query.ordem === "asc" ? "asc" : "desc";
   const limite = Math.min(200, Math.max(5, parseInt(String(req.query.limite ?? "50"), 10) || 50));
 
@@ -125,6 +126,7 @@ router.get("/cvm/estudo", async (req: AuthRequest, res: Response): Promise<void>
       company: {
         ...(classificacao ? { classificacao } : {}),
         ...(setor ? { setor } : {}),
+        ...(subsetor ? { subsetor } : {}),
       },
     },
     include: { company: { select: { denom: true, ticker: true, pregao: true, classificacao: true, setor: true } } },
