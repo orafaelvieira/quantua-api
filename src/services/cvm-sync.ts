@@ -253,6 +253,8 @@ export interface ProgressoHistorico {
   interrompido?: boolean;
   /** heartbeat: última fase executada (com heap) — numa morte abrupta, aponta ONDE. */
   fase?: string | null;
+  /** quantas vezes o BOOT retomou esta execução automaticamente (trava anti-loop). */
+  autoRetomadas?: number;
 }
 
 // Estado em memória do seed (1 por processo — a rota bloqueia disparo duplo).
@@ -330,7 +332,7 @@ export async function estadoHistorico(): Promise<ProgressoHistorico> {
  * RETOMÁVEL: arquivo com CvmSyncState existente é pulado — se o processo cair
  * no meio (deploy/restart), basta disparar de novo que continua de onde parou.
  */
-export async function sincronizarHistoricoCvm(reprocessar = false): Promise<void> {
+export async function sincronizarHistoricoCvm(reprocessar = false, autoRetomadas = 0): Promise<void> {
   if (progHist.emAndamento) throw new Error("Sincronização do histórico já em andamento");
   if (reprocessar) {
     // Recalibração (ex.: mapa de contas novo): apaga só os MARCOS de sincronização —
@@ -342,6 +344,7 @@ export async function sincronizarHistoricoCvm(reprocessar = false): Promise<void
   Object.assign(progHist, {
     emAndamento: true, total: plano.length, feitos: 0, atual: null,
     ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null,
+    autoRetomadas,
   });
   console.log(`[cvm-sync] seed histórico iniciado — ${plano.length} arquivos (${plano[0].tipo}_${plano[0].ano} → ${plano[plano.length - 1].tipo}_${plano[plano.length - 1].ano})`);
   await salvaSnapshotHistorico();
@@ -425,6 +428,30 @@ export async function recalcularIndicadoresTudo(): Promise<void> {
     progHist.terminadoEm = new Date().toISOString();
     await salvaSnapshotHistorico();
     console.log(`[cvm-sync] recálculo geral terminou: ${progHist.ok.length} anos ok · ${progHist.erros.length} erros`);
+  }
+}
+
+/**
+ * AUTO-RETOMADA NO BOOT: os restarts da plataforma DO matam execuções longas no
+ * meio; o snapshot no banco sabe (interrompido=true). Ao subir — depois dos seeds —
+ * o servidor retoma sozinho, sem depender de clique. Trava anti-loop: máximo de 20
+ * retomadas automáticas por execução (cada tentativa historicamente avança ≥1
+ * arquivo, então converge muito antes); manual zera o contador.
+ */
+const MAX_AUTO_RETOMADAS = 20;
+export async function autoRetomarSeInterrompido(): Promise<void> {
+  try {
+    const estado = await estadoHistorico();
+    if (!estado.interrompido || progHist.emAndamento) return;
+    const tentativas = estado.autoRetomadas ?? 0;
+    if (tentativas >= MAX_AUTO_RETOMADAS) {
+      console.warn(`[cvm-sync] auto-retomada SUSPENSA (${tentativas} tentativas) — retomar manualmente pela tela de pares`);
+      return;
+    }
+    console.log(`[cvm-sync] execução interrompida detectada (${estado.feitos}/${estado.total}, ${estado.atual ?? "?"}) — auto-retomando (tentativa ${tentativas + 1}/${MAX_AUTO_RETOMADAS})`);
+    await sincronizarHistoricoCvm(false, tentativas + 1);
+  } catch (e) {
+    console.error("[cvm-sync] auto-retomada falhou:", e instanceof Error ? e.message : e);
   }
 }
 

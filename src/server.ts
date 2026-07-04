@@ -24,7 +24,7 @@ import adminRouter from "./routes/admin";
 import peersRouter from "./routes/peers";
 import indicatorsRouter from "./routes/indicators";
 import { startJobs } from "./jobs";
-import { estadoHistorico, anotaSinal } from "./services/cvm-sync";
+import { estadoHistorico, anotaSinal, autoRetomarSeInterrompido } from "./services/cvm-sync";
 import { runtimeState } from "./services/runtime-state";
 import { prisma } from "./db/client";
 import { exec } from "node:child_process";
@@ -59,7 +59,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-03.cvm-v13.spaces-recalc";
+const BUILD_VERSION = "2026-07-03.cvm-v14.auto-retomada";
 
 // Sonda de diagnóstico dos restarts: health-check/deploy manda SIGTERM (dá tempo de
 // anotar no snapshot); OOM manda SIGKILL (não aparece). A anotação só ocorre com o
@@ -131,6 +131,8 @@ app.use("/indicators", indicatorsRouter);
 function runStartupSeeds(): void {
   if (process.env.RUN_STARTUP_SEEDS === "false") {
     console.log("[startup] seeds desligados (RUN_STARTUP_SEEDS=false)");
+    // Sem seeds, a auto-retomada do seed CVM pode partir direto (com folga p/ o boot).
+    setTimeout(() => void autoRetomarSeInterrompido(), 15_000);
     return;
   }
   const cmd =
@@ -143,6 +145,9 @@ function runStartupSeeds(): void {
   child.on("exit", (code) => {
     runtimeState.seedsRodando = false;
     console.log(`[startup] seeds finalizados (exit ${code})${code ? " — VERIFICAR LOG" : ""}`);
+    // Seed CVM interrompido por restart? Retoma sozinho — sem depender de clique.
+    // (Espera os seeds terminarem para não disputar a RAM/CPU do container.)
+    setTimeout(() => void autoRetomarSeInterrompido(), 10_000);
   });
 }
 
