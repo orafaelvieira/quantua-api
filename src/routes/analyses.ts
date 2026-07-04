@@ -277,10 +277,8 @@ async function buildPeerComparison(
   // RELEVÂNCIA: descarta linhas que só acharam pares no nível "mercado" (todas as
   // cias) — para segmento nicho isso não é par, é ruído. Mantém setor/classificação.
   const rows = allRows.filter((r) => r.level !== "mercado");
-  const coverage: PeerComparisonResult["coverage"] =
-    rows.some((r) => r.level === "setor" || r.level === "subsetor") ? "direta"
-    : rows.length > 0 ? "aproximada"
-    : "ausente";
+  // Só existe nível "setor" agora (pares = subsetor real; sem classificação/mercado).
+  const coverage: PeerComparisonResult["coverage"] = rows.length > 0 ? "direta" : "ausente";
 
   // FALLBACK EXTERNO (cobertura não-direta): a referência NÃO vem das Premissas
   // Setoriais (Damodaran/IBGE = base de PROJEÇÃO, não de pares) — vem da WEB.

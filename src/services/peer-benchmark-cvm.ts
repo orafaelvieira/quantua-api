@@ -3,7 +3,7 @@
  * base CVM (~1.100 cias, trimestral) na visão LTM do período mais recente.
  * Substitui a base xlsx: SEM mapa de-para de nomes (CvmIndicator.nome = nomes do
  * MESMO motor) e com percentil por taxonomia B3 (CvmCompany.classificacao/setor).
- * Cascata de nível: setor B3 (o "subsetor" do picker) → classificação → mercado.
+ * Pares = SÓ o subsetor B3 real (decisão do usuário) — sem subir de nível; mínimo 3.
  */
 import { prisma } from "../db/client";
 import type { PeerComparisonRow } from "./peer-benchmark";
@@ -87,17 +87,19 @@ export async function ultimoPeriodoCvm(): Promise<string | null> {
 export async function comparePeersCvm(
   segBruto: SegmentoCvm,
   valores: Array<{ indicador: string; valor: number }>,
-  minPeers = 5,
+  minPeers = 3, // 3 concorrentes REAIS > 14 vizinhos de prateleira
 ): Promise<ResultadoPeersCvm> {
   const dtFimStr = await ultimoPeriodoCvm();
   if (!dtFimStr) return { dtFim: null, periodo: null, rows: [] };
   const dtFim = new Date(`${dtFimStr}T00:00:00Z`);
   const seg = await resolveSegmentoCvm(segBruto);
 
+  // PARES = SÓ O SUBSETOR REAL (decisão do usuário, 04/07): subir p/ classificação
+  // (ex.: Bebidas → Consumo não Cíclico = Agro+Alimentos+Varejo+Higiene) compara
+  // estruturas de custo incomparáveis — não é par, é prateleira. Sem 3 pares no
+  // subsetor → sem percentil interno (cobertura "ausente" → referência externa/web).
   const niveis: Array<{ level: PeerComparisonRow["level"]; segment: string; filtro: object }> = [];
   if (seg.setor) niveis.push({ level: "setor", segment: seg.setor, filtro: { setor: seg.setor } });
-  if (seg.classificacao) niveis.push({ level: "classificacao", segment: seg.classificacao, filtro: { classificacao: seg.classificacao } });
-  niveis.push({ level: "mercado", segment: "Mercado (listadas + capital aberto)", filtro: {} });
 
   const rows: PeerComparisonRow[] = [];
   for (const { indicador, valor } of valores) {
