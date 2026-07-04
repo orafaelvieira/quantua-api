@@ -20,13 +20,19 @@ import { indicadoresDaEmpresa } from "./cvm-metrics";
 const arquivoId = (tipo: "itr" | "dfp", ano: number) => `${tipo}_${ano}`;
 
 /** Reconstrói CvmEmpresa a partir do banco (períodos já persistidos) — base p/ LTM.
- *  dtFimMin limita a janela carregada (memória: container de 1GB) — o LTM olha no
- *  máximo 4 trimestres p/ trás e a média de BP 12 meses, então 16 meses bastam. */
-async function carregaEmpresasDoBanco(cnpjs: string[], dtFimMin?: Date): Promise<Map<string, CvmEmpresa>> {
+ *  dtFimMin/dtFimMax limitam a janela carregada (memória: container de 1GB) — o LTM
+ *  olha no máximo 4 trimestres p/ trás e a média de BP 12 meses, então 16 meses
+ *  ANTES do dtFim mais antigo bastam; e nada DEPOIS do mais novo é usado. Sem o
+ *  TETO, o reprocesso (banco já cheio) carregava a base inteira p/ recalcular
+ *  2010 → heap 179MB → crash-loop no dfp_2010. */
+async function carregaEmpresasDoBanco(cnpjs: string[], dtFimMin?: Date, dtFimMax?: Date): Promise<Map<string, CvmEmpresa>> {
   const out = new Map<string, CvmEmpresa>();
   const companies = await prisma.cvmCompany.findMany({ where: { cnpj: { in: cnpjs } } });
   const periods = await prisma.cvmPeriod.findMany({
-    where: { cnpj: { in: cnpjs }, ...(dtFimMin ? { dtFim: { gte: dtFimMin } } : {}) },
+    where: {
+      cnpj: { in: cnpjs },
+      ...(dtFimMin || dtFimMax ? { dtFim: { ...(dtFimMin ? { gte: dtFimMin } : {}), ...(dtFimMax ? { lte: dtFimMax } : {}) } } : {}),
+    },
     orderBy: { dtFim: "asc" },
   });
   for (const c of companies) out.set(c.cnpj, { cnpj: c.cnpj, denom: c.denom, cdCvm: c.cdCvm, periodos: {} });
@@ -60,10 +66,13 @@ async function recalculaIndicadores(
   onProgresso?: (feitas: number, total: number) => void | Promise<void>,
 ): Promise<number> {
   if (dtFims.length === 0 || cnpjs.length === 0) return 0;
-  // janela: do dtFim mais antigo recalculado, 16 meses p/ trás (LTM = 4 tri + BP médio 12m)
-  const minDt = new Date(`${[...dtFims].sort()[0]}T00:00:00Z`);
+  // janela: do dtFim mais antigo recalculado, 16 meses p/ trás (LTM = 4 tri + BP médio
+  // 12m) ATÉ o dtFim mais novo — nunca a base inteira.
+  const ordenados = [...dtFims].sort();
+  const minDt = new Date(`${ordenados[0]}T00:00:00Z`);
   const dtFimMin = new Date(Date.UTC(minDt.getUTCFullYear(), minDt.getUTCMonth() - 16, 1));
-  const empresas = await carregaEmpresasDoBanco(cnpjs, dtFimMin);
+  const dtFimMax = new Date(`${ordenados[ordenados.length - 1]}T00:00:00Z`);
+  const empresas = await carregaEmpresasDoBanco(cnpjs, dtFimMin, dtFimMax);
 
   // apaga o range recalculado antes; regrava em lotes conforme acumula (memória bounded)
   const dts = dtFims.map((d) => new Date(`${d}T00:00:00Z`));
