@@ -95,6 +95,28 @@ router.put("/:id/swot", async (req: AuthRequest, res: Response): Promise<void> =
   res.json(clean);
 });
 
+// Plano priorizado editável (sobrescreve resultado.recomendacoes — a IA sugere,
+// o analista refina; valorEstimado em R$ liga cada ação ao "valor na mesa" do Ato 2).
+const recomendacaoSchema = z.object({
+  titulo: z.string(),
+  descricao: z.string().optional().nullable(),
+  prioridade: z.string().optional().nullable(),
+  impacto: z.string().optional().nullable(),
+  esforco: z.string().optional().nullable(),
+  horizonte: z.string().optional().nullable(),
+  valorEstimado: z.number().finite().optional().nullable(),
+}).passthrough(); // campos futuros do JSON livre sobrevivem à edição
+router.put("/:id/recomendacoes", async (req: AuthRequest, res: Response): Promise<void> => {
+  const analysis = await loadAnalysis(req);
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const parsed = z.array(recomendacaoSchema).safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const clean = parsed.data.filter((r) => r.titulo.trim().length > 0);
+  const resultado = (analysis.resultado as Record<string, unknown> | null) ?? {};
+  await prisma.analysis.update({ where: { id: analysis.id }, data: { resultado: { ...resultado, recomendacoes: clean } as object } });
+  res.json(clean);
+});
+
 router.get("/:id/options", async (req: AuthRequest, res: Response): Promise<void> => {
   const analysis = await loadAnalysis(req);
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
