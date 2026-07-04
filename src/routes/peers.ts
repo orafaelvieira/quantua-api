@@ -180,9 +180,13 @@ router.get("/cvm/empresa", async (req: AuthRequest, res: Response): Promise<void
   if (!emp || !per) { res.status(404).json({ error: "Empresa/período não encontrado" }); return; }
 
   const dre = visao === "ANO" ? per.dreYtd : visao === "TRI" ? dreTrimestre(emp, dtFim) : dreLtm(emp, dtFim);
-  const [cadastro, indicadores, periodos] = await Promise.all([
+  // Indicadores DIRETO do motor (mesmos valores dos persistidos, mas com grupo/
+  // tipo/fórmula/status) — permite à tela agrupar igual à aba Indicadores do IBR.
+  const { indicadoresDaEmpresa } = await import("../services/cvm-metrics");
+  const visaoInd = indicadoresDaEmpresa(emp, dtFim).find((v) => v.visao === visao);
+  const label = Object.keys(visaoInd?.indicadores[0]?.valores ?? {})[0];
+  const [cadastro, periodos] = await Promise.all([
     prisma.cvmCompany.findUnique({ where: { cnpj } }),
-    prisma.cvmIndicator.findMany({ where: { cnpj, dtFim: dt, visao }, orderBy: { nome: "asc" } }),
     prisma.cvmPeriod.findMany({ where: { cnpj }, distinct: ["dtFim"], select: { dtFim: true }, orderBy: { dtFim: "desc" } }),
   ]);
   res.json({
@@ -192,7 +196,14 @@ router.get("/cvm/empresa", async (req: AuthRequest, res: Response): Promise<void
     dre: dre ?? null,
     dreAviso: dre ? null : `Sem DRE na visão ${visao} para este período (janela incompleta).`,
     dfcYtd: per.dfcYtd,
-    indicadores: indicadores.map((i) => ({ nome: i.nome, valor: i.valor, texto: i.texto })),
+    indicadores: (visaoInd?.indicadores ?? []).map((i) => {
+      const v = i.valores[label];
+      return {
+        nome: i.nome, grupo: i.tipo || "Outros", tipoDado: i.tipoDado ?? "Índice",
+        formula: i.formula ?? "", valor: typeof v === "number" ? v : null, texto: typeof v === "string" ? v : null,
+        status: i.status?.[label] ?? null,
+      };
+    }),
   });
 });
 
