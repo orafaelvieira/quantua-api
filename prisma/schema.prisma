@@ -162,10 +162,17 @@ model CvmCompany {
   cnpj      String   @id // só dígitos
   cdCvm     String   @map("cd_cvm")
   denom     String
-  ticker    String? // casado com PeerCompany/B3 (fase de mapeamento)
+  ticker    String? // código emissor B3 (4 letras) — join exato CNPJ↔código via API de listadas
+  // Taxonomia setorial oficial B3 (mesma semântica da PeerCompany):
+  // classificacao = SETOR B3 · setor = SUBSETOR · subsetor = SEGMENTO
+  classificacao String?
+  setor         String?
+  subsetor      String?
+  pregao        String? // nome de pregão B3
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  periods CvmPeriod[]
+  periods    CvmPeriod[]
+  indicators CvmIndicator[]
 
   @@map("cvm_companies")
 }
@@ -198,6 +205,8 @@ model CvmIndicator {
   nome  String
   valor Float?
   texto String? // indicadores textuais (Fleuriet)
+
+  company CvmCompany @relation(fields: [cnpj], references: [cnpj])
 
   @@unique([cnpj, dtFim, visao, nome])
   @@index([dtFim, visao, nome])

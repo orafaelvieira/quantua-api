@@ -77,6 +77,71 @@ router.post("/cvm/recalcular", async (_req: AuthRequest, res: Response): Promise
   res.status(202).json({ ok: true });
 });
 
+// POST /peers/cvm/setores — enriquece as empresas CVM com ticker + taxonomia B3
+// (join exato código↔CNPJ via API de listadas da B3 + ClassifSetorial oficial).
+router.post("/cvm/setores", async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { atualizarSetoresCvm } = await import("../services/b3-empresas");
+    res.json(await atualizarSetoresCvm());
+  } catch (e) {
+    res.status(502).json({ error: e instanceof Error ? e.message : "Falha ao consultar a B3" });
+  }
+});
+
+// GET /peers/cvm/estudo/meta — opções p/ o painel de estudos (indicadores/períodos/setores).
+let metaEstudoCache: { em: number; dados: object } | null = null;
+router.get("/cvm/estudo/meta", async (_req: AuthRequest, res: Response): Promise<void> => {
+  if (metaEstudoCache && Date.now() - metaEstudoCache.em < 10 * 60_000) { res.json(metaEstudoCache.dados); return; }
+  const [nomes, dts, classifs] = await Promise.all([
+    prisma.cvmIndicator.findMany({ where: { visao: "ANO" }, distinct: ["nome"], select: { nome: true } }),
+    prisma.cvmPeriod.findMany({ distinct: ["dtFim"], select: { dtFim: true }, orderBy: { dtFim: "desc" } }),
+    prisma.cvmCompany.findMany({ where: { classificacao: { not: null } }, distinct: ["classificacao", "setor"], select: { classificacao: true, setor: true } }),
+  ]);
+  const dados = {
+    indicadores: nomes.map((n) => n.nome).sort(),
+    periodos: dts.map((d) => d.dtFim.toISOString().slice(0, 10)),
+    classificacoes: [...new Set(classifs.map((c) => c.classificacao))].sort(),
+    setores: classifs.map((c) => ({ classificacao: c.classificacao, setor: c.setor })).filter((c) => c.setor),
+  };
+  metaEstudoCache = { em: Date.now(), dados };
+  res.json(dados);
+});
+
+// GET /peers/cvm/estudo — ranking + distribuição de um indicador na base CVM.
+// ?nome=&visao=TRI|ANO|LTM&dtFim=AAAA-MM-DD&classificacao=&setor=&ordem=desc&limite=50
+router.get("/cvm/estudo", async (req: AuthRequest, res: Response): Promise<void> => {
+  const nome = String(req.query.nome ?? "");
+  const visao = ["TRI", "ANO", "LTM"].includes(String(req.query.visao)) ? String(req.query.visao) : "LTM";
+  const dtFim = String(req.query.dtFim ?? "");
+  if (!nome || !/^\d{4}-\d{2}-\d{2}$/.test(dtFim)) { res.status(400).json({ error: "nome e dtFim são obrigatórios" }); return; }
+  const classificacao = req.query.classificacao ? String(req.query.classificacao) : null;
+  const setor = req.query.setor ? String(req.query.setor) : null;
+  const ordem = req.query.ordem === "asc" ? "asc" : "desc";
+  const limite = Math.min(200, Math.max(5, parseInt(String(req.query.limite ?? "50"), 10) || 50));
+
+  const linhas = await prisma.cvmIndicator.findMany({
+    where: {
+      nome, visao, dtFim: new Date(`${dtFim}T00:00:00Z`), valor: { not: null },
+      company: {
+        ...(classificacao ? { classificacao } : {}),
+        ...(setor ? { setor } : {}),
+      },
+    },
+    include: { company: { select: { denom: true, ticker: true, pregao: true, classificacao: true, setor: true } } },
+  });
+  const valores = linhas.map((l) => l.valor as number).sort((a, b) => a - b);
+  const q = (p: number) => valores.length ? valores[Math.min(valores.length - 1, Math.floor(p * (valores.length - 1)))] : null;
+  linhas.sort((a, b) => (ordem === "desc" ? (b.valor as number) - (a.valor as number) : (a.valor as number) - (b.valor as number)));
+  res.json({
+    n: valores.length,
+    distribuicao: { p25: q(0.25), p50: q(0.5), p75: q(0.75), min: valores[0] ?? null, max: valores[valores.length - 1] ?? null },
+    ranking: linhas.slice(0, limite).map((l, i) => ({
+      posicao: i + 1, empresa: l.company.pregao ?? l.company.denom, ticker: l.company.ticker,
+      classificacao: l.company.classificacao, setor: l.company.setor, valor: l.valor,
+    })),
+  });
+});
+
 // POST /peers/cvm/check — checagem manual imediata (mesma rotina do cron semanal).
 router.post("/cvm/check", async (_req: AuthRequest, res: Response): Promise<void> => {
   const resultados = await checarAtualizacoesCvm();
