@@ -237,6 +237,7 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
 
 interface PeerBlockInput {
   year: number | null;
+  periodo?: string | null; // "1T26 (LTM)" — fonte CVM
   segment: string | null;
   coverage: "direta" | "aproximada" | "ausente";
   rows: PeerComparisonRow[];
@@ -328,7 +329,7 @@ function buildPeerBlock(peer?: PeerBlockInput | null): string {
     subsetor: "subsetor", setor: "setor", classificacao: "classificação", mercado: "mercado",
   };
   const seg = peer.segment ? ` — ${peer.segment}` : "";
-  const ano = peer.year ? `, ano ${peer.year}` : "";
+  const ano = peer.periodo ? `, pares @ ${peer.periodo} — fonte CVM` : peer.year ? `, ano ${peer.year}` : "";
 
   const nota =
     peer.coverage === "direta"

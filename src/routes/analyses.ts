@@ -10,6 +10,7 @@ import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocum
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
+import { comparePeersCvm, CVM_COMPARAVEIS } from "../services/peer-benchmark-cvm";
 import { researchCompanyWeb } from "../services/web-research";
 import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-context";
 import { sugerirClassificacoesIA, chaveNM } from "../services/classification-suggest";
@@ -220,6 +221,8 @@ export interface PeerExternalRef {
 
 export interface PeerComparisonResult {
   year: number | null;
+  /** rótulo do período de comparação na fonte CVM (ex.: "1T26 (LTM)"). */
+  periodo?: string | null;
   segment: string | null;
   /** direta = par no próprio subsetor · aproximada = subiu p/ setor/classificação ·
    *  ausente = sem par relevante na base interna (cai na referência externa). */
@@ -253,45 +256,29 @@ async function buildPeerComparison(
     : { classificacao: sector.name, setor: null as string | null, subsetor: null as string | null };
   const segLabel = seg.setor ?? seg.classificacao;
 
-  // Os nomes do catálogo B3 (Sector.name, do JSON oficial) podem diferir dos da base
-  // de pares (PeerCompany) por CASE/acento/pontuação (ex.: "Consumo não Cíclico" vs
-  // "Consumo Não Cíclico"). A query de pares casa por string EXATA — então remapeamos
-  // o segmento para a string exata que existe na base (match normalizado), senão a
-  // comparação sobe indevidamente pra "mercado" e marca "sem pares".
-  const normPeer = (s: string) =>
-    s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[.,]+/g, " ").replace(/\s+/g, " ").trim();
-  const [classifsB, setoresB] = await Promise.all([
-    prisma.peerCompany.findMany({ distinct: ["classificacao"], select: { classificacao: true } }),
-    prisma.peerCompany.findMany({ distinct: ["setor"], select: { setor: true } }),
-  ]);
-  const exato = (alvo: string | null, lista: string[]): string | null => {
-    if (!alvo) return null;
-    const n = normPeer(alvo);
-    return lista.find((x) => normPeer(x) === n) ?? alvo;
-  };
-  seg.classificacao = exato(seg.classificacao, classifsB.map((c) => c.classificacao)) ?? seg.classificacao;
-  seg.setor = exato(seg.setor, setoresB.map((s) => s.setor));
-
+  // FONTE CVM (fase 4): pares = base viva da CVM (~1.100 cias, LTM do trimestre
+  // mais recente), no lugar do snapshot xlsx. Sem mapa de-para: CvmIndicator.nome
+  // = nomes do MESMO motor. Normalização de segmento fica dentro do serviço.
   const ult = [...periodos].sort((a, b) => (yearOfPeriodo(a) ?? 0) - (yearOfPeriodo(b) ?? 0)).at(-1)!;
-  const companyYear = yearOfPeriodo(ult);
 
   const valores: Array<{ indicador: string; valor: number }> = [];
   for (const ind of indicadores) {
-    if (!(ind.nome in PEER_INDICATOR_MAP)) continue;
+    if (!(ind.nome in CVM_COMPARAVEIS)) continue;
     const v = ind.valores?.[ult];
     const n = typeof v === "number" ? v : Number(v);
     if (Number.isFinite(n)) valores.push({ indicador: ind.nome, valor: n });
   }
 
-  const { year, rows: allRows } = valores.length
-    ? await comparePeersForIndicators(seg, valores, companyYear)
-    : { year: companyYear, rows: [] as PeerComparisonRow[] };
+  const { periodo, dtFim, rows: allRows } = valores.length
+    ? await comparePeersCvm({ classificacao: seg.classificacao, setor: seg.setor }, valores)
+    : { periodo: null, dtFim: null, rows: [] as PeerComparisonRow[] };
+  const year = dtFim ? Number(dtFim.slice(0, 4)) : null;
 
   // RELEVÂNCIA: descarta linhas que só acharam pares no nível "mercado" (todas as
-  // listadas) — para subsetor nicho isso não é par, é ruído. Mantém subsetor/setor/classif.
+  // cias) — para segmento nicho isso não é par, é ruído. Mantém setor/classificação.
   const rows = allRows.filter((r) => r.level !== "mercado");
   const coverage: PeerComparisonResult["coverage"] =
-    rows.some((r) => r.level === "subsetor") ? "direta"
+    rows.some((r) => r.level === "setor" || r.level === "subsetor") ? "direta"
     : rows.length > 0 ? "aproximada"
     : "ausente";
 
@@ -300,7 +287,7 @@ async function buildPeerComparison(
   // Preenchido pelo item 3 (pesquisa web); por ora fica vazio (seam).
   const external: PeerExternalRef[] = [];
 
-  return { year, segment: segLabel, coverage, rows, external };
+  return { year, periodo, segment: segLabel, coverage, rows, external };
 }
 
 // Endpoint principal: dispara extração dos documentos + geração da análise com Claude
