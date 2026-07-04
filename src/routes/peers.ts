@@ -120,7 +120,7 @@ router.get("/cvm/estudo", async (req: AuthRequest, res: Response): Promise<void>
   const setor = req.query.setor ? String(req.query.setor) : null;
   const subsetor = req.query.subsetor ? String(req.query.subsetor) : null;
   const ordem = req.query.ordem === "asc" ? "asc" : "desc";
-  const limite = Math.min(200, Math.max(5, parseInt(String(req.query.limite ?? "50"), 10) || 50));
+  const limite = Math.min(2000, Math.max(5, parseInt(String(req.query.limite ?? "50"), 10) || 50)); // 2000 = export completo
 
   const linhas = await prisma.cvmIndicator.findMany({
     where: {
@@ -170,6 +170,12 @@ router.get("/cvm/empresa", async (req: AuthRequest, res: Response): Promise<void
   const dtFim = String(req.query.dtFim ?? "");
   const visao = ["TRI", "ANO", "LTM"].includes(String(req.query.visao)) ? String(req.query.visao) as "TRI" | "ANO" | "LTM" : "LTM";
   if (cnpj.length !== 14 || !/^\d{4}-\d{2}-\d{2}$/.test(dtFim)) { res.status(400).json({ error: "cnpj e dtFim são obrigatórios" }); return; }
+  // ANO = exercício fechado: aceitar trimestre devolveria acumulado PARCIAL rotulado
+  // como ano (flagrado pelo usuário: 1T26 exibido como "ANO 2025").
+  if (visao === "ANO" && !dtFim.endsWith("12-31")) { res.status(400).json({ error: "Visão ANO só existe em fechamentos (31/12) — escolha um período de fechamento." }); return; }
+  // ANO = exercício fechado: aceitar trimestre aqui devolveria o acumulado parcial
+  // rotulado como ano (flagrado pelo usuário: 1T26 exibido como ANO 2025).
+  if (visao === "ANO" && !dtFim.endsWith("12-31")) { res.status(400).json({ error: "Visão ANO só existe em fechamentos (31/12) — escolha um período de fechamento." }); return; }
 
   const { carregaEmpresasDoBanco } = await import("../services/cvm-sync");
   const { dreTrimestre, dreLtm } = await import("../services/cvm-metrics");
