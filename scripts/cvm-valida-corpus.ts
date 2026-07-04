@@ -15,6 +15,7 @@ import * as XLSX from "xlsx";
 import { parseCvmZip } from "../src/services/cvm-ingest";
 import { mesclaEmpresas, indicadoresDaEmpresa } from "../src/services/cvm-metrics";
 import { PEER_INDICATOR_MAP } from "../src/services/peer-indicator-map";
+import { baixarEmpresasB3 } from "../src/services/b3-empresas";
 
 const ANOS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025];
 const DEFINICIONAIS = new Set(["Margem EBITDA", "Índice de Cobertura de Juros", "Dívida Líquida/EBITDA", "Liquidez Imediata"]);
@@ -55,7 +56,9 @@ async function main(): Promise<void> {
   const cvm = mesclaEmpresas(mapas);
   console.log(`CVM: ${cvm.size} empresas · Planilha: ${nomePorPapel.size} papéis\n`);
 
-  // ── Casamento por nome normalizado ──
+  // ── Casamento por TICKER→CNPJ (exato, via API da B3) + fallback por nome ──
+  const listadas = await baixarEmpresasB3();
+  const cnpjPorCodigo = new Map(listadas.map((l) => [l.issuingCompany.toUpperCase(), l.cnpj]));
   const porNome = new Map<string, (typeof cvm extends Map<string, infer V> ? V : never)[]>();
   for (const emp of cvm.values()) {
     const n = norm(emp.denom);
@@ -64,6 +67,10 @@ async function main(): Promise<void> {
   const casados: Array<[string, (typeof cvm extends Map<string, infer V> ? V : never)]> = [];
   const semPar: string[] = [];
   for (const [papel, nome] of nomePorPapel) {
+    const raiz = papel.replace(/\d+$/, "").toUpperCase();
+    const cnpj = cnpjPorCodigo.get(raiz);
+    const direto = cnpj ? cvm.get(cnpj) : undefined;
+    if (direto) { casados.push([papel, direto]); continue; }
     const n = norm(nome);
     let cand = porNome.get(n);
     if (!cand) {
