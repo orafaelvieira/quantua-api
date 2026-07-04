@@ -152,12 +152,13 @@ router.get("/cvm/estudo", async (req: AuthRequest, res: Response): Promise<void>
 // GET /peers/cvm/empresas?search= — picker de empresa (nome/pregão/ticker).
 router.get("/cvm/empresas", async (req: AuthRequest, res: Response): Promise<void> => {
   const s = String(req.query.search ?? "").trim();
-  if (s.length < 2) { res.json([]); return; }
+  const todas = req.query.all === "1"; // lista completa p/ o dropdown com filtro client-side
+  if (!todas && s.length < 2) { res.json([]); return; }
   const empresas = await prisma.cvmCompany.findMany({
-    where: { OR: [{ denom: { contains: s, mode: "insensitive" } }, { pregao: { contains: s, mode: "insensitive" } }, { ticker: { contains: s.toUpperCase() } }] },
+    where: todas ? {} : { OR: [{ denom: { contains: s, mode: "insensitive" } }, { pregao: { contains: s, mode: "insensitive" } }, { ticker: { contains: s.toUpperCase() } }] },
     select: { cnpj: true, denom: true, ticker: true, pregao: true, classificacao: true, setor: true },
     orderBy: { denom: "asc" },
-    take: 20,
+    ...(todas ? {} : { take: 20 }),
   });
   res.json(empresas);
 });
