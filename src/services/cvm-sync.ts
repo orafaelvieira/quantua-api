@@ -8,9 +8,13 @@
  * em si é disparada pelo botão da tela de pares (ou futuramente automática).
  */
 import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { prisma } from "../db/client";
+import { env } from "../config/env";
 import type { Indicador } from "../types/financial";
 import { CVM_URLS, baixarCvmZipParaDisco, checarCvmAtualizacao, coletaLixo, parseCvmZip, persistirCvm, type CvmEmpresa, type CvmPeriodoDados } from "./cvm-ingest";
+import { uploadFile, downloadFileComMeta } from "./storage";
 import { indicadoresDaEmpresa } from "./cvm-metrics";
 
 const arquivoId = (tipo: "itr" | "dfp", ano: number) => `${tipo}_${ano}`;
@@ -127,15 +131,60 @@ export interface ResultadoSync {
   lastModified: string | null;
 }
 
-/** Pipeline completo de um arquivo da CVM — chamado pela rota/admin (server-side). */
-export async function sincronizarCvm(tipo: "itr" | "dfp", ano: number): Promise<ResultadoSync> {
-  const url = CVM_URLS[tipo](ano);
+const chaveSpaces = (arquivo: string) => `cvm/${arquivo}.zip`;
+
+/**
+ * Obtém o ZIP: da CVM (padrão — fonte de verdade p/ atualizações) ou do nosso
+ * ARQUIVO no Spaces (reprocesso/recalibração: mesmos bytes que geraram a base,
+ * sem depender da CVM). Todo download da CVM é espelhado no Spaces com o
+ * ETag/Last-Modified nos metadados do objeto — o espelho nunca fica para trás.
+ */
+async function obterZip(
+  tipo: "itr" | "dfp",
+  ano: number,
+  doArquivo: boolean,
+): Promise<{ caminho: string; etag: string | null; lastModified: string | null; origem: "cvm" | "spaces" }> {
   const arquivo = arquivoId(tipo, ano);
-  console.log(`[cvm-sync] baixando ${url}…`);
+  if (doArquivo && env.spaces.enabled) {
+    try {
+      const { buffer, metadata } = await downloadFileComMeta(chaveSpaces(arquivo));
+      const caminho = join(tmpdir(), `cvm-spaces-${arquivo}.zip`);
+      await fs.writeFile(caminho, buffer);
+      coletaLixo();
+      console.log(`[cvm-sync] ${arquivo}: usando espelho do Spaces (${(buffer.length / 1e6).toFixed(1)}MB)`);
+      return { caminho, etag: metadata["cvm-etag"] ?? null, lastModified: metadata["cvm-last-modified"] ?? null, origem: "spaces" };
+    } catch {
+      console.log(`[cvm-sync] ${arquivo}: sem espelho no Spaces — baixando da CVM`);
+    }
+  }
+  const baixado = await baixarCvmZipParaDisco(CVM_URLS[tipo](ano));
+  // Espelha no Spaces (arquivamento) — falha aqui não derruba o sync.
+  if (env.spaces.enabled) {
+    try {
+      const buf = await fs.readFile(baixado.caminho);
+      const meta: Record<string, string> = {};
+      if (baixado.etag) meta["cvm-etag"] = baixado.etag;
+      if (baixado.lastModified) meta["cvm-last-modified"] = baixado.lastModified;
+      await uploadFile(buf, chaveSpaces(arquivo), "application/zip", meta);
+      coletaLixo();
+    } catch (e) {
+      console.warn(`[cvm-sync] ${arquivo}: arquivamento no Spaces falhou (segue sem espelho):`, e instanceof Error ? e.message : e);
+    }
+  }
+  return { caminho: baixado.caminho, etag: baixado.etag, lastModified: baixado.lastModified, origem: "cvm" };
+}
+
+/** Pipeline completo de um arquivo da CVM — chamado pela rota/admin (server-side). */
+export async function sincronizarCvm(
+  tipo: "itr" | "dfp",
+  ano: number,
+  opts?: { doArquivo?: boolean },
+): Promise<ResultadoSync> {
+  const arquivo = arquivoId(tipo, ano);
   await marcaFase(`${arquivo}: baixando`);
   // Download em STREAMING para disco (não segura o ZIP em RAM duas vezes).
-  const baixado = await baixarCvmZipParaDisco(url);
-  console.log(`[cvm-sync] ${arquivo}: ${(baixado.tamanho / 1e6).toFixed(1)}MB — processando…`);
+  const baixado = await obterZip(tipo, ano, opts?.doArquivo === true);
+  console.log(`[cvm-sync] ${arquivo}: processando (origem ${baixado.origem})…`);
 
   let parsed: Awaited<ReturnType<typeof parseCvmZip>>;
   try {
@@ -306,7 +355,9 @@ export async function sincronizarHistoricoCvm(reprocessar = false): Promise<void
         progHist.pulados.push(arquivo);
       } else {
         try {
-          await sincronizarCvm(tipo, ano);
+          // Reprocesso (recalibração): prefere o espelho do Spaces — mesmos bytes,
+          // sem depender da CVM. Sync normal/retomada: direto da CVM.
+          await sincronizarCvm(tipo, ano, { doArquivo: reprocessar });
           progHist.ok.push(arquivo);
         } catch (e) {
           const erro = e instanceof Error ? e.message : String(e);
@@ -328,6 +379,55 @@ export async function sincronizarHistoricoCvm(reprocessar = false): Promise<void
   }
 }
 
+/**
+ * RECÁLCULO GERAL de indicadores — para erro de FÓRMULA (não de mapeamento):
+ * lê os períodos já persistidos e regrava CvmIndicator, ano a ano, sem download
+ * nem parse (~20-30 min). Usa o mesmo progresso/heartbeat do seed histórico.
+ */
+export async function recalcularIndicadoresTudo(): Promise<void> {
+  if (progHist.emAndamento) throw new Error("Já há um processamento em andamento");
+  const periodos = await prisma.cvmPeriod.findMany({ distinct: ["dtFim"], select: { dtFim: true }, orderBy: { dtFim: "asc" } });
+  const porAno = new Map<number, string[]>();
+  for (const p of periodos) {
+    const dt = p.dtFim.toISOString().slice(0, 10);
+    const ano = Number(dt.slice(0, 4));
+    porAno.set(ano, [...(porAno.get(ano) ?? []), dt]);
+  }
+  const anos = [...porAno.keys()].sort();
+  Object.assign(progHist, {
+    emAndamento: true, total: anos.length, feitos: 0, atual: null,
+    ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null, fase: null,
+  });
+  console.log(`[cvm-sync] recálculo geral iniciado — ${anos.length} anos (${anos[0]}–${anos[anos.length - 1]})`);
+  await salvaSnapshotHistorico();
+  try {
+    for (const ano of anos) {
+      const rotulo = `recalc_${ano}`;
+      progHist.atual = rotulo;
+      await salvaSnapshotHistorico();
+      try {
+        const dtFims = porAno.get(ano)!;
+        const dts = dtFims.map((d) => new Date(`${d}T00:00:00Z`));
+        const cnpjs = await prisma.cvmPeriod.findMany({ where: { dtFim: { in: dts } }, distinct: ["cnpj"], select: { cnpj: true } });
+        const n = await recalculaIndicadores(cnpjs.map((c) => c.cnpj), dtFims, (i, t) => marcaFase(`${rotulo}: ${i}/${t} empresas`));
+        console.log(`[cvm-sync] ${rotulo}: ${n} indicadores`);
+        progHist.ok.push(rotulo);
+      } catch (e) {
+        progHist.erros.push({ arquivo: rotulo, erro: e instanceof Error ? e.message : String(e) });
+      }
+      progHist.feitos++;
+      coletaLixo();
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  } finally {
+    progHist.emAndamento = false;
+    progHist.atual = null;
+    progHist.terminadoEm = new Date().toISOString();
+    await salvaSnapshotHistorico();
+    console.log(`[cvm-sync] recálculo geral terminou: ${progHist.ok.length} anos ok · ${progHist.erros.length} erros`);
+  }
+}
+
 /** Arquivos que o cron vigia: ITR do ano corrente e do anterior + DFP do ano anterior
  *  (reapresentações são comuns meses depois da entrega). */
 export function arquivosVigiados(hoje = new Date()): Array<{ tipo: "itr" | "dfp"; ano: number }> {
@@ -339,10 +439,12 @@ export function arquivosVigiados(hoje = new Date()): Array<{ tipo: "itr" | "dfp"
   ];
 }
 
-/** Checa a CVM (HEAD) e cria SystemNotice quando há versão nova não processada. */
+/** Checa a CVM (HEAD) e cria SystemNotice quando há versão nova não processada.
+ *  Vigia TODOS os arquivos do plano (2010→hoje), não só os recentes: reapresentação
+ *  de ano antigo também vira aviso no Inbox. Custo ~zero (só cabeçalhos HTTP). */
 export async function checarAtualizacoesCvm(): Promise<Array<{ arquivo: string; novo: boolean }>> {
   const resultados: Array<{ arquivo: string; novo: boolean }> = [];
-  for (const { tipo, ano } of arquivosVigiados()) {
+  for (const { tipo, ano } of planoHistorico()) {
     const arquivo = arquivoId(tipo, ano);
     try {
       const meta = await checarCvmAtualizacao(CVM_URLS[tipo](ano));

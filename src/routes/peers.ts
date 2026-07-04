@@ -4,7 +4,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/permissions";
 import { getPeerDistribution } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
-import { sincronizarCvm, sincronizarHistoricoCvm, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados } from "../services/cvm-sync";
+import { sincronizarCvm, sincronizarHistoricoCvm, recalcularIndicadoresTudo, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados } from "../services/cvm-sync";
 import { runtimeState } from "../services/runtime-state";
 
 const router = Router();
@@ -66,6 +66,15 @@ router.post("/cvm/sync", async (req: AuthRequest, res: Response): Promise<void> 
     console.error("[peers/cvm/sync] falhou:", e);
     res.status(502).json({ error: e instanceof Error ? e.message : "Falha ao sincronizar com a CVM" });
   }
+});
+
+// POST /peers/cvm/recalcular — recálculo geral de indicadores a partir dos períodos
+// já persistidos (erro de FÓRMULA; sem download/parse, ~20-30 min, mesmo progresso).
+router.post("/cvm/recalcular", async (_req: AuthRequest, res: Response): Promise<void> => {
+  if (getProgressoHistorico().emAndamento) { res.status(409).json({ error: "Já há um processamento em andamento" }); return; }
+  if (runtimeState.seedsRodando) { res.status(409).json({ error: "O servidor acabou de reiniciar e está carregando os dados de boot (~2 min). Tente de novo em instantes." }); return; }
+  recalcularIndicadoresTudo().catch((e) => console.error("[peers/cvm/recalcular] falhou:", e));
+  res.status(202).json({ ok: true });
 });
 
 // POST /peers/cvm/check — checagem manual imediata (mesma rotina do cron semanal).

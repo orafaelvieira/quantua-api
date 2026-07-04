@@ -24,7 +24,8 @@ function getClient(): S3Client {
 export async function uploadFile(
   buffer: Buffer,
   key: string,
-  mimeType: string
+  mimeType: string,
+  metadata?: Record<string, string>,
 ): Promise<string> {
   if (!env.spaces.enabled) {
     // Sem Spaces configurado: armazena em base64 no campo storagePath
@@ -38,9 +39,24 @@ export async function uploadFile(
       Body: buffer,
       ContentType: mimeType,
       ACL: "private",
+      Metadata: metadata,
     })
   );
   return key;
+}
+
+/** Download com os METADADOS do objeto (ex.: ETag da CVM gravado no arquivamento). */
+export async function downloadFileComMeta(
+  key: string,
+): Promise<{ buffer: Buffer; metadata: Record<string, string> }> {
+  const response = await getClient().send(
+    new GetObjectCommand({ Bucket: env.spaces.bucket, Key: key })
+  );
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+    chunks.push(chunk);
+  }
+  return { buffer: Buffer.concat(chunks), metadata: (response.Metadata ?? {}) as Record<string, string> };
 }
 
 export async function downloadFile(storagePath: string): Promise<Buffer> {
