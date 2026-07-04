@@ -69,11 +69,13 @@ export const CVM_BP_CLASSIF: Record<string, string> = {
   "Contas a Receber - CP": "AO",
   "Estoques - CP": "AO",
   "Tributos a Recuperar - CP": "AO",
-  // AO/PO alinhados à régua da planilha do usuário e do dicionário do IBR
-  // (validação 04/07: Tesouraria dela = CDG−NCG com estas classes, ao milhar exato)
+  // AO/PO = régua CONFIRMADA pelo usuário (04/07): AO = Contas a Receber, Estoques,
+  // Ativos Biológicos, Tributos a Recuperar, Despesas Antecipadas/Adiantamentos.
+  // "Outros Ativos Circulantes" NÃO entra em AO (correção explícita do usuário
+  // sobre a própria planilha) — classe "0" = neutra, só exibição.
   "Ativos Biológicos - CP": "AO",
   "Despesas Antecipadas - CP": "AO",
-  "Outros Ativos Circulantes": "AO",
+  "Outros Ativos Circulantes": "0",
   "Ativo Não Circulante": "ANC",
   "Realizável a Longo Prazo": "ANC",
   "Investimentos": "ANC",
@@ -81,6 +83,9 @@ export const CVM_BP_CLASSIF: Record<string, string> = {
   "Intangível": "ANC",
   "Passivo Total": "PT",
   "Passivo Circulante": "PC",
+  // PO = Fornecedores + Obrig. Trabalhistas + Obrig. Tributárias (+ adiantamentos
+  // de clientes, que o plano PADRONIZADO da CVM não isola — ficam dentro de
+  // 2.01.05 "Outras Obrigações", misturados a dividendos/derivativos; não entram).
   "Fornecedores - CP": "PO",
   "Obrigações Sociais e Trabalhistas - CP": "PO",
   "Obrigações Fiscais - CP": "PO",

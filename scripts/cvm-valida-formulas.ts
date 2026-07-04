@@ -47,9 +47,11 @@ async function main(): Promise<void> {
     const cr = g(papel, "BP", "Contas a Receber") ?? 0;
     const est = g(papel, "BP", "Estoques") ?? 0;
     const forn = g(papel, "BP", "Fornecedores") ?? 0;
-    // AO/PO EXATOS pela Class da planilha
+    // AO/PO pela régua CONFIRMADA pelo usuário (04/07): Outros AC fica FORA de AO
+    // (a Class do xlsx o incluía — correção explícita do usuário sobre a planilha).
     let ao = 0, po = 0;
     for (const [conta, cl] of classe) {
+      if (conta === "Outros Ativos Circulantes") continue;
       const v = g(papel, "BP", conta);
       if (typeof v !== "number") continue;
       if (cl === "AO") ao += v;

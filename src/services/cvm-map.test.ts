@@ -8,19 +8,18 @@ import { describe, it, expect } from "vitest";
 import { CVM_BP_MAP, CVM_BP_CLASSIF, CVM_DRE_MAP } from "./cvm-map";
 
 describe("cvm-map — travas de regressão", () => {
-  it("AO = régua da planilha do usuário (6 contas)", () => {
+  it("AO = régua confirmada pelo usuário (5 contas — Outros AC fica FORA)", () => {
     const ao = Object.entries(CVM_BP_CLASSIF).filter(([, c]) => c === "AO").map(([n]) => n).sort();
     expect(ao).toEqual([
       "Ativos Biológicos - CP",
       "Contas a Receber - CP",
       "Despesas Antecipadas - CP",
       "Estoques - CP",
-      "Outros Ativos Circulantes",
       "Tributos a Recuperar - CP",
     ]);
   });
 
-  it("PO = régua da planilha do usuário (3 contas)", () => {
+  it("PO = régua confirmada pelo usuário (3 contas padronizáveis)", () => {
     const po = Object.entries(CVM_BP_CLASSIF).filter(([, c]) => c === "PO").map(([n]) => n).sort();
     expect(po).toEqual([
       "Fornecedores - CP",
