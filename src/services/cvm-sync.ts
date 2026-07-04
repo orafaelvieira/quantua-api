@@ -25,7 +25,7 @@ const arquivoId = (tipo: "itr" | "dfp", ano: number) => `${tipo}_${ano}`;
  *  ANTES do dtFim mais antigo bastam; e nada DEPOIS do mais novo é usado. Sem o
  *  TETO, o reprocesso (banco já cheio) carregava a base inteira p/ recalcular
  *  2010 → heap 179MB → crash-loop no dfp_2010. */
-async function carregaEmpresasDoBanco(cnpjs: string[], dtFimMin?: Date, dtFimMax?: Date): Promise<Map<string, CvmEmpresa>> {
+export async function carregaEmpresasDoBanco(cnpjs: string[], dtFimMin?: Date, dtFimMax?: Date): Promise<Map<string, CvmEmpresa>> {
   const out = new Map<string, CvmEmpresa>();
   const companies = await prisma.cvmCompany.findMany({ where: { cnpj: { in: cnpjs } } });
   const periods = await prisma.cvmPeriod.findMany({

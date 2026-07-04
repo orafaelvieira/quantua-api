@@ -149,6 +149,52 @@ router.get("/cvm/estudo", async (req: AuthRequest, res: Response): Promise<void>
   });
 });
 
+// GET /peers/cvm/empresas?search= — picker de empresa (nome/pregão/ticker).
+router.get("/cvm/empresas", async (req: AuthRequest, res: Response): Promise<void> => {
+  const s = String(req.query.search ?? "").trim();
+  if (s.length < 2) { res.json([]); return; }
+  const empresas = await prisma.cvmCompany.findMany({
+    where: { OR: [{ denom: { contains: s, mode: "insensitive" } }, { pregao: { contains: s, mode: "insensitive" } }, { ticker: { contains: s.toUpperCase() } }] },
+    select: { cnpj: true, denom: true, ticker: true, pregao: true, classificacao: true, setor: true },
+    orderBy: { denom: "asc" },
+    take: 20,
+  });
+  res.json(empresas);
+});
+
+// GET /peers/cvm/empresa?cnpj=&dtFim=&visao= — DRE/BP/DFC da visão + indicadores
+// gravados: a PROVA de qualquer indicador (drill-down de auditoria).
+router.get("/cvm/empresa", async (req: AuthRequest, res: Response): Promise<void> => {
+  const cnpj = String(req.query.cnpj ?? "").replace(/[^\d]/g, "");
+  const dtFim = String(req.query.dtFim ?? "");
+  const visao = ["TRI", "ANO", "LTM"].includes(String(req.query.visao)) ? String(req.query.visao) as "TRI" | "ANO" | "LTM" : "LTM";
+  if (cnpj.length !== 14 || !/^\d{4}-\d{2}-\d{2}$/.test(dtFim)) { res.status(400).json({ error: "cnpj e dtFim são obrigatórios" }); return; }
+
+  const { carregaEmpresasDoBanco } = await import("../services/cvm-sync");
+  const { dreTrimestre, dreLtm } = await import("../services/cvm-metrics");
+  const dt = new Date(`${dtFim}T00:00:00Z`);
+  const dtMin = new Date(Date.UTC(dt.getUTCFullYear() - 2, dt.getUTCMonth(), 1)); // folga p/ LTM
+  const emp = (await carregaEmpresasDoBanco([cnpj], dtMin, dt)).get(cnpj);
+  const per = emp?.periodos[dtFim];
+  if (!emp || !per) { res.status(404).json({ error: "Empresa/período não encontrado" }); return; }
+
+  const dre = visao === "ANO" ? per.dreYtd : visao === "TRI" ? dreTrimestre(emp, dtFim) : dreLtm(emp, dtFim);
+  const [cadastro, indicadores, periodos] = await Promise.all([
+    prisma.cvmCompany.findUnique({ where: { cnpj } }),
+    prisma.cvmIndicator.findMany({ where: { cnpj, dtFim: dt, visao }, orderBy: { nome: "asc" } }),
+    prisma.cvmPeriod.findMany({ where: { cnpj }, distinct: ["dtFim"], select: { dtFim: true }, orderBy: { dtFim: "desc" } }),
+  ]);
+  res.json({
+    empresa: cadastro,
+    periodosDisponiveis: periodos.map((p) => p.dtFim.toISOString().slice(0, 10)),
+    bp: per.bp,
+    dre: dre ?? null,
+    dreAviso: dre ? null : `Sem DRE na visão ${visao} para este período (janela incompleta).`,
+    dfcYtd: per.dfcYtd,
+    indicadores: indicadores.map((i) => ({ nome: i.nome, valor: i.valor, texto: i.texto })),
+  });
+});
+
 // POST /peers/cvm/check — checagem manual imediata (mesma rotina do cron semanal).
 router.post("/cvm/check", async (_req: AuthRequest, res: Response): Promise<void> => {
   const resultados = await checarAtualizacoesCvm();
