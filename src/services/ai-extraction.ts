@@ -4,6 +4,8 @@ import { DRE_TEMPLATE } from "./financial-templates";
 import type { BPLineItem, DRELineItem } from "../types/financial";
 import type { DREModel } from "./model-version";
 import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, isContaIgnorada, blocoDoCaminhoDRE, CONFLITO_CONTEXTO_DRE, DEFAULT_BP_MODEL, type BPModel, type DictionaryEntry } from "./account-mapper";
+import { construirArvoreBPporIndentacao } from "./bp-tree-indent";
+import type { ParsedDocument } from "./parser";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
 const AI_MODEL = "claude-sonnet-4-6";        // visão (lê o PDF) — caro
@@ -591,6 +593,9 @@ export async function extractFinancialsWithAI(
   // que era a fonte da instabilidade (BP de um ano caía na chave de outro no batch de N docs).
   // Com 2+ períodos no mesmo doc, escopamos o canonicalPeriod aos períodos conhecidos do doc.
   type DocCtx = { pin: string | null; docPeriodos: string[] };
+  // Capturas de BP resolvidas DETERMINISTICAMENTE (árvore por indentação) — não passam pelo
+  // LLM. Cada uma vira uma "captura BP" já pronta, mesclada com as do LLM na mesma pipeline.
+  const bpDeterministicos: Array<{ data: ArvoreOriginalBP; ctx: DocCtx }> = [];
   const taskThunks = docs.flatMap((doc) => {
     const t = doc.tipo.toLowerCase();
     const isDRE = /dre|resultado|demonstra/.test(t);
@@ -601,8 +606,21 @@ export async function extractFinancialsWithAI(
     const promptPeriodos = docPeriodos.length ? docPeriodos : periodos;
     const out: Array<() => Promise<{ kind: "dre" | "bp"; data: any; ctx: DocCtx; inTok: number; outTok: number }>> = [];
     if (isDRE || !isBP) out.push(() => ask(input, dreTreePrompt(promptPeriodos), model, 0, 16000).then((r) => ({ kind: "dre" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
-    // Árvore completa pode ser funda (1-7 níveis) → teto de saída maior que o padrão.
-    if (isBP || (!isDRE && !isBP)) out.push(() => ask(input, bpTreePrompt(promptPeriodos), model, 0, 16000).then((r) => ({ kind: "bp" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
+    if (isBP || (!isDRE && !isBP)) {
+      // ANTES do LLM: se o doc tem texto do parser (`raw`) com hierarquia por INDENTAÇÃO
+      // confiável, reconstrói a árvore do BP de forma DETERMINÍSTICA (captura as contas-folha
+      // que o Haiku colapsava — caso Fibracabos Grau 4) e PULA a chamada de IA desse doc.
+      // Se a reconstrução não for confiável (null), mantém EXATAMENTE o fluxo LLM — sem regressão.
+      const arvoreDet = doc.raw
+        ? construirArvoreBPporIndentacao({ raw: doc.raw } as ParsedDocument, promptPeriodos)
+        : null;
+      if (arvoreDet) {
+        bpDeterministicos.push({ data: arvoreDet, ctx });
+      } else {
+        // Árvore completa pode ser funda (1-7 níveis) → teto de saída maior que o padrão.
+        out.push(() => ask(input, bpTreePrompt(promptPeriodos), model, 0, 16000).then((r) => ({ kind: "bp" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
+      }
+    }
     return out;
   });
   // Paralelo com CONCORRÊNCIA LIMITADA (4): muito mais rápido em uploads multi-documento que
@@ -665,6 +683,9 @@ export async function extractFinancialsWithAI(
     if (r.kind === "bp") mergeBP(r.data, r.ctx);
     else { mergeDRE(r.data, r.ctx); storeDeclarados(r.data?.declarados, r.ctx); }
   }
+  // Capturas de BP determinísticas (árvore por indentação) entram na MESMA pipeline de merge
+  // (canonicalização de período idêntica à do LLM) — apenas não custaram tokens.
+  for (const b of bpDeterministicos) mergeBP(b.data, b.ctx);
 
   // UNIFICA períodos do MESMO ANO com formatos diferentes entre docs ("2022" no DRE vs
   // "31/12/2022" no BP dividia o período em dois — BP num, DRE noutro — e quebrava a
