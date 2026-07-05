@@ -323,7 +323,8 @@ function bpTreePrompt(periodos: string[]): string {
 Para cada um dos 5 grupos, retorne a ÁRVORE de contas como aparece no documento: cada nó com o NOME ORIGINAL EXATO, o VALOR IMPRESSO ao lado dele, e seus filhos aninhados em "filhos".
 - Um nó PAI leva o valor impresso na linha dele (o subtotal declarado) E os filhos aninhados — NÃO some nada por conta própria, NÃO pule níveis, NÃO invente nomes.
 - PARE de descer quando os filhos deixarem de ser CONTAS e virarem lançamentos individuais (bancos específicos, contratos, parcelas numeradas, CNPJs, nomes de pessoas/clientes): nesse caso retorne só o nó pai com seu valor, sem "filhos".
-- Wrappers que são o PRÓPRIO grupo (ex.: "CIRCULANTE", "NÃO CIRCULANTE", "EXIGÍVEL A CURTO PRAZO" como primeiro nível) NÃO entram como nó — o grupo já é a chave.
+- Wrappers que são o PRÓPRIO grupo (ex.: "CIRCULANTE", "NÃO CIRCULANTE", "EXIGÍVEL A CURTO PRAZO" como primeiro nível) NÃO entram como nó — o grupo já é a chave. MAS as contas abaixo deles entram TODAS, preservando a hierarquia interna.
+- Níveis INTERMEDIÁRIOS entre o grupo e as contas-folha (ex.: "EXIGÍVEL A CURTO PRAZO" dentro do Passivo Circulante, "CRÉDITOS" dentro do Ativo Circulante) SÃO nós normais: transcreva cada um COM seus filhos aninhados, em QUALQUER profundidade (grau 4, 5, 6+). NUNCA resuma um nível intermediário numa linha única e NUNCA omita as contas-folha abaixo dele.
 - Valores negativos com sinal negativo (ex.: depreciação, encargos, retificadoras "(-)").
 - COLUNAS: se o documento (ex.: ECF/ECD/SPED, "Período da Escrituração DD/MM a DD/MM") trouxer "Saldo Inicial" e "Saldo Final" do MESMO período, use SEMPRE o Saldo FINAL (fechamento) — nunca o inicial. (Não confundir com colunas de ANOS diferentes, que são períodos distintos e cada um vale.)
 - ${periodKeyInstruction(periodos)}
@@ -408,6 +409,13 @@ export interface AlertaComposicaoBP {
 }
 
 export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryEntry[], model: BPModel = DEFAULT_BP_MODEL): { bp: BPLineItem[]; naoMapeados: NaoMapeado[]; alertasComposicao: AlertaComposicaoBP[] } {
+  // Linhas do modelo que NÃO são input (subtotais/totais: "Passivo Circulante", "Ativo
+  // Total"...). Um mapeamento para elas (dicionário/alias) identifica o nó como o PRÓPRIO
+  // grupo/agregado reafirmado — NUNCA pode ser destino de absorção: o valor cairia numa
+  // chave que nenhuma linha de input lê (a montagem lê subtotais de `subtotal[classif]`)
+  // e as folhas seriam descartadas (caso Fibracabos Grau 4: "EXIGÍVEL A CURTO PRAZO" →
+  // "Passivo Circulante" engolia Fornecedores/Obrigações e a composição do PC ficava R$ 0).
+  const naoInputModelo = new Set(model.lines.filter((l) => l.tipo !== "input").map((l) => l.conta));
   const alertasComposicao: AlertaComposicaoBP[] = [];
   const detalhe: Record<string, Record<string, number>> = {}; // conta → periodo → valor
   const subtotal: Record<string, Record<string, number>> = {}; // grupoCode → periodo → valor
@@ -467,14 +475,37 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
         const filhos = it.filhos ?? [];
 
         const destBruto = temValor ? mapAccountToBPGroup(it.nome, g, dict, model) : null;
-        // Se o pai só mapeia para um destino GENÉRICO — o balde do grupo OU qualquer linha
+        // (a) Destino que é SUBTOTAL/TOTAL do modelo: o nó "equivale ao grupo" — é
+        // ESTRUTURAL por definição, em QUALQUER profundidade. Nunca absorve: com filhos,
+        // desce e classifica as folhas; sem filhos, cai no tratamento de folha (balde do
+        // grupo + âmbar), preservando o total e a prova de composição.
+        const destEhSubtotalModelo = destBruto != null && naoInputModelo.has(destBruto);
+        // (b) Se o pai só mapeia para um destino GENÉRICO — o balde do grupo OU qualquer linha
         // "Outros/Outras ..." (ex.: "Outros Créditos a Receber - CP") — mas TEM filhos,
         // prefira descer: os filhos podem classificar mais específico (ex.: "Tributos a
         // Recuperar" sob "OUTROS CRÉDITOS" → linha própria). Pior caso, o filho cai no
         // mesmo destino do pai via contexto — nunca pior que a absorção.
         const destEhGenerico = destBruto != null &&
           (Object.values(OUTROS_GRUPO).includes(destBruto) || /^outr[oa]s\b/.test(normNome(destBruto)));
-        const dest = destEhGenerico && filhos.length > 0 ? null : destBruto;
+        // (c) Pai-AGREGADO provado por VALOR: mapeia para um input específico (ex.: alias
+        // "CRÉDITOS" → Contas a Receber - CP), mas os filhos somam exatamente o valor dele
+        // E pelo menos um filho classifica DIRETO em OUTRA linha do modelo — absorver aqui
+        // misturaria contas de naturezas distintas (Impostos a Recuperar, Adiantamentos...)
+        // numa linha só. Trata como estrutural e desce; como a soma fecha, nada se perde.
+        // Filhos homogêneos (mesmo destino do pai, ex.: bancos sob "Disponibilidades")
+        // seguem absorvidos como antes.
+        let paiAgregado = false;
+        if (destBruto && !destEhSubtotalModelo && !destEhGenerico && filhos.length > 0 && temValor) {
+          const sFilhos = somaDireta(filhos);
+          if (Math.abs(sFilhos - it.valor) <= tolDe(it.valor)) {
+            paiAgregado = filhos.some((f) => {
+              if (typeof f.valor !== "number" || isCompensacao(f.nome)) return false;
+              const df = mapAccountToBPGroup(f.nome, g, dict, model);
+              return df != null && !naoInputModelo.has(df) && df !== destBruto;
+            });
+          }
+        }
+        const dest = destEhSubtotalModelo || paiAgregado || (destEhGenerico && filhos.length > 0) ? null : destBruto;
         if (dest) {
           const v = it.valor * fator;
           add(subtotal, g, p, v);
@@ -514,7 +545,8 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
         const comContexto = caminho.length
           ? mapAccountToBPGroup(`${caminho[caminho.length - 1]} ${it.nome}`, g, undefined, model)
           : null;
-        if (comContexto) { add(detalhe, comContexto, p, v); it.destino = comContexto; return; }
+        // (contexto também nunca pode apontar para subtotal/total do modelo)
+        if (comContexto && !naoInputModelo.has(comContexto)) { add(detalhe, comContexto, p, v); it.destino = comContexto; return; }
         const balde = OUTROS_GRUPO[g];
         if (balde) add(detalhe, balde, p, v);
         it.destino = balde ?? "(não classificado)";

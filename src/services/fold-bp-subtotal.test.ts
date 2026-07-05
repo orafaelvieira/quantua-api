@@ -293,6 +293,148 @@ describe("foldBP — pai com destino genérico ('Outros ...') desce para os filh
   });
 });
 
+describe("foldBP — níveis intermediários de profundidade arbitrária (caso Fibracabos Grau 4)", () => {
+  // Soma das linhas de INPUT de um grupo (composição visível) — "nenhuma folha perdida"
+  // significa: composição das contas detalhadas = subtotal do grupo.
+  const somaInputs = (bp: any[], classifs: string[], p: string) =>
+    bp.filter((l) => l.nivel === 2 && classifs.includes(l.classificacao)).reduce((s, l) => s + (l.valores?.[p] ?? 0), 0);
+
+  it("Grau 4: EXIGÍVEL/CRÉDITOS viram estruturais, folhas classificadas nas contas do modelo, subtotais fecham", () => {
+    const arvore = {
+      "2023": {
+        grupos: {
+          "Ativo Circulante": [
+            // Intermediário homogêneo: filhos no MESMO destino → absorção continua (regressão)
+            { nome: "DISPONIBILIDADES", valor: 50000, filhos: [
+              { nome: "CAIXA GERAL", valor: 10000 },
+              { nome: "BANCOS CONTA CORRENTE", valor: 40000 },
+            ]},
+            // Intermediário AGREGADO: mapeia via alias p/ "Contas a Receber - CP", mas os
+            // filhos são de naturezas distintas — antes ABSORVIA tudo numa linha só.
+            { nome: "CRÉDITOS", valor: 450000, filhos: [
+              { nome: "IMPOSTOS A RECUPERAR", valor: 100000 },
+              { nome: "DUPLICATAS A RECEBER", valor: 300000 },
+              { nome: "ADIANTAMENTOS A FORNECEDORES", valor: 50000 },
+            ]},
+          ],
+          "Ativo Não Circulante": [
+            { nome: "DIFERIDO", valor: 30000 }, // grupo irmão fora do padrão — nunca descartado
+          ],
+          "Passivo Circulante": [
+            // Intermediário que EQUIVALE AO GRUPO (= total do PC). Entrada de dicionário
+            // real que disparava o bug: destino = a linha de SUBTOTAL "Passivo Circulante"
+            // → absorvia as folhas e a composição do PC ficava R$ 0.
+            { nome: "EXIGÍVEL A CURTO PRAZO", valor: 500000, filhos: [
+              { nome: "FORNECEDORES A PAGAR", valor: 200000 },
+              { nome: "OBRIGAÇÕES FISCAIS", valor: 180000 },
+              { nome: "OBRIGAÇÕES TRABALHISTAS", valor: 120000 },
+            ]},
+          ],
+        },
+      },
+    } as any;
+    const dict = [{ nomeOriginal: "Exigível a Curto Prazo", contaDestino: "Passivo Circulante", grupoConta: "Passivo Circulante" }];
+    const { bp, naoMapeados, alertasComposicao } = foldBP(arvore, ["2023"], dict);
+
+    // PC: folhas classificadas nas contas do modelo (era: tudo absorvido, composição 0)
+    expect(valorDe(bp, "Fornecedores - CP", "2023")).toBeCloseTo(200000, 1);
+    expect(valorDe(bp, "Obrigações Tributárias - CP", "2023")).toBeCloseTo(180000, 1);
+    expect(valorDe(bp, "Obrigações Trabalhistas - CP", "2023")).toBeCloseTo(120000, 1);
+    const pc = bp.find((l) => l.classificacao === "PC" && l.nivel === 1);
+    expect(pc?.valores["2023"]).toBeCloseTo(500000, 1);
+    // "verde só com prova": composição das contas detalhadas FECHA com o subtotal
+    expect(somaInputs(bp, ["PO", "PF"], "2023")).toBeCloseTo(500000, 1);
+    // intermediário marcado ESTRUTURAL (não-folha), com a trilha preservada p/ auditoria
+    const exigivel = arvore["2023"].grupos["Passivo Circulante"][0];
+    expect(exigivel.destino).toContain("estrutural");
+
+    // AC: CRÉDITOS estrutural → cada folha na linha certa (era: tudo em Contas a Receber)
+    expect(valorDe(bp, "Tributos a Recuperar - CP", "2023")).toBeCloseTo(100000, 1);
+    expect(valorDe(bp, "Contas a Receber - CP", "2023")).toBeCloseTo(300000, 1);
+    expect(valorDe(bp, "Despesas Ant. / Adiantamentos - Ativo", "2023")).toBeCloseTo(50000, 1);
+    const creditos = arvore["2023"].grupos["Ativo Circulante"][1];
+    expect(creditos.destino).toContain("estrutural");
+    // DISPONIBILIDADES (filhos homogêneos) segue ABSORVENDO — comportamento preservado
+    expect(valorDe(bp, "Caixa e Equivalentes de Caixa", "2023")).toBeCloseTo(50000, 1);
+    const ac = bp.find((l) => l.classificacao === "AC" && l.nivel === 1);
+    expect(ac?.valores["2023"]).toBeCloseTo(500000, 1);
+    expect(somaInputs(bp, ["AC", "AF", "AO"], "2023")).toBeCloseTo(500000, 1);
+
+    // DIFERIDO não é descartado (classificado em linha do modelo; ANC fecha)
+    const anc = bp.find((l) => l.classificacao === "ANC" && l.nivel === 1);
+    expect(anc?.valores["2023"]).toBeCloseTo(30000, 1);
+    expect(somaInputs(bp, ["ANC"], "2023")).toBeCloseTo(30000, 1);
+
+    // Documento internamente consistente → nenhum alerta; nada âmbar
+    expect(alertasComposicao.length).toBe(0);
+    expect(naoMapeados.length).toBe(0);
+  });
+
+  it("Grau 5-6: cadeia de intermediários vira estrutural nível a nível; absorção só no nó semântico", () => {
+    const arvore = {
+      "2024": {
+        grupos: {
+          "Ativo Circulante": [
+            { nome: "REALIZÁVEL A CURTO PRAZO", valor: 1000, filhos: [           // nível 1 (= grupo)
+              { nome: "CRÉDITOS", valor: 700, filhos: [                          // nível 2 (agregado)
+                { nome: "CLIENTES", valor: 400, filhos: [                        // nível 3 (mapeia)
+                  { nome: "DUPLICATAS A RECEBER", valor: 400 },                  // nível 4 (mesmo destino → absorvido)
+                ]},
+                { nome: "TRIBUTOS", valor: 300, filhos: [                        // nível 3 (mapeia)
+                  { nome: "IMPOSTOS A RECUPERAR", valor: 300, filhos: [          // nível 4 (mesmo destino)
+                    { nome: "ICMS A RECUPERAR", valor: 180 },                    // nível 5 (folha)
+                    { nome: "PIS A RECUPERAR", valor: 120 },                     // nível 5 (folha)
+                  ]},
+                ]},
+              ]},
+              { nome: "DISPONIBILIDADES", valor: 300, filhos: [
+                { nome: "CAIXA GERAL", valor: 100 },
+                { nome: "BANCOS CONTA CORRENTE", valor: 200 },
+              ]},
+            ]},
+          ],
+        },
+      },
+    } as any;
+    const { bp, naoMapeados, alertasComposicao } = foldBP(arvore, ["2024"]);
+
+    // Folhas/subárvores classificadas no nó semântico certo — nenhuma folha perdida
+    expect(valorDe(bp, "Contas a Receber - CP", "2024")).toBeCloseTo(400, 1);
+    expect(valorDe(bp, "Tributos a Recuperar - CP", "2024")).toBeCloseTo(300, 1);
+    expect(valorDe(bp, "Caixa e Equivalentes de Caixa", "2024")).toBeCloseTo(300, 1);
+    const ac = bp.find((l) => l.classificacao === "AC" && l.nivel === 1);
+    expect(ac?.valores["2024"]).toBeCloseTo(1000, 1); // subtotal fecha com o declarado
+    expect(somaInputs(bp, ["AC", "AF", "AO"], "2024")).toBeCloseTo(1000, 1); // composição fecha
+
+    // Intermediários marcados estruturais em CADA nível da cadeia
+    const realizavel = arvore["2024"].grupos["Ativo Circulante"][0];
+    expect(realizavel.destino).toContain("estrutural");
+    expect(realizavel.filhos[0].destino).toContain("estrutural"); // CRÉDITOS
+    // Absorção preservada no nó semântico (mesma linha do modelo): filhos auditáveis
+    expect(realizavel.filhos[0].filhos[1].filhos[0].filhos[0].destino).toContain("absorvido"); // ICMS sob IMPOSTOS A RECUPERAR
+    expect(alertasComposicao.length).toBe(0);
+    expect(naoMapeados.length).toBe(0);
+  });
+
+  it("intermediário-grupo SEM filhos capturados: valor vai p/ o balde VISÍVEL + âmbar (nunca some da composição)", () => {
+    const arvore = {
+      "2023": {
+        grupos: {
+          "Passivo Circulante": [{ nome: "EXIGÍVEL A CURTO PRAZO", valor: 500 }], // folha única
+        },
+      },
+    } as any;
+    const dict = [{ nomeOriginal: "Exigível a Curto Prazo", contaDestino: "Passivo Circulante", grupoConta: "Passivo Circulante" }];
+    const { bp, naoMapeados } = foldBP(arvore, ["2023"], dict);
+    const pc = bp.find((l) => l.classificacao === "PC" && l.nivel === 1);
+    expect(pc?.valores["2023"]).toBeCloseTo(500, 1); // total nunca se perde
+    // Antes: valor caía em detalhe["Passivo Circulante"] (chave que nenhuma linha lê) →
+    // composição R$ 0 invisível. Agora: balde do grupo + âmbar para o analista.
+    expect(valorDe(bp, "Outros Passivos Circulantes", "2023")).toBeCloseTo(500, 1);
+    expect(naoMapeados.map((n) => n.nome)).toContain("EXIGÍVEL A CURTO PRAZO");
+  });
+});
+
 describe("foldDRE — blindagem contextual (posição no documento × dicionário)", () => {
   const RECEITA = { nome: "RECEITA OPERACIONAL BRUTA", valor: 1000 };
   const arvoreCom = (paiNome: string) => ({
