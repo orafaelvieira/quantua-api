@@ -149,18 +149,64 @@ router.get("/cvm/estudo", async (req: AuthRequest, res: Response): Promise<void>
   });
 });
 
-// GET /peers/cvm/empresas?search= — picker de empresa (nome/pregão/ticker).
+// GET /peers/cvm/empresas?search=&classificacao=&setor=&subsetor=&all=1 — picker/diretório.
+// Filtros de taxonomia (classificacao/setor/subsetor) combinam em AND com a busca e com all=1.
 router.get("/cvm/empresas", async (req: AuthRequest, res: Response): Promise<void> => {
   const s = String(req.query.search ?? "").trim();
   const todas = req.query.all === "1"; // lista completa p/ o dropdown com filtro client-side
+  const classificacao = req.query.classificacao ? String(req.query.classificacao) : null;
+  const setor = req.query.setor ? String(req.query.setor) : null;
+  const subsetor = req.query.subsetor ? String(req.query.subsetor) : null;
   if (!todas && s.length < 2) { res.json([]); return; }
+  const taxonomia = {
+    ...(classificacao ? { classificacao } : {}),
+    ...(setor ? { setor } : {}),
+    ...(subsetor ? { subsetor } : {}),
+  };
+  const busca = todas ? {} : { OR: [{ denom: { contains: s, mode: "insensitive" as const } }, { pregao: { contains: s, mode: "insensitive" as const } }, { ticker: { contains: s.toUpperCase() } }] };
   const empresas = await prisma.cvmCompany.findMany({
-    where: todas ? {} : { OR: [{ denom: { contains: s, mode: "insensitive" } }, { pregao: { contains: s, mode: "insensitive" } }, { ticker: { contains: s.toUpperCase() } }] },
-    select: { cnpj: true, denom: true, ticker: true, pregao: true, classificacao: true, setor: true },
+    where: { ...taxonomia, ...busca },
+    select: { cnpj: true, denom: true, ticker: true, pregao: true, classificacao: true, setor: true, subsetor: true },
     orderBy: { denom: "asc" },
     ...(todas ? {} : { take: 20 }),
   });
   res.json(empresas);
+});
+
+// GET /peers/cvm/matriz?cnpj=&visao= — matriz indicador × período de UMA empresa
+// (todos os dtFims da visão, DESC, no máx 12). Só leitura; prova de auditoria multi-período.
+router.get("/cvm/matriz", async (req: AuthRequest, res: Response): Promise<void> => {
+  const cnpj = String(req.query.cnpj ?? "").replace(/[^\d]/g, "");
+  const visao = ["TRI", "ANO", "LTM"].includes(String(req.query.visao)) ? String(req.query.visao) : "LTM";
+  if (cnpj.length !== 14) { res.status(400).json({ error: "cnpj é obrigatório" }); return; }
+  const [cadastro, indicadores] = await Promise.all([
+    prisma.cvmCompany.findUnique({ where: { cnpj }, select: { denom: true, ticker: true, pregao: true, classificacao: true, setor: true, subsetor: true } }),
+    prisma.cvmIndicator.findMany({
+      where: { cnpj, visao },
+      select: { dtFim: true, nome: true, valor: true, texto: true },
+      orderBy: { dtFim: "desc" },
+    }),
+  ]);
+  if (!cadastro) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  // Períodos DESC, no máx 12 (os mais recentes).
+  const periodos = [...new Set(indicadores.map((i) => i.dtFim.toISOString().slice(0, 10)))]
+    .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
+    .slice(0, 12);
+  const periodoSet = new Set(periodos);
+  // Agrupa por nome do indicador; valores/texto por dtFim.
+  const porNome = new Map<string, { valores: Record<string, number | null>; texto: Record<string, string | null> }>();
+  for (const ind of indicadores) {
+    const dt = ind.dtFim.toISOString().slice(0, 10);
+    if (!periodoSet.has(dt)) continue;
+    let linha = porNome.get(ind.nome);
+    if (!linha) { linha = { valores: {}, texto: {} }; porNome.set(ind.nome, linha); }
+    linha.valores[dt] = ind.valor ?? null;
+    linha.texto[dt] = ind.texto ?? null;
+  }
+  const linhas = [...porNome.entries()]
+    .sort(([a], [b]) => a.localeCompare(b, "pt-BR"))
+    .map(([nome, { valores, texto }]) => ({ nome, valores, texto }));
+  res.json({ empresa: cadastro, periodos, linhas });
 });
 
 // GET /peers/cvm/empresa?cnpj=&dtFim=&visao= — DRE/BP/DFC da visão + indicadores
