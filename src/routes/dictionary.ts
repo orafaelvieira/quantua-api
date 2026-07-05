@@ -3,6 +3,7 @@ import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { bumpDictionaryVersion, getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { DEFAULT_BP_MODEL, IGNORAR_DESTINO } from "../services/account-mapper";
+import { avaliaBloqueioEstrutural } from "../services/conta-estrutural";
 
 const router = Router();
 router.use(requireAuth);
@@ -291,6 +292,17 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
   for (const entry of entries) {
     if (!entry.nomeOriginal || !entry.contaDestino || !entry.grupoConta) continue;
     const tipoE = entry.tipo || "BP";
+
+    // TRAVA ESTRUTURAL: conta de AGRUPAMENTO (ex.: "Exigível a Curto Prazo") não
+    // pode virar conta-FOLHA no dicionário — colapsaria o grupo e comprometeria os
+    // demais IBRs. __IGNORAR__ passa sempre (não aprende nada).
+    if (entry.contaDestino !== IGNORAR_DESTINO) {
+      const bloqueio = avaliaBloqueioEstrutural(entry.nomeOriginal, entry.contaDestino);
+      if (bloqueio.bloqueado) {
+        rejeitadas.push({ nomeOriginal: entry.nomeOriginal, contaDestino: entry.contaDestino, motivo: bloqueio.motivo! });
+        continue;
+      }
+    }
 
     // VALIDAÇÃO CRUZADA (BP): o destino precisa ser do MESMO grupo em que a conta foi
     // vista no documento — nunca cruza Ativo/Passivo nem CP/LP. Protege o dicionário
