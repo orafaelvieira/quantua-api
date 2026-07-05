@@ -11,7 +11,7 @@ import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
 import { comparePeersCvm, CVM_COMPARAVEIS } from "../services/peer-benchmark-cvm";
-import { researchCompanyWeb } from "../services/web-research";
+import { researchCompanyWeb, researchSectorBenchmarksWeb } from "../services/web-research";
 import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-context";
 import { sugerirClassificacoesIA, chaveNM } from "../services/classification-suggest";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta, ordPeriodo } from "../services/account-mapper";
@@ -363,6 +363,34 @@ async function runAnalysisBackground(
       if (web) console.log(`[generate] ${analysisId} web: ${web.custo.buscas} buscas, $${web.custo.usd.toFixed(4)}, ${web.fontes.length} fontes`);
     }
 
+    // PARES VIA WEB — só quando NÃO há par B3 na base (setor "Outros"/custom →
+    // coverage "ausente"). Preenche o `external` do peerComparison com as faixas
+    // típicas do setor: referência DIRECIONAL, confiança baixa, NUNCA percentil/
+    // semáforo duro. Custo vinculado ao IBR. Cache no reuseWeb (não re-busca à toa).
+    let webPares: Awaited<ReturnType<typeof researchSectorBenchmarksWeb>> = null;
+    if (peer && peer.coverage === "ausente") {
+      const setorDesc = analysis.sectorCustom?.trim() || analysis.company.setor || peer.segment || "";
+      const prevExternal = (analysis.resultado as { peerComparison?: { external?: unknown[] } } | null)?.peerComparison?.external;
+      if (opts?.reuseWeb && Array.isArray(prevExternal) && prevExternal.length > 0) {
+        peer.external = prevExternal as typeof peer.external;
+        console.log(`[generate] ${analysisId} pares-web: REUSADOS do cache (${prevExternal.length} refs)`);
+      } else if (setorDesc) {
+        try {
+          webPares = await researchSectorBenchmarksWeb(
+            setorDesc,
+            Object.entries(CVM_COMPARAVEIS).map(([nome, hib]) => ({ nome, higherIsBetter: hib })),
+            modelKey,
+          );
+        } catch (e: any) {
+          console.error(`[generate] ${analysisId} pares-web falhou (segue sem):`, e?.message ?? e);
+        }
+        if (webPares) {
+          peer.external = webPares.refs;
+          console.log(`[generate] ${analysisId} pares-web: ${webPares.refs.length} refs, $${webPares.custo.usd.toFixed(4)}`);
+        }
+      }
+    }
+
     // Input 4: materiais complementares (notas/apresentações) resumidos pela IA.
     let materiais: Awaited<ReturnType<typeof buildMateriaisContext>> = null;
     try {
@@ -398,6 +426,7 @@ async function runAnalysisBackground(
       peerComparison: peer,
       webResearch: web ? { resumo: web.resumo, fontes: web.fontes } : null,
       custoWebResearch: web?.custo ?? null,
+      custoWebPares: webPares?.custo ?? null, // pares via web (setor sem par B3)
       materiaisContexto: materiais ? { blocos: materiais.blocos } : null,
       custoMateriais: materiais?.custo ?? null,
     };

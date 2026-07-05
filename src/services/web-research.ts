@@ -59,6 +59,129 @@ REGRAS DE CONTEÚDO:
 - NÃO invente fatos. Prefira fontes primárias (site da empresa, imprensa, órgãos reguladores).`;
 }
 
+/* ─────────── Pares via WEB para setores SEM par B3 (setor "Outros"/custom) ───────────
+ * Quando o setor do cliente não existe na taxonomia B3, não há pares na base CVM
+ * (coverage "ausente"). Aqui buscamos na web as FAIXAS TÍPICAS do setor para os
+ * indicadores comparáveis — referência DIRECIONAL, nunca percentil/semáforo duro
+ * ("verde só com prova"). Best-effort; custo registrado. */
+
+export interface RefExternaWeb {
+  indicador: string;
+  referencia: number;      // valor típico (mediana aproximada) do setor
+  fonte: string;           // sempre marca confiança baixa + web
+  higherIsBetter: boolean;
+}
+export interface WebParesResult {
+  refs: RefExternaWeb[];
+  fontes: WebResearchFonte[];
+  custo: CustoWebResearch;
+}
+
+// Só indicadores que fontes setoriais realmente publicam (Kanitz/Altman/Fleuriet
+// não têm mediana setorial confiável na web → ficam de fora).
+const WEB_PARES_INDICADORES = new Set<string>([
+  "Margem Bruta", "Margem EBITDA", "Margem Líquida",
+  "Liquidez Corrente", "Liquidez Seca",
+  "ROE (Retorno sobre Patrimônio Líquido)", "ROA (Retorno sobre Ativos)", "Giro do Ativo",
+  "Dívida Líquida/EBITDA", "Endividamento Geral",
+  "Prazo Médio Contas a Receber", "Prazo Médio Estoque", "Prazo Médio Fornecedores", "Ciclo Financeiro",
+]);
+
+/** Extrai as refs do bloco JSON da resposta web (função pura, testável sem rede).
+ *  Só aceita indicadores conhecidos (na polaridade) e valores numéricos sãos. */
+export function parseWebParesJson(texto: string, polaridade: Map<string, boolean>): RefExternaWeb[] {
+  const m = texto.match(/\[[\s\S]*\]/); // primeiro array JSON
+  if (!m) return [];
+  let parsed: Array<{ indicador?: string; valor?: unknown }>;
+  try { parsed = JSON.parse(m[0]); } catch { return []; }
+  if (!Array.isArray(parsed)) return [];
+  const refs: RefExternaWeb[] = [];
+  const vistos = new Set<string>();
+  for (const item of parsed) {
+    const nome = String(item?.indicador ?? "").trim();
+    const valor = typeof item?.valor === "number" ? item.valor : Number(item?.valor);
+    if (!polaridade.has(nome) || vistos.has(nome) || !Number.isFinite(valor)) continue;
+    if (Math.abs(valor) > 100000) continue; // sanidade grosseira contra absurdos
+    vistos.add(nome);
+    refs.push({
+      indicador: nome,
+      referencia: valor,
+      fonte: "estimativa web (faixa típica do setor) · confiança baixa",
+      higherIsBetter: polaridade.get(nome)!,
+    });
+  }
+  return refs;
+}
+
+function promptPares(setor: string, indicadores: string[]): string {
+  return `Você é analista financeiro de um IBR. O setor abaixo NÃO tem pares listados na B3, então preciso de uma REFERÊNCIA SETORIAL aproximada (mediana típica do setor no Brasil) para posicionar a empresa. Pesquise na web fontes setoriais confiáveis.
+
+Setor/atividade: "${setor}".
+
+Para CADA indicador abaixo, estime o VALOR TÍPICO (mediana) do setor no Brasil. Responda APENAS com um bloco JSON, sem texto antes ou depois:
+
+\`\`\`json
+[{"indicador": "<nome exato>", "valor": <número no formato pedido>}]
+\`\`\`
+
+Formato do valor (SIGA À RISCA):
+- Margens, ROE, ROA, Endividamento Geral: DECIMAL (ex.: 25% → 0.25).
+- Liquidez, Giro, Dívida Líquida/EBITDA: número puro (ex.: 1.5).
+- Prazos médios e Ciclo Financeiro: dias inteiros (ex.: 45).
+
+Indicadores: ${indicadores.join(" · ")}
+
+REGRAS: só inclua indicadores para os quais encontrar base setorial razoável (omita o resto — não invente). Prefira fontes recentes. Nada de percentis, só o valor típico.`;
+}
+
+/** Pares via web para setor custom. Null se desligado/indisponível/erro (best-effort). */
+export async function researchSectorBenchmarksWeb(
+  setor: string,
+  indicadores: Array<{ nome: string; higherIsBetter: boolean }>,
+  modelKey?: string | null,
+): Promise<WebParesResult | null> {
+  if (process.env.RESEARCH_WEB_ATIVO === "false") return null;
+  const alvo = indicadores.filter((i) => WEB_PARES_INDICADORES.has(i.nome));
+  if (!setor.trim() || alvo.length === 0) return null;
+  const polaridade = new Map(alvo.map((i) => [i.nome, i.higherIsBetter]));
+  const model = modeloAnaliseId(modelKey);
+
+  let msg: any;
+  try {
+    msg = await createWithRetry({
+      model,
+      max_tokens: 1500,
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_BUSCAS }],
+      messages: [{ role: "user", content: promptPares(setor, alvo.map((i) => i.nome)) }],
+    });
+  } catch (e: any) {
+    console.warn(`[web-pares] falhou (${setor}): ${e?.message ?? e}`);
+    return null;
+  }
+
+  const textos: string[] = [];
+  const fontesMap = new Map<string, string>();
+  for (const block of (msg.content ?? []) as any[]) {
+    if (block.type === "text" && typeof block.text === "string") textos.push(block.text);
+    else if (block.type === "web_search_tool_result" && Array.isArray(block.content)) {
+      for (const r of block.content) if (r?.type === "web_search_result" && r.url) fontesMap.set(r.url, r.title ?? r.url);
+    }
+  }
+  const refs = parseWebParesJson(textos.join("\n"), polaridade);
+  if (refs.length === 0) return null;
+
+  const inTok = msg.usage?.input_tokens ?? 0;
+  const outTok = msg.usage?.output_tokens ?? 0;
+  const buscas = msg.usage?.server_tool_use?.web_search_requests ?? 0;
+  const base = calcCusto(model, inTok, outTok);
+  const usdBuscas = buscas * WEB_SEARCH_USD_POR_BUSCA;
+  return {
+    refs,
+    fontes: [...fontesMap.entries()].map(([url, titulo]) => ({ titulo, url })),
+    custo: { ...base, usd: base.usd + usdBuscas, buscas, usdBuscas },
+  };
+}
+
 /** Pesquisa web sobre a empresa. Null se desligado/indisponível/erro (best-effort). */
 export async function researchCompanyWeb(
   empresa: { razaoSocial: string; setor?: string | null; site?: string | null },
