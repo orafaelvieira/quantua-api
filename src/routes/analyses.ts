@@ -1074,6 +1074,10 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
   // sectorCustom pode ser LIMPO (string vazia → null) quando o usuário troca "Outros" por setor real
   if (typeof req.body?.sectorCustom === "string") data.sectorCustom = req.body.sectorCustom.trim() || null;
   if (["light", "full", "crisis"].includes(String(req.body?.ibrType))) data.ibrType = String(req.body.ibrType);
+  // mode e documentChecklist: hoje as telas estão OCULTAS no wizard (flags), mas o
+  // update já os aceita — reativar as flags não ressuscita o bug de edição perdida.
+  if (["recurring", "ibr"].includes(String(req.body?.mode))) data.mode = String(req.body.mode);
+  if (Array.isArray(req.body?.documentChecklist)) data.documentChecklist = req.body.documentChecklist as object;
   if (Object.keys(data).length === 0 && !req.body?.engagement) { res.status(400).json({ error: "Nada para atualizar" }); return; }
   if (Object.keys(data).length > 0) await prisma.analysis.update({ where: { id }, data });
 
