@@ -130,9 +130,12 @@ router.get("/cvm/estudo", async (req: AuthRequest, res: Response): Promise<void>
         ...(classificacao ? { classificacao } : {}),
         ...(setor ? { setor } : {}),
         ...(subsetor ? { subsetor } : {}),
-        // "listadas=1": só negociadas na B3 (com ticker). Não listadas também são
-        // OFICIAIS (capital aberto presta contas à CVM igual) — o usuário escolhe.
-        ...(req.query.listadas === "1" ? { ticker: { not: null } } : {}),
+        // "listadas=1": só empresas COM TAXONOMIA B3 (ações classificadas na ClassifSetorial).
+        // Ter ticker NÃO basta: emissoras só de DÍVIDA (debêntures/SPEs — Rio+Saneamento,
+        // Águas do Sertão, empresas em recuperação) estão no diretório de emissores da B3
+        // mas fora da classificação setorial → apareciam "listadas" com setor "—" no ranking
+        // (flagrado pelo usuário). Quem espera "listada" espera setor junto.
+        ...(req.query.listadas === "1" ? { classificacao: { not: null } } : {}),
       },
     },
     include: { company: { select: { denom: true, ticker: true, pregao: true, classificacao: true, setor: true } } },
