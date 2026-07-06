@@ -22,6 +22,7 @@ import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../se
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
 import { getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
+import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
 const router = Router();
@@ -884,51 +885,53 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       custoExtracao: { usd: custoExtracaoUsd, fonte: escolhido.fonte, fecha: escolhido.fecha, niveis: custos },
     } as DadosEstruturados;
 
+    // 3. GATE — régua ÚNICA de prontidão (prontidao-geracao.ts): documentos presentes
+    //    (BP E DRE — "só BP" parava em 'Pronta para gerar' enganoso, flagrado pelo usuário),
+    //    equação fechada, composição ok, 0 não classificadas com valor, DRE reconciliada
+    //    quando verificável. A avaliação é PERSISTIDA em dados.prontidao (a UI lista as
+    //    pendências) e a MESMA régua protege o POST /generate e é recalculada no /refold.
+    const dadosComValidacao = { ...dadosEstruturados, validacao } as any;
+    const prontidao = avaliarProntidaoGeracao(dadosComValidacao);
+    dadosComValidacao.prontidao = prontidao;
+
     await prisma.analysis.update({
       where: { id: analysis.id },
       data: {
-        dadosEstruturados: { ...dadosEstruturados, validacao } as any,
+        dadosEstruturados: dadosComValidacao,
         periodo: allPeriodos.join(" a "),
       },
     });
 
-    // 3. GATE: só dispara a IA se a extração FECHOU (5/5) E está 100% classificada (sem N3
-    //    órfã com valor). Senão para em "Revisão necessária" — o analista classifica a conta
-    //    (alimenta o dicionário) e dispara a análise via POST /:id/generate. Evita gastar
-    //    crédito de IA em DF incompleto. (Se virou "Cancelada", o updateMany não casa
-    //    "Extraindo" → no-op, e a IA não roda.)
-    const naoClassMateriais = ((usouIA ? hibridoNaoMapeados : (escolhido.unmatched ?? [])) as any[])
-      .filter((n) => Object.values(n?.valores ?? {}).some((v) => typeof v === "number" && v !== 0)).length;
-    const bpLimpo = escolhido.fecha === true && naoClassMateriais === 0;
-    // "verde só com prova": a DRE só conta como provada se foi VERIFICADA contra os subtotais
-    // declarados no documento (verificada && ok). DRE não verificável (sem declarados) NÃO prova.
-    const dreProvada = validacao.reconciliacaoDRE.verificada === true && validacao.reconciliacaoDRE.ok === true;
-
-    if (!bpLimpo) {
-      // Não fecha (faltam contas / desbalanceado) ou há N3 não classificada → precisa corrigir.
+    if (!prontidao.pronta) {
+      // Pendências (documento faltando / não fecha / não classificadas / DRE divergente)
+      // → o analista corrige (classificar é grátis) e o /refold reabre o caminho.
+      // (Se virou "Cancelada", o updateMany não casa "Extraindo" → no-op.)
       await prisma.analysis.updateMany({
         where: { id: analysis.id, status: "Extraindo" },
         data: { status: "Revisão necessária" },
       });
-      console.log(`[process] ${analysis.id}: extração não-limpa (fecha=${escolhido.fecha}, naoClassificadas=${naoClassMateriais}) → "Revisão necessária" — IA NÃO disparada`);
-      return;
-    }
-    if (!dreProvada) {
-      // BP fecha e tudo classificado, MAS a DRE não pôde ser PROVADA por reconciliação
-      // (documento sem subtotais declarados). Não auto-roda — o analista decide via "Gerar análise".
-      await prisma.analysis.updateMany({
-        where: { id: analysis.id, status: "Extraindo" },
-        data: { status: "Pronta para gerar" },
-      });
-      console.log(`[process] ${analysis.id}: BP fecha mas DRE não verificada (sem declarados) → "Pronta para gerar" (analista decide) — IA NÃO disparada`);
+      console.log(`[process] ${analysis.id}: extração com pendências → "Revisão necessária" — IA NÃO disparada: ${prontidao.pendencias.join(" | ")}`);
       return;
     }
 
-    // 4. Prova COMPLETA (BP fecha + 0 não classificadas + DRE verificada) → roda a ÚNICA passada
-    //    de IA automaticamente (preenche o IBR).
-    const ws = await prisma.workspace.findFirst({ where: { members: { some: { id: req.userId! } } }, select: { aiAnalysisModel: true } });
-    await runAnalysisBackground(analysis.id, ws?.aiAnalysisModel);
-    // resposta (202) já foi enviada — frontend acompanha por polling do status.
+    // 4. Extração VALIDADA. AUTO-GERAR está DESLIGADO por decisão do usuário (2026-07-06):
+    //    o analista SEMPRE dá o OK antes da chamada de IA — gasto de token 100% previsível
+    //    e um olhar humano antes da etapa mais cara (validações podem "fechar verde" com
+    //    erro silencioso). Para religar: env AUTO_GERAR_ANALISE=true (exige também DRE
+    //    PROVADA por reconciliação — regra original do auto).
+    const dreProvada = validacao.reconciliacaoDRE.verificada === true && validacao.reconciliacaoDRE.ok === true;
+    const AUTO_GERAR = process.env.AUTO_GERAR_ANALISE === "true";
+    if (AUTO_GERAR && dreProvada) {
+      const ws = await prisma.workspace.findFirst({ where: { members: { some: { id: req.userId! } } }, select: { aiAnalysisModel: true } });
+      await runAnalysisBackground(analysis.id, ws?.aiAnalysisModel);
+      // resposta (202) já foi enviada — frontend acompanha por polling do status.
+      return;
+    }
+    await prisma.analysis.updateMany({
+      where: { id: analysis.id, status: "Extraindo" },
+      data: { status: "Pronta para gerar" },
+    });
+    console.log(`[process] ${analysis.id}: extração validada → "Pronta para gerar" (analista dá o OK) — IA NÃO disparada${prontidao.avisos.length ? ` · avisos: ${prontidao.avisos.join(" | ")}` : ""}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await prisma.analysis.update({ where: { id: analysis.id }, data: { status: "Erro", resultado: { erro: `Processamento (extração): ${msg}` } as object } });
@@ -949,6 +952,18 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const dados = analysis.dadosEstruturados as any;
   if (!dados?.indicadores?.length) { res.status(400).json({ error: "Extraia os documentos primeiro (sem indicadores)" }); return; }
+
+  // TRAVA (decisão do usuário 2026-07-06): a IA só roda com a extração VALIDADA.
+  // Guard por DADO (não por status) — vale para gerar E regerar, mesmo após edições.
+  // Antes o botão passava direto em "Revisão necessária" e queimava tokens em DF suja.
+  const prontidao = avaliarProntidaoGeracao(dados);
+  if (!prontidao.pronta) {
+    res.status(409).json({
+      error: "A extração ainda não está validada — corrija as pendências antes de gerar (nenhum token foi gasto).",
+      pendencias: prontidao.pendencias,
+    });
+    return;
+  }
 
   const ws = await prisma.workspace.findFirst({ where: { members: { some: { id: req.userId! } } }, select: { aiAnalysisModel: true } });
   // "Regerar só a análise" reaproveita a pesquisa web já salva (reuseWeb) — barato. Passar
@@ -1090,8 +1105,23 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   dados.indicadores = await buildIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
   dados.fluxoCaixa = buildIndirectCashFlow(dados.bp ?? [], dados.dre ?? [], periodos); // FC acompanha o refold (grátis)
 
+  // VALIDAÇÃO + PRONTIDÃO acompanham o refold: reclassificar muda subtotais (DRE) e zera
+  // pendências — sem recalcular, o gate ficava preso no estado da extração. Classificou a
+  // última conta → status vira "Pronta para gerar" SOZINHO (sem beco sem saída); apareceu
+  // pendência nova → volta a "Revisão necessária". Só mexe nos estados do checkpoint
+  // (nunca rebaixa "Concluída"/"Gerando diagnóstico").
+  if (dados.version === 2) {
+    dados.validacao = validateFinancialData(dados.bp ?? [], dados.dre ?? [], periodos, (dados as any).declarados);
+  }
+  const prontidaoRefold = avaliarProntidaoGeracao(dados);
+  (dados as any).prontidao = prontidaoRefold;
+
   await prisma.analysis.update({ where: { id }, data: { dadosEstruturados: dados } });
-  res.json({ ok: true, naoMapeados: naoMapeados.length });
+  await prisma.analysis.updateMany({
+    where: { id, status: { in: ["Revisão necessária", "Pronta para gerar"] } },
+    data: { status: prontidaoRefold.pronta ? "Pronta para gerar" : "Revisão necessária" },
+  });
+  res.json({ ok: true, naoMapeados: naoMapeados.length, prontidao: prontidaoRefold });
 });
 
 // Salva a árvore original do BP (auditoria original ↔ padrão) + não-mapeados
@@ -1274,7 +1304,11 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
   }
   const errosComp = alertasComp.filter((a) => a.severidade !== "info");
 
-  res.json({ ...validacao, benford, composicaoOk: errosComp.length === 0, alertasComposicao: alertasComp });
+  // PRONTIDÃO AO VIVO (mesma régua do gate/POST generate) — a UI lista as pendências
+  // e habilita/desabilita o "Gerar análise" por isto, nunca por status defasado.
+  const prontidao = avaliarProntidaoGeracao({ ...(dados as any), validacao });
+
+  res.json({ ...validacao, benford, composicaoOk: errosComp.length === 0, alertasComposicao: alertasComp, prontidao });
 });
 
 // Validation report — per-document extraction stats + overall summary
