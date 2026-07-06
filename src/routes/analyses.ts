@@ -893,6 +893,10 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const dadosComValidacao = { ...dadosEstruturados, validacao } as any;
     const prontidao = avaliarProntidaoGeracao(dadosComValidacao);
     dadosComValidacao.prontidao = prontidao;
+    // INDICADORES SÓ COM EXTRAÇÃO VALIDADA (decisão do usuário 2026-07-06): número
+    // derivado de DF não conciliada é enganoso — fica "sem informação" até as
+    // pendências caírem; o /refold os calcula SOZINHO quando a última pendência sair.
+    if (!prontidao.pronta) dadosComValidacao.indicadores = [];
 
     await prisma.analysis.update({
       where: { id: analysis.id },
@@ -951,11 +955,11 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const dados = analysis.dadosEstruturados as any;
-  if (!dados?.indicadores?.length) { res.status(400).json({ error: "Extraia os documentos primeiro (sem indicadores)" }); return; }
 
   // TRAVA (decisão do usuário 2026-07-06): a IA só roda com a extração VALIDADA.
   // Guard por DADO (não por status) — vale para gerar E regerar, mesmo após edições.
-  // Antes o botão passava direto em "Revisão necessária" e queimava tokens em DF suja.
+  // ANTES do check de indicadores: com pendências os indicadores ficam vazios de
+  // propósito, e o analista precisa ver as PENDÊNCIAS (409), não um 400 genérico.
   const prontidao = avaliarProntidaoGeracao(dados);
   if (!prontidao.pronta) {
     res.status(409).json({
@@ -964,6 +968,7 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
     });
     return;
   }
+  if (!dados?.indicadores?.length) { res.status(400).json({ error: "Extraia os documentos primeiro (sem indicadores)" }); return; }
 
   const ws = await prisma.workspace.findFirst({ where: { members: { some: { id: req.userId! } } }, select: { aiAnalysisModel: true } });
   // "Regerar só a análise" reaproveita a pesquisa web já salva (reuseWeb) — barato. Passar
@@ -1128,7 +1133,8 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   for (const nm of naoMapeados) { const k = chaveNM(nm as any); if (sugAntigas[k]) sugNovas[k] = sugAntigas[k]; }
   (dados as any).sugestoesIA = sugNovas;
   dados.naoMapeados = naoMapeados;
-  dados.indicadores = await buildIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
+  // FC continua visível mesmo sem validação completa: é SUPERFÍCIE DE AUDITORIA
+  // (tem prova de fechamento própria) e ajuda a diagnosticar as pendências.
   dados.fluxoCaixa = buildIndirectCashFlow(dados.bp ?? [], dados.dre ?? [], periodos); // FC acompanha o refold (grátis)
 
   // VALIDAÇÃO + PRONTIDÃO acompanham o refold: reclassificar muda subtotais (DRE) e zera
@@ -1141,6 +1147,20 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   }
   const prontidaoRefold = avaliarProntidaoGeracao(dados);
   (dados as any).prontidao = prontidaoRefold;
+
+  // INDICADORES: automáticos (sem pedido do analista), mas SÓ com extração validada —
+  // caiu a última pendência, este refold já os calcula; com pendências, ficam vazios
+  // ("sem informação" em vez de número enganoso). Overrides manuais são preservados.
+  if (prontidaoRefold.pronta) {
+    const novos = await buildIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
+    for (const n of novos) {
+      const antigo = (dados.indicadores as any[])?.find((i) => i?.nome === n.nome);
+      if (antigo?.overrides) (n as any).overrides = antigo.overrides;
+    }
+    dados.indicadores = novos;
+  } else {
+    dados.indicadores = [];
+  }
 
   await prisma.analysis.update({ where: { id }, data: { dadosEstruturados: dados } });
   await prisma.analysis.updateMany({
@@ -1210,6 +1230,16 @@ router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Respons
   if (!analysis.dadosEstruturados) { res.status(400).json({ error: "Sem dados estruturados" }); return; }
 
   const dados = analysis.dadosEstruturados as any as DadosEstruturados;
+  // Mesma trava do gate: sem extração validada não há indicador para recalcular —
+  // eles são calculados AUTOMATICAMENTE quando a última pendência cai (refold).
+  const prontidaoRecalc = avaliarProntidaoGeracao(dados);
+  if (!prontidaoRecalc.pronta) {
+    res.status(409).json({
+      error: "Extração não validada — os indicadores são calculados automaticamente quando as pendências forem corrigidas.",
+      pendencias: prontidaoRecalc.pendencias,
+    });
+    return;
+  }
   const newIndicadores = await buildIndicators(dados.bp, dados.dre, dados.periodos);
 
   // Preserve user overrides from old indicators
