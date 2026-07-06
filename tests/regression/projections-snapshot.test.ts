@@ -81,3 +81,56 @@ describe("projection-engine regression snapshot", () => {
     });
   }
 });
+
+// ─── OpEx histórico: a DRE de PRODUÇÃO não tem linha "Despesas Operacionais" ───
+// O DRE_TEMPLATE detalha as despesas (Gerais e Adm., Vendas, Marketing, P&D, Outras) e
+// tem os subtotais Lucro Bruto e EBITDA. O findLine por substring achava só "OUTRAS
+// Despesas Operacionais" (a sobra) → OpEx de fração → projeção inflada. Estes testes
+// alimentam a DRE com o SHAPE REAL (nomes canônicos do template, como o foldDRE emite)
+// e fixam: OpEx mensal = (Lucro Bruto − EBITDA)/12.
+describe("projection-engine — OpEx histórico no shape de produção", () => {
+  // OpEx real anual: LB 3.6M − EBITDA 1.2M = 2.4M → 200.000/mês. Com o bug, pegava só
+  // "Outras Despesas Operacionais" (200k/ano) → 16.667/mês.
+  const DRE_CANONICA = [
+    { conta: "Receita Líquida", valores: { "2025": 12_000_000 } },
+    { conta: "Custo Operacional", valores: { "2025": -8_400_000 } },
+    { conta: "Lucro Bruto", valores: { "2025": 3_600_000 } },
+    { conta: "Despesas Gerais e Administrativas", valores: { "2025": -1_500_000 } },
+    { conta: "Despesas com Vendas", valores: { "2025": -600_000 } },
+    { conta: "Despesas com Marketing", valores: { "2025": -200_000 } },
+    { conta: "Outras Receitas Operacionais", valores: { "2025": 100_000 } },
+    { conta: "Outras Despesas Operacionais", valores: { "2025": -200_000 } },
+    { conta: "EBITDA", valores: { "2025": 1_200_000 } },
+    { conta: "Depreciação e Amortização", valores: { "2025": -200_000 } },
+  ];
+  const base = (dre: Array<{ conta: string; valores: Record<string, number> }>) => ({
+    ...FIXTURE,
+    dadosEstruturados: { ...FIXTURE.dadosEstruturados, periodos: ["2025"], dre },
+    setor: null,
+  });
+
+  it("DRE canônica (com subtotais): OpEx = (Lucro Bruto − EBITDA)/12, não só a sobra 'Outras'", () => {
+    const months = computeProjections(base(DRE_CANONICA));
+    // mês 0: opex = −opexMensalHist × multiplier(1.0) × inflação^0 → exatamente −200.000
+    expect(months[0].dre.opex).toBe(-200_000);
+    // coerência interna preservada: EBITDA projetado = Lucro Bruto projetado + opex
+    expect(months[0].dre.ebitda).toBe(months[0].dre.lucroBruto + months[0].dre.opex);
+  });
+
+  it("DRE detalhada SEM subtotal EBITDA (legado/editada): soma as linhas de despesa do modelo", () => {
+    const semEbitda = DRE_CANONICA.filter((l) => l.conta !== "EBITDA");
+    const months = computeProjections(base(semEbitda));
+    // −(−1.5M −600k −200k +100k −200k)/12 = 2.4M/12 = 200.000
+    expect(months[0].dre.opex).toBe(-200_000);
+  });
+
+  it("DRE legada com linha AGREGADA 'Despesas Operacionais' (sem detalhe): comportamento antigo preservado", () => {
+    const legada = [
+      { conta: "Receita Líquida", valores: { "2025": 12_000_000 } },
+      { conta: "Lucro Bruto", valores: { "2025": 3_600_000 } },
+      { conta: "Despesas Operacionais", valores: { "2025": -2_400_000 } },
+    ];
+    const months = computeProjections(base(legada));
+    expect(months[0].dre.opex).toBe(-200_000);
+  });
+});

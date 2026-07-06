@@ -112,6 +112,53 @@ function findLine(lines: LineWithValores[] | undefined, accountSubstr: string): 
   return lines.find((l) => l.conta?.toLowerCase().includes(lower));
 }
 
+/** Match EXATO por nome (case/trim-insensitive) — para subtotais cujo nome é prefixo/
+ *  substring de outras linhas ("Lucro Bruto", "EBITDA"), onde o findLine por substring
+ *  poderia casar uma linha custom errada. */
+function findLineExact(lines: LineWithValores[] | undefined, conta: string): LineWithValores | undefined {
+  if (!lines) return undefined;
+  const alvo = conta.trim().toLowerCase();
+  return lines.find((l) => l.conta?.trim().toLowerCase() === alvo);
+}
+
+/** Linhas de despesa operacional do DRE_TEMPLATE (o bloco entre Lucro Bruto e EBITDA) —
+ *  usadas no fallback quando a DRE não traz os subtotais. */
+const OPEX_LINHAS_MODELO = [
+  "Despesas Gerais e Administrativas",
+  "Despesas com Vendas",
+  "Despesas com Marketing",
+  "Despesas com P&D",
+  "Outras Receitas Operacionais",
+  "Outras Despesas Operacionais",
+];
+
+/** OpEx histórico ANUAL (positivo = despesa líquida).
+ *
+ *  O modelo de DRE NÃO tem linha agregada "Despesas Operacionais" (as despesas são
+ *  detalhadas: Gerais e Adm., Vendas, Marketing, P&D, Outras). O findLine antigo, por
+ *  substring, achava só "OUTRAS Despesas Operacionais" (a sobra) → a base de OpEx virava
+ *  fração do real e a projeção saía com lucro/caixa inflados. Derivação robusta a
+ *  QUALQUER estrutura (inclui contas custom que pesam no EBITDA via extrasPorBloco):
+ *    OpEx líquido = Lucro Bruto − EBITDA   (o bloco entre os dois subtotais).
+ *  Fallbacks, nesta ordem: soma das linhas de despesa do modelo; por último, a linha
+ *  agregada "Despesas Operacionais" (DREs legadas), que era o comportamento antigo. */
+function opexAnualHistDe(dreLines: LineWithValores[], periodos: string[]): number {
+  const lbLinha = findLineExact(dreLines, "Lucro Bruto");
+  const ebitdaLinha = findLineExact(dreLines, "EBITDA");
+  const lbVal = lastValueOf(lbLinha?.valores, periodos);
+  const ebitdaVal = lastValueOf(ebitdaLinha?.valores, periodos);
+  if (lbLinha && ebitdaLinha && (lbVal !== 0 || ebitdaVal !== 0)) {
+    return Math.max(0, lbVal - ebitdaVal); // net-receita-op > despesas → OpEx 0, nunca negativo
+  }
+  const linhas = OPEX_LINHAS_MODELO
+    .map((c) => findLineExact(dreLines, c))
+    .filter((l): l is LineWithValores => !!l);
+  if (linhas.length) {
+    return Math.max(0, -linhas.reduce((s, l) => s + lastValueOf(l.valores, periodos), 0));
+  }
+  return Math.abs(lastValueOf(findLine(dreLines, "Despesas Operacionais")?.valores, periodos));
+}
+
 export function computeProjections(input: ProjectionInput): ProjectionMonth[] {
   const premises: SectorPremises = input.premises ?? getSectorPremises(input.setor ?? null);
   const { dadosEstruturados, stcf, scenario, startMonth } = input;
@@ -127,7 +174,7 @@ export function computeProjections(input: ProjectionInput): ProjectionMonth[] {
     (ultReceitaAnual || 1)) || premises.margemBruta;
   const margemBrutaAplicada = premises.margemBruta * 0.7 + margemBrutaHist * 0.3; // pondera setor + hist
 
-  const opexMensalHist = Math.abs(lastValueOf(findLine(dreLines, "Despesas Operacionais")?.valores, periodos)) / 12;
+  const opexMensalHist = opexAnualHistDe(dreLines, periodos) / 12;
   const depMensalHist = Math.abs(lastValueOf(findLine(dreLines, "Depreciação")?.valores, periodos)) / 12;
 
   const dividaCPInicial = lastValueOf(findLine(bpLines, "Empréstimos e Financiamentos - CP")?.valores, periodos);
