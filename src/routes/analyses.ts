@@ -1043,6 +1043,32 @@ router.put("/:id/dados-estruturados/dre", async (req: AuthRequest, res: Response
 
 // DORES declaradas (entrevista com o dono) — fonte [5] da análise. O confronto
 // declarado×observado (confirmada / desmentida / ponto cego) nasce daqui.
+// Atualiza o ESCOPO de uma análise já criada (nome / empresa / tipo de análise) — usado
+// quando o analista VOLTA à tela de Escopo no wizard. Sem isto os campos ficavam
+// bloqueados e a única saída era excluir e recriar o IBR (flagrado pelo usuário).
+router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: { in: req.scopeUserIds! } },
+    select: { id: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const data: Record<string, unknown> = {};
+  if (typeof req.body?.nome === "string" && req.body.nome.trim()) data.nome = String(req.body.nome).trim().slice(0, 120);
+  if (typeof req.body?.tipo === "string" && req.body.tipo.trim()) data.tipo = String(req.body.tipo).trim().slice(0, 40);
+  if (typeof req.body?.companyId === "string" && req.body.companyId) {
+    const company = await prisma.company.findFirst({
+      where: { id: req.body.companyId, userId: { in: req.scopeUserIds! } },
+      select: { id: true },
+    });
+    if (!company) { res.status(400).json({ error: "Empresa não encontrada neste workspace" }); return; }
+    data.companyId = company.id;
+  }
+  if (Object.keys(data).length === 0) { res.status(400).json({ error: "Nada para atualizar" }); return; }
+  await prisma.analysis.update({ where: { id }, data });
+  res.json({ ok: true });
+});
+
 router.put("/:id/dores", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
