@@ -131,10 +131,11 @@ router.put("/:id/dados-extraidos", async (req: AuthRequest, res: Response): Prom
   res.json(updated);
 });
 
-// Update document type
+// Update document metadata (tipo + competência/moeda). Antes só o tipo persistia —
+// editar competência/moeda no wizard após o upload era perdido em silêncio.
 router.put("/:id/tipo", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
-  const { tipo } = req.body;
+  const { tipo, competencia, moeda } = req.body;
   if (!tipo || !["DRE", "Balanço Patrimonial", "Balancete", "Outro"].includes(tipo)) {
     res.status(400).json({ error: "Tipo inválido" });
     return;
@@ -147,7 +148,13 @@ router.put("/:id/tipo", async (req: AuthRequest, res: Response): Promise<void> =
 
   const updated = await prisma.document.update({
     where: { id },
-    data: { tipo },
+    data: {
+      tipo,
+      // opcionais: só atualiza quando enviados (chamadas antigas com { tipo } seguem iguais).
+      // moeda carrega unidade junto ("BRL (milhões)") — teto folgado, sem truncar.
+      ...(typeof competencia === "string" ? { competencia: competencia.trim().slice(0, 40) || null } : {}),
+      ...(typeof moeda === "string" && moeda.trim() ? { moeda: moeda.trim().slice(0, 24) } : {}),
+    },
   });
   res.json(updated);
 });
