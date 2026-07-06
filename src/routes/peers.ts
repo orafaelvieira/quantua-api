@@ -5,6 +5,7 @@ import { requireRole } from "../middleware/permissions";
 import { getPeerDistribution } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
 import { sincronizarCvm, sincronizarHistoricoCvm, recalcularIndicadoresTudo, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados } from "../services/cvm-sync";
+import { INDICADORES_TEMPLATE } from "../services/financial-templates";
 import { runtimeState } from "../services/runtime-state";
 
 const router = Router();
@@ -174,7 +175,9 @@ router.get("/cvm/empresas", async (req: AuthRequest, res: Response): Promise<voi
 });
 
 // GET /peers/cvm/matriz?cnpj=&visao= — matriz indicador × período de UMA empresa
-// (todos os dtFims da visão, DESC, no máx 12). Só leitura; prova de auditoria multi-período.
+// (TODOS os dtFims da visão, DESC — o histórico completo da base; a tela rola na
+// horizontal). Linhas na ORDEM e com o GRUPO do INDICADORES_TEMPLATE — a mesma
+// estrutura da aba Indicadores do IBR. Só leitura; prova de auditoria multi-período.
 router.get("/cvm/matriz", async (req: AuthRequest, res: Response): Promise<void> => {
   const cnpj = String(req.query.cnpj ?? "").replace(/[^\d]/g, "");
   const visao = ["TRI", "ANO", "LTM"].includes(String(req.query.visao)) ? String(req.query.visao) : "LTM";
@@ -188,24 +191,30 @@ router.get("/cvm/matriz", async (req: AuthRequest, res: Response): Promise<void>
     }),
   ]);
   if (!cadastro) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
-  // Períodos DESC, no máx 12 (os mais recentes).
+  // Períodos DESC — histórico COMPLETO (o teto antigo de 12 escondia tudo antes de ~2023).
   const periodos = [...new Set(indicadores.map((i) => i.dtFim.toISOString().slice(0, 10)))]
-    .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
-    .slice(0, 12);
-  const periodoSet = new Set(periodos);
+    .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
   // Agrupa por nome do indicador; valores/texto por dtFim.
   const porNome = new Map<string, { valores: Record<string, number | null>; texto: Record<string, string | null> }>();
   for (const ind of indicadores) {
     const dt = ind.dtFim.toISOString().slice(0, 10);
-    if (!periodoSet.has(dt)) continue;
     let linha = porNome.get(ind.nome);
     if (!linha) { linha = { valores: {}, texto: {} }; porNome.set(ind.nome, linha); }
     linha.valores[dt] = ind.valor ?? null;
     linha.texto[dt] = ind.texto ?? null;
   }
+  // Ordem/grupo/unidade do TEMPLATE oficial (igual à aba Indicadores do IBR);
+  // indicador fora do template cai em "Outros", no fim, em ordem alfabética.
+  const ordemTpl = new Map(INDICADORES_TEMPLATE.map((t, i) => [t.nome, i]));
+  const metaTpl = new Map(INDICADORES_TEMPLATE.map((t) => [t.nome, { grupo: t.tipo, tipoDado: t.tipoDado }]));
   const linhas = [...porNome.entries()]
-    .sort(([a], [b]) => a.localeCompare(b, "pt-BR"))
-    .map(([nome, { valores, texto }]) => ({ nome, valores, texto }));
+    .sort(([a], [b]) => (ordemTpl.get(a) ?? 99999) - (ordemTpl.get(b) ?? 99999) || a.localeCompare(b, "pt-BR"))
+    .map(([nome, { valores, texto }]) => ({
+      nome,
+      grupo: metaTpl.get(nome)?.grupo ?? "Outros",
+      tipoDado: metaTpl.get(nome)?.tipoDado ?? "Índice",
+      valores, texto,
+    }));
   res.json({ empresa: cadastro, periodos, linhas });
 });
 
