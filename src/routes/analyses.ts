@@ -743,7 +743,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
 
     // Nível 2 — HÍBRIDO (parser → IA Haiku texto → fold N3). Período por-doc (pin). Custo medido.
     const rodaHibrido = async (): Promise<Candidato | null> => {
-      const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), tipo: d.tipo, periodos: d.periodos }));
+      // raw = linhasToText (limpo, p/ o LLM) · rawIndent = doc.raw do parser (INDENTADO, p/ a
+      // árvore determinística por indentação — recupera as folhas Grau-4 que `linhas` colapsa).
+      const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), rawIndent: d.raw, tipo: d.tipo, periodos: d.periodos }));
       if (!aiDocs.length) return null;
       const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel, { dreModel });
       if (!temDadosIA(r)) return null;

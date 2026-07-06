@@ -12,6 +12,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
 vi.mock("../config/env", () => ({ env: { anthropicApiKey: "test-key" } }));
 
 import { extractFinancialsWithAI } from "./ai-extraction";
+import { DEFAULT_BP_MODEL } from "./account-mapper";
 
 const aiReply = (payload: unknown) => ({ content: [{ type: "text", text: JSON.stringify(payload) }] });
 
@@ -64,5 +65,56 @@ describe("extractFinancialsWithAI — período por-documento (pin)", () => {
     createMock.mockResolvedValue(bpComAnoErrado(50));
     const r = await extractFinancialsWithAI([{ raw: "x", tipo: "Balanço" }], []);
     expect(Object.keys(r.arvoreOriginalBP)).toEqual(["2099"]); // segue o ano devolvido pela IA
+  });
+});
+
+describe("extractFinancialsWithAI — árvore por INDENTAÇÃO (rawIndent) pula o LLM", () => {
+  // Regressão do caso real: a rota alimenta `raw` = linhasToText (contexto>conta, SEM
+  // indentação e já colapsado no nível do parser) e `rawIndent` = doc.raw (INDENTADO). O
+  // builder determinístico DEVE ler o rawIndent — se ler o raw (colapsado), não vê hierarquia,
+  // cai no LLM e as folhas Grau-4 somem. Este teste garante a fiação certa.
+  const P = "31/12/2020";
+  // BP "Grau 4": Passivo Circulante > EXIGÍVEL A CURTO PRAZO (wrapper) > 3 folhas. Fecha.
+  const RAW_INDENT = [
+    "   ATIVO                                 1.000.000,00",
+    "    ATIVO CIRCULANTE                        400.000,00",
+    "      DISPONIBILIDADES                      400.000,00",
+    "       CAIXA                                400.000,00",
+    "    ATIVO NAO CIRCULANTE                     600.000,00",
+    "      ATIVO IMOBILIZADO                      600.000,00",
+    "       BENS EM OPERACAO                      600.000,00",
+    "   PASSIVO                                1.000.000,00",
+    "    PASSIVO CIRCULANTE                       600.000,00",
+    "      EXIGIVEL A CURTO PRAZO                 600.000,00",
+    "       FORNECEDORES A PAGAR                  250.000,00",
+    "       OBRIGACOES TRABALHISTAS A PAGAR       150.000,00",
+    "       EMPREST FINANC C.PRAZO                200.000,00",
+    "    PATRIMONIO LIQUIDO                        400.000,00",
+    "      CAPITAL SOCIAL REALIZADO                400.000,00",
+    "       CAPITAL SOCIAL                         400.000,00",
+  ].join("\n");
+  // `raw` colapsado (o que linhasToText produz) — SEM indentação: sozinho, o builder daria null.
+  const RAW_COLAPSADO = [
+    `ATIVO = {"${P}":1000000}`,
+    `ATIVO > ATIVO CIRCULANTE > DISPONIBILIDADES = {"${P}":400000}`,
+    `PASSIVO > PASSIVO CIRCULANTE > EXIGIVEL A CURTO PRAZO = {"${P}":600000}`,
+    `PASSIVO > PATRIMONIO LIQUIDO > CAPITAL SOCIAL REALIZADO = {"${P}":400000}`,
+  ].join("\n");
+
+  it("lê rawIndent, PULA o LLM (custo 0) e recupera as folhas Grau-4 na linha certa", async () => {
+    createMock.mockResolvedValue(aiReply({})); // se o LLM for chamado, devolve vazio → asserts falham
+    const docs = [{ raw: RAW_COLAPSADO, rawIndent: RAW_INDENT, tipo: "Balanço", periodos: [P] }];
+    const r = await extractFinancialsWithAI(docs, [], undefined, DEFAULT_BP_MODEL, {});
+
+    // O LLM NÃO foi acionado — a árvore determinística cobriu o BP inteiro.
+    expect(createMock).not.toHaveBeenCalled();
+    expect(r.custo.usd).toBe(0);
+
+    // As 3 folhas do PC caíram na linha CERTA do modelo (não colapsadas em "Outros").
+    const val = (c: string) => r.bp.find((l) => l.conta === c)?.valores[P] ?? 0;
+    expect(val("Fornecedores - CP")).toBeCloseTo(250000, 2);
+    expect(val("Obrigações Trabalhistas - CP")).toBeCloseTo(150000, 2);
+    expect(val("Empréstimos e Financiamentos - CP")).toBeCloseTo(200000, 2);
+    expect(val("Passivo Circulante")).toBeCloseTo(600000, 2);
   });
 });

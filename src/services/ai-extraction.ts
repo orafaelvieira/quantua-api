@@ -580,7 +580,7 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
 }
 
 export async function extractFinancialsWithAI(
-  docs: Array<{ buffer?: Buffer; raw?: string; tipo: string; periodos?: string[] }>,
+  docs: Array<{ buffer?: Buffer; raw?: string; rawIndent?: string; tipo: string; periodos?: string[] }>,
   periodos: string[],
   dict?: DictionaryEntry[],
   bpModel: BPModel = DEFAULT_BP_MODEL,
@@ -607,12 +607,16 @@ export async function extractFinancialsWithAI(
     const out: Array<() => Promise<{ kind: "dre" | "bp"; data: any; ctx: DocCtx; inTok: number; outTok: number }>> = [];
     if (isDRE || !isBP) out.push(() => ask(input, dreTreePrompt(promptPeriodos), model, 0, 16000).then((r) => ({ kind: "dre" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
     if (isBP || (!isDRE && !isBP)) {
-      // ANTES do LLM: se o doc tem texto do parser (`raw`) com hierarquia por INDENTAÇÃO
-      // confiável, reconstrói a árvore do BP de forma DETERMINÍSTICA (captura as contas-folha
-      // que o Haiku colapsava — caso Fibracabos Grau 4) e PULA a chamada de IA desse doc.
-      // Se a reconstrução não for confiável (null), mantém EXATAMENTE o fluxo LLM — sem regressão.
-      const arvoreDet = doc.raw
-        ? construirArvoreBPporIndentacao({ raw: doc.raw } as ParsedDocument, promptPeriodos)
+      // ANTES do LLM: se o doc tem o texto INDENTADO do parser (`rawIndent` = doc.raw, com a
+      // hierarquia preservada na coluna/x-position), reconstrói a árvore do BP de forma
+      // DETERMINÍSTICA (captura as contas-folha que o Haiku colapsava — caso Fibracabos Grau 4)
+      // e PULA a chamada de IA desse doc. IMPORTANTE: usa `rawIndent`, NÃO `raw` — o `raw` que
+      // o híbrido passa é `linhasToText(linhas)` (contexto>conta, SEM indentação e já colapsado
+      // no nível do parser), onde o builder sempre via 1 nível e caía no LLM. Se a reconstrução
+      // não for confiável (null), mantém EXATAMENTE o fluxo LLM atual — sem regressão.
+      const rawArvore = doc.rawIndent ?? doc.raw;
+      const arvoreDet = rawArvore
+        ? construirArvoreBPporIndentacao({ raw: rawArvore } as ParsedDocument, promptPeriodos)
         : null;
       if (arvoreDet) {
         bpDeterministicos.push({ data: arvoreDet, ctx });
