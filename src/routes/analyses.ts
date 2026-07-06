@@ -1048,14 +1048,15 @@ router.put("/:id/dados-estruturados/dre", async (req: AuthRequest, res: Response
 
 // DORES declaradas (entrevista com o dono) — fonte [5] da análise. O confronto
 // declarado×observado (confirmada / desmentida / ponto cego) nasce daqui.
-// Atualiza o ESCOPO de uma análise já criada (nome / empresa / tipo de análise) — usado
-// quando o analista VOLTA à tela de Escopo no wizard. Sem isto os campos ficavam
-// bloqueados e a única saída era excluir e recriar o IBR (flagrado pelo usuário).
+// Atualiza o CADASTRO de uma análise já criada (nome / empresa / tipo / setor / tipo de
+// IBR / engagement) — usado quando o analista VOLTA nas telas do wizard. Regra do
+// usuário: até rodar a EXTRAÇÃO, tudo pode ser alterado — sem bloqueio e sem perder
+// edição em silêncio (antes, mudar o Setor ao voltar era simplesmente descartado).
 router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, userId: { in: req.scopeUserIds! } },
-    select: { id: true },
+    select: { id: true, mode: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const data: Record<string, unknown> = {};
@@ -1069,8 +1070,40 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
     if (!company) { res.status(400).json({ error: "Empresa não encontrada neste workspace" }); return; }
     data.companyId = company.id;
   }
-  if (Object.keys(data).length === 0) { res.status(400).json({ error: "Nada para atualizar" }); return; }
-  await prisma.analysis.update({ where: { id }, data });
+  if (typeof req.body?.sectorId === "string" && req.body.sectorId) data.sectorId = req.body.sectorId;
+  // sectorCustom pode ser LIMPO (string vazia → null) quando o usuário troca "Outros" por setor real
+  if (typeof req.body?.sectorCustom === "string") data.sectorCustom = req.body.sectorCustom.trim() || null;
+  if (["light", "full", "crisis"].includes(String(req.body?.ibrType))) data.ibrType = String(req.body.ibrType);
+  if (Object.keys(data).length === 0 && !req.body?.engagement) { res.status(400).json({ error: "Nada para atualizar" }); return; }
+  if (Object.keys(data).length > 0) await prisma.analysis.update({ where: { id }, data });
+
+  // Engagement (registro próprio): atualiza o existente ou cria se ainda não houver.
+  const eng = req.body?.engagement;
+  if (eng && typeof eng === "object" && typeof eng.requestedBy === "string") {
+    const existing = await prisma.engagement.findFirst({ where: { analysisId: id }, select: { id: true } });
+    const engData = {
+      requestedBy: String(eng.requestedBy).slice(0, 200),
+      requestedByType: ["lender", "investor", "advisor", "other"].includes(String(eng.requestedByType)) ? String(eng.requestedByType) : "other",
+      scope: typeof eng.scope === "string" ? eng.scope.slice(0, 4000) : "",
+      deadline: eng.deadline ? new Date(String(eng.deadline)) : null,
+      feeAmount: typeof eng.feeAmount === "number" && Number.isFinite(eng.feeAmount) ? eng.feeAmount : null,
+    };
+    if (existing) {
+      await prisma.engagement.update({ where: { id: existing.id }, data: engData });
+    } else if (eng.requestedBy.trim()) {
+      const comp = await prisma.analysis.findUnique({ where: { id }, select: { company: { select: { nomeFantasia: true, razaoSocial: true } } } });
+      await prisma.engagement.create({
+        data: {
+          analysisId: id,
+          userId: req.userId!,
+          companyName: comp?.company?.nomeFantasia ?? comp?.company?.razaoSocial ?? "",
+          ...engData,
+          feeCurrency: "BRL",
+          state: "kicked_off",
+        },
+      });
+    }
+  }
   res.json({ ok: true });
 });
 
