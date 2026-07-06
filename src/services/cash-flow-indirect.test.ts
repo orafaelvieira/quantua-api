@@ -123,4 +123,74 @@ describe("buildIndirectCashFlow", () => {
     expect(bucketDaConta("Obras em Andamento (Imobilizado)")).toBe("fci");
     expect(bucketDaConta("Adiantamento de Clientes")).toBe("fco");
   });
+
+  // ─── Partição FCO/FCI/FCF: contas que caíam no grupo errado (auditoria) ───
+  it("Realizável a Longo Prazo e Dividendos a RECEBER são INVESTIMENTO (não FCO/FCF)", () => {
+    expect(bucketDaConta("Realizável a Longo Prazo")).toBe("fci");
+    expect(bucketDaConta("Dividendos a Receber - CP")).toBe("fci");
+    expect(bucketDaConta("Dividendos a Receber -  Longo Prazo")).toBe("fci"); // espaço duplo do template
+    // dividendos a PAGAR seguem financiamento (o que a empresa distribui)
+    expect(bucketDaConta("Dividendos e JCP a Pagar")).toBe("fcf");
+  });
+
+  it("Δ Realizável a Longo Prazo aparece no FCI (não no FCO) e a identidade fecha igual", () => {
+    // Fixture base + Realizável LP 0→50 (aplicação de caixa em investimento);
+    // contrapartida: Empréstimos CP 230→280 no ano final (AT=PT preservado: 1250).
+    const bp2 = BP.map((l) => {
+      if (l.conta === "Ativo Total" || l.conta === "Passivo Total") return { ...l, valores: { "2022": 950, "2023": 1250 } };
+      if (l.conta === "Ativo Não Circulante") return { ...l, valores: { "2022": 500, "2023": 610 } };
+      if (l.conta === "Empréstimos e Financiamentos - CP") return { ...l, valores: { "2022": 180, "2023": 280 } };
+      return l;
+    });
+    bp2.push(bpLine("ANC", "Realizável a Longo Prazo", 2, 0, 50));
+    const fc = buildIndirectCashFlow(bp2, DRE, ["2022", "2023"])!;
+    const noFCI = fc.fci.find((l) => l.nome === "Δ Realizável a Longo Prazo");
+    expect(noFCI?.valores["2023"]).toBeCloseTo(-50, 2); // ativo cresceu → consumiu caixa
+    expect(fc.fco.map((l) => l.nome)).not.toContain("Δ Realizável a Longo Prazo");
+    expect(fc.prova[0].fecha).toBe(true); // mover de grupo NUNCA quebra a prova
+  });
+
+  // ─── Capital de Giro: sub-bloco DENTRO do FCO (CR, Estoques, Ativos Biológicos, Fornecedores) ───
+  it("capital de giro: sub-bloco com as 4 contas, subtotal certo, FCO total e prova inalterados", () => {
+    const fc = buildIndirectCashFlow(BP, DRE, ["2022", "2023"])!;
+    const nomes = (fc.capitalGiro?.linhas ?? []).map((l) => l.nome);
+    expect(nomes).toContain("Δ Contas a Receber - CP");
+    expect(nomes).toContain("Δ Estoques - CP");
+    expect(nomes).toContain("Δ Fornecedores - CP");
+    // subtotal: −50 (CR subiu) + 20 (estoques caíram) + 50 (fornecedores subiram) = +20
+    expect(fc.capitalGiro?.total["2023"]).toBeCloseTo(20, 2);
+    // as linhas saem do array fco (sem dupla exibição)…
+    expect(fc.fco.map((l) => l.nome)).not.toContain("Δ Contas a Receber - CP");
+    // …mas o TOTAL do FCO segue incluindo o CG (identidade e Dickinson intactos)
+    expect(fc.totais.fco["2023"]).toBeCloseTo(230, 2);
+    expect(fc.prova[0].fecha).toBe(true);
+  });
+
+  it("capital de giro: Ativos Biológicos - CP entra no sub-bloco", () => {
+    const bp3 = BP.map((l) => {
+      if (l.conta === "Ativo Total" || l.conta === "Passivo Total") return { ...l, valores: { "2022": 950, "2023": 1230 } };
+      if (l.conta === "Ativo Circulante") return { ...l, valores: { "2022": 450, "2023": 670 } };
+      if (l.conta === "Empréstimos e Financiamentos - CP") return { ...l, valores: { "2022": 180, "2023": 260 } };
+      return l;
+    });
+    bp3.push(bpLine("AO", "Ativos Biológicos - CP", 2, 0, 30));
+    const fc = buildIndirectCashFlow(bp3, DRE, ["2022", "2023"])!;
+    const bio = fc.capitalGiro?.linhas.find((l) => l.nome === "Δ Ativos Biológicos - CP");
+    expect(bio?.valores["2023"]).toBeCloseTo(-30, 2);
+    expect(fc.prova[0].fecha).toBe(true);
+  });
+
+  // ─── FCF: aporte de capital ABERTO (Δ Capital Social separado dos dividendos/ajustes) ───
+  it("FCF abre o Δ Capital Social (aporte visível) e o restante fica em dividendos/ajustes", () => {
+    const fc = buildIndirectCashFlow(BP, DRE, ["2022", "2023"])!;
+    // Capital Social 300→320 = aporte de +20, agora em linha própria
+    const aporte = fc.fcf.find((l) => /Δ Capital Social/.test(l.nome));
+    expect(aporte?.valores["2023"]).toBeCloseTo(20, 2);
+    // restante: ΔPL(150) − lucro(170) − Δcapital(20) = −40 (dividendos distribuídos)
+    const ajustes = fc.fcf.find((l) => /dividendos e ajustes/i.test(l.nome));
+    expect(ajustes?.valores["2023"]).toBeCloseTo(-40, 2);
+    // total do FCF inalterado: +50 (empréstimos) + 20 (aporte) − 40 (dividendos) = 30
+    expect(fc.totais.fcf["2023"]).toBeCloseTo(30, 2);
+    expect(fc.prova[0].fecha).toBe(true);
+  });
 });

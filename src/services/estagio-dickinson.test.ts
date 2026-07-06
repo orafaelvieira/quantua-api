@@ -62,4 +62,33 @@ describe("classifyEstagio — Dickinson pelos sinais do FC", () => {
     expect(r).not.toBeNull();
     expect(r?.justificativa).not.toContain("Dickinson");
   });
+
+  // ─── Multi-anual: o gate valida a coluna que os SINAIS realmente usam (a mais recente) ───
+  const fcMulti = (fechaAntiga: boolean, fechaRecente: boolean): FluxoCaixaLite => ({
+    colunas: ["2022", "2023"],
+    totais: {
+      fco: { "2022": -100, "2023": 500 },
+      fci: { "2022": 80, "2023": -200 },
+      fcf: { "2022": 30, "2023": -150 },
+    },
+    prova: [
+      { periodo: "2022", fecha: fechaAntiga },
+      { periodo: "2023", fecha: fechaRecente },
+    ],
+  });
+
+  it("coluna ANTIGA não fecha mas a RECENTE fecha → Dickinson classifica pela recente (não descarta)", () => {
+    // Antes: prova.every() exigia TODAS fecharem — uma coluna antiga ruim descartava o
+    // padrão-ouro mesmo com a coluna usada (a recente) provada. Sinais 2023: FCO+ FCI− FCF− = Maturidade.
+    const r = classifyEstagio(INDS, ["2021", "2022", "2023"], fcMulti(false, true));
+    expect(r?.estagio).toBe("Maturidade");
+    expect(r?.justificativa).toContain("Dickinson");
+  });
+
+  it("coluna RECENTE não fecha → NÃO classifica por Dickinson (mesmo com a antiga fechando)", () => {
+    // Nunca classificar o estágio ATUAL por sinais de uma coluna velha ("verde só com prova"
+    // vale para a coluna que os sinais usam).
+    const r = classifyEstagio(INDS, ["2021", "2022", "2023"], fcMulti(true, false));
+    expect(r?.justificativa).not.toContain("Dickinson");
+  });
 });

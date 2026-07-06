@@ -20,7 +20,9 @@ import type { BPLineItem, DRELineItem } from "../types/financial";
 
 export type BucketFC = "caixa" | "fco" | "fci" | "fcf";
 
-const norm = (s: string) => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+// Colapsa espaços internos também: o template tem "Dividendos a Receber -  Longo Prazo"
+// (espaço duplo) — sem o collapse, a chave explícita nunca casaria.
+const norm = (s: string) => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
 
 // Linhas do modelo padrão com destino EXPLÍCITO (nome → bucket). Linhas adicionadas
 // pelo usuário no editor de modelos caem no fallback por palavra-chave (determinístico).
@@ -35,6 +37,13 @@ const BUCKET_EXPLICITO: Record<string, BucketFC> = {
   "ativo diferido": "fci",
   "ativos com partes relacionadas - cp": "fci",
   "ativos com partes relacionadas - lp": "fci",
+  // Realizável a LP = aplicações/depósitos de longo prazo — INVESTIMENTO (caía no
+  // default operacional e distorcia a leitura FCO vs FCI; auditoria 2026-07).
+  "realizavel a longo prazo": "fci",
+  // Dividendos a RECEBER são ATIVO (retorno de participações) — investimento. A regra
+  // de palavra-chave /dividendo/ os jogava em financiamento (que é dividendo a PAGAR).
+  "dividendos a receber - cp": "fci",
+  "dividendos a receber - longo prazo": "fci",
   // FCF — financiamento (passivos onerosos, dividendos, capital)
   "emprestimos e financiamentos - cp": "fcf",
   "emprestimos e financiamentos - lp": "fcf",
@@ -52,11 +61,22 @@ export function bucketDaConta(conta: string): BucketFC {
   const exp = BUCKET_EXPLICITO[n];
   if (exp) return exp;
   if (/caixa e equivalentes/.test(n)) return "caixa";
+  // dividendos a RECEBER (ativo) antes da regra de financiamento — variantes custom
+  if (/dividendo.*receber|receber.*dividendo/.test(n)) return "fci";
   if (/emprest|financiament|debentur|arrendament/.test(n)) return "fcf";
   if (/dividendo|jcp|juros sobre o capital|aumento capital/.test(n)) return "fcf";
-  if (/imobilizado|intangivel|investimento|aplicac/.test(n)) return "fci";
+  if (/imobilizado|intangivel|investimento|aplicac|realizavel a longo prazo/.test(n)) return "fci";
   return "fco"; // capital de giro / operacional por padrão
 }
+
+/** Contas do CAPITAL DE GIRO — sub-bloco próprio dentro do FCO (subtotal exibido).
+ *  Régua definida pelo usuário (2026-07): CR, Estoques, Ativos Biológicos, Fornecedores. */
+const CG_CONTAS = new Set([
+  "contas a receber - cp",
+  "estoques - cp",
+  "ativos biologicos - cp",
+  "fornecedores - cp",
+]);
 
 export interface FCLinha { nome: string; valores: Record<string, number> }
 export interface ProvaFC {
@@ -69,7 +89,11 @@ export interface ProvaFC {
 }
 export interface FluxoCaixaIndireto {
   colunas: string[];         // períodos-coluna (cada um = variação vs período anterior)
-  fco: FCLinha[];
+  fco: FCLinha[];            // SEM as linhas de capital de giro (exibidas no sub-bloco)
+  /** Sub-bloco do FCO: variação do CAPITAL DE GIRO (CR, Estoques, Ativos Biológicos,
+   *  Fornecedores) com subtotal próprio. `totais.fco` CONTINUA incluindo o CG — a
+   *  identidade e o Dickinson não mudam. Ausente em dados persistidos antigos. */
+  capitalGiro?: { linhas: FCLinha[]; total: Record<string, number> };
   fci: FCLinha[];
   fcf: FCLinha[];
   totais: { fco: Record<string, number>; fci: Record<string, number>; fcf: Record<string, number>; geracaoTotal: Record<string, number> };
@@ -112,6 +136,7 @@ export function buildIndirectCashFlow(
 
   const colunas: string[] = [];
   const fcoMap = new Map<string, Record<string, number>>();
+  const cgMap = new Map<string, Record<string, number>>(); // capital de giro (sub-bloco do FCO)
   const fciMap = new Map<string, Record<string, number>>();
   const fcfMap = new Map<string, Record<string, number>>();
   const push = (map: Map<string, Record<string, number>>, nome: string, p: string, v: number) => {
@@ -137,11 +162,16 @@ export function buildIndirectCashFlow(
 
     // ── Variações patrimoniais linha a linha ──
     let deltaPL = 0;
+    let deltaCapSocial = 0; // aporte/redução de capital — aberto em linha própria no FCF
     let deltaImobIntang = 0;
     let deltaInvest = 0;
     for (const l of inputsBP) {
       const delta = (l.valores[p1] ?? 0) - (l.valores[p0] ?? 0);
-      if (ehPL(l)) { deltaPL += delta; continue; }        // PL agregado (aportes/dividendos/ajustes)
+      if (ehPL(l)) {
+        deltaPL += delta;                                  // PL agregado (identidade intacta)
+        if (/capital social/.test(norm(l.conta))) deltaCapSocial += delta;
+        continue;
+      }
       if (delta === 0) continue;
       const bucket = bucketDaConta(l.conta);
       if (bucket === "caixa") continue;                    // caixa é o ALVO da prova, não componente
@@ -151,7 +181,7 @@ export function buildIndirectCashFlow(
       // Ativo: aumento CONSOME caixa (−Δ). Passivo: aumento GERA caixa (+Δ).
       const efeito = ehPassivo(l) ? delta : -delta;
       const rotulo = `Δ ${l.conta}`;
-      if (bucket === "fco") push(fcoMap, rotulo, p1, efeito);
+      if (bucket === "fco") push(CG_CONTAS.has(nomeIt) ? cgMap : fcoMap, rotulo, p1, efeito);
       else if (bucket === "fci") push(fciMap, rotulo, p1, efeito);
       else push(fcfMap, rotulo, p1, efeito);
     }
@@ -163,13 +193,18 @@ export function buildIndirectCashFlow(
     if (investExEq !== 0) push(fciMap, "Investimentos em participações (ex-equivalência)", p1, investExEq);
 
     // ── FCF: movimentações do PL fora do resultado ──
+    // Δ Capital Social ABERTO em linha própria (aporte/redução visível); o restante
+    // (dividendos e demais ajustes) fica na linha agregada. A soma é a mesma de antes
+    // (ΔPL − lucro) — identidade e prova intactas.
     const plForaResultado = deltaPL - lucro;
-    if (Math.abs(plForaResultado) > 0.005) push(fcfMap, "Aportes, dividendos e ajustes do PL (ΔPL − lucro)", p1, plForaResultado);
+    const ajustesSemCapital = plForaResultado - deltaCapSocial;
+    if (Math.abs(deltaCapSocial) > 0.005) push(fcfMap, "Δ Capital Social (aporte / redução de capital)", p1, deltaCapSocial);
+    if (Math.abs(ajustesSemCapital) > 0.005) push(fcfMap, "Dividendos e ajustes do PL (ΔPL − lucro − Δ capital)", p1, ajustesSemCapital);
 
     // ── Totais + prova de fechamento ──
     const soma = (map: Map<string, Record<string, number>>) =>
       [...map.values()].reduce((s, v) => s + (v[p1] ?? 0), 0);
-    totais.fco[p1] = soma(fcoMap);
+    totais.fco[p1] = soma(fcoMap) + soma(cgMap); // FCO INCLUI o capital de giro
     totais.fci[p1] = soma(fciMap);
     totais.fcf[p1] = soma(fcfMap);
     totais.geracaoTotal[p1] = totais.fco[p1] + totais.fci[p1] + totais.fcf[p1];
@@ -193,5 +228,17 @@ export function buildIndirectCashFlow(
       .filter(([, valores]) => Object.values(valores).some((v) => Math.abs(v) > 0.005))
       .map(([nome, valores]) => ({ nome, valores }));
 
-  return { colunas, fco: toLinhas(fcoMap), fci: toLinhas(fciMap), fcf: toLinhas(fcfMap), totais, prova, avisos };
+  // Subtotal do capital de giro por coluna (a partir das linhas que sobreviveram ao filtro)
+  const cgLinhas = toLinhas(cgMap);
+  const cgTotal: Record<string, number> = {};
+  for (const c of colunas) cgTotal[c] = cgLinhas.reduce((s, l) => s + (l.valores[c] ?? 0), 0);
+
+  return {
+    colunas,
+    fco: toLinhas(fcoMap),
+    capitalGiro: { linhas: cgLinhas, total: cgTotal },
+    fci: toLinhas(fciMap),
+    fcf: toLinhas(fcfMap),
+    totais, prova, avisos,
+  };
 }

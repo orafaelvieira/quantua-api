@@ -198,12 +198,16 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
   }
 
   // 2) DICKINSON (2011) — padrão-ouro: os SINAIS de FCO/FCI/FCF do FC indireto classificam
-  //    o estágio. Só quando o FC existe E a prova de fechamento bate ("verde só com prova");
-  //    senão cai na heurística de receita/margem abaixo.
+  //    o estágio. "Verde só com prova" vale para a COLUNA QUE OS SINAIS USAM (a mais
+  //    recente): exigir que TODAS fechem (prova.every) descartava o padrão-ouro por culpa
+  //    de uma coluna antiga que os sinais nem leem; e classificar por coluna velha
+  //    rotularia o estágio de anos atrás — por isso, se a RECENTE não fecha, cai na
+  //    heurística (nunca usa sinais defasados).
   const cols = fluxoCaixa?.colunas ?? [];
-  const provaOk = (fluxoCaixa?.prova ?? []).length > 0 && (fluxoCaixa!.prova!).every((p) => p.fecha);
-  if (fluxoCaixa && cols.length > 0 && provaOk) {
-    const c = cols[cols.length - 1]; // variação mais recente
+  const colRecente = cols.length > 0 ? cols[cols.length - 1] : null;
+  const provaOk = colRecente != null && (fluxoCaixa?.prova ?? []).some((p) => p.periodo === colRecente && p.fecha);
+  if (fluxoCaixa && colRecente != null && provaOk) {
+    const c = colRecente; // variação mais recente (com prova fechada)
     const fco = fluxoCaixa.totais.fco[c] ?? 0;
     const fci = fluxoCaixa.totais.fci[c] ?? 0;
     const fcf = fluxoCaixa.totais.fcf[c] ?? 0;
