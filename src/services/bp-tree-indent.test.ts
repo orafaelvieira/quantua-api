@@ -84,10 +84,13 @@ describe("construirArvoreBPporIndentacao — Grau 4 (caso Fibracabos)", () => {
     const arvore = construirArvoreBPporIndentacao(doc(RAW_GRAU4), [P])!;
     const { bp } = foldBP(arvore, [P], undefined, DEFAULT_BP_MODEL);
 
-    // As contas com nome canônico caem na LINHA CERTA do modelo (não em "Outros").
+    // As contas caem na LINHA CERTA do modelo (não em "Outros"). Além dos nomes canônicos,
+    // as abreviações de ERP consolidam: ENCARGOS SOCIAIS A RECOLHER → Obrig. Trabalhistas
+    // (164.395,97 + 52.007,44 = 216.403,41); PARCEL TRIBUT + I.R.P.J./C.S.L.L. → Obrig.
+    // Tributárias (25.966,01 + 109.242,28 + 388.784,45 = 523.992,74).
     expect(valor(bp, "Fornecedores - CP", P)).toBeCloseTo(1860814.34, 2);
-    expect(valor(bp, "Obrigações Trabalhistas - CP", P)).toBeCloseTo(164395.97, 2);
-    expect(valor(bp, "Obrigações Tributárias - CP", P)).toBeCloseTo(25966.01, 2);
+    expect(valor(bp, "Obrigações Trabalhistas - CP", P)).toBeCloseTo(216403.41, 2);
+    expect(valor(bp, "Obrigações Tributárias - CP", P)).toBeCloseTo(523992.74, 2);
     expect(valor(bp, "Empréstimos e Financiamentos - CP", P)).toBeCloseTo(700040.88, 2);
 
     // A composição do PC fecha: soma das linhas-folha = subtotal Passivo Circulante.
@@ -110,8 +113,9 @@ describe("construirArvoreBPporIndentacao — Grau 4 (caso Fibracabos)", () => {
       valor(bp, "Obrigações Tributárias - CP", P) +
       valor(bp, "Empréstimos e Financiamentos - CP", P);
     expect(somaMapeadas).toBeGreaterThan(0);
-    // As 4 contas canônicas somam ~2.75M — mais da metade do PC não está no balde.
-    expect(somaMapeadas).toBeCloseTo(1860814.34 + 164395.97 + 25966.01 + 700040.88, 2);
+    // Com as abreviações de ERP consolidadas, as 4 linhas somam ~3,3M — só ADIANTAMENTOS
+    // DIVERSOS (ambíguo, deixado âmbar) + OUTRAS OBRIGAÇÕES restam no balde "Outros".
+    expect(somaMapeadas).toBeCloseTo(1860814.34 + 216403.41 + 523992.74 + 700040.88, 2);
   });
 
   it("também quebra o Ativo Circulante em contas-folha do modelo", () => {

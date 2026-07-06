@@ -576,6 +576,26 @@ export const ACCOUNT_ALIASES: Record<string, string> = {
   "Obrigações em Circulação": "Outros Passivos Circulantes",
   "Valores Pendentes a Curto Prazo": "Outros Passivos Circulantes",
 
+  // === ABREVIAÇÕES DE ERP (Fibracabos/SERPRO/Domínio e afins) ===
+  // Nomes truncados que os sistemas contábeis BR emitem. São INEQUÍVOCOS (natureza
+  // clara) e todos protegidos pelo contexto de grupo em findBestMatch (isGrupoCompatible):
+  // um destino CP nunca dispara em grupo LP e vice-versa; passivo nunca cruza p/ ativo.
+  // Sem estes, caíam mudos em "Outros Passivos Circulantes" e a dívida (EMPREST FINANC)
+  // ficava subestimada. NÃO incluímos "ADIANTAMENTOS DIVERSOS" (genuinamente ambíguo —
+  // fica âmbar p/ o analista decidir, melhor que erro silencioso).
+  "EMPREST FINANC C.PRAZO": "Empréstimos e Financiamentos - CP",
+  "EMPREST FINANC CURTO PRAZO": "Empréstimos e Financiamentos - CP",
+  "EMPREST FINANC": "Empréstimos e Financiamentos - CP",
+  "EMPREST FINANC L.PRAZO": "Empréstimos e Financiamentos - LP",
+  "EMPREST FINANC LONGO PRAZO": "Empréstimos e Financiamentos - LP",
+  "ENCARGOS SOCIAIS A RECOLHER": "Obrigações Trabalhistas - CP",
+  "PARCEL TRIBUT A RECOLHER": "Obrigações Tributárias - CP",
+  "PARCELAMENTO TRIBUTARIO A RECOLHER": "Obrigações Tributárias - CP",
+  "PARCELAMENTOS TRIBUTARIOS": "Obrigações Tributárias - CP",
+  "I.R.P.J. E C.S.L.L. A RECOLHER": "Obrigações Tributárias - CP",
+  "IRPJ E CSLL A RECOLHER": "Obrigações Tributárias - CP",
+  "IRPJ/CSLL A RECOLHER": "Obrigações Tributárias - CP",
+
   // === PASSIVO NÃO CIRCULANTE ===
   "Passivo Exigivel A Longo Prazo": "Passivo Não Circulante",
   "PASSIVO EXIGIVEL A LONGO PRAZO": "Passivo Não Circulante",
