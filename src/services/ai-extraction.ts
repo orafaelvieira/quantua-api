@@ -422,6 +422,8 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
   const detalhe: Record<string, Record<string, number>> = {}; // conta → periodo → valor
   const subtotal: Record<string, Record<string, number>> = {}; // grupoCode → periodo → valor
   const naoMapeados: NaoMapeado[] = [];
+  // Referências das folhas âmbar (para a exclusão automática de subtotal duplicado no pós-passe)
+  const ambarRefs: Array<{ it: BPN3Item; grupoNome: string; g: string; p: string; v: number; balde: string | null; nm: NaoMapeado }> = [];
   const add = (acc: Record<string, Record<string, number>>, k: string, p: string, v: number) => { (acc[k] ??= {})[p] = (acc[k][p] ?? 0) + v; };
 
   for (const p of periodos) {
@@ -556,10 +558,50 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
         // "Outros ..." do próprio grupo: o balde É a classificação correta por definição —
         // não pede ação do analista (nada de âmbar).
         if (balde && ehNomeGenerico(it.nome)) return;
-        naoMapeados.push({ nome: it.nome, grupo: caminho.length ? `${grupoNome} > ${caminho.join(" > ")}` : grupoNome, destino: it.destino, valor: v, periodo: p, tipo: "BP" });
+        const nm: NaoMapeado = { nome: it.nome, grupo: caminho.length ? `${grupoNome} > ${caminho.join(" > ")}` : grupoNome, destino: it.destino, valor: v, periodo: p, tipo: "BP" };
+        naoMapeados.push(nm);
+        ambarRefs.push({ it, grupoNome, g, p, v, balde: balde ?? null, nm });
       };
       for (const it of itensNivel0) processa(it, []);
     }
+  }
+
+  // ── EXCLUSÃO AUTOMÁTICA de SUBTOTAL DUPLICADO por prova de equilíbrio ──
+  // O detectaPaisFlat resolve o grupo 100% flat; num grupo SEMI-hierárquico ele é pulado
+  // e um total repetido vira folha âmbar somando em DUPLICIDADE — e o analista poderia
+  // classificá-lo, dobrando o valor. Exclui automaticamente SÓ com prova dupla:
+  // (1) a linha PARECE subtotal — valor = subconjunto dos irmãos de nível 0, duplicata
+  //     exata de um irmão ou nome "total/soma/subtotal"; e
+  // (2) removê-la FECHA o balanço (Ativo = Passivo) e é a ÚNICA âmbar que fecha
+  //     (duplicatas exatas entre si contam como uma — excluir qualquer uma dá no mesmo).
+  // Ambíguo → não mexe: fica âmbar para o analista. A prova fica anotada no destino.
+  for (const p of periodos) {
+    const cap = arvore[p]; if (!cap) continue;
+    const somaA = (subtotal.AC?.[p] ?? 0) + (subtotal.ANC?.[p] ?? 0);
+    const somaP = (subtotal.PC?.[p] ?? 0) + (subtotal.PNC?.[p] ?? 0) + (subtotal.PL?.[p] ?? 0);
+    const delta = somaA - somaP;
+    if (Math.abs(delta) <= Math.max(0.05, Math.abs(somaA) * 0.0001)) continue; // balanço já fecha
+    const tolDe = (v: number) => Math.max(0.05, Math.abs(v) * 0.001);
+    const candidatas = ambarRefs.filter((r) => {
+      if (r.p !== p) return false;
+      const novoDelta = r.g === "AC" || r.g === "ANC" ? delta - r.v : delta + r.v;
+      if (Math.abs(novoDelta) > tolDe(r.v)) return false; // remover não fecha o balanço
+      if (/\b(total|soma|subtotal)\b/i.test(r.it.nome)) return true;
+      const irmaos = (cap.grupos[r.grupoNome] ?? []).filter((s) => s !== r.it && typeof s.valor === "number" && !isCompensacao(s.nome));
+      const vals = irmaos.map((s) => s.valor);
+      if (vals.some((x) => Math.abs(x - r.it.valor) <= tolDe(r.it.valor))) return true; // duplicata de irmão
+      return achaSubsetSoma(vals, r.it.valor, tolDe(r.it.valor)) != null; // soma de irmãos
+    });
+    if (!candidatas.length) continue;
+    const c0 = candidatas[0];
+    const equivalentes = candidatas.every((r) =>
+      r.grupoNome === c0.grupoNome && normNome(r.it.nome) === normNome(c0.it.nome) && Math.abs(r.it.valor - c0.it.valor) <= 0.05);
+    if (!equivalentes) continue; // mais de uma candidata DISTINTA = ambíguo → analista decide
+    add(subtotal, c0.g, p, -c0.v);
+    if (c0.balde) add(detalhe, c0.balde, p, -c0.v);
+    c0.it.destino = "(subtotal duplicado — excluído automaticamente: sem esta linha o balanço fecha)";
+    const ix = naoMapeados.indexOf(c0.nm);
+    if (ix >= 0) naoMapeados.splice(ix, 1);
   }
 
   // Estrutura por TIPO + CLASSIFICAÇÃO (códigos estáveis), não por nome — robusto a
