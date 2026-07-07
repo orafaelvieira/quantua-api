@@ -23,6 +23,7 @@ import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from ".
 import { getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
+import { registrarAuditoria, diffCampos } from "../services/audit-trail";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
 const router = Router();
@@ -154,6 +155,12 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
   const existing = await prisma.analysis.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
   if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   await prisma.analysis.delete({ where: { id } });
+  // TRILHA da exclusão do IBR — analysisId NULL de propósito: com o id preenchido, o
+  // cascade da análise apagaria a própria trilha da exclusão. entityId guarda o id.
+  void registrarAuditoria({
+    userId: req.userId!, entity: "analysis", entityId: id, field: "exclusão do IBR",
+    before: { nome: existing.nome, status: existing.status, companyId: existing.companyId, criadoEm: existing.createdAt },
+  });
   res.status(204).send();
 });
 
@@ -1056,7 +1063,7 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, userId: { in: req.scopeUserIds! } },
-    select: { id: true, mode: true },
+    select: { id: true, mode: true, nome: true, companyId: true, tipo: true, sectorId: true, sectorCustom: true, ibrType: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const data: Record<string, unknown> = {};
@@ -1080,6 +1087,18 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
   if (Array.isArray(req.body?.documentChecklist)) data.documentChecklist = req.body.documentChecklist as object;
   if (Object.keys(data).length === 0 && !req.body?.engagement) { res.status(400).json({ error: "Nada para atualizar" }); return; }
   if (Object.keys(data).length > 0) await prisma.analysis.update({ where: { id }, data });
+
+  // TRILHA: escopo do IBR editado no wizard (só o que mudou, com quem e quando).
+  {
+    const d = diffCampos(analysis as unknown as Record<string, unknown>, data,
+      ["nome", "companyId", "tipo", "sectorId", "sectorCustom", "ibrType", "mode"]);
+    if (d.mudou) {
+      void registrarAuditoria({
+        userId: req.userId!, analysisId: id, entity: "analysis", entityId: id,
+        field: "escopo (wizard)", before: d.before, after: d.after,
+      });
+    }
+  }
 
   // Engagement (registro próprio): atualiza o existente ou cria se ainda não houver.
   const eng = req.body?.engagement;
@@ -1115,7 +1134,7 @@ router.put("/:id/dores", async (req: AuthRequest, res: Response): Promise<void> 
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, userId: { in: req.scopeUserIds! } },
-    select: { id: true },
+    select: { id: true, dores: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const raw = req.body?.dores;
@@ -1131,6 +1150,12 @@ router.put("/:id/dores", async (req: AuthRequest, res: Response): Promise<void> 
     .filter((d) => d.descricao.trim().length > 0)
     .slice(0, 30);
   await prisma.analysis.update({ where: { id }, data: { dores: dores as object[] } });
+  // TRILHA: dores editadas (resumo por categoria — as descrições completas ficam no registro atual).
+  const resumo = (lista: unknown) => Array.isArray(lista) ? { total: lista.length, categorias: (lista as Array<{ categoria?: string }>).map((x) => x?.categoria ?? "Geral") } : { total: 0, categorias: [] };
+  void registrarAuditoria({
+    userId: req.userId!, analysisId: id, entity: "analysis", entityId: id,
+    field: "dores (kickoff)", before: resumo(analysis.dores), after: resumo(dores),
+  });
   res.json({ ok: true, total: dores.length });
 });
 

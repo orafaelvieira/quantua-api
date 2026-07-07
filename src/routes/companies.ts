@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { deleteFile } from "../services/storage";
+import { registrarAuditoria, diffCampos } from "../services/audit-trail";
 
 const router = Router();
 
@@ -93,6 +94,10 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const company = await prisma.company.create({
     data: { ...parsed.data, cnpjData: parsed.data.cnpjData as object | undefined, userId: req.userId! },
   });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "company", entityId: company.id, field: "criação",
+    after: { razaoSocial: company.razaoSocial, nomeFantasia: company.nomeFantasia, cnpj: company.cnpj, setor: company.setor, porte: company.porte, uf: company.uf },
+  });
   res.status(201).json(company);
 });
 
@@ -131,6 +136,17 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     data: { ...parsed.data, cnpjData: parsed.data.cnpjData as object | undefined },
   });
 
+  // TRILHA: grava só o que MUDOU (before/after), com quem e quando. cnpjData fica de
+  // fora do diff (payload grande) — a reconsulta é registrada como flag.
+  const d = diffCampos(existing as unknown as Record<string, unknown>, parsed.data as Record<string, unknown>,
+    ["razaoSocial", "nomeFantasia", "cnpj", "setor", "porte", "uf", "regimeTributario", "municipio", "cnae", "situacaoCadastral", "capitalSocial"]);
+  if (d.mudou || parsed.data.cnpjData !== undefined) {
+    void registrarAuditoria({
+      userId: req.userId!, entity: "company", entityId: id, field: "edição do cadastro",
+      before: d.before, after: { ...d.after, ...(parsed.data.cnpjData !== undefined ? { dadosReceita: "reconsultados" } : {}) },
+    });
+  }
+
   // Engagement.companyName é um SNAPSHOT gravado na criação do IBR — renomear a
   // empresa deixava engagements/propostas com o nome velho. Sincroniza aqui.
   if (parsed.data.razaoSocial !== undefined || parsed.data.nomeFantasia !== undefined) {
@@ -163,6 +179,12 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
     }
 
     await prisma.company.delete({ where: { id } });
+    // TRILHA da exclusão — snapshot básico ANTES de sumir (analysisId null: as análises
+    // em cascade não podem levar a trilha junto).
+    void registrarAuditoria({
+      userId: req.userId!, entity: "company", entityId: id, field: "exclusão",
+      before: { razaoSocial: existing.razaoSocial, nomeFantasia: existing.nomeFantasia, cnpj: existing.cnpj },
+    });
     res.status(204).send();
   } catch (err: any) {
     console.error("Error deleting company:", err);
