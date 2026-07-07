@@ -1415,6 +1415,11 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
 
   const dados = analysis.dadosEstruturados as any as DadosEstruturados | null;
 
+  // O relatório valida DEMONSTRAÇÕES — materiais complementares (notas, PPT, docx)
+  // NÃO passam pela extração; listá-los com "0 linhas · erro" só gerava confusão
+  // (flagrado pelo usuário). Eles vivem na Data room e no resumo da IA da análise.
+  const docsFinanceiros = analysis.documents.filter((d) => d.tipo !== "Material complementar");
+
   // Pendências VIVAS do motor árvore: `naoMapeados` é atualizado pelo /refold quando o
   // analista classifica (o legado `unmatchedAccounts` fica congelado na extração — usá-lo
   // deixava o relatório defasado após reclassificações).
@@ -1424,13 +1429,13 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
     Array.isArray((dados as any)?.naoMapeados) ? (dados as any).naoMapeados : [];
   // Nomes de linhas por tipo de documento (para atribuir pendência órfã só onde faz sentido)
   const nomesPorTipo: Record<"BP" | "DRE", Set<string>> = { BP: new Set(), DRE: new Set() };
-  for (const doc of analysis.documents) {
+  for (const doc of docsFinanceiros) {
     const t = doc.tipo.toLowerCase().includes("balan") ? "BP" : "DRE";
     for (const l of ((doc.dadosExtraidos as any)?.linhas ?? []) as Array<{ conta: string }>) nomesPorTipo[t].add(normRel(l.conta));
   }
 
   // Build per-document stats
-  const documents = analysis.documents.map((doc) => {
+  const documents = docsFinanceiros.map((doc) => {
     const dadosExtraidos = doc.dadosExtraidos as any;
     const linhas: Array<{ conta: string; valores: Record<string, number> }> = dadosExtraidos?.linhas || [];
     const periodos: string[] = dadosExtraidos?.periodos || [];
