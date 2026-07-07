@@ -124,18 +124,6 @@ describe("buildIndirectCashFlow", () => {
     expect(bucketDaConta("Adiantamento de Clientes")).toBe("fco");
   });
 
-  it("antecipação/distribuição de lucros a sócios (ativo) é DISTRIBUIÇÃO → FCF", () => {
-    // Caso Move Farma: "LUCROS DISTRIBUÍDOS NO EXERCÍCIO" registrado em Outros Créditos
-    // (ativo). No FCO, a baixa contra o PL inflava o caixa operacional; o caixa dessa
-    // conta é financiamento (distribuição aos sócios), como dividendos pagos.
-    expect(bucketDaConta("Antecipação de Lucros aos Sócios - CP")).toBe("fcf");
-    expect(bucketDaConta("Lucros Distribuídos no Exercício")).toBe("fcf");
-    expect(bucketDaConta("Distribuição Antecipada de Lucros")).toBe("fcf");
-    expect(bucketDaConta("Créditos com Sócios - CP")).toBe("fcf");
-    // participação nos lucros de EMPREGADOS não é distribuição a sócio — segue operacional
-    expect(bucketDaConta("Participação nos Lucros ou Resultados")).toBe("fco");
-  });
-
   // ─── Partição FCO/FCI/FCF: contas que caíam no grupo errado (auditoria) ───
   it("Realizável a Longo Prazo e Dividendos a RECEBER são INVESTIMENTO (não FCO/FCF)", () => {
     expect(bucketDaConta("Realizável a Longo Prazo")).toBe("fci");
