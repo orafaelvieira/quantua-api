@@ -1504,10 +1504,12 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
       issues.push("Nenhum período detectado");
     }
     if (contasNaoClassificadas > 0) {
-      if (contasNaoClassificadas > totalLinhas * 0.5) {
-        status = status === "error" ? "error" : "warning";
-      }
-      issues.push(`${contasNaoClassificadas} conta(s) não classificada(s)`);
+      // QUALQUER pendência = ÂMBAR ("verde só com prova"): antes só virava warning
+      // acima de 50% das linhas — 1 conta pendente ficava com check VERDE enquanto o
+      // gate bloqueava a geração por ela (telas contando histórias diferentes,
+      // flagrado pelo usuário). Verde volta sozinho quando a última for classificada.
+      status = status === "error" ? "error" : "warning";
+      issues.push(`${contasNaoClassificadas} conta(s) não classificada(s) — classifique ou ignore na auditoria (grátis)`);
     }
     if (balanceia === false) {
       status = status === "error" ? "error" : "warning";
