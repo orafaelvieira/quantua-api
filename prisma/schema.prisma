@@ -325,6 +325,18 @@ model Company {
   porte        String?
   uf           String?
   status       String   @default("ativo")
+  // ── Dados da Receita Federal (consulta CNPJ · BrasilAPI) ──
+  // Campos promovidos = os que a UI/análise usam direto; cnpjData guarda a
+  // RESPOSTA COMPLETA da consulta (nada se perde — QSA, endereço, CNAEs 2os…).
+  municipio           String?
+  cnae                String? // código CNAE principal (7 dígitos)
+  cnaeDescricao       String? @map("cnae_descricao")
+  naturezaJuridica    String? @map("natureza_juridica")
+  dataInicioAtividade String? @map("data_inicio_atividade") // AAAA-MM-DD
+  situacaoCadastral   String? @map("situacao_cadastral") // ATIVA/SUSPENSA/BAIXADA…
+  capitalSocial       Float?  @map("capital_social")
+  regimeTributario    String? @map("regime_tributario") // MEI/Simples Nacional/Lucro Presumido/Lucro Real
+  cnpjData            Json?   @map("cnpj_data")
   createdAt    DateTime @default(now()) @map("created_at")
 
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)

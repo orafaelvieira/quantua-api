@@ -42,6 +42,16 @@ const companySchema = z.object({
   setor: z.string().optional(),
   porte: z.string().optional(),
   uf: z.string().optional(),
+  // Dados da Receita Federal (consulta CNPJ) — opcionais; cnpjData = resposta COMPLETA
+  municipio: z.string().optional(),
+  cnae: z.string().optional(),
+  cnaeDescricao: z.string().optional(),
+  naturezaJuridica: z.string().optional(),
+  dataInicioAtividade: z.string().optional(),
+  situacaoCadastral: z.string().optional(),
+  capitalSocial: z.number().finite().optional(),
+  regimeTributario: z.string().optional(),
+  cnpjData: z.record(z.unknown()).optional(),
 });
 
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
@@ -58,7 +68,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
   const company = await prisma.company.create({
-    data: { ...parsed.data, userId: req.userId! },
+    data: { ...parsed.data, cnpjData: parsed.data.cnpjData as object | undefined, userId: req.userId! },
   });
   res.status(201).json(company);
 });
@@ -81,7 +91,10 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = companySchema.partial().safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
-  const company = await prisma.company.update({ where: { id }, data: parsed.data });
+  const company = await prisma.company.update({
+    where: { id },
+    data: { ...parsed.data, cnpjData: parsed.data.cnpjData as object | undefined },
+  });
   res.json(company);
 });
 
