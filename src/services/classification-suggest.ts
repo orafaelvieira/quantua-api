@@ -14,7 +14,7 @@
  * - Custo registrado ([[registrar-custo-ia]]) em dadosEstruturados.custoSugestoes.
  */
 import { createWithRetry, calcCusto, type CustoIA, type NaoMapeado } from "./ai-extraction";
-import { DEFAULT_BP_MODEL } from "./account-mapper";
+import { DEFAULT_BP_MODEL, blocoDoCaminhoDRE, blocoDoDestinoDRE } from "./account-mapper";
 
 const MODELO_SUGESTAO = "claude-haiku-4-5-20251001";
 
@@ -40,6 +40,22 @@ const GRUPO_CODE: Record<string, string> = {
 };
 const norm = (s: string) => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
 
+/** Opções DRE permitidas: NATUREZA (entrada/saída pelo sinal) + BLOCO pela POSIÇÃO no
+ *  documento (custo × despesa) — "a posição no documento manda" vale também para a
+ *  SUGESTÃO, não só para o fold/dicionário: pessoas pode ser CUSTO (mão de obra fabril)
+ *  ou DESPESA (folha administrativa) conforme onde a empresa a declara. Destinos
+ *  neutros (D&A, financeiras, IR) passam sempre. Exportada p/ teste. */
+export function opcoesDREPermitidas(dreInputs: string[], valor: number, grupoDoc?: string): string[] {
+  const ehReceitaDRE = (c: string) => /receita/i.test(c);
+  const porNatureza = dreInputs.filter((c) => ehReceitaDRE(c) === (valor > 0));
+  const bloco = blocoDoCaminhoDRE((grupoDoc ?? "").split(">").map((s) => s.trim()));
+  if (!bloco) return porNatureza;
+  return porNatureza.filter((c) => {
+    const b = blocoDoDestinoDRE(c);
+    return b === null || b === bloco;
+  });
+}
+
 /** Opções BP do grupo da conta (mesmo filtro do dropdown — a IA não vê opção inválida). */
 function opcoesBPDoGrupo(grupoDoc: string): string[] {
   // grupoDoc pode vir como "Passivo Circulante" ou "Passivo Circulante > PAI > ..."
@@ -63,11 +79,10 @@ export async function sugerirClassificacoesIA(
   const itens = naoMapeados.filter((nm) => nm.nome && typeof nm.valor === "number");
   if (itens.length === 0) return { sugestoes: {}, custo: null };
 
-  const ehReceitaDRE = (c: string) => /receita/i.test(c);
   const linhas = itens.map((nm, i) => {
     const opcoes = nm.tipo === "BP"
       ? opcoesBPDoGrupo(nm.grupo)
-      : dreInputs.filter((c) => ehReceitaDRE(c) === (nm.valor > 0));
+      : opcoesDREPermitidas(dreInputs, nm.valor, nm.grupo);
     const pctReceita = ctx.receitaUltimoAno ? ` (${((Math.abs(nm.valor) / Math.abs(ctx.receitaUltimoAno)) * 100).toFixed(1)}% da receita)` : "";
     return `${i + 1}. [${nm.tipo}] "${nm.nome}" · posição no documento: ${nm.grupo} · valor ${nm.valor.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}${pctReceita}
    OPÇÕES PERMITIDAS: ${opcoes.join(" | ") || "(nenhuma — responda sugestao vazia)"}`;
@@ -106,7 +121,7 @@ Responda APENAS JSON: [{"i":1,"sugestao":"...","justificativa":"...","confianca"
       const nm = itens[idx];
       if (!nm || !r?.sugestao || typeof r.sugestao !== "string") continue;
       // Blindagem: a sugestão precisa estar nas opções permitidas daquela conta.
-      const opcoes = nm.tipo === "BP" ? opcoesBPDoGrupo(nm.grupo) : dreInputs.filter((c) => ehReceitaDRE(c) === (nm.valor > 0));
+      const opcoes = nm.tipo === "BP" ? opcoesBPDoGrupo(nm.grupo) : opcoesDREPermitidas(dreInputs, nm.valor, nm.grupo);
       if (!opcoes.includes(r.sugestao)) continue;
       sugestoes[chaveNM(nm)] = {
         sugestao: r.sugestao,

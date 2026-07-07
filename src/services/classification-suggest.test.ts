@@ -4,7 +4,7 @@ const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
 vi.mock("@anthropic-ai/sdk", () => ({ default: class { messages = { create: createMock } } }));
 vi.mock("../config/env", () => ({ env: { anthropicApiKey: "test-key" } }));
 
-import { sugerirClassificacoesIA, chaveNM } from "./classification-suggest";
+import { sugerirClassificacoesIA, chaveNM, opcoesDREPermitidas } from "./classification-suggest";
 import type { NaoMapeado } from "./ai-extraction";
 
 const reply = (payload: unknown) => ({
@@ -53,5 +53,40 @@ describe("sugerirClassificacoesIA", () => {
     const r = await sugerirClassificacoesIA([], {}, dreInputs);
     expect(createMock).not.toHaveBeenCalled();
     expect(r.custo).toBeNull();
+  });
+});
+
+describe("opcoesDREPermitidas — a posição no documento manda também na SUGESTÃO", () => {
+  // Pessoas pode ser CUSTO (mão de obra fabril) ou DESPESA (folha administrativa),
+  // conforme onde a empresa declara a conta na DRE original.
+  const inputs = [
+    "Custo Operacional",
+    "Despesas Gerais e Administrativas",
+    "Despesas com Pessoas", // conta custom do modelo (caso Move Farma)
+    "Outras Despesas Operacionais",
+    "Depreciação e Amortização", // neutra — passa nos dois blocos
+    "Receitas Financeiras",
+  ];
+
+  it("conta no bloco de DESPESAS: oferece despesas + neutras, NUNCA Custo Operacional", () => {
+    const ops = opcoesDREPermitidas(inputs, -47184, "DRE > DESPESAS OPERACIONAIS > DESPESAS COM PESSOAL");
+    expect(ops).toContain("Despesas com Pessoas");
+    expect(ops).toContain("Depreciação e Amortização");
+    expect(ops).not.toContain("Custo Operacional");
+  });
+
+  it("conta no bloco de CUSTOS: oferece Custo Operacional + neutras, NUNCA linhas de despesa", () => {
+    const ops = opcoesDREPermitidas(inputs, -47184, "DRE > CUSTOS DOS PRODUTOS VENDIDOS > MAO DE OBRA");
+    expect(ops).toContain("Custo Operacional");
+    expect(ops).toContain("Depreciação e Amortização");
+    expect(ops).not.toContain("Despesas com Pessoas");
+    expect(ops).not.toContain("Despesas Gerais e Administrativas");
+  });
+
+  it("caminho sem bloco declarado: só o filtro de natureza (tudo de saída)", () => {
+    const ops = opcoesDREPermitidas(inputs, -100, "DRE");
+    expect(ops).toContain("Custo Operacional");
+    expect(ops).toContain("Despesas com Pessoas");
+    expect(ops).not.toContain("Receitas Financeiras"); // entrada, sinal oposto
   });
 });
