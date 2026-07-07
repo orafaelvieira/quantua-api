@@ -63,9 +63,32 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   res.json(companies);
 });
 
+/** Duplicidade de CNPJ no workspace (comparação por DÍGITOS — o campo é salvo
+ *  formatado). Retorna a empresa existente ou null. */
+async function cnpjJaCadastrado(scopeUserIds: string[], cnpj: string | undefined, ignoreId?: string) {
+  const digits = (cnpj ?? "").replace(/\D/g, "");
+  if (digits.length !== 14) return null;
+  const todas = await prisma.company.findMany({
+    where: { userId: { in: scopeUserIds }, cnpj: { not: null } },
+    select: { id: true, cnpj: true, razaoSocial: true, nomeFantasia: true },
+  });
+  return todas.find((c) => c.id !== ignoreId && (c.cnpj ?? "").replace(/\D/g, "") === digits) ?? null;
+}
+
 router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = companySchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+
+  // TRAVA: um CNPJ = um cadastro por workspace (duplicar geraria IBRs/documentos
+  // espalhados em duas fichas da mesma empresa).
+  const dup = await cnpjJaCadastrado(req.scopeUserIds!, parsed.data.cnpj);
+  if (dup) {
+    res.status(409).json({
+      error: `Este CNPJ já está cadastrado para "${dup.nomeFantasia || dup.razaoSocial}" — edite o cadastro existente em vez de duplicar.`,
+      companyId: dup.id,
+    });
+    return;
+  }
 
   const company = await prisma.company.create({
     data: { ...parsed.data, cnpjData: parsed.data.cnpjData as object | undefined, userId: req.userId! },
@@ -91,10 +114,33 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = companySchema.partial().safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
+  // Mesma trava do POST: editar o CNPJ para um já usado em OUTRA ficha é duplicação.
+  if (parsed.data.cnpj !== undefined) {
+    const dup = await cnpjJaCadastrado(req.scopeUserIds!, parsed.data.cnpj, id);
+    if (dup) {
+      res.status(409).json({
+        error: `Este CNPJ já está cadastrado para "${dup.nomeFantasia || dup.razaoSocial}".`,
+        companyId: dup.id,
+      });
+      return;
+    }
+  }
+
   const company = await prisma.company.update({
     where: { id },
     data: { ...parsed.data, cnpjData: parsed.data.cnpjData as object | undefined },
   });
+
+  // Engagement.companyName é um SNAPSHOT gravado na criação do IBR — renomear a
+  // empresa deixava engagements/propostas com o nome velho. Sincroniza aqui.
+  if (parsed.data.razaoSocial !== undefined || parsed.data.nomeFantasia !== undefined) {
+    const display = company.nomeFantasia || company.razaoSocial;
+    await prisma.engagement.updateMany({
+      where: { analysis: { companyId: id } },
+      data: { companyName: display },
+    });
+  }
+
   res.json(company);
 });
 
