@@ -16,7 +16,8 @@ import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-conte
 import { sugerirClassificacoesIA, chaveNM } from "../services/classification-suggest";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta, ordPeriodo } from "../services/account-mapper";
 import { DRE_TEMPLATE } from "../services/financial-templates";
-import { buildIndicators } from "../services/indicator-config";
+import { buildIndicators, type ConfigRow } from "../services/indicator-config";
+import { catalogoPadraoEfetivo, calibrarSemaforoComPares, sanitizeRowsIBR, type IBRIndicadorConfig } from "../services/indicador-config-ibr";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
@@ -250,6 +251,12 @@ export interface PeerComparisonResult {
  * EXTERNA (Premissas Setoriais) em vez de comparar contra o mercado inteiro
  * (que seria enganoso). Determinístico (sem IA). Null quando não há setor.
  */
+/** Rows da config de indicadores DESTE IBR (null = usa o catálogo global). */
+function rowsIBRDe(indicadorConfig: unknown): ConfigRow[] | null {
+  const rows = (indicadorConfig as { rows?: unknown } | null)?.rows;
+  return Array.isArray(rows) && rows.length > 0 ? (rows as ConfigRow[]) : null;
+}
+
 async function buildPeerComparison(
   sectorId: string | null,
   indicadores: Array<{ nome: string; valores: Record<string, unknown> }>,
@@ -818,7 +825,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const custoExtracaoUsd = custoTotalUsd;
 
     // DRE já normalizada/recalculada e validada na cascata (avalia) → só os indicadores.
-    const indicadores = await buildIndicators(structuredBP, structuredDRE, allPeriodos);
+    const indicadores = await buildIndicators(structuredBP, structuredDRE, allPeriodos, rowsIBRDe(analysis.indicadorConfig));
     console.log(`[process] Validação: confiança=${validacao.confiancaGeral}%, equação=${validacao.equacaoPatrimonial}, alertas=${validacao.alertas.length}`);
     for (const alerta of validacao.alertas) {
       console.log(`[process]   [${alerta.tipo}] ${alerta.area}: ${alerta.mensagem}`);
@@ -1165,7 +1172,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, userId: { in: req.scopeUserIds! } },
-    select: { dadosEstruturados: true },
+    select: { dadosEstruturados: true, indicadorConfig: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const dados = analysis.dadosEstruturados as any;
@@ -1214,7 +1221,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   // caiu a última pendência, este refold já os calcula; com pendências, ficam vazios
   // ("sem informação" em vez de número enganoso). Overrides manuais são preservados.
   if (prontidaoRefold.pronta) {
-    const novos = await buildIndicators(dados.bp ?? [], dados.dre ?? [], periodos);
+    const novos = await buildIndicators(dados.bp ?? [], dados.dre ?? [], periodos, rowsIBRDe(analysis.indicadorConfig));
     for (const n of novos) {
       const antigo = (dados.indicadores as any[])?.find((i) => i?.nome === n.nome);
       if (antigo?.overrides) (n as any).overrides = antigo.overrides;
@@ -1282,11 +1289,142 @@ router.put("/:id/dados-estruturados/indicadores/override", async (req: AuthReque
   res.json({ ok: true });
 });
 
+/* ───────── INDICADORES POR IBR: réplica editável do catálogo, calibrada pelos pares ─────────
+ * GET  → seed-if-empty (copia o catálogo padrão) + calibração automática ÚNICA pelos
+ *        quartis dos pares quando já há indicadores calculados (extração validada).
+ * PUT  → salva edições (sanitizadas) + recalcula dados.indicadores se a extração está
+ *        validada (mesmo gate do refold) + trilha de auditoria.
+ * POST /recalibrar → re-seed do padrão + nova calibração pelos pares (auditada). */
+
+async function recalcularIndicadoresComConfig(id: string, dados: any, rows: ConfigRow[]): Promise<boolean> {
+  const prontidao = avaliarProntidaoGeracao(dados);
+  if (!prontidao.pronta) return false; // sem extração validada, indicadores seguem vazios (gate)
+  const novos = await buildIndicators(dados.bp ?? [], dados.dre ?? [], dados.periodos ?? [], rows);
+  for (const n of novos) {
+    const antigo = (dados.indicadores as any[])?.find((i) => i?.nome === n.nome);
+    if (antigo?.overrides) (n as any).overrides = antigo.overrides;
+  }
+  dados.indicadores = novos;
+  await prisma.analysis.update({ where: { id }, data: { dadosEstruturados: dados } });
+  return true;
+}
+
+router.get("/:id/indicador-config", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: { in: req.scopeUserIds! } },
+    select: { indicadorConfig: true, sectorId: true, dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  const dados = analysis.dadosEstruturados as any;
+  let cfg = analysis.indicadorConfig as unknown as IBRIndicadorConfig | null;
+  let mudou = false;
+
+  if (!cfg || !Array.isArray(cfg.rows) || cfg.rows.length === 0) {
+    // Seed: réplica do catálogo padrão do dia (a partir daqui, evolui só neste IBR).
+    cfg = { calibrado: false, pares: null, atualizadoEm: new Date().toISOString(), rows: await catalogoPadraoEfetivo() };
+    mudou = true;
+  }
+  // Calibração automática ÚNICA: precisa dos VALORES da empresa (base do pareamento CVM),
+  // então só acontece quando a extração validada já produziu indicadores. Depois disso,
+  // recalibrar é ação explícita (botão) — edição manual do analista nunca é sobrescrita.
+  if (!cfg.calibrado && Array.isArray(dados?.indicadores) && dados.indicadores.length > 0) {
+    const pares = await calibrarSemaforoComPares(cfg.rows, analysis.sectorId, dados.indicadores, dados.periodos ?? []);
+    cfg = { ...cfg, calibrado: true, pares, atualizadoEm: new Date().toISOString() };
+    mudou = true;
+  }
+  if (mudou) {
+    await prisma.analysis.update({ where: { id }, data: { indicadorConfig: cfg as unknown as object } });
+    // O semáforo calibrado precisa aparecer nos indicadores já calculados.
+    if (cfg.calibrado && (cfg.pares?.calibrados ?? 0) > 0) await recalcularIndicadoresComConfig(id, dados, cfg.rows as unknown as ConfigRow[]);
+  }
+  res.json(cfg);
+});
+
+router.put("/:id/indicador-config", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: { in: req.scopeUserIds! } },
+    select: { indicadorConfig: true, dadosEstruturados: true, nome: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  const anterior = analysis.indicadorConfig as unknown as IBRIndicadorConfig | null;
+  const padrao = await catalogoPadraoEfetivo();
+  const rows = sanitizeRowsIBR(req.body?.rows, padrao);
+  // Preserva a proveniência do semáforo quando os limiares não mudaram; senão "editado".
+  for (const r of rows) {
+    const ant = anterior?.rows?.find((a) => a.nome === r.nome);
+    if (!ant) continue;
+    if (ant.semCritico === r.semCritico && ant.semAtencao === r.semAtencao && ant.semDirecao === r.semDirecao) {
+      r.origemSemaforo = ant.origemSemaforo ?? r.origemSemaforo;
+    } else {
+      r.origemSemaforo = "editado";
+    }
+  }
+  const cfg: IBRIndicadorConfig = {
+    calibrado: anterior?.calibrado ?? false,
+    pares: anterior?.pares ?? null,
+    atualizadoEm: new Date().toISOString(),
+    rows,
+  };
+  await prisma.analysis.update({ where: { id }, data: { indicadorConfig: cfg as unknown as object } });
+
+  const dados = analysis.dadosEstruturados as any;
+  const recalculado = dados ? await recalcularIndicadoresComConfig(id, dados, rows as unknown as ConfigRow[]) : false;
+
+  // Trilha de auditoria ([[auditabilidade-obrigatoria]]): resumo do que mudou.
+  const antes = anterior?.rows ?? [];
+  const mudancas: string[] = [];
+  for (const r of rows) {
+    const a = antes.find((x) => x.nome === r.nome);
+    if (!a) { if (!r.sistema) mudancas.push(`+ ${r.nome} (personalizado)`); continue; }
+    if (a.ativo !== r.ativo) mudancas.push(`${r.nome}: ${r.ativo ? "exibido" : "oculto"}`);
+    if (a.semCritico !== r.semCritico || a.semAtencao !== r.semAtencao || a.semDirecao !== r.semDirecao) mudancas.push(`${r.nome}: semáforo`);
+  }
+  for (const a of antes.filter((x) => !x.sistema)) if (!rows.some((r) => r.nome === a.nome)) mudancas.push(`− ${a.nome}`);
+  void registrarAuditoria({
+    userId: req.userId!, analysisId: id, entity: "analysis", entityId: id,
+    field: "indicadores do IBR", before: mudancas.length ? mudancas.slice(0, 30).join("; ") : "(sem mudança)", after: `${rows.length} indicadores`,
+    source: "indicador-config-ibr", reason: "Configuração de indicadores do IBR",
+  });
+  res.json({ ok: true, config: cfg, indicadoresRecalculados: recalculado });
+});
+
+router.post("/:id/indicador-config/recalibrar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: { in: req.scopeUserIds! } },
+    select: { indicadorConfig: true, sectorId: true, dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const dados = analysis.dadosEstruturados as any;
+
+  // Re-seed do padrão + calibração nova — descarta edições manuais de semáforo/exibição
+  // (o frontend avisa antes). Personalizados DESTE IBR são preservados.
+  const rows = await catalogoPadraoEfetivo();
+  const anterior = analysis.indicadorConfig as unknown as IBRIndicadorConfig | null;
+  for (const p of anterior?.rows?.filter((r) => !r.sistema && !rows.some((x) => x.nome === r.nome)) ?? []) rows.push(p);
+  const pares = await calibrarSemaforoComPares(rows, analysis.sectorId, dados?.indicadores ?? [], dados?.periodos ?? []);
+  const cfg: IBRIndicadorConfig = { calibrado: true, pares, atualizadoEm: new Date().toISOString(), rows };
+  await prisma.analysis.update({ where: { id }, data: { indicadorConfig: cfg as unknown as object } });
+  const recalculado = dados ? await recalcularIndicadoresComConfig(id, dados, rows as unknown as ConfigRow[]) : false;
+
+  void registrarAuditoria({
+    userId: req.userId!, analysisId: id, entity: "analysis", entityId: id,
+    field: "indicadores do IBR", before: "recalibração pelos pares",
+    after: pares ? `pares: ${pares.segmento} (${pares.calibrados} indicadores calibrados)` : "sem pares na base — semáforo padrão",
+    source: "indicador-config-ibr", reason: "Recalibrar semáforo pelos pares do setor",
+  });
+  res.json({ ok: true, config: cfg, indicadoresRecalculados: recalculado });
+});
+
 router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, userId: { in: req.scopeUserIds! } },
-    select: { dadosEstruturados: true },
+    select: { dadosEstruturados: true, indicadorConfig: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   if (!analysis.dadosEstruturados) { res.status(400).json({ error: "Sem dados estruturados" }); return; }
@@ -1302,7 +1440,7 @@ router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Respons
     });
     return;
   }
-  const newIndicadores = await buildIndicators(dados.bp, dados.dre, dados.periodos);
+  const newIndicadores = await buildIndicators(dados.bp, dados.dre, dados.periodos, rowsIBRDe(analysis.indicadorConfig));
 
   // Preserve user overrides from old indicators
   for (const newInd of newIndicadores) {
@@ -1357,7 +1495,7 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
     const dreModelIA = await loadActiveDREModel();
     const { bp, dre, periodos, declarados, arvoreOriginalBP, arvoreOriginalDRE, naoMapeados } =
       await extractFinancialsWithAI(buffers, periodosAlvo, dictRows, bpModel, { dreModel: dreModelIA });
-    const indicadores = await buildIndicators(bp, dre, periodos);
+    const indicadores = await buildIndicators(bp, dre, periodos, rowsIBRDe(analysis.indicadorConfig));
 
     // Reconciliação: subtotal computado vs DECLARADO no PDF (vindo da própria IA),
     // para TODOS os períodos (não só o primeiro).

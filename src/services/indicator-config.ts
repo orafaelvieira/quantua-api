@@ -14,7 +14,7 @@ import { calculateIndicators, statusPorSemaforo, type SemaforoDef } from "./indi
 
 export interface TermoFormula { origem: "BP" | "DRE"; conta: string; sinal?: 1 | -1; abs?: boolean }
 
-interface ConfigRow {
+export interface ConfigRow {
   nome: string; sistema: boolean; ativo: boolean; grupo: string; tipoDado: string;
   formula: string | null; numerador: unknown; denominador: unknown; multiplicador: number | null;
   semDirecao: string | null; semCritico: number | null; semAtencao: number | null; ordem: number;
@@ -65,9 +65,18 @@ function computeCustom(c: ConfigRow, bp: BPLineItem[], dre: DRELineItem[], perio
  * (semáforo editado, exibição, ordem). Best-effort: se a tabela não existir/der erro,
  * cai nos canônicos com defaults — o processamento nunca quebra por causa da config.
  */
-export async function buildIndicators(bp: BPLineItem[], dre: DRELineItem[], periodos: string[]): Promise<Indicador[]> {
+export async function buildIndicators(
+  bp: BPLineItem[],
+  dre: DRELineItem[],
+  periodos: string[],
+  // Config DO IBR (Analysis.indicadorConfig.rows): quando presente, substitui o catálogo
+  // global — semáforo calibrado pelos pares, exibição e personalizados daquele engajamento.
+  ibrRows?: ConfigRow[] | null,
+): Promise<Indicador[]> {
   let configs: ConfigRow[] = [];
-  try {
+  if (ibrRows && ibrRows.length > 0) {
+    configs = ibrRows;
+  } else try {
     configs = (await prisma.indicatorConfig.findMany({ orderBy: [{ grupo: "asc" }, { ordem: "asc" }] })) as unknown as ConfigRow[];
   } catch (e: unknown) {
     console.warn("[indicators] config indisponível (segue com defaults):", e instanceof Error ? e.message : e);

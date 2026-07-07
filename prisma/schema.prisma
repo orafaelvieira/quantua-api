@@ -372,6 +372,11 @@ model Analysis {
   reviewState       String   @default("draft") @map("review_state")
   resultado         Json?
   dadosEstruturados Json?    @map("dados_estruturados")
+  /// Configuração de INDICADORES deste IBR ({ calibrado, pares, rows }): réplica editável
+  /// do catálogo padrão, com semáforo pré-calibrado pelos PARES do setor (quartis CVM).
+  /// Null = IBR usa o catálogo global (comportamento anterior). Coluna própria (não em
+  /// dadosEstruturados) para SOBREVIVER ao "Reprocessar tudo", que reconstrói os dados.
+  indicadorConfig   Json?    @map("indicador_config")
   documentChecklist Json?    @map("document_checklist")
   stcf              Json?
   scenarios         Json?
