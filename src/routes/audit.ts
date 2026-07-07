@@ -64,6 +64,21 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     prisma.auditEvent.count({ where }),
   ]);
 
+  // Eventos de EMPRESA (analysisId null): resolve o NOME pela entityId — sem isso a
+  // coluna Entidade mostrava "—" + UUID (flagrado pelo usuário). Empresa já excluída
+  // não resolve pelo banco → cai no snapshot gravado em `before`.
+  const companyIds = [...new Set(
+    items.filter((e) => !e.analysisId && e.entity === "company" && e.entityId).map((e) => e.entityId as string)
+  )];
+  const companiesById = new Map<string, string>(
+    companyIds.length
+      ? (await prisma.company.findMany({
+          where: { id: { in: companyIds } },
+          select: { id: true, razaoSocial: true, nomeFantasia: true },
+        })).map((c) => [c.id, c.nomeFantasia || c.razaoSocial])
+      : []
+  );
+
   const out = items.map((e) => ({
     id: e.id,
     timestamp: e.timestamp.toISOString(),
@@ -80,7 +95,12 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     analysisName: e.analysis?.nome ?? null,
     companyName: e.analysis?.company
       ? e.analysis.company.nomeFantasia || e.analysis.company.razaoSocial
-      : null,
+      : e.entity === "company"
+        ? companiesById.get(e.entityId ?? "")
+          ?? ((e.before as { nomeFantasia?: string | null; razaoSocial?: string | null } | null)?.nomeFantasia
+            || (e.before as { razaoSocial?: string | null } | null)?.razaoSocial
+            || null)
+        : null,
   }));
 
   res.json({ items: out, total, page, pageSize });
