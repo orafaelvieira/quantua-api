@@ -72,6 +72,9 @@ export interface AnalysisResult {
   confrontoDores?: Array<{ dor: string; veredicto: "confirmada" | "desmentida" | "parcial" | string; evidencia: string; leitura: string }>;
   /** Número ruim SEM dor declarada — ninguém na empresa está olhando. Só com dores preenchidas. */
   pontosCegos?: Array<{ titulo: string; evidencia: string; porQueImporta: string; acaoSugerida: string }>;
+  /** Apresentação da empresa em TEXTO CORRIDO (15-20 linhas): quem é, história, o que faz,
+   *  modelo de negócio e momento. Abre a Análise Estratégica no PDF. Sem tópicos, sem fontes. */
+  perfilEmpresa?: string;
 }
 
 interface IndicadorLite {
@@ -426,6 +429,7 @@ MÉTODO DE RACIOCÍNIO (siga NESTA ordem — cada etapa condiciona a próxima):
 
 Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta estrutura. Evite REPETIR conteúdo entre seções — cada uma tem um papel distinto (veja as regras):
 {
+  "perfilEmpresa": "<apresentação da empresa em TEXTO CORRIDO de 15 a 20 linhas (1-2 parágrafos): quem é, quando e como nasceu, o que faz e para quem, modelo de negócio e proposta de valor, canais/clientes, porte e momento atual. Use a pesquisa web e os materiais como matéria-prima, mas NUNCA cite nomes de arquivos, fontes ou 'segundo o documento X'. Prosa fluida, sem tópicos/bullets.>",
   "estagioCicloVida": { "estagio": "Crescimento|Maturidade|Platô|Declínio|Crise de caixa", "justificativa": "<1-2 frases citando a tendência dos números>" },
   "situacao": { "classificacao": "saudável|estável|atenção|pressão operacional|pressão financeira|crise", "racional": "<onde nasce a força ou a pressão, com evidência>" },
   "saudeFinanceira": { "status": "sólida|adequada|apertada|frágil", "mesesDeCaixa": <número ou null>, "leitura": "<liquidez, dívida, caixa e o que isso permite/exige no estágio atual>" },
@@ -482,6 +486,7 @@ PRINCÍPIOS (inegociáveis):
 - POSICIONAMENTO VS PARES: com o bloco de pares presente, o semáforo é RELATIVO ao setor (status pela posição vs mediana/faixa, respeitando a polaridade "maior/menor é melhor"); cite percentil/mediana. RESPEITE A COBERTURA: "direta" = confiável; "aproximada" = nível superior, direcional; "ausente" = NÃO invente percentil, use referência externa da web + conhecimento do setor e seja explícito.
 - fatoresChave: 3 a 6, priorizando os que mais explicam o desempenho. opcoesEstrategicas: 4 a 8 pelos pilares conforme o diagnóstico. recomendacoes: 4 a 6, todas derivadas das opções. revelacoes: 3 a 5, TODAS aprovadas no teste do dono (melhor 3 fortes que 5 mornas). protecoes: 2 a 3. destaques: frases ≤15 palavras. priority p0=urgente, p1=importante, p2=oportuno.
 - confianca: maior com 2+ períodos e indicadores/DRE completos.
+- ESTILO (todo campo de texto): prosa profissional em português; NUNCA use travessão (— ou –) nem marcação markdown (**, *, #, listas com hífen) — o texto vai direto para o relatório do cliente. Separe ideias com vírgula, dois-pontos ou ponto.
 - Responda APENAS com o JSON.`;
 
   // max_tokens generoso: o JSON rico (diagnóstico + semáforo + swot + causas + opções) é grande.
@@ -526,6 +531,7 @@ PRINCÍPIOS (inegociáveis):
     protecoes: Array.isArray(ai.protecoes) ? ai.protecoes.filter((p: any) => p && p.oQueProteger) : [],
     confrontoDores: Array.isArray(ai.confrontoDores) ? ai.confrontoDores.filter((c: any) => c && c.dor) : [],
     pontosCegos: Array.isArray(ai.pontosCegos) ? ai.pontosCegos.filter((p: any) => p && p.titulo) : [],
+    perfilEmpresa: typeof ai.perfilEmpresa === "string" && ai.perfilEmpresa.trim().length > 0 ? ai.perfilEmpresa.trim() : undefined,
   };
 
   // Estágio: o MOTOR manda. Sobrescreve o que a IA disser (rótulo estável, "verde só com prova").
