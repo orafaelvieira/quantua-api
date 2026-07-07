@@ -25,8 +25,13 @@ export interface SugestaoIA {
   verificar?: string;
 }
 
-/** Chave estável de um item não-mapeado (mesma usada no carry-over do refold). */
-export const chaveNM = (nm: { tipo: string; nome: string }) => `${nm.tipo}|${nm.nome}`;
+/** Chave estável de um item não-mapeado (mesma usada no carry-over do refold e no
+ *  lookup da tela). O GRUPO-RAIZ entra na chave porque a MESMA conta pode existir no
+ *  PC e no PNC (ex.: "INSTITUIÇÕES FINANCEIRAS" nos dois) — sem ele, a sugestão de um
+ *  grupo atropelava a do outro e a tela exibia destino de LP para conta de CP, que o
+ *  /classify bloquearia (flagrado pelo usuário na Move Farma). */
+export const chaveNM = (nm: { tipo: string; nome: string; grupo?: string }) =>
+  `${nm.tipo}|${(nm.grupo ?? "").split(">")[0].trim()}|${nm.nome}`;
 
 const CLASSIF_TO_GRUPO: Record<string, string> = { AC: "AC", AF: "AC", AO: "AC", ANC: "ANC", PC: "PC", PO: "PC", PF: "PC", PNC: "PNC", PL: "PL" };
 const GRUPO_CODE: Record<string, string> = {
