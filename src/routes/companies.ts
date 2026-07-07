@@ -119,8 +119,19 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = companySchema.partial().safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
-  // Mesma trava do POST: editar o CNPJ para um já usado em OUTRA ficha é duplicação.
+  // CNPJ é a IDENTIDADE da ficha (decisão do usuário 2026-07-07): alterar um CNPJ já
+  // gravado religaria IBRs/documentos a outra empresa. Permitido apenas PREENCHER
+  // quando o cadastro legado ainda não tem CNPJ.
   if (parsed.data.cnpj !== undefined) {
+    const novo = parsed.data.cnpj.replace(/\D/g, "");
+    const atual = (existing.cnpj ?? "").replace(/\D/g, "");
+    if (atual.length === 14 && novo !== atual) {
+      res.status(400).json({
+        error: "O CNPJ de um cadastro não pode ser alterado — ele identifica a ficha (IBRs e documentos vinculados). Para outra empresa, crie um novo cadastro.",
+      });
+      return;
+    }
+    // Preenchendo pela 1ª vez: vale a trava de duplicidade contra OUTRAS fichas.
     const dup = await cnpjJaCadastrado(req.scopeUserIds!, parsed.data.cnpj, id);
     if (dup) {
       res.status(409).json({
