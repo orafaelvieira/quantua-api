@@ -65,6 +65,11 @@ export function bucketDaConta(conta: string): BucketFC {
   if (/dividendo.*receber|receber.*dividendo/.test(n)) return "fci";
   if (/emprest|financiament|debentur|arrendament/.test(n)) return "fcf";
   if (/dividendo|jcp|juros sobre o capital|aumento capital/.test(n)) return "fcf";
+  // Antecipação/distribuição de LUCROS A SÓCIOS registrada no ativo (ex.: "LUCROS
+  // DISTRIBUÍDOS NO EXERCÍCIO" em créditos — caso Move Farma): é DISTRIBUIÇÃO, mesmo
+  // bucket de dividendos pagos. No FCO, a baixa contra o PL inflava o caixa operacional.
+  // ("Participação nos Lucros ou Resultados" de empregados não casa — segue operacional.)
+  if (/antecipa\S* de lucr|lucros? distribuid|distribui\S* (antecipada )?de lucr|creditos? com socios/.test(n)) return "fcf";
   if (/imobilizado|intangivel|investimento|aplicac|realizavel a longo prazo/.test(n)) return "fci";
   return "fco"; // capital de giro / operacional por padrão
 }
