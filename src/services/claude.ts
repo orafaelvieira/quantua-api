@@ -2,6 +2,22 @@ import Anthropic from "@anthropic-ai/sdk";
 import { env } from "../config/env";
 import { calcCusto, modeloAnaliseId, createWithRetry, type CustoIA } from "./ai-extraction";
 import type { PeerComparisonRow } from "./peer-benchmark";
+import { INDICADORES_TEMPLATE } from "./financial-templates";
+
+// tipoDado por nome de indicador (template) — formata os números do prompt na unidade
+// final ("39,0%", "45 dias") para a IA nunca confundir fração com percentual.
+const TIPO_DADO_INDICADOR: Record<string, string> = Object.fromEntries(
+  INDICADORES_TEMPLATE.map((t) => [t.nome, t.tipoDado]),
+);
+function fmtValorIndicador(nome: string, v: number | null | undefined): string {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "-";
+  switch (TIPO_DADO_INDICADOR[nome]) {
+    case "%": return `${(v * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+    case "Dias": return `${Math.round(v).toLocaleString("pt-BR")} dias`;
+    case "R$": return `R$ ${v.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`;
+    default: return v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+}
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
 
@@ -81,6 +97,8 @@ interface IndicadorLite {
   nome: string;
   valores: Record<string, number | string | null>;
   status?: Record<string, "ok" | "atencao" | "critico" | null>;
+  /** "%" | "Índice" | "Dias" | "R$" | "Texto" — unidade do indicador (motor). */
+  tipoDado?: string;
 }
 
 const numOf = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -151,10 +169,24 @@ function kpisDeterministicos(indicadores: IndicadorLite[], periodos: string[]) {
     divLiqEbitda: raw("Dívida Líquida / EBITDA", ult) ?? raw("Dívida Líquida/EBITDA", ult) ?? undefined,
     coberturaJuros: raw("Índice de Cobertura de Juros", ult) ?? raw("Cobertura de Juros", ult) ?? undefined,
   };
-  // Tabela de fatos para o prompt (só indicadores com algum valor numérico).
+  // Tabela de fatos para o prompt — valores JÁ NA UNIDADE FINAL pelo tipoDado do
+  // indicador. Antes iam crus (toFixed(4)): "Crescimento da Receita = 0.3900" levou a
+  // IA a escrever "0,39%" quando o real era 39% (flagrado na Move Farma). Percentual
+  // vai multiplicado e com símbolo; texto (Fleuriet) agora também entra.
+  const fmtFato = (v: number | string | null | undefined, tipoDado?: string): string => {
+    if (typeof v === "string") return v.trim() || "-";
+    if (typeof v !== "number" || !Number.isFinite(v)) return "-";
+    switch (tipoDado) {
+      case "%": return `${(v * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+      case "Dias": return `${Math.round(v).toLocaleString("pt-BR")} dias`;
+      case "R$": return `R$ ${v.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`;
+      case "Índice": return v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      default: return v.toLocaleString("pt-BR", { maximumFractionDigits: 4 });
+    }
+  };
   const tabela = indicadores
-    .filter((i) => periodos.some((p) => numOf(i.valores[p]) != null))
-    .map((i) => `${i.nome}: ${periodos.map((p) => `${p}=${typeof i.valores[p] === "number" ? (i.valores[p] as number).toFixed(4) : "-"}`).join(" · ")}`)
+    .filter((i) => periodos.some((p) => i.valores[p] != null && i.valores[p] !== ""))
+    .map((i) => `${i.nome}: ${periodos.map((p) => `${p}=${fmtFato(i.valores[p], i.tipoDado)}`).join(" · ")}`)
     .join("\n");
   return { kpis, ...sec, tabela };
 }
@@ -331,7 +363,6 @@ ${fontes ? "Fontes:\n" + fontes + "\n" : ""}`;
  *  setorial externa. Vazio quando não há nada comparável. */
 function buildPeerBlock(peer?: PeerBlockInput | null): string {
   if (!peer || (peer.rows.length === 0 && peer.external.length === 0)) return "";
-  const fmt = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : "-");
   const nivelLabel: Record<PeerComparisonRow["level"], string> = {
     subsetor: "subsetor", setor: "setor", classificacao: "classificação", mercado: "mercado",
   };
@@ -345,16 +376,18 @@ function buildPeerBlock(peer?: PeerBlockInput | null): string {
       ? "Cobertura: SEM pares diretos no subsetor — comparação usa nível setor/classificação (par aproximado; trate como direcional)."
       : "Cobertura: SEM pares na base interna para este subsetor — sem referência interna. NÃO há percentil; use a referência externa da web (quando houver) + conhecimento do setor, e seja explícito de que não há pares diretos.";
 
+  // Valores na UNIDADE FINAL pelo tipoDado do indicador (margem 0,12 → "12,0%"):
+  // cru, a IA podia citar "0,12%" — mesmo bug do "0,39%" da tabela de fatos.
   const linhasInternas = peer.rows
     .map(
       (r) =>
-        `- ${r.indicador}: empresa=${fmt(r.valor)} · mediana pares=${fmt(r.p50)} · faixa p25–p75=${fmt(r.p25)}–${fmt(r.p75)} · percentil=${r.percentil} · ${r.higherIsBetter ? "maior é melhor" : "menor é melhor"} · nível=${nivelLabel[r.level]} (n=${r.count})`,
+        `- ${r.indicador}: empresa=${fmtValorIndicador(r.indicador, r.valor)} · mediana pares=${fmtValorIndicador(r.indicador, r.p50)} · faixa p25–p75=${fmtValorIndicador(r.indicador, r.p25)}–${fmtValorIndicador(r.indicador, r.p75)} · percentil=${r.percentil} · ${r.higherIsBetter ? "maior é melhor" : "menor é melhor"} · nível=${nivelLabel[r.level]} (n=${r.count})`,
     )
     .join("\n");
   const linhasExternas = peer.external
     .map(
       (e) =>
-        `- ${e.indicador}: referência=${fmt(e.referencia)} · ${e.higherIsBetter ? "maior é melhor" : "menor é melhor"} · fonte=${e.fonte} (sem percentil)`,
+        `- ${e.indicador}: referência=${fmtValorIndicador(e.indicador, e.referencia)} · ${e.higherIsBetter ? "maior é melhor" : "menor é melhor"} · fonte=${e.fonte} (sem percentil)`,
     )
     .join("\n");
 
@@ -481,6 +514,7 @@ PAPÉIS DAS SEÇÕES (NÃO haja overlap — cada uma responde a uma pergunta dif
 
 PRINCÍPIOS (inegociáveis):
 - Hipótese e FATO sempre separados. A IA NÃO inventa nem recalcula número — cita os números já prontos (indicadores, DRE, pares).
+- EXATIDÃO NUMÉRICA (erro aqui destrói a credibilidade do relatório): os valores da tabela de indicadores JÁ ESTÃO na unidade final — percentuais já vêm multiplicados e com o símbolo % ("39,0%"), dias com "dias", moeda com "R$". Copie-os EXATAMENTE como estão: NUNCA re-escale, divida/multiplique por 100, nem adicione/remova o símbolo de %. Antes de citar qualquer percentual, faça o teste de sanidade contra a série (receita indo de 18,8M para 26,3M é crescimento de ~39%, jamais 0,39%). Se um número parecer inconsistente com a série, NÃO o cite — descreva a tendência sem o número.
 - Lente PME-Brasil: gestão familiar/pessoa-chave, peso tributário, custo do capital de giro, informalidade de mercado.
 - Toda afirmação relevante ancorada em NÚMERO (R$, %, dias, percentil) e, quando houver, no GAP vs pares e no contexto web/materiais. Nada de generalidade vazia.
 - POSICIONAMENTO VS PARES: com o bloco de pares presente, o semáforo é RELATIVO ao setor (status pela posição vs mediana/faixa, respeitando a polaridade "maior/menor é melhor"); cite percentil/mediana. RESPEITE A COBERTURA: "direta" = confiável; "aproximada" = nível superior, direcional; "ausente" = NÃO invente percentil, use referência externa da web + conhecimento do setor e seja explícito.
