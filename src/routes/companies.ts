@@ -127,8 +127,14 @@ router.get("/:id/sugestao-setor", async (req: AuthRequest, res: Response): Promi
   const secundarios = (company.cnpjData as { cnaes_secundarios?: Array<{ codigo?: unknown; descricao?: string }> } | null)?.cnaes_secundarios ?? [];
   for (const c of secundarios.slice(0, 20)) cnaes.push({ codigo: c?.codigo, descricao: c?.descricao ?? null, origem: "secundário" });
 
+  if (cnaes.length === 0) {
+    // Empresa sem CNAE (cadastro anterior à consulta de CNPJ ou sem CNPJ) — o wizard
+    // explica e aponta o caminho (editar a empresa → Reconsultar Receita).
+    res.json({ principal: null, alternativas: [], motivo: "sem-cnae" });
+    return;
+  }
   const sugestoes = sugerirSetores(cnaes);
-  if (sugestoes.length === 0) { res.json({ principal: null, alternativas: [] }); return; }
+  if (sugestoes.length === 0) { res.json({ principal: null, alternativas: [], motivo: "cnae-sem-mapeamento" }); return; }
   // Resolve nomes (e valida que o código existe/está ativo no picker).
   const sectors = await prisma.sector.findMany({ where: { code: { in: sugestoes.map((s) => s.sectorCode) }, active: true }, include: { parent: true } });
   const nomeDe = new Map(sectors.map((x) => [x.code, x.parent ? `${x.parent.name} — ${x.name}` : x.name]));
