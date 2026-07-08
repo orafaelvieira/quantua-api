@@ -18,6 +18,7 @@ import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESub
 import { DRE_TEMPLATE } from "../services/financial-templates";
 import { buildIndicators, type ConfigRow } from "../services/indicator-config";
 import { catalogoPadraoEfetivo, calibrarSemaforoComPares, sanitizeRowsIBR, type IBRIndicadorConfig } from "../services/indicador-config-ibr";
+import { classificarSetor } from "../services/setor-classificador";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
@@ -109,6 +110,8 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       mode: resolvedMode,
       ibrType: analysisData.ibrType,
       sectorId: analysisData.sectorId,
+      // Setor informado na criação = escolha explícita do analista (confirmado).
+      setorConfirmado: !!analysisData.sectorId,
       sectorCustom: analysisData.sectorCustom,
       documentChecklist: documentChecklist as object | undefined,
       userId: req.userId!,
@@ -253,6 +256,33 @@ export interface PeerComparisonResult {
  * EXTERNA (Premissas Setoriais) em vez de comparar contra o mercado inteiro
  * (que seria enganoso). Determinístico (sem IA). Null quando não há setor.
  */
+/* ───────── SETOR CONFIRMADO (gate) ─────────
+ * Setor errado envenena pares/semáforo/valor na mesa — a GERAÇÃO só roda com o setor
+ * confirmado pelo analista (escolha explícita ou clique na proposta do classificador).
+ * LEGADO sem migração: análise que JÁ FOI GERADA conta como confirmada. */
+const PEND_SETOR = "Setor da empresa não confirmado — confirme a proposta do sistema (ou escolha o setor) no aviso da tela antes de gerar.";
+function setorPendente(a: { setorConfirmado: boolean; resultado: unknown }): boolean {
+  if (a.setorConfirmado) return false;
+  const r = a.resultado as Record<string, unknown> | null;
+  const jaGerada = !!r && typeof r === "object" && Object.keys(r).some((k) => k !== "erro");
+  return !jaGerada;
+}
+
+/** Troca de setor → a calibração de indicadores POR PARES fica órfã. Recalibra na hora
+ *  (re-seed do padrão + pares do setor novo, preservando personalizados do IBR). */
+async function recalibrarConfigSeExistir(id: string): Promise<void> {
+  const a = await prisma.analysis.findUnique({ where: { id }, select: { indicadorConfig: true, sectorId: true, dadosEstruturados: true } });
+  if (!a?.indicadorConfig) return; // IBR nunca abriu a config — nada a recalibrar
+  const dados = a.dadosEstruturados as any;
+  const rows = await catalogoPadraoEfetivo();
+  const anterior = a.indicadorConfig as unknown as IBRIndicadorConfig | null;
+  for (const p of anterior?.rows?.filter((r) => !r.sistema && !rows.some((x) => x.nome === r.nome)) ?? []) rows.push(p);
+  const pares = await calibrarSemaforoComPares(rows, a.sectorId, dados?.indicadores ?? [], dados?.periodos ?? []);
+  const cfg: IBRIndicadorConfig = { calibrado: true, pares, atualizadoEm: new Date().toISOString(), rows };
+  await prisma.analysis.update({ where: { id }, data: { indicadorConfig: cfg as unknown as object } });
+  if (dados) await recalcularIndicadoresComConfig(id, dados, rows as unknown as ConfigRow[]);
+}
+
 /** Rows da config de indicadores DESTE IBR (null = usa o catálogo global). */
 function rowsIBRDe(indicadorConfig: unknown): ConfigRow[] | null {
   const rows = (indicadorConfig as { rows?: unknown } | null)?.rows;
@@ -945,10 +975,28 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     //    PROVADA por reconciliação — regra original do auto).
     const dreProvada = validacao.reconciliacaoDRE.verificada === true && validacao.reconciliacaoDRE.ok === true;
     const AUTO_GERAR = process.env.AUTO_GERAR_ANALISE === "true";
-    if (AUTO_GERAR && dreProvada) {
+    if (AUTO_GERAR && dreProvada && !setorPendente(analysis)) {
       const ws = await prisma.workspace.findFirst({ where: { members: { some: { id: req.userId! } } }, select: { aiAnalysisModel: true } });
       await runAnalysisBackground(analysis.id, ws?.aiAnalysisModel);
       // resposta (202) já foi enviada — frontend acompanha por polling do status.
+      return;
+    }
+    // SETOR: extração validada + setor não confirmado → calcula a PROPOSTA do
+    // classificador (zero IA) e segura em "Revisão necessária" com a pendência —
+    // a geração só destrava com a confirmação do analista.
+    if (setorPendente(analysis)) {
+      try {
+        const proposta = await classificarSetor(dadosComValidacao.indicadores ?? [], allPeriodos);
+        if (proposta) await prisma.analysis.update({ where: { id: analysis.id }, data: { setorProposta: proposta as unknown as object } });
+      } catch (e) { console.warn(`[process] classificador de setor falhou (segue sem proposta):`, e instanceof Error ? e.message : e); }
+      const prontidaoComSetor = { ...prontidao, pronta: false, pendencias: [...prontidao.pendencias, PEND_SETOR] };
+      const dadosSetor = { ...dadosComValidacao, prontidao: prontidaoComSetor };
+      await prisma.analysis.update({ where: { id: analysis.id }, data: { dadosEstruturados: dadosSetor as any } });
+      await prisma.analysis.updateMany({
+        where: { id: analysis.id, status: "Extraindo" },
+        data: { status: "Revisão necessária" },
+      });
+      console.log(`[process] ${analysis.id}: extração validada, SETOR pendente de confirmação → "Revisão necessária"`);
       return;
     }
     await prisma.analysis.updateMany({
@@ -971,7 +1019,7 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, userId: { in: req.scopeUserIds! } },
-    select: { id: true, dadosEstruturados: true },
+    select: { id: true, dadosEstruturados: true, setorConfirmado: true, resultado: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const dados = analysis.dadosEstruturados as any;
@@ -981,10 +1029,11 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
   // ANTES do check de indicadores: com pendências os indicadores ficam vazios de
   // propósito, e o analista precisa ver as PENDÊNCIAS (409), não um 400 genérico.
   const prontidao = avaliarProntidaoGeracao(dados);
-  if (!prontidao.pronta) {
+  const pendencias = [...prontidao.pendencias, ...(setorPendente(analysis) ? [PEND_SETOR] : [])];
+  if (!prontidao.pronta || pendencias.length > prontidao.pendencias.length) {
     res.status(409).json({
       error: "A extração ainda não está validada — corrija as pendências antes de gerar (nenhum token foi gasto).",
-      pendencias: prontidao.pendencias,
+      pendencias,
     });
     return;
   }
@@ -1090,7 +1139,12 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
     if (!company) { res.status(400).json({ error: "Empresa não encontrada neste workspace" }); return; }
     data.companyId = company.id;
   }
-  if (typeof req.body?.sectorId === "string" && req.body.sectorId) data.sectorId = req.body.sectorId;
+  if (typeof req.body?.sectorId === "string" && req.body.sectorId) {
+    data.sectorId = req.body.sectorId;
+    // Escolha EXPLÍCITA do analista no wizard/Escopo = setor confirmado (o card do
+    // classificador só aparece para quem deixou o sistema propor).
+    (data as any).setorConfirmado = true;
+  }
   // sectorCustom pode ser LIMPO (string vazia → null) quando o usuário troca "Outros" por setor real
   if (typeof req.body?.sectorCustom === "string") data.sectorCustom = req.body.sectorCustom.trim() || null;
   if (["light", "full", "crisis"].includes(String(req.body?.ibrType))) data.ibrType = String(req.body.ibrType);
@@ -1100,6 +1154,10 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
   if (Array.isArray(req.body?.documentChecklist)) data.documentChecklist = req.body.documentChecklist as object;
   if (Object.keys(data).length === 0 && !req.body?.engagement) { res.status(400).json({ error: "Nada para atualizar" }); return; }
   if (Object.keys(data).length > 0) await prisma.analysis.update({ where: { id }, data });
+  // Setor MUDOU → recalibra a config de indicadores por pares (senão fica presa ao antigo).
+  if (typeof data.sectorId === "string" && data.sectorId !== (analysis as any).sectorId) {
+    await recalibrarConfigSeExistir(id).catch((e) => console.warn(`[escopo] recalibração pós-troca de setor falhou:`, e instanceof Error ? e.message : e));
+  }
 
   // TRILHA: escopo do IBR editado no wizard (só o que mudou, com quem e quando).
   {
@@ -1178,7 +1236,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, userId: { in: req.scopeUserIds! } },
-    select: { dadosEstruturados: true, indicadorConfig: true },
+    select: { dadosEstruturados: true, indicadorConfig: true, setorConfirmado: true, resultado: true, setorProposta: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const dados = analysis.dadosEstruturados as any;
@@ -1237,12 +1295,25 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
     dados.indicadores = [];
   }
 
+  // SETOR: com os indicadores prontos, o CLASSIFICADOR calcula/atualiza a proposta
+  // (zero IA) e a confirmação vira pendência do GATE de geração — os indicadores acima
+  // NÃO dependem disto (senão o classificador nunca teria números). Best-effort.
+  let prontidaoFinal = prontidaoRefold;
+  if (prontidaoRefold.pronta && setorPendente(analysis)) {
+    try {
+      const proposta = await classificarSetor(dados.indicadores ?? [], periodos);
+      if (proposta) await prisma.analysis.update({ where: { id }, data: { setorProposta: proposta as unknown as object } });
+    } catch (e) { console.warn(`[refold] classificador de setor falhou (segue sem proposta):`, e instanceof Error ? e.message : e); }
+    prontidaoFinal = { ...prontidaoRefold, pronta: false, pendencias: [...prontidaoRefold.pendencias, PEND_SETOR] };
+  }
+  (dados as any).prontidao = prontidaoFinal;
+
   await prisma.analysis.update({ where: { id }, data: { dadosEstruturados: dados } });
   await prisma.analysis.updateMany({
     where: { id, status: { in: ["Revisão necessária", "Pronta para gerar"] } },
-    data: { status: prontidaoRefold.pronta ? "Pronta para gerar" : "Revisão necessária" },
+    data: { status: prontidaoFinal.pronta ? "Pronta para gerar" : "Revisão necessária" },
   });
-  res.json({ ok: true, naoMapeados: naoMapeados.length, prontidao: prontidaoRefold });
+  res.json({ ok: true, naoMapeados: naoMapeados.length, prontidao: prontidaoFinal });
 });
 
 // Salva a árvore original do BP (auditoria original ↔ padrão) + não-mapeados
@@ -1526,11 +1597,41 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
 });
 
 // Validation endpoint — run validation on current structured data
+/** Confirmação do SETOR (proposta do classificador ou escolha manual). Auditada; se o
+ *  setor MUDOU, a calibração de indicadores por pares é refeita na hora (nada órfão). */
+router.post("/:id/setor/confirmar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const sectorId = typeof req.body?.sectorId === "string" ? req.body.sectorId.trim() : "";
+  if (!sectorId) { res.status(400).json({ error: "Informe o setor (sectorId)" }); return; }
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: { in: req.scopeUserIds! } },
+    select: { sectorId: true, setorConfirmado: true, dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const sector = await prisma.sector.findUnique({ where: { code: sectorId }, include: { parent: true } });
+  if (!sector) { res.status(400).json({ error: "Setor inválido" }); return; }
+
+  const mudou = analysis.sectorId !== sectorId;
+  await prisma.analysis.update({ where: { id }, data: { sectorId, setorConfirmado: true } });
+  // Confirmou e a extração já estava validada → destrava o checkpoint na hora.
+  const dadosConf = analysis.dadosEstruturados as any;
+  if (dadosConf && avaliarProntidaoGeracao(dadosConf).pronta) {
+    await prisma.analysis.updateMany({ where: { id, status: "Revisão necessária" }, data: { status: "Pronta para gerar" } });
+  }
+  void registrarAuditoria({
+    userId: req.userId!, analysisId: id, entity: "analysis", entityId: id,
+    field: "setor da empresa", before: analysis.sectorId ?? "(não definido)", after: `${sector.name} (confirmado)`,
+    source: "setor-classificador", reason: mudou ? "Confirmação do setor (alterado)" : "Confirmação do setor",
+  });
+  if (mudou) await recalibrarConfigSeExistir(id); // calibração por pares nunca fica presa ao setor antigo
+  res.json({ ok: true, sectorId, recalibrado: mudou });
+});
+
 router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, userId: { in: req.scopeUserIds! } },
-    select: { dadosEstruturados: true },
+    select: { dadosEstruturados: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   if (!analysis.dadosEstruturados) { res.status(400).json({ error: "Sem dados estruturados" }); return; }
@@ -1568,9 +1669,17 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
 
   // PRONTIDÃO AO VIVO (mesma régua do gate/POST generate) — a UI lista as pendências
   // e habilita/desabilita o "Gerar análise" por isto, nunca por status defasado.
-  const prontidao = avaliarProntidaoGeracao({ ...(dados as any), validacao });
+  const prontidaoDados = avaliarProntidaoGeracao({ ...(dados as any), validacao });
+  const pendSetor = setorPendente(analysis);
+  const prontidao = pendSetor && prontidaoDados.pronta
+    ? { ...prontidaoDados, pronta: false, pendencias: [...prontidaoDados.pendencias, PEND_SETOR] }
+    : prontidaoDados;
 
-  res.json({ ...validacao, benford, composicaoOk: errosComp.length === 0, alertasComposicao: alertasComp, prontidao });
+  res.json({
+    ...validacao, benford, composicaoOk: errosComp.length === 0, alertasComposicao: alertasComp, prontidao,
+    // Card de confirmação do SETOR (classificador): proposta + estado atual.
+    setor: { confirmado: !pendSetor, sectorId: analysis.sectorId, proposta: analysis.setorProposta ?? null },
+  });
 });
 
 // Validation report — per-document extraction stats + overall summary

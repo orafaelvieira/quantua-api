@@ -365,6 +365,14 @@ model Analysis {
   mode              String?  @map("mode")
   ibrType           String?  @map("ibr_type")
   sectorId          String?  @map("sector_id")
+  /// Setor CONFIRMADO pelo analista (escolha explícita no wizard/Escopo ou clique na
+  /// proposta do classificador). Sem confirmação, a GERAÇÃO da análise fica bloqueada
+  /// (setor errado envenena pares/semáforo/valor na mesa). Análises legadas já geradas
+  /// contam como confirmadas (regra no código — sem backfill).
+  setorConfirmado   Boolean  @default(false) @map("setor_confirmado")
+  /// Proposta do CLASSIFICADOR DE SETOR (determinístico, zero IA): ranking de aderência
+  /// dos números da empresa às distribuições de cada subsetor da base CVM.
+  setorProposta     Json?    @map("setor_proposta")
   /// Texto livre do setor/subsetor quando o analista escolhe "Outros" no picker
   /// (atividade que não encaixa na taxonomia B3). Alimenta o setorText do
   /// resolvedor de premissas como último recurso.
