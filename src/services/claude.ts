@@ -452,7 +452,13 @@ PRINCÍPIOS (inegociáveis):
   // Parse robusto: aceita cerca ``` e descarta preâmbulo/sufixo de texto.
   // A estabilidade dos rótulos-chave (estágio etc.) vem do classificador DETERMINÍSTICO no
   // motor, não da amostragem. Opus 4.8 NÃO aceita `temperature` (depreciado) — não enviar.
-  const message = await createWithRetry({ model, max_tokens: 12000, messages: [{ role: "user", content: prompt }] });
+  // max_tokens: os textos "para leigos" (3-5 frases por recomendação + perfilEmpresa)
+  // alongaram o JSON e 12k passou a TRUNCAR a resposta (parse falhava e a análise era
+  // gravada VAZIA por cima da anterior — incidente Move Farma 08/07). 24k dá folga 2x;
+  // haiku fica em 8k (limite do modelo rápido).
+  const maxTokensAnalise = modelKey === "haiku" ? 8000 : 24000;
+  const message = await createWithRetry({ model, max_tokens: maxTokensAnalise, messages: [{ role: "user", content: prompt }] });
+  const truncada = (message as { stop_reason?: string }).stop_reason === "max_tokens";
   let text = message.content[0]?.type === "text" ? message.content[0].text.trim() : "";
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) text = fence[1].trim();
@@ -464,6 +470,17 @@ PRINCÍPIOS (inegociáveis):
     if (ini >= 0 && fim > ini) {
       try { ai = JSON.parse(text.slice(ini, fim + 1)); } catch { ai = {}; }
     }
+  }
+
+  // GUARD: se o JSON não veio íntegro (truncado/não parseável), FALHA ALTO — jamais
+  // persistir uma análise vazia por cima da anterior. O chamador preserva o resultado.
+  const essenciais = Array.isArray(ai.semaforo) && ai.semaforo.length > 0
+    && Array.isArray(ai.opcoesEstrategicas) && ai.opcoesEstrategicas.length > 0
+    && ai.swot && Array.isArray(ai.swot.forcas) && ai.swot.forcas.length > 0;
+  if (!essenciais) {
+    throw new Error(truncada
+      ? `Resposta da IA truncada no limite de ${maxTokensAnalise} tokens — a análise anterior foi preservada; regenere.`
+      : "Resposta da IA incompleta/não parseável — a análise anterior foi preservada; regenere.");
   }
 
   const custo = calcCusto(model, message.usage?.input_tokens ?? 0, message.usage?.output_tokens ?? 0);

@@ -473,9 +473,13 @@ async function runAnalysisBackground(
     console.log(`[generate] ${analysisId} CONCLUÍDA`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    // PRESERVA o resultado anterior: gravar só { erro } apagava a análise boa que já
+    // existia (incidente Move Farma 08/07 — resposta truncada destruiu o conteúdo).
+    const atual = await prisma.analysis.findUnique({ where: { id: analysisId }, select: { resultado: true } }).catch(() => null);
+    const base = atual?.resultado && typeof atual.resultado === "object" ? (atual.resultado as object) : {};
     await prisma.analysis.updateMany({
       where: { id: analysisId, status: "Gerando diagnóstico" },
-      data: { status: "Erro", resultado: { erro: `Geração da análise: ${msg}` } as object },
+      data: { status: "Erro", resultado: { ...base, erro: `Geração da análise: ${msg}` } as object },
     });
     console.error(`[generate] ${analysisId} erro:`, err);
   }
