@@ -4,6 +4,7 @@ import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { deleteFile } from "../services/storage";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
+import { sugerirSetores } from "../services/cnae-b3";
 
 const router = Router();
 
@@ -109,6 +110,30 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   });
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
   res.json(company);
+});
+
+/** Sugestão de SETOR B3 pelo CNAE da Receita (principal + secundários) — zero IA.
+ *  Sinal FRACO: pré-preenche o picker do wizard com selo; nunca confirma sozinho. */
+router.get("/:id/sugestao-setor", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const company = await prisma.company.findFirst({
+    where: { id, userId: { in: req.scopeUserIds! } },
+    select: { cnae: true, cnaeDescricao: true, cnpjData: true },
+  });
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+
+  const cnaes: Array<{ codigo: unknown; descricao?: string | null; origem: string }> = [];
+  if (company.cnae) cnaes.push({ codigo: company.cnae, descricao: company.cnaeDescricao, origem: "principal" });
+  const secundarios = (company.cnpjData as { cnaes_secundarios?: Array<{ codigo?: unknown; descricao?: string }> } | null)?.cnaes_secundarios ?? [];
+  for (const c of secundarios.slice(0, 20)) cnaes.push({ codigo: c?.codigo, descricao: c?.descricao ?? null, origem: "secundário" });
+
+  const sugestoes = sugerirSetores(cnaes);
+  if (sugestoes.length === 0) { res.json({ principal: null, alternativas: [] }); return; }
+  // Resolve nomes (e valida que o código existe/está ativo no picker).
+  const sectors = await prisma.sector.findMany({ where: { code: { in: sugestoes.map((s) => s.sectorCode) }, active: true }, include: { parent: true } });
+  const nomeDe = new Map(sectors.map((x) => [x.code, x.parent ? `${x.parent.name} — ${x.name}` : x.name]));
+  const validas = sugestoes.filter((x) => nomeDe.has(x.sectorCode)).map((x) => ({ ...x, sectorName: nomeDe.get(x.sectorCode)! }));
+  res.json({ principal: validas[0] ?? null, alternativas: validas.slice(1) });
 });
 
 router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {

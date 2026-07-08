@@ -47,6 +47,8 @@ const analysisSchema = z.object({
   mode: z.enum(["recurring", "ibr"]).optional(),
   ibrType: z.enum(["light", "full", "crisis"]).optional(),
   sectorId: z.string().optional(),
+  /** true = o analista ESCOLHEU ativamente no picker (diferente de sugestão de CNAE por inércia). */
+  setorEscolhido: z.boolean().optional(),
   // Texto livre quando o picker está em "Outros" (setor fora da taxonomia B3).
   sectorCustom: z.string().max(120).optional(),
   documentChecklist: z.array(z.object({
@@ -110,8 +112,8 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       mode: resolvedMode,
       ibrType: analysisData.ibrType,
       sectorId: analysisData.sectorId,
-      // Setor informado na criação = escolha explícita do analista (confirmado).
-      setorConfirmado: !!analysisData.sectorId,
+      // Confirma SÓ com escolha ativa (flag do wizard); sugestão de CNAE por inércia não.
+      setorConfirmado: analysisData.setorEscolhido === true && !!analysisData.sectorId,
       sectorCustom: analysisData.sectorCustom,
       documentChecklist: documentChecklist as object | undefined,
       userId: req.userId!,
@@ -266,6 +268,20 @@ function setorPendente(a: { setorConfirmado: boolean; resultado: unknown }): boo
   const r = a.resultado as Record<string, unknown> | null;
   const jaGerada = !!r && typeof r === "object" && Object.keys(r).some((k) => k !== "erro");
   return !jaGerada;
+}
+
+/** AVISO DA CONVICÇÃO: setor CONFIRMADO pelo analista, mas os números aderem com
+ *  folga a OUTRO setor (proposta do classificador armazenada) → aviso âmbar, nunca
+ *  bloqueio — escolha explícita do humano manda. */
+function avisoSetorDe(proposta: unknown, sectorId: string | null): string | null {
+  const p = proposta as { recomendado?: { setor: string; sectorCode: string | null; dentro: number; total: number }; ranking?: Array<{ setor: string; sectorCode: string | null; dentro: number; total: number }> } | null;
+  const rec = p?.recomendado;
+  if (!rec?.sectorCode || !sectorId || rec.sectorCode === sectorId) return null;
+  const atual = (p?.ranking ?? []).find((r) => r.sectorCode === sectorId);
+  const fr = rec.dentro / rec.total;
+  const fa = atual ? atual.dentro / atual.total : null;
+  if (fa != null && fr - fa < 0.25) return null; // discordância fraca não vira aviso
+  return `Os números da empresa aderem mais ao setor ${rec.setor} (${rec.dentro} de ${rec.total} indicadores na faixa dos pares${atual ? `, contra ${atual.dentro} de ${atual.total} no setor escolhido` : ""}) — revise a escolha do setor na aba Escopo.`;
 }
 
 /** Troca de setor → a calibração de indicadores POR PARES fica órfã. Recalibra na hora
@@ -981,14 +997,14 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       // resposta (202) já foi enviada — frontend acompanha por polling do status.
       return;
     }
-    // SETOR: extração validada + setor não confirmado → calcula a PROPOSTA do
-    // classificador (zero IA) e segura em "Revisão necessária" com a pendência —
-    // a geração só destrava com a confirmação do analista.
+    // SETOR: extração validada → calcula a PROPOSTA do classificador (zero IA) SEMPRE
+    // (alimenta o card de confirmação E o aviso da convicção). Sem confirmação, segura
+    // em "Revisão necessária" com a pendência — a geração só destrava com o OK.
+    try {
+      const propostaSetor = await classificarSetor(dadosComValidacao.indicadores ?? [], allPeriodos);
+      if (propostaSetor) await prisma.analysis.update({ where: { id: analysis.id }, data: { setorProposta: propostaSetor as unknown as object } });
+    } catch (e) { console.warn(`[process] classificador de setor falhou (segue sem proposta):`, e instanceof Error ? e.message : e); }
     if (setorPendente(analysis)) {
-      try {
-        const proposta = await classificarSetor(dadosComValidacao.indicadores ?? [], allPeriodos);
-        if (proposta) await prisma.analysis.update({ where: { id: analysis.id }, data: { setorProposta: proposta as unknown as object } });
-      } catch (e) { console.warn(`[process] classificador de setor falhou (segue sem proposta):`, e instanceof Error ? e.message : e); }
       const prontidaoComSetor = { ...prontidao, pronta: false, pendencias: [...prontidao.pendencias, PEND_SETOR] };
       const dadosSetor = { ...dadosComValidacao, prontidao: prontidaoComSetor };
       await prisma.analysis.update({ where: { id: analysis.id }, data: { dadosEstruturados: dadosSetor as any } });
@@ -1141,9 +1157,10 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
   }
   if (typeof req.body?.sectorId === "string" && req.body.sectorId) {
     data.sectorId = req.body.sectorId;
-    // Escolha EXPLÍCITA do analista no wizard/Escopo = setor confirmado (o card do
-    // classificador só aparece para quem deixou o sistema propor).
-    (data as any).setorConfirmado = true;
+    // Só a escolha ATIVA do analista confirma (flag do frontend). Sugestão do CNAE
+    // aceita por inércia fica registrada mas NÃO confirmada — o classificador valida
+    // depois com os números (sugestão fraca nunca confirma sozinha).
+    if (req.body?.setorEscolhido === true) (data as any).setorConfirmado = true;
   }
   // sectorCustom pode ser LIMPO (string vazia → null) quando o usuário troca "Outros" por setor real
   if (typeof req.body?.sectorCustom === "string") data.sectorCustom = req.body.sectorCustom.trim() || null;
@@ -1236,7 +1253,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, userId: { in: req.scopeUserIds! } },
-    select: { dadosEstruturados: true, indicadorConfig: true, setorConfirmado: true, resultado: true, setorProposta: true },
+    select: { dadosEstruturados: true, indicadorConfig: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const dados = analysis.dadosEstruturados as any;
@@ -1296,15 +1313,22 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   }
 
   // SETOR: com os indicadores prontos, o CLASSIFICADOR calcula/atualiza a proposta
-  // (zero IA) e a confirmação vira pendência do GATE de geração — os indicadores acima
-  // NÃO dependem disto (senão o classificador nunca teria números). Best-effort.
+  // (zero IA) SEMPRE — os indicadores acima NÃO dependem disto (senão o classificador
+  // nunca teria números). Sem confirmação → PENDÊNCIA (gate); confirmado mas números
+  // discordando forte → AVISO da convicção (âmbar, não bloqueia). Best-effort.
   let prontidaoFinal = prontidaoRefold;
-  if (prontidaoRefold.pronta && setorPendente(analysis)) {
+  if (prontidaoRefold.pronta) {
+    let proposta: unknown = (analysis as any).setorProposta ?? null;
     try {
-      const proposta = await classificarSetor(dados.indicadores ?? [], periodos);
-      if (proposta) await prisma.analysis.update({ where: { id }, data: { setorProposta: proposta as unknown as object } });
+      const nova = await classificarSetor(dados.indicadores ?? [], periodos);
+      if (nova) { proposta = nova; await prisma.analysis.update({ where: { id }, data: { setorProposta: nova as unknown as object } }); }
     } catch (e) { console.warn(`[refold] classificador de setor falhou (segue sem proposta):`, e instanceof Error ? e.message : e); }
-    prontidaoFinal = { ...prontidaoRefold, pronta: false, pendencias: [...prontidaoRefold.pendencias, PEND_SETOR] };
+    if (setorPendente(analysis)) {
+      prontidaoFinal = { ...prontidaoRefold, pronta: false, pendencias: [...prontidaoRefold.pendencias, PEND_SETOR] };
+    } else {
+      const aviso = avisoSetorDe(proposta, (analysis as any).sectorId ?? null);
+      if (aviso) prontidaoFinal = { ...prontidaoRefold, avisos: [...prontidaoRefold.avisos, aviso] };
+    }
   }
   (dados as any).prontidao = prontidaoFinal;
 
@@ -1671,9 +1695,13 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
   // e habilita/desabilita o "Gerar análise" por isto, nunca por status defasado.
   const prontidaoDados = avaliarProntidaoGeracao({ ...(dados as any), validacao });
   const pendSetor = setorPendente(analysis);
-  const prontidao = pendSetor && prontidaoDados.pronta
+  let prontidao = pendSetor && prontidaoDados.pronta
     ? { ...prontidaoDados, pronta: false, pendencias: [...prontidaoDados.pendencias, PEND_SETOR] }
     : prontidaoDados;
+  if (!pendSetor && prontidao.pronta) {
+    const avisoConviccao = avisoSetorDe(analysis.setorProposta, analysis.sectorId);
+    if (avisoConviccao) prontidao = { ...prontidao, avisos: [...prontidao.avisos, avisoConviccao] };
+  }
 
   res.json({
     ...validacao, benford, composicaoOk: errosComp.length === 0, alertasComposicao: alertasComp, prontidao,
