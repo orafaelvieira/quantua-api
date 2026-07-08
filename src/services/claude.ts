@@ -3,6 +3,7 @@ import { env } from "../config/env";
 import { calcCusto, modeloAnaliseId, createWithRetry, type CustoIA } from "./ai-extraction";
 import type { PeerComparisonRow } from "./peer-benchmark";
 import { INDICADORES_TEMPLATE } from "./financial-templates";
+import { calcularValorCanonico, type AlavancaValor, type ValorCanonico } from "./valor-na-mesa";
 
 // tipoDado por nome de indicador (template) — formata os números do prompt na unidade
 // final ("39,0%", "45 dias") para a IA nunca confundir fração com percentual.
@@ -81,8 +82,14 @@ export interface AnalysisResult {
     comoChegou: string;
     perguntaAmanha: string;
   }>;
-  /** Placar agregado: quanto dinheiro está na mesa (sem dupla contagem). */
-  valorNaMesa?: { total: number; caixaLiberavel: number; margemRecuperavel: number; leitura: string };
+  /** Placar agregado: quanto dinheiro está na mesa (sem dupla contagem).
+   *  alavancas = detalhamento auditável: origem "motor" (canônicas, determinísticas —
+   *  gaps vs mediana dos pares) + "analise" (específicas, estimadas pela IA). */
+  valorNaMesa?: {
+    total: number; caixaLiberavel: number; margemRecuperavel: number; leitura: string;
+    alavancas?: AlavancaValor[];
+    base?: { segmento: string | null; periodo: string | null };
+  };
   /** O que PROTEGER — forças que sustentam o resultado e como blindá-las. */
   protecoes?: Array<{ oQueProteger: string; ameaca: string; acaoDefensiva: string }>;
   /** Confronto declarado×observado: cada dor julgada pelos números. Só com dores preenchidas. */
@@ -355,6 +362,16 @@ export async function generateAnalysis(
   const estagioDet = classifyEstagio(indicadores, periodos, fluxoCaixa);
   const nPeriodos = new Set(periodos).size;
   const periodoInsuficiente = nPeriodos < 2;
+  // VALOR NA MESA — ESTRATO 1 (canônico/determinístico): gaps vs mediana dos pares.
+  // Entra no prompt como FATO "já contado"; a IA só ADICIONA alavancas específicas.
+  const canonico: ValorCanonico | null = calcularValorCanonico(
+    indicadores, periodos, peer?.rows ?? [], dre ?? null,
+    { segmento: peer?.segment ?? null, periodo: peer?.periodo ?? null },
+  );
+  const canonicoBlock = canonico && canonico.alavancas.length > 0
+    ? `\nVALOR NA MESA — ALAVANCAS CANÔNICAS JÁ CALCULADAS PELO MOTOR (fatos; NÃO re-some, NÃO altere, NÃO repita nas adicionais):\n${canonico.alavancas.map((a) => `- [${a.tipo}] ${a.titulo}: R$ ${a.valor.toLocaleString("pt-BR")} — ${a.memoria}`).join("\n")}\nSubtotal canônico: caixa liberável R$ ${canonico.caixaLiberavel.toLocaleString("pt-BR")} · margem recuperável/ano R$ ${canonico.margemRecuperavelAno.toLocaleString("pt-BR")}.`
+    : "";
+
   const estagioBlock = estagioDet
     ? `\nESTÁGIO DO CICLO (determinado pelo MOTOR a partir do histórico — use como VERDADE, NÃO reclassifique): ${estagioDet.estagio}. ${estagioDet.justificativa}`
     : periodoInsuficiente
@@ -371,7 +388,7 @@ Você recebe VÁRIAS fontes. USE TODAS e CRUZE-AS — o valor está em conectar 
 
 [1] INDICADORES JÁ CALCULADOS E AUDITADOS (determinísticos — NÃO recalcule, apenas INTERPRETE):
 ${det.tabela || "(indicadores indisponíveis)"}
-${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${doresBlock}${estagioBlock}
+${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${doresBlock}${estagioBlock}${canonicoBlock}
 
 IMPORTANTE — olhe o HISTÓRICO: leia SEMPRE a evolução multi-ano (tendência entre os períodos), nunca um ano isolado. A força de um IBR está na trajetória.
 
@@ -414,7 +431,10 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
       "comoChegou": "<memória de cálculo em 1 linha, ex.: 'receita 6,6M/365 = R$18k/dia × 80 dias de PMR acima dos pares ≈ R$1,45M parados'>",
       "perguntaAmanha": "<a pergunta que o dono deve fazer à equipe amanhã de manhã>" }
   ],
-  "valorNaMesa": { "total": <R$>, "caixaLiberavel": <R$ de caixa que pode ser liberado (giro/ativos)>, "margemRecuperavel": <R$ ANUAIS de resultado recuperável (custo/preço/mix)>, "leitura": "<1-2 frases: o número-manchete e de onde vem; deixe claro que é ordem de grandeza a validar>" },
+  ${canonico && canonico.alavancas.length > 0
+    ? `"alavancasAdicionais": [ { "titulo": "<alavanca ESPECÍFICA que o motor não calcula (ex.: disciplina de distribuição, ativo ocioso, custo financeiro) — NUNCA repita as canônicas (prazos vs mediana, gap de margem vs mediana)>", "tipo": "caixa|margem", "valor": <R$>, "memoria": "<a conta explicada em prosa, citando os números-fonte>" } ],
+  "valorNaMesaLeitura": "<1-2 frases: o número-manchete (canônicas + suas adicionais) e de onde vem; ordem de grandeza a validar>",`
+    : `"valorNaMesa": { "total": <R$>, "caixaLiberavel": <R$ de caixa que pode ser liberado (giro/ativos)>, "margemRecuperavel": <R$ ANUAIS de resultado recuperável (custo/preço/mix)>, "leitura": "<1-2 frases: o número-manchete e de onde vem; deixe claro que é ordem de grandeza a validar>" },`}
   "protecoes": [ { "oQueProteger": "<força que SUSTENTA o resultado atual>", "ameaca": "<o que pode destruí-la>", "acaoDefensiva": "<como blindar, concreto>" } ],
   "confrontoDores": [ { "dor": "<a dor declarada, resumida>", "veredicto": "confirmada|desmentida|parcial", "evidencia": "<os números que confirmam/desmentem>", "leitura": "<o que isso muda na prioridade — 1-2 frases diretas>" } ],
   "pontosCegos": [ { "titulo": "<problema que os números mostram e NINGUÉM declarou como dor>", "evidencia": "<número/tendência>", "porQueImporta": "<consequência em R$/caixa se continuar invisível>", "acaoSugerida": "<primeiro passo concreto>" } ],
@@ -431,7 +451,7 @@ PAPÉIS DAS SEÇÕES (NÃO haja overlap — cada uma responde a uma pergunta dif
 - opcoesEstrategicas = o LEQUE de movimentos possíveis por pilar ("o que dá para fazer").
 - recomendacoes = o PLANO PRIORIZADO ("por onde começar"): escolha e SEQUENCIE as melhores opcoesEstrategicas em horizontes (0–30d/30–90d/90–180d). NÃO invente ações novas fora das opções — priorize e ordene as que você propôs.
 - revelacoes = "O QUE VOCÊ NÃO SABIA" — a seção que faz o dono falar "uau". Só entra o que passa no TESTE DO DONO (etapa 6). É diferente de destaques (resumo) e de fatoresChave (hipóteses de causa): revelação é DESCOBERTA quantificada em caixa. Uma revelação pode alimentar uma opção estratégica — mas aqui o papel é REVELAR, não recomendar.
-- valorNaMesa = o PLACAR: soma honesta do valor endereçável (caixaLiberavel = giro/ativos, uma vez; margemRecuperavel = resultado anual). SEM DUPLA CONTAGEM entre opções e revelações que apontam para a mesma alavanca; ordem de grandeza, não promessa.
+- valorNaMesa/alavancasAdicionais = o PLACAR: quando o motor entregou as ALAVANCAS CANÔNICAS (bloco acima), elas JÁ ESTÃO CONTADAS — você só ADICIONA alavancas específicas que o motor não calcula, cada uma com memória em prosa; NUNCA repita prazos-vs-mediana ou gap-de-margem-vs-mediana. Sem o bloco canônico, monte o placar completo você mesmo. SEM DUPLA CONTAGEM; ordem de grandeza, não promessa.
 - protecoes = O QUE NÃO PODE QUEBRAR: 2-3 forças que sustentam o resultado atual e como blindá-las (pessoa-chave, contrato, canal, licença, cliente-âncora). Em empresa saudável esta seção é TÃO importante quanto as opções — manter o que funciona também é resultado.
 - confrontoDores = REALIDADE × PERCEPÇÃO: cada dor declarada julgada pelos números (confirmada/desmentida/parcial) com honestidade — desmentir uma dor liberta energia da gestão; confirmar dá prioridade. pontosCegos = o INVERSO: problema numérico relevante que NINGUÉM declarou — apresente com respeito, mas sem suavizar.
 
@@ -503,7 +523,35 @@ PRINCÍPIOS (inegociáveis):
     saudeFinanceira: ai.saudeFinanceira && typeof ai.saudeFinanceira === "object" ? ai.saudeFinanceira : undefined,
     fatoresChave: Array.isArray(ai.fatoresChave) ? ai.fatoresChave : [],
     revelacoes: Array.isArray(ai.revelacoes) ? ai.revelacoes.filter((r: any) => r && r.titulo) : [],
-    valorNaMesa: ai.valorNaMesa && typeof ai.valorNaMesa === "object" && typeof ai.valorNaMesa.total === "number" ? ai.valorNaMesa : undefined,
+    valorNaMesa: (() => {
+      if (canonico && canonico.alavancas.length > 0) {
+        // MOTOR manda: canônicas são imutáveis; a IA só adiciona (com sanidade).
+        const adicionais: AlavancaValor[] = (Array.isArray(ai.alavancasAdicionais) ? ai.alavancasAdicionais : [])
+          .filter((a: any) => a && typeof a.titulo === "string" && typeof a.valor === "number" && a.valor > 0 && a.valor <= 5 * (canonico.total + 1_000_000))
+          .slice(0, 5)
+          .map((a: any): AlavancaValor => ({
+            origem: "analise",
+            titulo: String(a.titulo).slice(0, 160),
+            tipo: a.tipo === "margem" ? "margem" : "caixa",
+            valor: Math.round(a.valor),
+            memoria: String(a.memoria ?? "").slice(0, 400),
+          }));
+        const caixaAdd = adicionais.filter((a) => a.tipo === "caixa").reduce((x, a) => x + a.valor, 0);
+        const margemAdd = adicionais.filter((a) => a.tipo === "margem").reduce((x, a) => x + a.valor, 0);
+        return {
+          total: canonico.total + caixaAdd + margemAdd,
+          caixaLiberavel: canonico.caixaLiberavel + caixaAdd,
+          margemRecuperavel: canonico.margemRecuperavelAno + margemAdd,
+          leitura: typeof ai.valorNaMesaLeitura === "string" && ai.valorNaMesaLeitura.trim()
+            ? ai.valorNaMesaLeitura.trim()
+            : `Valor endereçável calculado dos gaps vs os pares do setor${adicionais.length ? " somado às alavancas específicas identificadas na análise" : ""} — ordem de grandeza a validar.`,
+          alavancas: [...canonico.alavancas, ...adicionais],
+          base: canonico.base,
+        };
+      }
+      // Sem base de pares → comportamento anterior (100% IA), declarado como tal.
+      return ai.valorNaMesa && typeof ai.valorNaMesa === "object" && typeof ai.valorNaMesa.total === "number" ? ai.valorNaMesa : undefined;
+    })(),
     protecoes: Array.isArray(ai.protecoes) ? ai.protecoes.filter((p: any) => p && p.oQueProteger) : [],
     confrontoDores: Array.isArray(ai.confrontoDores) ? ai.confrontoDores.filter((c: any) => c && c.dor) : [],
     pontosCegos: Array.isArray(ai.pontosCegos) ? ai.pontosCegos.filter((p: any) => p && p.titulo) : [],
