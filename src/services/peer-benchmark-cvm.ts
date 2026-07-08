@@ -42,6 +42,9 @@ export interface ResultadoPeersCvm {
   dtFim: string | null;
   periodo: string | null; // rótulo humano: "1T26 (LTM)"
   rows: PeerComparisonRow[];
+  /** Nomes de pregão das listadas usadas como pares (subsetor real, com dado no
+   *  período) — transparência de metodologia no relatório (Apêndice). */
+  empresas: string[];
 }
 
 const rotulo = (dtFim: string): string => {
@@ -90,9 +93,19 @@ export async function comparePeersCvm(
   minPeers = 3, // 3 concorrentes REAIS > 14 vizinhos de prateleira
 ): Promise<ResultadoPeersCvm> {
   const dtFimStr = await ultimoPeriodoCvm();
-  if (!dtFimStr) return { dtFim: null, periodo: null, rows: [] };
+  if (!dtFimStr) return { dtFim: null, periodo: null, rows: [], empresas: [] };
   const dtFim = new Date(`${dtFimStr}T00:00:00Z`);
   const seg = await resolveSegmentoCvm(segBruto);
+
+  // Quem são os pares (nome de pregão): listadas do subsetor com indicador LTM no
+  // período — a mesma população dos quartis. Vai para o Apêndice do relatório.
+  const empresas: string[] = seg.setor
+    ? (await prisma.cvmCompany.findMany({
+        where: { setor: seg.setor, indicators: { some: { visao: "LTM", dtFim, valor: { not: null } } } },
+        select: { pregao: true, denom: true },
+        orderBy: { denom: "asc" },
+      })).map((c) => c.pregao ?? c.denom)
+    : [];
 
   // PARES = SÓ O SUBSETOR REAL (decisão do usuário, 04/07): subir p/ classificação
   // (ex.: Bebidas → Consumo não Cíclico = Agro+Alimentos+Varejo+Higiene) compara
@@ -124,5 +137,5 @@ export async function comparePeersCvm(
       break; // achou nível com pares suficientes — não desce mais
     }
   }
-  return { dtFim: dtFimStr, periodo: rotulo(dtFimStr), rows };
+  return { dtFim: dtFimStr, periodo: rotulo(dtFimStr), rows, empresas };
 }

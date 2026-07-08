@@ -238,6 +238,8 @@ export interface PeerComparisonResult {
   coverage: "direta" | "aproximada" | "ausente";
   /** Comparações internas RELEVANTES (descarta nível "mercado", enganoso p/ nicho). */
   rows: PeerComparisonRow[];
+  /** Nomes das listadas usadas como pares — transparência de metodologia (Apêndice do PDF). */
+  empresas?: string[];
   /** Referência externa (WEB) quando a base interna não cobre o subsetor.
    *  Preenchido pela pesquisa web (item 3); NÃO usa Premissas Setoriais
    *  (Damodaran/IBGE), que é base de projeção e não de pares. */
@@ -284,9 +286,9 @@ async function buildPeerComparison(
     if (Number.isFinite(n)) valores.push({ indicador: ind.nome, valor: n });
   }
 
-  const { periodo, dtFim, rows: allRows } = valores.length
+  const { periodo, dtFim, rows: allRows, empresas } = valores.length
     ? await comparePeersCvm({ classificacao: seg.classificacao, setor: seg.setor }, valores)
-    : { periodo: null, dtFim: null, rows: [] as PeerComparisonRow[] };
+    : { periodo: null, dtFim: null, rows: [] as PeerComparisonRow[], empresas: [] as string[] };
   const year = dtFim ? Number(dtFim.slice(0, 4)) : null;
 
   // RELEVÂNCIA: descarta linhas que só acharam pares no nível "mercado" (todas as
@@ -300,7 +302,7 @@ async function buildPeerComparison(
   // Preenchido pelo item 3 (pesquisa web); por ora fica vazio (seam).
   const external: PeerExternalRef[] = [];
 
-  return { year, periodo, segment: segLabel, coverage, rows, external };
+  return { year, periodo, segment: segLabel, coverage, rows, external, empresas };
 }
 
 // Endpoint principal: dispara extração dos documentos + geração da análise com Claude
