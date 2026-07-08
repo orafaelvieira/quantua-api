@@ -126,6 +126,14 @@ export function calcCusto(modelo: string, inTok: number, outTok: number): CustoI
  */
 export async function createWithRetry(params: any, attempt = 0): Promise<any> {
   try {
+    // max_tokens grande (análise "para leigos": 24k) → o SDK EXIGE streaming em
+    // requisições potencialmente longas ("Streaming is strongly recommended…").
+    // O stream é consumido inteiro aqui e finalMessage() devolve o MESMO shape de
+    // Message (content/usage/stop_reason) — os chamadores não mudam em nada.
+    if (typeof params?.max_tokens === "number" && params.max_tokens > 12000) {
+      const stream = client.messages.stream(params);
+      return await stream.finalMessage();
+    }
     return await client.messages.create(params);
   } catch (e: any) {
     if ((e?.status === 429 || e?.status === 529) && attempt < 4) {
