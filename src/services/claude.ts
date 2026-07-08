@@ -58,8 +58,9 @@ export interface AnalysisResult {
   }>;
   /** Aviso quando o período analisado é curto demais (1 período) para leitura assertiva. */
   avisoPeriodo?: string | null;
-  /** DIAGNÓSTICO de IBR (camada rica) — leitura universal (empresa boa, estável ou sob pressão). */
-  estagioCicloVida?: { estagio: string; justificativa: string };
+  /** DIAGNÓSTICO de IBR (camada rica) — leitura universal (empresa boa, estável ou sob pressão).
+   *  solidez = eixo 2 do motor (trio Fleuriet/Kanitz/Altman) — presente quando calculável. */
+  estagioCicloVida?: { estagio: string; justificativa: string; solidez?: import("./estagio-ciclo").SolidezResult };
   situacao?: { classificacao: string; racional: string };
   saudeFinanceira?: { status: string; mesesDeCaixa: number | null; leitura: string };
   fatoresChave?: Array<{
@@ -191,88 +192,10 @@ function kpisDeterministicos(indicadores: IndicadorLite[], periodos: string[]) {
   return { kpis, ...sec, tabela };
 }
 
-export interface EstagioResult { estagio: string; justificativa: string }
-
-/**
- * Classifica o ESTÁGIO DO CICLO de forma DETERMINÍSTICA a partir dos indicadores, olhando o
- * HISTÓRICO multi-ano (não um período isolado). Regra em ordem — o primeiro que casa vence.
- * Rótulo-chave não pode variar entre regerações ("verde só com prova"); a IA recebe isto como
- * FATO e só narra. Retorna null se houver < 2 períodos (sem base para tendência).
- */
-/** Recorte mínimo do FC indireto que o estágio Dickinson consome (evita acoplar o tipo inteiro). */
-export interface FluxoCaixaLite {
-  colunas: string[];
-  totais: { fco: Record<string, number>; fci: Record<string, number>; fcf: Record<string, number> };
-  prova?: Array<{ periodo: string; fecha: boolean }>;
-}
-
-export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[], fluxoCaixa?: FluxoCaixaLite | null): EstagioResult | null {
-  const ord = [...periodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
-  if (ord.length < 2) return null; // período insuficiente p/ tendência
-  const ind = (nome: string) => achaIndicador(indicadores, nome);
-  const val = (nome: string, p: string): number | null => { const i = ind(nome); return i ? numOf(i.valores[p]) : null; };
-  const ult = ord[ord.length - 1];
-
-  const receita = ord.map((p) => val("Receita Líquida", p)).filter((x): x is number => x != null);
-  const margemOp = val("Margem EBITDA", ult); // razão (negativo = prejuízo operacional)
-  const liqCorr = val("Liquidez Corrente", ult);
-  const liqImed = val("Liquidez Imediata", ult);
-  const pct = (r: number) => `${(r * 100).toFixed(0)}%`;
-
-  // 1) CRISE DE CAIXA — aperto agudo manda, independentemente da tendência de receita.
-  const margemNeg = margemOp != null && margemOp < 0;
-  const liqBaixa = liqCorr != null && liqCorr < 1;
-  const caixaMinimo = liqImed != null && liqImed < 0.05;
-  if ((margemNeg && liqBaixa) || (margemNeg && caixaMinimo)) {
-    const partes = [
-      margemOp != null ? `margem operacional ${pct(margemOp)}` : null,
-      liqCorr != null ? `liquidez corrente ${liqCorr.toFixed(2)}` : null,
-      liqImed != null ? `liquidez imediata ${liqImed.toFixed(3)}` : null,
-    ].filter(Boolean).join(", ");
-    return { estagio: "Crise de caixa", justificativa: `Aperto agudo de liquidez (${partes}).` };
-  }
-
-  // 2) DICKINSON (2011) — padrão-ouro: os SINAIS de FCO/FCI/FCF do FC indireto classificam
-  //    o estágio. "Verde só com prova" vale para a COLUNA QUE OS SINAIS USAM (a mais
-  //    recente): exigir que TODAS fechem (prova.every) descartava o padrão-ouro por culpa
-  //    de uma coluna antiga que os sinais nem leem; e classificar por coluna velha
-  //    rotularia o estágio de anos atrás — por isso, se a RECENTE não fecha, cai na
-  //    heurística (nunca usa sinais defasados).
-  const cols = fluxoCaixa?.colunas ?? [];
-  const colRecente = cols.length > 0 ? cols[cols.length - 1] : null;
-  const provaOk = colRecente != null && (fluxoCaixa?.prova ?? []).some((p) => p.periodo === colRecente && p.fecha);
-  if (fluxoCaixa && colRecente != null && provaOk) {
-    const c = colRecente; // variação mais recente (com prova fechada)
-    const fco = fluxoCaixa.totais.fco[c] ?? 0;
-    const fci = fluxoCaixa.totais.fci[c] ?? 0;
-    const fcf = fluxoCaixa.totais.fcf[c] ?? 0;
-    const fmt = (v: number) => `${v < 0 ? "−" : "+"}R$ ${Math.abs(Math.round(v)).toLocaleString("pt-BR")}`;
-    const sinais = `FCO ${fmt(fco)}, FCI ${fmt(fci)}, FCF ${fmt(fcf)} em ${c}`;
-    const base = `Sinais do fluxo de caixa (Dickinson): ${sinais} — `;
-    if (fco > 0 && fci < 0 && fcf > 0) return { estagio: "Crescimento", justificativa: base + "operação gera caixa, a empresa investe e ainda capta para acelerar (padrão de crescimento)." };
-    if (fco < 0 && fci < 0 && fcf > 0) return { estagio: "Crescimento", justificativa: base + "operação ainda queima caixa mas investe com captação — fase inicial/expansão financiada." };
-    if (fco > 0 && fci < 0 && fcf < 0) return { estagio: "Maturidade", justificativa: base + "operação financia os investimentos e ainda amortiza dívida/remunera sócios (padrão maduro)." };
-    if (fco > 0 && fci > 0 && fcf < 0) return { estagio: "Platô", justificativa: base + "gera caixa mas desinveste e devolve capital — sem novas frentes de crescimento (shake-out)." };
-    if (fco < 0 && fci > 0) return { estagio: "Declínio", justificativa: base + "operação queima caixa coberta por venda de ativos — padrão típico de declínio." };
-    if (fco < 0 && fci < 0 && fcf < 0) return { estagio: "Declínio", justificativa: base + "caixa consumido em todas as frentes." };
-    // combinação ambígua (ex.: tudo positivo) → segue para a heurística de receita/margem
-  }
-
-  // 3) Fallback: tendência de RECEITA no histórico completo (sem FC confiável).
-  if (receita.length >= 2) {
-    const first = receita[0], last = receita[receita.length - 1], n = receita.length;
-    const cresc = first !== 0 ? (last - first) / Math.abs(first) : 0; // crescimento acumulado do período
-    const quedaUlt = receita[n - 1] < receita[n - 2] && (n < 3 || receita[n - 2] <= receita[n - 3]);
-    const cresceUlt = receita[n - 1] > receita[n - 2] && (n < 3 || receita[n - 2] >= receita[n - 3]);
-    const margemPos = margemOp != null && margemOp > 0;
-
-    if (quedaUlt || cresc < -0.1) return { estagio: "Declínio", justificativa: `Receita em queda no histórico (${pct(cresc)} acumulado), sem aperto agudo de caixa.` };
-    if (cresceUlt && cresc > 0.2 && margemPos) return { estagio: "Crescimento", justificativa: `Receita em expansão consistente (${pct(cresc)} no período) com margem operacional positiva.` };
-    if (Math.abs(cresc) <= 0.1 && margemPos && (liqCorr == null || liqCorr >= 1)) return { estagio: "Maturidade", justificativa: `Receita estável (${pct(cresc)} no período), margem positiva e liquidez adequada.` };
-    return { estagio: "Platô", justificativa: `Receita praticamente estagnada (${pct(cresc)} no período), sem sinais claros de crescimento, declínio ou aperto de caixa.` };
-  }
-  return null;
-}
+// Estágio do ciclo: motor extraído para ./estagio-ciclo (2 eixos: Dickinson robusto
+// com materialidade+persistência × SOLIDEZ pelo trio Fleuriet/Kanitz/Altman).
+export { classifyEstagio, type EstagioResult, type FluxoCaixaLite, type SolidezResult } from "./estagio-ciclo";
+import { classifyEstagio, type EstagioResult, type FluxoCaixaLite } from "./estagio-ciclo";
 
 interface PeerBlockInput {
   year: number | null;
