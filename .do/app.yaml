@@ -29,7 +29,7 @@ services:
         type: SECRET
       - key: FRONTEND_URL
         scope: RUN_TIME
-        value: https://walrus-app-bizfv.ondigitalocean.app
+        value: https://quantua.com.br
       - key: SPACES_ENDPOINT
         scope: RUN_TIME
         type: SECRET
