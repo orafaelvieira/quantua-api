@@ -54,6 +54,55 @@ describe("sorteioTriangular", () => {
   });
 });
 
+describe("deduções da receita (vendas canceladas e abatimentos)", () => {
+  const blocosComDeducoes = (): BlocoModelo[] => {
+    const b = blocos();
+    b[0].config.deducoesPct = 0.05; // 5% da bruta
+    b.push({ id: "b3", tipo: "impostos", nome: "Impostos", ativo: true, config: { impostos: { regime: "presumido", issPct: 0.05 } } });
+    return b;
+  };
+
+  it("linha própria na DRE: bruta − deduções − impostos = receita líquida; base fiscal exclui deduções", () => {
+    const r = calcularModelo({ mesInicial: "2033-01", horizonteMeses: 12, blocks: blocosComDeducoes() });
+    const ano = "2033";
+    const bruta = r.agregacoes.anual["receita-total"][ano];       // 1.200.000
+    const ded = r.agregacoes.anual["deducoes-receita"][ano];
+    const imp = r.agregacoes.anual["impostos-receita"][ano];
+    const liquida = r.agregacoes.anual["receita-liquida"][ano];
+    expect(bruta).toBeCloseTo(1_200_000, 2);
+    expect(ded).toBeCloseTo(60_000, 2);                            // 5%
+    expect(imp).toBeCloseTo((1_200_000 - 60_000) * (0.0365 + 0.05), 2); // base LÍQUIDA de deduções
+    expect(liquida).toBeCloseTo(bruta - ded - imp, 4);
+    // lucro bruto parte da líquida
+    const lb = r.agregacoes.anual["lucro-bruto"][ano];
+    expect(lb).toBeCloseTo(liquida - r.agregacoes.anual["custos-total"][ano], 4);
+  });
+
+  it("deducoesPorAno sobrepõe o % geral no ano; sem deduções nada muda (retrocompat)", () => {
+    const b = blocosComDeducoes();
+    b[0].config.deducoesPorAno = { "2034": 0.10 };
+    const r = calcularModelo({ mesInicial: "2033-01", horizonteMeses: 24, blocks: b });
+    expect(r.agregacoes.anual["deducoes-receita"]["2033"]).toBeCloseTo(60_000, 2);   // 5% (flat)
+    expect(r.agregacoes.anual["deducoes-receita"]["2034"]).toBeCloseTo(120_000, 2);  // 10% (do ano)
+    // sem config: linha não existe e a DRE fica como antes
+    const sem = calcularModelo({ mesInicial: "2033-01", horizonteMeses: 12, blocks: blocos() });
+    expect(sem.agregacoes.anual["deducoes-receita"]).toBeUndefined();
+  });
+
+  it("Simples: RBT12 e o DAS usam a receita líquida de deduções (LC 123 art. 3º §1º)", () => {
+    const b = blocos();
+    b[0].config.deducoesPct = 0.10;
+    b.push({ id: "b3", tipo: "impostos", nome: "Impostos", ativo: true, config: { impostos: { regime: "simples", anexo: "III", rbt12Inicial: 1_080_000 } } });
+    const r = calcularModelo({ mesInicial: "2033-01", horizonteMeses: 24, blocks: b });
+    // após 12 meses projetados, RBT12 = 12 × (100k − 10%) = 1.080.000
+    const m13 = r.meses[12];
+    expect(r.series["rbt12"][m13]).toBeCloseTo(12 * 90_000, 2);
+    // DAS do mês incide sobre a base líquida
+    const aliq = r.series["aliquota_efetiva_simples"][m13];
+    expect(r.series["impostos_receita_total"][m13]).toBeCloseTo(90_000 * aliq, 4);
+  });
+});
+
 describe("multiplicador de cenário em linhas de custo (alavanca dos sliders)", () => {
   it("escala linha % da receita e linha fixa; sem override nada muda", () => {
     const base = calcularModelo({ mesInicial: "2026-01", horizonteMeses: 12, blocks: blocos() });

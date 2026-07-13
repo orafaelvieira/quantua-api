@@ -294,7 +294,9 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       realizado: realizado ? (realizado as object) : undefined,
       blocks: {
         create: [
-          { tipo: "receitas", nome: "Receitas", ordem: 0, config: { linhasReceita } as object },
+          // Deduções da receita (vendas canceladas/abatimentos) ancoradas no
+          // histórico: % sobre a bruta do último período extraído.
+          { tipo: "receitas", nome: "Receitas", ordem: 0, config: { linhasReceita, ...(seed.deducoesPct > 0 ? { deducoesPct: seed.deducoesPct } : {}) } as object },
           {
             tipo: "custos", nome: "Custos", ordem: 1,
             config: { linhasCusto: [{ id: "custos1", nome: "Custos sobre a receita", modo: "pctReceita", pct: seed.pctCustos }] } as object,
@@ -408,6 +410,23 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     const historicoAnual = derivarHistoricoAnual(analysis?.dadosEstruturados ?? null);
     if (historicoAnual) {
       await prisma.financialModel.update({ where: { id: model.id }, data: { realizado: { historicoAnual } as object } });
+    }
+  }
+  // Backfill preguiçoso: histórico gravado ANTES das deduções (receita do topo
+  // era a LÍQUIDA e destoava da abertura por linha, que é BRUTA) — re-deriva
+  // uma vez, preservando o resto do realizado (meses/porGrupo).
+  if (model.realizado && model.analysisSeedId) {
+    const realizadoAtual = model.realizado as { historicoAnual?: { linhas?: Record<string, unknown> } } & Record<string, unknown>;
+    if (realizadoAtual.historicoAnual && !realizadoAtual.historicoAnual.linhas?.impostosFat) {
+      const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
+      const novo = derivarHistoricoAnual(analysis?.dadosEstruturados ?? null);
+      if (novo) {
+        const antigo = realizadoAtual.historicoAnual as { receitaPorLinha?: unknown };
+        await prisma.financialModel.update({
+          where: { id: model.id },
+          data: { realizado: { ...realizadoAtual, historicoAnual: { ...novo, receitaPorLinha: antigo.receitaPorLinha } } as object },
+        });
+      }
     }
   }
   // Backfill preguiçoso: modelos criados antes dos "outros itens do balanço"

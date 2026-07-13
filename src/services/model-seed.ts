@@ -16,6 +16,8 @@ export interface SeedDerivado {
   crescimentoAnual: number;
   pctCustos: number;
   pctDespesas: number;
+  /** Deduções da receita (vendas canceladas/abatimentos) ÷ receita BRUTA. */
+  deducoesPct: number;
   /** Prova legível para a trilha/tela: de onde cada âncora veio. */
   memoria: string[];
 }
@@ -35,7 +37,13 @@ function valorEm(l: LinhaDados | undefined, periodo: string): number {
 export interface HistoricoAnual {
   periodos: string[];
   linhas: {
+    /** Receita BRUTA (consistente com a abertura por linha, que é bruta). */
     receita: Record<string, number>;
+    /** Deduções COMERCIAIS: vendas canceladas, devoluções e abatimentos. */
+    deducoes: Record<string, number>;
+    /** Impostos sobre o faturamento HISTÓRICOS (quando a extração separa). */
+    impostosFat: Record<string, number>;
+    receitaLiquida: Record<string, number>;
     custos: Record<string, number>;
     lucroBruto: Record<string, number>;
     despesas: Record<string, number>;
@@ -337,23 +345,47 @@ export function derivarGiroHistorico(dadosEstruturados: unknown): { periodo: str
 export function derivarHistoricoAnual(dadosEstruturados: unknown, excluirPeriodos: string[] = []): HistoricoAnual | null {
   const de = (dadosEstruturados ?? {}) as { periodos?: string[]; dre?: LinhaDados[] };
   const dre = de.dre ?? [];
-  const receitaLinha = achar(dre, "Receita Líquida") ?? achar(dre, "Receita Bruta");
+  // A referência do TOPO é a receita BRUTA — a mesma base da abertura por
+  // linha (que traz as contas brutas do documento). Sem bruta na extração,
+  // a líquida assume as duas pontas (deduções ficam zero).
+  const brutaLinha = achar(dre, "Receita Bruta");
+  const liquidaLinha = achar(dre, "Receita Líquida");
+  const receitaLinha = brutaLinha ?? liquidaLinha;
+  // Deduções: "Deduções da Receita Bruta" (vendas canceladas/abatimentos) e
+  // "Impostos s/ Faturamento" quando a extração os separa.
+  const deducoesLinha = achar(dre, "Deduções da Receita Bruta");
+  const impostosFatLinha = achar(dre, "Impostos s/ Faturamento");
   const lbLinha = achar(dre, "Lucro Bruto");
   const ebitdaLinha = achar(dre, "EBITDA");
   if (!receitaLinha) return null;
 
-  const linhas: HistoricoAnual["linhas"] = { receita: {}, custos: {}, lucroBruto: {}, despesas: {}, ebitda: {} };
+  const linhas: HistoricoAnual["linhas"] = { receita: {}, deducoes: {}, impostosFat: {}, receitaLiquida: {}, custos: {}, lucroBruto: {}, despesas: {}, ebitda: {} };
   const periodos: string[] = [];
   for (const p of de.periodos ?? []) {
     if (excluirPeriodos.includes(p)) continue; // absorvido pelo horizonte (realizado parcial)
-    const receita = Math.abs(valorEm(receitaLinha, p));
-    if (receita <= 0) continue; // período vazio/parcial sem receita não vira coluna
+    const bruta = Math.abs(valorEm(receitaLinha, p));
+    if (bruta <= 0) continue; // período vazio/parcial sem receita não vira coluna
+    // A VERDADE do período é o GAP bruta − líquida declarada (independe dos
+    // nomes das linhas intermediárias); as linhas nomeadas o DECOMPÕEM em
+    // deduções comerciais × impostos s/ faturamento. Sem nomeadas, o gap
+    // inteiro vai para deduções (aproximação declarada).
+    const liquidaDeclarada = Math.abs(valorEm(liquidaLinha, p));
+    const deducoesNomeadas = Math.abs(valorEm(deducoesLinha, p));
+    const impostosFatNomeados = Math.abs(valorEm(impostosFatLinha, p));
+    const gap = liquidaDeclarada > 0 ? Math.max(0, bruta - liquidaDeclarada) : deducoesNomeadas + impostosFatNomeados;
+    const impostosFat = Math.min(gap, impostosFatNomeados);
+    const deducoes = gap - impostosFat;
+    const liquida = liquidaDeclarada > 0 ? liquidaDeclarada : bruta - gap;
     const lb = valorEm(lbLinha, p);
     const ebitda = valorEm(ebitdaLinha, p);
     periodos.push(p);
-    linhas.receita[p] = receita;
+    linhas.receita[p] = bruta;
+    linhas.deducoes[p] = deducoes;
+    linhas.impostosFat[p] = impostosFat;
+    linhas.receitaLiquida[p] = liquida;
     linhas.lucroBruto[p] = lb;
-    linhas.custos[p] = receita - lb;
+    // Custos = líquida − lucro bruto (o lucro bruto da extração parte da líquida)
+    linhas.custos[p] = liquida - lb;
     linhas.despesas[p] = lb - ebitda;
     linhas.ebitda[p] = ebitda;
   }
@@ -420,7 +452,13 @@ export function derivarSeed(dadosEstruturados: unknown): SeedDerivado {
   const dre = de.dre ?? [];
   const memoria: string[] = [];
 
-  const receitaLinha = achar(dre, "Receita Líquida") ?? achar(dre, "Receita Bruta");
+  // Base do modelo = receita BRUTA (a mesma da abertura por linha); as
+  // deduções (vendas canceladas/abatimentos) viram % próprio do modelo.
+  const brutaLinha = achar(dre, "Receita Bruta");
+  const liquidaLinha = achar(dre, "Receita Líquida");
+  const receitaLinha = brutaLinha ?? liquidaLinha;
+  const deducoesLinha = achar(dre, "Deduções da Receita Bruta");
+  const impostosFatLinha = achar(dre, "Impostos s/ Faturamento");
   const lucroBrutoLinha = achar(dre, "Lucro Bruto");
   const ebitdaLinha = achar(dre, "EBITDA");
 
@@ -431,12 +469,26 @@ export function derivarSeed(dadosEstruturados: unknown): SeedDerivado {
   }
 
   if (!ultimo) {
-    return { receitaMensal: 0, crescimentoAnual: 0.1, pctCustos: 0, pctDespesas: 0, memoria: ["Histórico sem receita — modelo parte de valores neutros para o analista preencher."] };
+    return { receitaMensal: 0, crescimentoAnual: 0.1, pctCustos: 0, pctDespesas: 0, deducoesPct: 0, memoria: ["Histórico sem receita — modelo parte de valores neutros para o analista preencher."] };
   }
 
   const receitaAnual = Math.abs(valorEm(receitaLinha, ultimo));
   const receitaMensal = receitaAnual / 12;
   memoria.push(`Receita base: ${ultimo} = ${receitaAnual.toFixed(2)} (÷12 por mês), linha "${receitaLinha?.conta}".`);
+
+  // Deduções COMERCIAIS (vendas canceladas/devoluções/abatimentos) como % da
+  // bruta: gap bruta − líquida MENOS os impostos s/ faturamento nomeados (que
+  // o bloco Impostos do modelo projeta por conta própria — sem dupla contagem).
+  const liquidaDeclarada = Math.abs(valorEm(liquidaLinha, ultimo));
+  const deducoesNomeadas = Math.abs(valorEm(deducoesLinha, ultimo));
+  const impostosFatUlt = Math.abs(valorEm(impostosFatLinha, ultimo));
+  const gapUlt = liquidaDeclarada > 0 ? Math.max(0, receitaAnual - liquidaDeclarada) : deducoesNomeadas + impostosFatUlt;
+  const deducoesUlt = Math.max(0, gapUlt - Math.min(gapUlt, impostosFatUlt));
+  const deducoesPct = brutaLinha && receitaAnual > 0 ? Math.max(0, Math.min(0.9, deducoesUlt / receitaAnual)) : 0;
+  if (deducoesPct > 0) {
+    memoria.push(`Deduções da receita: ${ultimo} = ${deducoesUlt.toFixed(2)} ÷ receita bruta = ${(deducoesPct * 100).toFixed(2)}% (vendas canceladas/abatimentos; impostos s/ faturamento ficam com o bloco Impostos).`);
+  }
+  const receitaLiquidaUlt = liquidaDeclarada > 0 ? liquidaDeclarada : receitaAnual - gapUlt;
 
   // Crescimento: variação da receita entre os dois últimos períodos com valor.
   let crescimentoAnual = 0.1;
@@ -451,20 +503,20 @@ export function derivarSeed(dadosEstruturados: unknown): SeedDerivado {
     }
   }
 
-  // Custos = Receita − Lucro Bruto; Despesas (OpEx) = Lucro Bruto − EBITDA.
-  // Mesma derivação robusta do projection-engine (independe de linha agregada).
+  // Custos = Receita Líquida − Lucro Bruto; Despesas (OpEx) = Lucro Bruto − EBITDA.
+  // Os %s dividem pela BRUTA porque é sobre ela que as linhas % do motor aplicam.
   const lucroBruto = valorEm(lucroBrutoLinha, ultimo);
   const ebitda = valorEm(ebitdaLinha, ultimo);
   let pctCustos = 0;
   let pctDespesas = 0;
   if (receitaAnual > 0 && lucroBrutoLinha) {
-    pctCustos = Math.max(0, Math.min(1, (receitaAnual - lucroBruto) / receitaAnual));
-    memoria.push(`Custos: (Receita − Lucro Bruto) ÷ Receita = ${(pctCustos * 100).toFixed(1)}%.`);
+    pctCustos = Math.max(0, Math.min(1, (receitaLiquidaUlt - lucroBruto) / receitaAnual));
+    memoria.push(`Custos: (Receita Líquida − Lucro Bruto) ÷ Receita Bruta = ${(pctCustos * 100).toFixed(1)}%.`);
   }
   if (receitaAnual > 0 && lucroBrutoLinha && ebitdaLinha) {
     pctDespesas = Math.max(0, Math.min(1, (lucroBruto - ebitda) / receitaAnual));
-    memoria.push(`Despesas: (Lucro Bruto − EBITDA) ÷ Receita = ${(pctDespesas * 100).toFixed(1)}%.`);
+    memoria.push(`Despesas: (Lucro Bruto − EBITDA) ÷ Receita Bruta = ${(pctDespesas * 100).toFixed(1)}%.`);
   }
 
-  return { receitaMensal, crescimentoAnual, pctCustos, pctDespesas, memoria };
+  return { receitaMensal, crescimentoAnual, pctCustos, pctDespesas, deducoesPct, memoria };
 }

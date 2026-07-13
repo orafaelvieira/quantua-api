@@ -334,6 +334,10 @@ export interface BlocoModelo {
     linhasReceita?: LinhaReceita[];
     /** Linhas SIMPLES de custos/despesas (% da receita, fixo+reajuste, série). */
     linhasCusto?: LinhaCusto[];
+    /** Só bloco RECEITAS: deduções da receita (vendas canceladas, devoluções e
+     *  abatimentos) como % da receita BRUTA — flat + por ano calendário. */
+    deducoesPct?: number;
+    deducoesPorAno?: Record<string, number>;
     /** Só em bloco CAPEX: imobilizado que a empresa JÁ TEM na largada… */
     saldoInicialImobilizado?: number;
     /** …e a taxa de depreciação linear dele (a.a.). */
@@ -1736,6 +1740,29 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   const temGiro = !!cfgGiro && (num(cfgGiro.pmr) > 0 || num(cfgGiro.pme) > 0 || num(cfgGiro.pmp) > 0
     || Object.keys(cfgGiro.pmrPorAno ?? {}).length > 0 || Object.keys(cfgGiro.pmePorAno ?? {}).length > 0 || Object.keys(cfgGiro.pmpPorAno ?? {}).length > 0);
 
+  // ── DEDUÇÕES DA RECEITA (vendas canceladas, devoluções e abatimentos) ──
+  // Linha própria entre a receita BRUTA e os impostos: % sobre a bruta (flat
+  // ou por ano). Também REDUZ a base fiscal — a lei exclui vendas canceladas e
+  // descontos incondicionais da base de PIS/COFINS/ICMS/Simples/presunção
+  // (DL 1.598 art. 12; LC 123 art. 3º §1º).
+  const cfgReceitasBloco = input.blocks.find((b) => b.ativo && b.tipo === "receitas")?.config;
+  const deducoesFlat = Math.max(0, Math.min(0.9, num(cfgReceitasBloco?.deducoesPct)));
+  const deducoesPorAnoCfg = cfgReceitasBloco?.deducoesPorAno;
+  const deducoes: Serie = {};
+  let temDeducoes = false;
+  for (const mes of meses) {
+    const ano = mes.slice(0, 4);
+    const pct = typeof deducoesPorAnoCfg?.[ano] === "number"
+      ? Math.max(0, Math.min(0.9, deducoesPorAnoCfg[ano]))
+      : deducoesFlat;
+    deducoes[mes] = Math.max(0, receitaTotal[mes] ?? 0) * pct;
+    if (deducoes[mes] !== 0) temDeducoes = true;
+  }
+  // Base fiscal = bruta − deduções (usada por TODOS os regimes e pela reforma).
+  const receitaBase: Serie = {};
+  for (const mes of meses) receitaBase[mes] = (receitaTotal[mes] ?? 0) - (deducoes[mes] ?? 0);
+  if (temDeducoes) series["deducoes_receita_total"] = deducoes;
+
   // ── F3: IMPOSTOS SOBRE A RECEITA (Simples/PIS-COFINS/ISS/ICMS) ──
   // Simples: RBT12 em JANELA MÓVEL de 12 meses (antes do horizonte, cada mês
   // vale rbt12Inicial ÷ 12); alíquota efetiva da LC 123 por anexo; Fator R
@@ -1752,7 +1779,8 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     const rbt12Inicial = Math.max(0, num(cfgImp!.rbt12Inicial));
     const rbt12Serie: Serie = {};
     const aliqSerie: Serie = {};
-    const receitaEm = (i: number): number => (i >= 0 ? receitaTotal[meses[i]] ?? 0 : rbt12Inicial / 12);
+    // RBT12 e a base do DAS excluem as deduções (vendas canceladas — LC 123 art. 3º §1º)
+    const receitaEm = (i: number): number => (i >= 0 ? receitaBase[meses[i]] ?? 0 : rbt12Inicial / 12);
     const folhaEm = (i: number): number => (i >= 0 ? series["folha_total"]?.[meses[i]] ?? 0 : series["folha_total"]?.[meses[0]] ?? 0);
     for (let i = 0; i < meses.length; i++) {
       const mes = meses[i];
@@ -1766,7 +1794,7 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
         ? (rbt12 > 0 && folha12 / rbt12 >= 0.28 ? "III" : "V")
         : anexoBase;
       const aliq = aliquotaEfetivaSimples(rbt12, anexoDoMes);
-      impostosReceita[mes] = (receitaTotal[mes] ?? 0) * aliq;
+      impostosReceita[mes] = (receitaBase[mes] ?? 0) * aliq;
       rbt12Serie[mes] = rbt12;
       aliqSerie[mes] = aliq;
       if (rbt12 > 4_800_000 && estourosSimples.length < 3) estourosSimples.push(`${mes} (RBT12 R$ ${(rbt12 / 1e6).toFixed(2)} mi)`);
@@ -1783,7 +1811,7 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     const sIss: Serie = {};
     const sIcms: Serie = {};
     for (const mes of meses) {
-      const rec = receitaTotal[mes] ?? 0;
+      const rec = receitaBase[mes] ?? 0; // base já líquida das deduções
       sPisCofins[mes] = rec * pisCofins;
       sIss[mes] = rec * iss;
       sIcms[mes] = rec * icms;
@@ -1832,7 +1860,7 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     const pisCofinsAtual = Math.max(0, num(cfgImp!.pisCofinsPct, regime === "presumido" ? 0.0365 : 0.0925));
     const r = calcularImpostosReforma({
       meses,
-      receita: receitaTotal,
+      receita: receitaBase, // vendas canceladas também ficam fora do IBS/CBS
       comprasCreditaveis,
       capex: series["capex_total"] ?? {},
       cfg: input.reforma,
@@ -1861,16 +1889,27 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   dre.push({ id: "receita-total", nome: "Receita", grupo: "subtotal", valores: receitaTotal, pctReceita: pctDe(receitaTotal) });
   for (const l of linhasReceita) dre.push({ id: l.id, nome: l.nome, grupo: "receita", valores: l.valores, pctReceita: pctDe(l.valores) });
 
-  // Com regime tributário: deduções da receita → RECEITA LÍQUIDA, e o lucro
-  // bruto passa a partir dela (cascata contábil correta).
+  // Cascata contábil: BRUTA → (−) deduções (vendas canceladas/abatimentos) →
+  // (−) impostos sobre a receita → RECEITA LÍQUIDA; o lucro bruto parte dela.
   const receitaLiquida: Serie = {};
-  for (const mes of meses) receitaLiquida[mes] = (receitaTotal[mes] ?? 0) - (regime ? impostosReceita[mes] ?? 0 : 0);
+  for (const mes of meses) {
+    receitaLiquida[mes] = (receitaTotal[mes] ?? 0) - (deducoes[mes] ?? 0) - (regime ? impostosReceita[mes] ?? 0 : 0);
+  }
+  if (temDeducoes) {
+    dre.push({
+      id: "deducoes-receita",
+      nome: "(−) Deduções da receita (vendas canceladas e abatimentos)",
+      grupo: "despesas", valores: deducoes, pctReceita: pctDe(deducoes),
+    });
+  }
   if (regime) {
     dre.push({
       id: "impostos-receita",
       nome: regime === "simples" ? "(−) Simples Nacional (DAS)" : "(−) Impostos sobre a receita",
       grupo: "despesas", valores: impostosReceita, pctReceita: pctDe(impostosReceita),
     });
+  }
+  if (regime || temDeducoes) {
     dre.push({ id: "receita-liquida", nome: "Receita líquida", grupo: "subtotal", valores: receitaLiquida, pctReceita: pctDe(receitaLiquida) });
   }
 
@@ -1973,7 +2012,7 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
       for (const mes of meses) {
         const ano = mes.slice(0, 4);
         if (ano !== anoCorrente) { anoCorrente = ano; recAcum = 0; excedenteAnterior = 0; }
-        const rec = receitaTotal[mes] ?? 0;
+        const rec = receitaBase[mes] ?? 0; // presunção sobre a receita já líquida das deduções
         recAcum += rec;
         const vale224 = aplicaLC224 && Number(ano) >= 2026;
         const excedenteAcum = vale224 ? Math.max(0, recAcum - 5_000_000) : 0;
