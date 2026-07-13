@@ -806,3 +806,81 @@ model SeedMarker {
 
   @@map("seed_markers")
 }
+
+/// ── MODELOS FINANCEIROS (produto Projeções/Orçamento/Valuation) ──────────────
+/// Modelo financeiro VIVO de uma empresa — esteira separada do IBR (F1 do
+/// PLANO_VALUATION_ORCAMENTO.md). Motor mensal; blocos modulares; cenários.
+model FinancialModel {
+  id             String   @id @default(uuid())
+  companyId      String   @map("company_id")
+  userId         String   @map("user_id")
+  nome           String
+  /// "valuation" | "orcamento" | "ambos" — decide os blocos default do wizard
+  objetivo       String   @default("ambos")
+  /// 1º mês do horizonte, "YYYY-MM" (motor é mensal SEMPRE)
+  mesInicial     String   @map("mes_inicial")
+  horizonteMeses Int      @default(60) @map("horizonte_meses")
+  /// Periodicidade de EXIBIÇÃO: "mensal" | "trimestral" | "anual"
+  visao          String   @default("anual")
+  /// Cenário ativo (selo em todas as telas — Driver Status do CFI)
+  cenarioAtivoId String?  @map("cenario_ativo_id")
+  /// Análise (IBR) usada como fonte do realizado/seed, quando houver
+  analysisSeedId String?  @map("analysis_seed_id")
+  /// Realizado consolidado: { meses: [...], porGrupo: {receita|custos|despesas: {"YYYY-MM": n}} }
+  realizado      Json?
+  /// Cache do último cálculo do motor (séries, DRE, checks) + hash dos inputs
+  resultadoCache Json?    @map("resultado_cache")
+  /// SNAPSHOT dos índices macro (BCB Focus + PTAX) usado pelas fórmulas macro_* —
+  /// gravado no modelo p/ projeção reproduzível; botão Atualizar renova + recalcula
+  indicesMacro   Json?    @map("indices_macro")
+  status         String   @default("Rascunho")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  blocks    ModelBlock[]
+  scenarios ModelScenario[]
+
+  @@index([companyId])
+  @@index([userId])
+  @@map("financial_models")
+}
+
+/// Bloco do modelo (schedule do CFI). Os NÓS DE DRIVER vivem em `config`
+/// (edição é por bloco inteiro; trilha de auditoria registra o diff do bloco).
+model ModelBlock {
+  id        String   @id @default(uuid())
+  modelId   String   @map("model_id")
+  /// "receitas" | "custos" | "despesas" | (fases seguintes: "folha", "impostos",
+  /// "capex", "giro", "divida", "dfs", "wacc", "valuation", "orcamento")
+  tipo      String
+  nome      String
+  ordem     Int      @default(0)
+  /// "simples" | "detalhado" (nível de detalhe CFI, por bloco)
+  modo      String   @default("simples")
+  ativo     Boolean  @default(true)
+  /// { linhasReceita?: LinhaReceita[], linhasCusto?: LinhaCusto[] } — ver model-engine.ts
+  config    Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  model FinancialModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@index([modelId])
+  @@map("model_blocks")
+}
+
+/// Cenário = overrides de params ({nodeId|linhaId: {param: valor}}). "Base" nasce
+/// vazio; os demais só guardam o que diverge (cascata, sem duplicação).
+model ModelScenario {
+  id        String   @id @default(uuid())
+  modelId   String   @map("model_id")
+  nome      String
+  isBase    Boolean  @default(false) @map("is_base")
+  overrides Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  model FinancialModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@index([modelId])
+  @@map("model_scenarios")
+}

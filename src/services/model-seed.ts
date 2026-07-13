@@ -1,0 +1,470 @@
+/**
+ * Seed determinístico do Modelo Financeiro a partir do HISTÓRICO já extraído
+ * (Analysis.dadosEstruturados: { periodos, dre: [{conta, valores}], bp }).
+ *
+ * Deriva as âncoras que a planilha da casa deriva do realizado: receita mensal
+ * base, crescimento, % custos e % despesas sobre a receita. Zero IA.
+ */
+
+interface LinhaDados {
+  conta?: string;
+  valores?: Record<string, number>;
+}
+
+export interface SeedDerivado {
+  receitaMensal: number;
+  crescimentoAnual: number;
+  pctCustos: number;
+  pctDespesas: number;
+  /** Prova legível para a trilha/tela: de onde cada âncora veio. */
+  memoria: string[];
+}
+
+function achar(linhas: LinhaDados[], conta: string): LinhaDados | undefined {
+  const alvo = conta.trim().toLowerCase();
+  return linhas.find((l) => l.conta?.trim().toLowerCase() === alvo);
+}
+
+function valorEm(l: LinhaDados | undefined, periodo: string): number {
+  const v = l?.valores?.[periodo];
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+/** Histórico ANUAL da DRE extraída — vira as colunas "hist" da Demonstração
+ *  (realizado ao lado do projetado, como no modelo Quantua de Valuation). */
+export interface HistoricoAnual {
+  periodos: string[];
+  linhas: {
+    receita: Record<string, number>;
+    custos: Record<string, number>;
+    lucroBruto: Record<string, number>;
+    despesas: Record<string, number>;
+    ebitda: Record<string, number>;
+  };
+  /** Histórico POR LINHA DE RECEITA do modelo ({linhaId: {período: valor}}) —
+   *  preenchido quando o seed traz a abertura da DRE (uma linha por conta). */
+  receitaPorLinha?: Record<string, Record<string, number>>;
+}
+
+/** Abertura de RECEITA do histórico: as contas de receita da DRE extraída
+ *  (detalhe, não só o consolidado).
+ *
+ *  Fonte primária: `arvoreOriginalDRE` — fiel ao documento contábil do cliente,
+ *  então as linhas do modelo nascem com os NOMES EXATOS do documento (regra da
+ *  casa). Cada item da árvore carrega o `destino` canônico em que foi dobrado;
+ *  os itens que dobraram em conta de receita são a abertura — e, quando o item
+ *  é o próprio agregado do documento (tem filhos com valor), a abertura são os
+ *  filhos.
+ *
+ *  Fallback (capturas sem árvore): heurística sobre a DRE canônica — linhas
+ *  POSITIVAS antes da "Receita Líquida"; se a "Receita Bruta" for o subtotal
+ *  das demais (soma bate), ela sai e fica só o detalhe. */
+export interface LinhaReceitaHist {
+  conta: string;
+  valores: Record<string, number>;
+}
+
+interface ItemArvoreDRE { nome?: string; valor?: number; destino?: string; filhos?: ItemArvoreDRE[] }
+
+export function derivarAberturaReceita(dadosEstruturados: unknown): LinhaReceitaHist[] {
+  const de = (dadosEstruturados ?? {}) as {
+    periodos?: string[];
+    dre?: LinhaDados[];
+    arvoreOriginalDRE?: Record<string, ItemArvoreDRE[]>;
+  };
+  const dre = de.dre ?? [];
+  const periodos = de.periodos ?? [];
+  const idxLiquida = dre.findIndex((l) => l.conta?.trim().toLowerCase() === "receita líquida");
+  if (idxLiquida < 0) return [];
+
+  // Último período com receita — referência para separar receita de dedução.
+  const receitaLiq = dre[idxLiquida];
+  let ultimo: string | null = null;
+  for (let i = periodos.length - 1; i >= 0; i--) {
+    if (Math.abs(valorEm(receitaLiq, periodos[i])) > 0) { ultimo = periodos[i]; break; }
+  }
+  if (!ultimo) return [];
+
+  // Contas canônicas que SÃO receita: linhas positivas antes da Receita Líquida
+  // (Receita Bruta + contas de receita adicionadas ao modelo padrão).
+  const candidatas = dre.slice(0, idxLiquida).filter((l) => valorEm(l, ultimo!) > 0);
+  if (!candidatas.length) return [];
+  const destinosReceita = new Set(candidatas.map((l) => l.conta?.trim()).filter(Boolean) as string[]);
+
+  // ── Caminho 1: árvore original — nomes exatos do documento do cliente ──
+  const arvore = de.arvoreOriginalDRE;
+  if (arvore) {
+    const porNome = new Map<string, Record<string, number>>();
+    const add = (nome: string | undefined, p: string, v: number | undefined) => {
+      const chave = (nome ?? "").trim();
+      if (!chave || typeof v !== "number" || !Number.isFinite(v) || v === 0) return;
+      const vals = porNome.get(chave) ?? {};
+      vals[p] = (vals[p] ?? 0) + v;
+      porNome.set(chave, vals);
+    };
+    for (const p of periodos) {
+      const visita = (it: ItemArvoreDRE): void => {
+        if (it.destino && destinosReceita.has(it.destino)) {
+          const filhosComValor = (it.filhos ?? []).filter((f) => typeof f.valor === "number" && f.valor !== 0);
+          // O item é o agregado do documento → a abertura são os filhos dele.
+          if (filhosComValor.length) filhosComValor.forEach((f) => add(f.nome, p, f.valor));
+          else add(it.nome, p, it.valor);
+          return;
+        }
+        (it.filhos ?? []).forEach(visita);
+      };
+      (arvore[p] ?? []).forEach(visita);
+    }
+    const linhasArvore = [...porNome.entries()]
+      .filter(([, vals]) => (vals[ultimo!] ?? 0) > 0) // fonte extinta não vira projeção
+      .map(([conta, vals]) => ({
+        conta,
+        valores: Object.fromEntries(periodos.map((p) => [p, vals[p] ?? 0])),
+      }));
+    if (linhasArvore.length) return linhasArvore;
+  }
+
+  // ── Fallback: DRE canônica (capturas legadas sem árvore) ──
+  const bruta = candidatas.find((l) => l.conta?.trim().toLowerCase() === "receita bruta");
+  const demais = candidatas.filter((l) => l !== bruta);
+  let linhas = candidatas;
+  if (bruta && demais.length) {
+    const somaDemais = demais.reduce((s, l) => s + valorEm(l, ultimo!), 0);
+    const vBruta = valorEm(bruta, ultimo!);
+    // Bruta ≈ soma do detalhe → é subtotal; fica só o detalhe.
+    if (vBruta > 0 && Math.abs(somaDemais - vBruta) / vBruta < 0.02) linhas = demais;
+  }
+  return linhas.map((l) => ({
+    conta: l.conta ?? "Receita",
+    valores: Object.fromEntries(periodos.map((p) => [p, valorEm(l, p)])),
+  }));
+}
+
+/** Abertura de CUSTOS/DESPESAS do histórico (contas entre a Receita Líquida e o
+ *  EBITDA): mesma mecânica da receita — nomes EXATOS do documento via árvore
+ *  original, fallback na DRE canônica. Valores devolvidos em ABS (a DRE guarda
+ *  custos negativos; para ancorar premissa o analista lê o custo positivo). */
+export function derivarAberturaCustos(dadosEstruturados: unknown): LinhaReceitaHist[] {
+  const de = (dadosEstruturados ?? {}) as {
+    periodos?: string[];
+    dre?: Array<LinhaDados & { subtotal?: boolean }>;
+    arvoreOriginalDRE?: Record<string, ItemArvoreDRE[]>;
+  };
+  const dre = de.dre ?? [];
+  const periodos = de.periodos ?? [];
+  const idxLiquida = dre.findIndex((l) => l.conta?.trim().toLowerCase() === "receita líquida");
+  if (idxLiquida < 0) return [];
+  const idxEbitda = dre.findIndex((l) => l.conta?.trim().toLowerCase() === "ebitda");
+  const fim = idxEbitda > idxLiquida ? idxEbitda : dre.length;
+
+  // Último período com receita — mesma referência da abertura de receita.
+  const receitaLiq = dre[idxLiquida];
+  let ultimo: string | null = null;
+  for (let i = periodos.length - 1; i >= 0; i--) {
+    if (Math.abs(valorEm(receitaLiq, periodos[i])) > 0) { ultimo = periodos[i]; break; }
+  }
+  if (!ultimo) return [];
+
+  const candidatas = dre.slice(idxLiquida + 1, fim).filter((l) => !l.subtotal && valorEm(l, ultimo!) < 0);
+  if (!candidatas.length) return [];
+  const destinos = new Set(candidatas.map((l) => l.conta?.trim()).filter(Boolean) as string[]);
+
+  // Caminho 1: árvore original — nomes exatos do documento do cliente.
+  const arvore = de.arvoreOriginalDRE;
+  if (arvore) {
+    const porNome = new Map<string, Record<string, number>>();
+    const add = (nome: string | undefined, p: string, v: number | undefined) => {
+      const chave = (nome ?? "").trim();
+      if (!chave || typeof v !== "number" || !Number.isFinite(v) || v === 0) return;
+      const vals = porNome.get(chave) ?? {};
+      vals[p] = (vals[p] ?? 0) + v;
+      porNome.set(chave, vals);
+    };
+    for (const p of periodos) {
+      const visita = (it: ItemArvoreDRE): void => {
+        if (it.destino && destinos.has(it.destino)) {
+          const filhosComValor = (it.filhos ?? []).filter((f) => typeof f.valor === "number" && f.valor !== 0);
+          if (filhosComValor.length) filhosComValor.forEach((f) => add(f.nome, p, f.valor));
+          else add(it.nome, p, it.valor);
+          return;
+        }
+        (it.filhos ?? []).forEach(visita);
+      };
+      (arvore[p] ?? []).forEach(visita);
+    }
+    const linhasArvore = [...porNome.entries()]
+      .filter(([, vals]) => Math.abs(vals[ultimo!] ?? 0) > 0)
+      .map(([conta, vals]) => ({
+        conta,
+        valores: Object.fromEntries(periodos.map((p) => [p, Math.abs(vals[p] ?? 0)])),
+      }));
+    if (linhasArvore.length) return linhasArvore;
+  }
+
+  // Fallback: contas canônicas (capturas legadas sem árvore).
+  return candidatas.map((l) => ({
+    conta: l.conta ?? "Custo",
+    valores: Object.fromEntries(periodos.map((p) => [p, Math.abs(valorEm(l, p))])),
+  }));
+}
+
+/** Ativos de LONGO PRAZO do BP extraído (Imobilizado, Intangível, Ativos
+ *  Biológicos/cultura em formação) no último período com valor — âncora dos
+ *  "ativos existentes" do bloco de investimentos. Valores em ABS (líquidos de
+ *  depreciação acumulada: o fold já compensa as contas redutoras). */
+export function derivarImobilizadoHistorico(dadosEstruturados: unknown): { periodo: string | null; itens: Array<{ conta: string; valor: number }> } {
+  const de = (dadosEstruturados ?? {}) as { periodos?: string[]; bp?: Array<LinhaDados & { subtotal?: boolean }> };
+  const bp = de.bp ?? [];
+  const periodos = de.periodos ?? [];
+  const CONTAS = ["Imobilizado", "Intangível", "Ativos Biológicos - CP", "Ativos Biológicos - LP"];
+  const linhas = CONTAS
+    .map((c) => bp.find((l) => l.conta?.trim().toLowerCase() === c.toLowerCase()))
+    .filter((l): l is LinhaDados => !!l);
+  if (!linhas.length) return { periodo: null, itens: [] };
+  // Último período em que ALGUMA dessas contas tem valor.
+  let ultimo: string | null = null;
+  for (let i = periodos.length - 1; i >= 0; i--) {
+    if (linhas.some((l) => Math.abs(valorEm(l, periodos[i])) > 0)) { ultimo = periodos[i]; break; }
+  }
+  if (!ultimo) return { periodo: null, itens: [] };
+  return {
+    periodo: ultimo,
+    itens: linhas
+      .map((l) => ({ conta: l.conta ?? "Ativo", valor: Math.abs(valorEm(l, ultimo!)) }))
+      .filter((x) => x.valor > 0),
+  };
+}
+
+/** DÍVIDA do histórico: saldos de Empréstimos e Financiamentos (CP + LP) no
+ *  último período do balanço com valor — âncora para o contrato "dívida que
+ *  já existe" do B8 (o saldo vem daqui; prazo/taxa o analista informa). */
+export function derivarDividaHistorico(dadosEstruturados: unknown): { periodo: string | null; itens: Array<{ conta: string; valor: number }>; total: number } {
+  const de = (dadosEstruturados ?? {}) as { periodos?: string[]; bp?: LinhaDados[] };
+  const bp = de.bp ?? [];
+  const periodos = de.periodos ?? [];
+  const CONTAS = ["Empréstimos e Financiamentos - CP", "Empréstimos e Financiamentos - LP"];
+  const linhas = CONTAS
+    .map((c) => bp.find((l) => l.conta?.trim().toLowerCase() === c.toLowerCase()))
+    .filter((l): l is LinhaDados => !!l);
+  if (!linhas.length) return { periodo: null, itens: [], total: 0 };
+  let ultimo: string | null = null;
+  for (let i = periodos.length - 1; i >= 0; i--) {
+    if (linhas.some((l) => Math.abs(valorEm(l, periodos[i])) > 0)) { ultimo = periodos[i]; break; }
+  }
+  if (!ultimo) return { periodo: null, itens: [], total: 0 };
+  const itens = linhas
+    .map((l) => ({ conta: l.conta ?? "Empréstimos", valor: Math.abs(valorEm(l, ultimo!)) }))
+    .filter((x) => x.valor > 0);
+  return { periodo: ultimo, itens, total: itens.reduce((s, x) => s + x.valor, 0) };
+}
+
+/** OUTRAS contas do BP histórico (fora de caixa/giro/imobilizado/dívida/PL):
+ *  âncora do bloco "Outros itens do balanço" — mútuos, antecipações, impostos
+ *  e pessoal a pagar etc. Classificação SUGERIDA pelo sufixo CP/LP (circulante)
+ *  e por palavras-chave (lado ativo/passivo) — o analista confirma na tela. */
+export function derivarOutrosBalanco(dadosEstruturados: unknown): {
+  periodo: string | null;
+  itens: Array<{ conta: string; valor: number; classificacao: "ac" | "anc" | "pc" | "pnc"; ladoIncerto: boolean }>;
+} {
+  const de = (dadosEstruturados ?? {}) as { periodos?: string[]; bp?: LinhaDados[] };
+  const bp = de.bp ?? [];
+  const periodos = de.periodos ?? [];
+  const JA_MODELADAS = [
+    "caixa", "equivalentes", "disponibilidades", "aplicações financeiras", "aplicacoes financeiras",
+    "contas a receber", "estoques", "fornecedores", "empréstimos e financiamentos", "emprestimos e financiamentos",
+    "imobilizado", "intangível", "intangivel", "biológicos", "biologicos",
+    "capital social", "reservas", "lucros acumulados", "prejuízos acumulados", "prejuizos acumulados", "patrimônio", "patrimonio", "ajustes de avaliação",
+  ];
+  const PASSIVO_KEYS = ["a pagar", "obrigaç", "obrigac", "provis", "adiantamento de cliente", "adiantamentos de cliente", "dividendos", "salários", "salarios", "pessoal", "encargos", "débitos", "debitos", "parcelament"];
+  const ATIVO_KEYS = ["a receber", "recuperar", "adiantamento a fornecedor", "adiantamentos a fornecedor", "crédito", "credito", "despesas antecipadas", "depósitos judiciais", "depositos judiciais"];
+
+  const candidatas = bp.filter((l) => {
+    const nome = (l.conta ?? "").trim();
+    const lower = nome.toLowerCase();
+    const ehFolha = / - (cp|lp)$/i.test(nome); // só contas-folha do modelo canônico
+    return ehFolha && !JA_MODELADAS.some((k) => lower.includes(k));
+  });
+  let ultimo: string | null = null;
+  for (let i = periodos.length - 1; i >= 0; i--) {
+    if (candidatas.some((l) => Math.abs(valorEm(l, periodos[i])) > 0)) { ultimo = periodos[i]; break; }
+  }
+  if (!ultimo) return { periodo: null, itens: [] };
+
+  const itens = candidatas
+    .map((l) => {
+      const nome = (l.conta ?? "").trim();
+      const lower = nome.toLowerCase();
+      const valor = Math.abs(valorEm(l, ultimo!));
+      const circulante = / - cp$/i.test(nome);
+      const ehPassivo = PASSIVO_KEYS.some((k) => lower.includes(k));
+      const ehAtivo = ATIVO_KEYS.some((k) => lower.includes(k));
+      const lado: "ativo" | "passivo" = ehPassivo && !ehAtivo ? "passivo" : "ativo";
+      const classificacao = (lado === "ativo" ? (circulante ? "ac" : "anc") : (circulante ? "pc" : "pnc")) as "ac" | "anc" | "pc" | "pnc";
+      return { conta: nome, valor, classificacao, ladoIncerto: ehPassivo === ehAtivo };
+    })
+    .filter((x) => x.valor > 0);
+  return { periodo: ultimo, itens };
+}
+
+/** DIAS DE GIRO do histórico (mesma régua dos indicadores do IBR, base anual):
+ *  PMR = Contas a Receber CP × 365 ÷ Receita Líquida · PME/PMP = conta × 365 ÷
+ *  Custo Operacional. Último período com receita; arredondado a dias inteiros. */
+export function derivarGiroHistorico(dadosEstruturados: unknown): { periodo: string | null; pmr: number | null; pme: number | null; pmp: number | null } {
+  const de = (dadosEstruturados ?? {}) as { periodos?: string[]; bp?: LinhaDados[]; dre?: LinhaDados[] };
+  const bp = de.bp ?? [];
+  const dre = de.dre ?? [];
+  const periodos = de.periodos ?? [];
+  const receitaLinha = achar(dre, "Receita Líquida") ?? achar(dre, "Receita Bruta");
+  const custoLinha = achar(dre, "Custo Operacional");
+  let ultimo: string | null = null;
+  for (let i = periodos.length - 1; i >= 0; i--) {
+    if (Math.abs(valorEm(receitaLinha, periodos[i])) > 0) { ultimo = periodos[i]; break; }
+  }
+  if (!ultimo) return { periodo: null, pmr: null, pme: null, pmp: null };
+  const receita = Math.abs(valorEm(receitaLinha, ultimo));
+  const custo = Math.abs(valorEm(custoLinha, ultimo));
+  const conta = (nome: string) => Math.abs(valorEm(achar(bp, nome), ultimo!));
+  const dias = (saldo: number, base: number): number | null =>
+    base > 0 && saldo > 0 ? Math.round((saldo * 365) / base) : null;
+  return {
+    periodo: ultimo,
+    pmr: dias(conta("Contas a Receber - CP"), receita),
+    pme: dias(conta("Estoques - CP"), custo),
+    pmp: dias(conta("Fornecedores - CP"), custo),
+  };
+}
+
+export function derivarHistoricoAnual(dadosEstruturados: unknown, excluirPeriodos: string[] = []): HistoricoAnual | null {
+  const de = (dadosEstruturados ?? {}) as { periodos?: string[]; dre?: LinhaDados[] };
+  const dre = de.dre ?? [];
+  const receitaLinha = achar(dre, "Receita Líquida") ?? achar(dre, "Receita Bruta");
+  const lbLinha = achar(dre, "Lucro Bruto");
+  const ebitdaLinha = achar(dre, "EBITDA");
+  if (!receitaLinha) return null;
+
+  const linhas: HistoricoAnual["linhas"] = { receita: {}, custos: {}, lucroBruto: {}, despesas: {}, ebitda: {} };
+  const periodos: string[] = [];
+  for (const p of de.periodos ?? []) {
+    if (excluirPeriodos.includes(p)) continue; // absorvido pelo horizonte (realizado parcial)
+    const receita = Math.abs(valorEm(receitaLinha, p));
+    if (receita <= 0) continue; // período vazio/parcial sem receita não vira coluna
+    const lb = valorEm(lbLinha, p);
+    const ebitda = valorEm(ebitdaLinha, p);
+    periodos.push(p);
+    linhas.receita[p] = receita;
+    linhas.lucroBruto[p] = lb;
+    linhas.custos[p] = receita - lb;
+    linhas.despesas[p] = lb - ebitda;
+    linhas.ebitda[p] = ebitda;
+  }
+  return periodos.length ? { periodos, linhas } : null;
+}
+
+/** Realizado PARCIAL do ano corrente (ex.: balancete até 30/06/2026): vira meses
+ *  "reais" DENTRO do horizonte — o ano deixa de ser um vale de 6 meses e fecha
+ *  inteiro (realizado + projetado), como o valuation exige. Sem abertura mensal
+ *  na fonte, o acumulado é distribuído por igual entre os meses (aproximação
+ *  declarada; o balancete mensal refina isso nas próximas fases). */
+export interface RealizadoParcial {
+  ano: string;
+  fimMes: number; // último mês realizado (1-12)
+  periodoFonte: string; // rótulo do período na extração ("30/06/2026")
+  meses: string[];
+  porGrupo: { receita: Record<string, number>; custos: Record<string, number>; despesas: Record<string, number> };
+  memoria: string[];
+}
+
+export function derivarRealizadoParcial(dadosEstruturados: unknown, ano: string): RealizadoParcial | null {
+  const de = (dadosEstruturados ?? {}) as { periodos?: string[]; dre?: LinhaDados[] };
+  const dre = de.dre ?? [];
+  const receitaLinha = achar(dre, "Receita Líquida") ?? achar(dre, "Receita Bruta");
+  if (!receitaLinha) return null;
+
+  // Período parcial do ano: "DD/MM/AAAA" com AAAA = ano e MM < 12.
+  let periodoFonte: string | null = null;
+  let fimMes = 0;
+  for (const p of de.periodos ?? []) {
+    const m = p.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (m && m[3] === ano && Number(m[2]) < 12 && Math.abs(valorEm(receitaLinha, p)) > 0) {
+      if (Number(m[2]) > fimMes) { fimMes = Number(m[2]); periodoFonte = p; }
+    }
+  }
+  if (!periodoFonte || fimMes < 1) return null;
+
+  const receita = Math.abs(valorEm(receitaLinha, periodoFonte));
+  const lb = valorEm(achar(dre, "Lucro Bruto"), periodoFonte);
+  const ebitda = valorEm(achar(dre, "EBITDA"), periodoFonte);
+  const custosTot = receita - lb;
+  const despesasTot = lb - ebitda;
+
+  const meses: string[] = [];
+  const porGrupo: RealizadoParcial["porGrupo"] = { receita: {}, custos: {}, despesas: {} };
+  for (let m = 1; m <= fimMes; m++) {
+    const mes = `${ano}-${String(m).padStart(2, "0")}`;
+    meses.push(mes);
+    porGrupo.receita[mes] = receita / fimMes;
+    porGrupo.custos[mes] = custosTot / fimMes;
+    porGrupo.despesas[mes] = despesasTot / fimMes;
+  }
+  return {
+    ano, fimMes, periodoFonte, meses, porGrupo,
+    memoria: [
+      `Realizado parcial de ${ano}: período "${periodoFonte}" (receita ${receita.toFixed(2)}, EBITDA ${ebitda.toFixed(2)}), distribuído por igual entre ${fimMes} meses (sem abertura mensal na fonte).`,
+    ],
+  };
+}
+
+export function derivarSeed(dadosEstruturados: unknown): SeedDerivado {
+  const de = (dadosEstruturados ?? {}) as { periodos?: string[]; dre?: LinhaDados[] };
+  const periodos = de.periodos ?? [];
+  const dre = de.dre ?? [];
+  const memoria: string[] = [];
+
+  const receitaLinha = achar(dre, "Receita Líquida") ?? achar(dre, "Receita Bruta");
+  const lucroBrutoLinha = achar(dre, "Lucro Bruto");
+  const ebitdaLinha = achar(dre, "EBITDA");
+
+  // Último período com receita > 0 (períodos parciais/zerados não ancoram nada).
+  let ultimo: string | null = null;
+  for (let i = periodos.length - 1; i >= 0; i--) {
+    if (Math.abs(valorEm(receitaLinha, periodos[i])) > 0) { ultimo = periodos[i]; break; }
+  }
+
+  if (!ultimo) {
+    return { receitaMensal: 0, crescimentoAnual: 0.1, pctCustos: 0, pctDespesas: 0, memoria: ["Histórico sem receita — modelo parte de valores neutros para o analista preencher."] };
+  }
+
+  const receitaAnual = Math.abs(valorEm(receitaLinha, ultimo));
+  const receitaMensal = receitaAnual / 12;
+  memoria.push(`Receita base: ${ultimo} = ${receitaAnual.toFixed(2)} (÷12 por mês), linha "${receitaLinha?.conta}".`);
+
+  // Crescimento: variação da receita entre os dois últimos períodos com valor.
+  let crescimentoAnual = 0.1;
+  const idxUlt = periodos.indexOf(ultimo);
+  for (let i = idxUlt - 1; i >= 0; i--) {
+    const ant = Math.abs(valorEm(receitaLinha, periodos[i]));
+    if (ant > 0) {
+      // Trava de sanidade: −50%..+100% a.a. — fora disso a âncora vira ruído.
+      crescimentoAnual = Math.max(-0.5, Math.min(1, receitaAnual / ant - 1));
+      memoria.push(`Crescimento: ${periodos[i]} → ${ultimo} = ${(crescimentoAnual * 100).toFixed(1)}% a.a. (trava −50%..+100%).`);
+      break;
+    }
+  }
+
+  // Custos = Receita − Lucro Bruto; Despesas (OpEx) = Lucro Bruto − EBITDA.
+  // Mesma derivação robusta do projection-engine (independe de linha agregada).
+  const lucroBruto = valorEm(lucroBrutoLinha, ultimo);
+  const ebitda = valorEm(ebitdaLinha, ultimo);
+  let pctCustos = 0;
+  let pctDespesas = 0;
+  if (receitaAnual > 0 && lucroBrutoLinha) {
+    pctCustos = Math.max(0, Math.min(1, (receitaAnual - lucroBruto) / receitaAnual));
+    memoria.push(`Custos: (Receita − Lucro Bruto) ÷ Receita = ${(pctCustos * 100).toFixed(1)}%.`);
+  }
+  if (receitaAnual > 0 && lucroBrutoLinha && ebitdaLinha) {
+    pctDespesas = Math.max(0, Math.min(1, (lucroBruto - ebitda) / receitaAnual));
+    memoria.push(`Despesas: (Lucro Bruto − EBITDA) ÷ Receita = ${(pctDespesas * 100).toFixed(1)}%.`);
+  }
+
+  return { receitaMensal, crescimentoAnual, pctCustos, pctDespesas, memoria };
+}

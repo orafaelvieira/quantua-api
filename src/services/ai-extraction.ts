@@ -118,6 +118,25 @@ export function calcCusto(modelo: string, inTok: number, outTok: number): CustoI
   return { modelo, inputTokens: inTok, outputTokens: outTok, usd: inTok * p.in + outTok * p.out };
 }
 
+/** Pergunta AVULSA de texto com resposta JSON (Haiku, barata) — para features
+ *  pontuais fora do pipeline (ex.: escrever a fórmula do Modelo Financeiro).
+ *  Devolve o custo junto: quem chama REGISTRA (regra da casa). */
+export async function perguntarJson(prompt: string, maxTokens = 800, modelo: "haiku" | "sonnet" = "haiku"): Promise<{ data: Record<string, unknown>; custo: CustoIA }> {
+  const modelId = modelo === "sonnet" ? AI_MODEL : AI_MODEL_FAST;
+  const msg = await client.messages.create({
+    model: modelId, max_tokens: maxTokens, temperature: 0,
+    messages: [{ role: "user", content: prompt }],
+  });
+  let txt = msg.content[0]?.type === "text" ? msg.content[0].text.trim() : "";
+  if (txt.startsWith("```")) txt = txt.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
+  let data: Record<string, unknown> = {};
+  try { data = JSON.parse(txt); } catch {
+    const i = txt.indexOf("{"), f = txt.lastIndexOf("}");
+    if (i >= 0 && f > i) { try { data = JSON.parse(txt.slice(i, f + 1)); } catch { /* fica vazio */ } }
+  }
+  return { data, custo: calcCusto(modelId, msg.usage?.input_tokens ?? 0, msg.usage?.output_tokens ?? 0) };
+}
+
 /**
  * `messages.create` com retry/backoff em 429 (rate limit) e 529 (overloaded) —
  * espelha o que o `ask()` faz na extração. Picos transitórios da API NÃO podem
