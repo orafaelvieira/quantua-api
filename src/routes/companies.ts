@@ -220,12 +220,16 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
       }
     }
 
+    // Modelos financeiros da empresa NÃO têm FK (companyId é índice simples) —
+    // sem esta limpeza explícita eles ficariam órfãos após a exclusão.
+    const modelosRemovidos = await prisma.financialModel.deleteMany({ where: { companyId: id } });
+
     await prisma.company.delete({ where: { id } });
     // TRILHA da exclusão — snapshot básico ANTES de sumir (analysisId null: as análises
     // em cascade não podem levar a trilha junto).
     void registrarAuditoria({
       userId: req.userId!, entity: "company", entityId: id, field: "exclusão",
-      before: { razaoSocial: existing.razaoSocial, nomeFantasia: existing.nomeFantasia, cnpj: existing.cnpj },
+      before: { razaoSocial: existing.razaoSocial, nomeFantasia: existing.nomeFantasia, cnpj: existing.cnpj, modelosFinanceiros: modelosRemovidos.count },
     });
     res.status(204).send();
   } catch (err: any) {

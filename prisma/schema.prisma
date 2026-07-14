@@ -442,7 +442,10 @@ model Document {
   createdAt      DateTime @default(now()) @map("created_at")
 
   analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
-  company  Company  @relation(fields: [companyId], references: [id])
+  // Cascade TAMBÉM por empresa: sem ele o RESTRICT dispara IMEDIATO no
+  // Postgres e excluir empresa com documentos falha — mesmo que a cascata
+  // das análises fosse apagar esses documentos logo em seguida.
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@map("documents")
 }
