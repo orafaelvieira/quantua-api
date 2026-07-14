@@ -835,7 +835,7 @@
   },
   {
     "nomeOriginal": "Despesas do Exercicio Seguinte",
-    "contaDestino": "Outros Ativos Circulantes",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
     "grupoConta": "Ativo Circulante",
     "tipo": "BP"
   },
@@ -7449,6 +7449,66 @@
     "nomeOriginal": "ICMS sobre Faturamento",
     "contaDestino": "Impostos s/ Faturamento",
     "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "Quotas em Tesouraria",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Ações em Tesouraria",
+    "contaDestino": "Capital Social",
+    "grupoConta": "Patrimônio Líquido",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Encargos sobre Empréstimos e Financiamentos",
+    "contaDestino": "Empréstimos e Financiamentos - LP",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Encargos sobre Parcelamentos",
+    "contaDestino": "Obrigações Tributárias - LP",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Parcelamentos",
+    "contaDestino": "Obrigações Tributárias - LP",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Saldo Devedor Conta Corrente",
+    "contaDestino": "Empréstimos e Financiamentos - CP",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucros ou Dividendos Apurados",
+    "contaDestino": "Dividendos e JCP a Pagar",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Lucros ou Dividendos Apurados",
+    "contaDestino": "Dividendos e Juros sobre o Capital Próprio",
+    "grupoConta": "Passivo Não Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisões para Férias e 13º Salário",
+    "contaDestino": "Obrigações Trabalhistas - CP",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "Provisão para Contr. Social",
+    "contaDestino": "IR e CSLL",
+    "grupoConta": "IR e CSLL",
     "tipo": "DRE"
   }
 ]

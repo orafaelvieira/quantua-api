@@ -587,3 +587,53 @@ describe("DRE — bridge do modelo do banco (conta adicionada pelo usuário)", (
     expect(val("Lucro Líquido")).toBeCloseTo(800, 1);         // fluiu até o LL
   });
 });
+
+// Regressões do caso AOCP (visualizador SPED, 2026-07-14).
+
+describe("foldDRE — herança da seção de receita (caso AOCP)", () => {
+  it("folha sem mapa sob 'Receita Operacional' herda Receita Bruta (não cai em Outras Receitas)", async () => {
+    const { foldDRE } = await import("./ai-extraction");
+    const arvore = {
+      "2025": [
+        {
+          nome: "Receita Operacional", valor: 5435708.05, filhos: [
+            { nome: "SERVIÇOS PRESTADOS", valor: 1910411 },
+            { nome: "ARRENDAMENTO", valor: 3525297.05 }, // receita de arrendamento, sem entrada no dicionário
+          ],
+        },
+      ],
+    } as any;
+    const dict = [{ nomeOriginal: "Serviços Prestados", contaDestino: "Receita Bruta", grupoConta: "Receita Bruta" }];
+    const { dre, naoMapeados } = foldDRE(arvore, ["2025"], dict);
+    const val = (c: string) => dre.find((l) => l.conta === c)?.valores["2025"] ?? 0;
+    expect(val("Receita Bruta")).toBeCloseTo(5435708.05, 1);
+    expect(val("Outras Receitas Operacionais")).toBeCloseTo(0, 1);
+    expect(naoMapeados.length).toBe(0);
+  });
+});
+
+describe("foldBP — destino GENÉRICO não prova divergência (caso AOCP)", () => {
+  it("filho que só mapeia para 'Outros …' não força descida — o pai específico absorve", () => {
+    const arvore = {
+      "2025": {
+        grupos: {
+          "Ativo Circulante": [
+            {
+              nome: "DESPESAS PAGAS ANTECIPADAMENTE", valor: 3150.18, filhos: [
+                { nome: "DESPESAS DO EXERCÍCIO SEGUINTE", valor: 3150.18 },
+              ],
+            },
+          ],
+        },
+      },
+    } as any;
+    const dict = [
+      { nomeOriginal: "Despesas Pagas Antecipadamente", contaDestino: "Despesas Ant. / Adiantamentos - Ativo", grupoConta: "Ativo Circulante" },
+      // entrada que aponta para o BALDE: não pode ser "prova" de que vale descer
+      { nomeOriginal: "Despesas do Exercicio Seguinte", contaDestino: "Outros Ativos Circulantes", grupoConta: "Ativo Circulante" },
+    ];
+    const { bp } = foldBP(arvore, ["2025"], dict);
+    expect(valorDe(bp, "Despesas Ant. / Adiantamentos - Ativo", "2025")).toBeCloseTo(3150.18, 1);
+    expect(valorDe(bp, "Outros Ativos Circulantes", "2025")).toBeCloseTo(0, 1);
+  });
+});

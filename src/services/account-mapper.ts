@@ -21,6 +21,13 @@ export interface DREMapResult {
 function normalize(s: string): string {
   return s.toLowerCase()
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // remove accents
+    // Expande abrevia\u00e7\u00f5es cont\u00e1beis ANTES de tirar a pontua\u00e7\u00e3o: "p/", "s/", "c/"
+    // ("PROVIS\u00c3O P/ IRPJ" \u2261 "Provis\u00e3o para IRPJ", "ENCARGOS S/ PARCELAMENTOS" \u2261
+    // "Encargos sobre Parcelamentos"). S\u00f3 quando segue palavra de 3+ letras \u2014
+    // preserva "S/A" (sociedade an\u00f4nima) e "c/c" (conta corrente).
+    .replace(/\bp\/\s*(?=[a-z]{3,})/g, "para ")
+    .replace(/\bs\/\s*(?=[a-z]{3,})/g, "sobre ")
+    .replace(/\bc\/\s*(?=[a-z]{3,})/g, "com ")
     .replace(/[^a-z0-9 ]/g, " ")  // replace non-alphanumeric with space
     .replace(/\s+/g, " ")         // collapse whitespace
     .trim();
@@ -106,6 +113,17 @@ function findBestMatch(
     return grupoMatchesClassificacao(grupo, classif);
   };
 
+  // TRADUÇÃO CP↔LP: quando o dicionário conhece a conta mas no OUTRO prazo (ex.:
+  // "Clientes Diversos" → Contas a Receber - CP, e o documento a coloca no Ativo
+  // NÃO Circulante), a linha-gêmea do prazo certo é o destino correto — a POSIÇÃO
+  // no documento manda. Nunca cruza Ativo/Passivo (o sufixo só troca o prazo) e o
+  // gêmeo ainda passa por isGrupoCompatible.
+  const twinCPLP = (dest: string): string | null => {
+    const twin = dest.endsWith(" - CP") ? `${dest.slice(0, -5)} - LP`
+      : dest.endsWith(" - LP") ? `${dest.slice(0, -5)} - CP` : null;
+    return twin && candidates.includes(twin) && isGrupoCompatible(twin) ? twin : null;
+  };
+
   // 0. Dictionary exact match (highest priority — user-defined mappings)
   if (dictionaryEntries && dictionaryEntries.length > 0) {
     // First pass: match by name + grupo
@@ -143,13 +161,18 @@ function findBestMatch(
         if (isGrupoCompatible(entry.contaDestino)) {
           return entry.contaDestino;
         }
+        const twin = twinCPLP(entry.contaDestino);
+        if (twin) return twin;
       }
     }
     // Third pass: name-only match — ainda RESPEITA o grupo (nunca cruza Ativo/Passivo
-    // nem CP/LP). Sem grupo (DRE) isGrupoCompatible é sempre true.
+    // nem CP/LP — mas TRADUZ para a linha-gêmea do prazo do documento quando existe).
+    // Sem grupo (DRE) isGrupoCompatible é sempre true.
     for (const entry of dictionaryEntries) {
-      if (normalize(entry.nomeOriginal) === norm && candidates.includes(entry.contaDestino) && isGrupoCompatible(entry.contaDestino)) {
-        return entry.contaDestino;
+      if (normalize(entry.nomeOriginal) === norm && candidates.includes(entry.contaDestino)) {
+        if (isGrupoCompatible(entry.contaDestino)) return entry.contaDestino;
+        const twin = twinCPLP(entry.contaDestino);
+        if (twin) return twin;
       }
     }
   }
@@ -161,12 +184,21 @@ function findBestMatch(
   // (sem fallback que ignore grupo: cruzar Ativo/Passivo ou CP/LP é proibido)
 
   // 2. Alias match — try both original and cleaned name, prefer grupo-compatible
+  // (com tradução CP↔LP quando o alias conhece a conta no outro prazo)
   for (const name of [conta, cleaned, conta.trim()]) {
     const aliased = ACCOUNT_ALIASES[name];
-    if (aliased && candidates.includes(aliased) && isGrupoCompatible(aliased)) return aliased;
+    if (aliased && candidates.includes(aliased)) {
+      if (isGrupoCompatible(aliased)) return aliased;
+      const twin = twinCPLP(aliased);
+      if (twin) return twin;
+    }
   }
   for (const [alias, canonical] of Object.entries(ACCOUNT_ALIASES)) {
-    if (normalize(alias) === norm && candidates.includes(canonical) && isGrupoCompatible(canonical)) return canonical;
+    if (normalize(alias) === norm && candidates.includes(canonical)) {
+      if (isGrupoCompatible(canonical)) return canonical;
+      const twin = twinCPLP(canonical);
+      if (twin) return twin;
+    }
   }
   // (sem fallback de alias que ignore grupo)
 
@@ -183,7 +215,13 @@ function findBestMatch(
   // DEDUP das palavras: sem isso, uma palavra repetida no nome (ex.: o fallback de contexto
   // "OUTRAS OBRIGAÇÕES A LONGO PRAZO OUTRAS OBRIGAÇÕES") conta 2x no overlap e infla o score,
   // casando falsamente com candidatos de 1 palavra em comum ("Obrigações Trabalhistas - LP").
-  const normWords = [...new Set(norm.split(/\s+/).filter(w => w.length > 2))];
+  // STOPWORDS: conectivos (inclusive os que a expansão p//s//c/ cria) não carregam
+  // significado e inflavam o OVERLAP — "Despesas c/ Administração" ≡ "despesas com
+  // administracao" casava "Despesas com P&D" só por {despesas, com} ("p d" some no filtro).
+  // Saem só do lado do NOME (numerador); o candidato mantém as palavras no denominador
+  // — assim um candidato curto ("Despesas com P&D") não vira alvo de 1 palavra genérica.
+  const STOP_FUZZY = new Set(["com", "para", "sobre"]);
+  const normWords = [...new Set(norm.split(/\s+/).filter(w => w.length > 2 && !STOP_FUZZY.has(w)))];
   let bestScore = 0;
   let bestCandidate: string | null = null;
   for (const c of candidates) {

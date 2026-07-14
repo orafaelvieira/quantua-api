@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseBRNumber, yearFromFilename, detectPeriodsFromPDF, collapseOpeningClosing } from "./parser";
+import { parseBRNumber, yearFromFilename, detectPeriodsFromPDF, collapseOpeningClosing, juntarNomeValorQuebrados } from "./parser";
 
 describe("parseBRNumber — sinal contábil (parênteses = negativo)", () => {
   it("positivo simples", () => {
@@ -92,5 +92,60 @@ describe("collapseOpeningClosing — saldo abertura+fechamento (ECF/ECD/SPED)", 
 
   it("período único: inalterado", () => {
     expect(collapseOpeningClosing(["31/12/2022"], [row({ "31/12/2022": 1 })])).toEqual(["31/12/2022"]);
+  });
+});
+
+// Regressão do caso AOCP (visualizador SPED): algumas linhas renderizam nome e valores
+// em baselines vizinhas (linhas separadas) e nomes longos quebram em 2 linhas com os
+// valores no MEIO — sem a junção, o PL inteiro e as contas do PNC sumiam da extração.
+describe("juntarNomeValorQuebrados — pares nome/valor do visualizador SPED", () => {
+  it("nome órfão + linha de valores → uma linha só", () => {
+    const raw = [
+      "     PATRIMÔNIO LÍQUIDO",
+      "                     R$ 2.800.000,00                  R$ 3.400.000,00",
+      "      CAPITAL SOCIAL",
+      "                     R$ 2.800.000,00                  R$ 3.400.000,00",
+    ].join("\n");
+    const out = juntarNomeValorQuebrados(raw).split("\n");
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatch(/^     PATRIMÔNIO LÍQUIDO\s+R\$ 2\.800\.000,00/);
+    expect(out[1]).toMatch(/^      CAPITAL SOCIAL\s+R\$ 2\.800\.000,00/);
+  });
+
+  it("nome quebrado em 2 linhas com valores no meio → junta os fragmentos", () => {
+    const raw = [
+      "       (-) (-) ENCARGOS S/ EMPRÉSTIMOS E ",
+      "                     R$ (78.391,93)                   R$ (333.421,03)",
+      "    FINANCIAMENTOS",
+      "       PARCELAMENTOS                                  R$ 2.831.703,57                  R$ 1.964.719,78",
+    ].join("\n");
+    const out = juntarNomeValorQuebrados(raw).split("\n");
+    expect(out).toHaveLength(2);
+    expect(out[0]).toContain("ENCARGOS S/ EMPRÉSTIMOS E FINANCIAMENTOS");
+    expect(out[0]).toContain("R$ (333.421,03)");
+    expect(out[1]).toContain("PARCELAMENTOS");
+  });
+
+  it("linha seguinte que espera o próprio par NÃO é tratada como continuação", () => {
+    const raw = [
+      "       OUTRAS OBRIGAÇÕES A PAGAR",
+      "                     R$ 317.511,06                   R$ 105.363,38",
+      "       LUCROS OU DIVIDENDOS APURADOS",
+      "                     R$ 0,00                   R$ 509.619,94",
+    ].join("\n");
+    const out = juntarNomeValorQuebrados(raw).split("\n");
+    expect(out).toHaveLength(2);
+    expect(out[0]).toContain("OUTRAS OBRIGAÇÕES A PAGAR");
+    expect(out[0]).toContain("105.363,38");
+    expect(out[1]).toContain("LUCROS OU DIVIDENDOS APURADOS");
+    expect(out[1]).toContain("509.619,94");
+  });
+
+  it("linhas inline e cabeçalhos passam intactos", () => {
+    const raw = [
+      "                 Descrição                     Nota                Saldo Inicial                   Saldo Final",
+      "    ATIVO                                      R$ 6.593.019,93                  R$ 8.147.304,62",
+    ].join("\n");
+    expect(juntarNomeValorQuebrados(raw)).toBe(raw);
   });
 });

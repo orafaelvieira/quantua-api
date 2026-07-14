@@ -16,7 +16,7 @@
 // encaixam nesta reconstrução.
 
 import type { ParsedDocument } from "./parser";
-import { parseBRNumber } from "./parser";
+import { parseBRNumber, juntarNomeValorQuebrados } from "./parser";
 import type { ArvoreOriginalBP, BPN3Item, BPN3Periodo } from "./ai-extraction";
 
 // Normaliza acento/caixa/pontuação para comparar nomes de grupo de forma robusta.
@@ -81,17 +81,33 @@ interface NoIndent {
   filhos: NoIndent[];
 }
 
-/** Extrai (nome, valores[]) de uma linha indentada. `nCols` = nº de períodos esperados:
- *  pega os `nCols` ÚLTIMOS números da linha (na ordem das colunas). Se a linha não termina
- *  em número, é cabeçalho/rodapé textual → retorna null. */
+/** Extrai (nome, valores[]) de uma linha indentada. `nCols` = nº de períodos esperados.
+ *  O nome é tudo antes da CORRIDA FINAL de números (a sequência de tokens de valor no fim da
+ *  linha, separados só por espaços/"R$"/parênteses). Antes o corte era no último token apenas:
+ *  em docs de 2 colunas com o período já colapsado (SPED "Saldo Inicial | Saldo Final"),
+ *  o valor da 1ª coluna ficava DENTRO do nome ("CAIXA ... R$ 0,00") e o dicionário não casava
+ *  — o BP inteiro caía nos baldes "Outros". A corrida protege nomes com número no meio
+ *  ("PIS 0,65% SOBRE FATURAMENTO"): a corrida para no primeiro trecho com letras. */
 function parseLinha(linha: string, nCols: number): { nome: string; valores: number[] } | null {
   const semIndent = linha.replace(/\s+$/, "");
   const matches = [...semIndent.matchAll(BR_VALOR)].map((m) => ({ raw: m[0], idx: m.index ?? 0 }));
   if (matches.length === 0) return null;
 
-  // Os valores ficam NO FIM da linha (colunas de período). Pega os últimos `nCols` tokens
-  // que sejam realmente numéricos; se houver menos, usa quantos houver (linhas de 1 valor).
-  const usar = matches.slice(Math.max(0, matches.length - Math.max(1, nCols)));
+  // Corrida final: caminha do último token para trás enquanto o texto entre os tokens
+  // (e depois do último) só tiver espaços, "R$" e parênteses — sem letras.
+  const soSeparador = (s: string) => !/[A-Za-zÀ-ú]/.test(s.replace(/R\$/g, ""));
+  if (!soSeparador(semIndent.slice(matches[matches.length - 1].idx + matches[matches.length - 1].raw.length))) return null;
+  let inicioCorrida = matches.length - 1;
+  while (inicioCorrida > 0) {
+    const ant = matches[inicioCorrida - 1];
+    const entre = semIndent.slice(ant.idx + ant.raw.length, matches[inicioCorrida].idx);
+    if (!soSeparador(entre)) break;
+    inicioCorrida--;
+  }
+  const corrida = matches.slice(inicioCorrida);
+
+  // Valores = os últimos `nCols` tokens da corrida (linhas de 1 valor usam o que houver).
+  const usar = corrida.slice(Math.max(0, corrida.length - Math.max(1, nCols)));
   const valores: number[] = [];
   for (const m of usar) {
     const v = parseBRNumber(m.raw);
@@ -100,8 +116,13 @@ function parseLinha(linha: string, nCols: number): { nome: string; valores: numb
   }
   if (valores.length === 0) return null;
 
-  // O NOME é tudo antes do primeiro token de valor usado (o resto à direita são só números).
-  const nome = semIndent.slice(0, usar[0].idx).trim();
+  // Nome = tudo antes da corrida, sem o "R$" da 1ª coluna e sem prefixos (-)/(=)/(+)
+  // — o SPED imprime até duplicado: "(-) (-) QUOTAS EM TESOURARIA".
+  const nome = semIndent
+    .slice(0, corrida[0].idx)
+    .replace(/\s*R\$\s*$/, "")
+    .replace(/^(\s*\(?[=\-+]\)?\s*)+/, "")
+    .trim();
   if (!nome) return null;
   return { nome, valores };
 }
@@ -197,8 +218,11 @@ export function construirArvoreBPporIndentacao(
   doc: ParsedDocument,
   periodos: string[]
 ): ArvoreOriginalBP | null {
-  const raw = doc.raw;
-  if (!raw || typeof raw !== "string") return null;
+  if (!doc.raw || typeof doc.raw !== "string") return null;
+  // Junta pares nome-órfão + linha-de-valores e nomes quebrados em 2 linhas (SPED)
+  // ANTES de ler — sem isso essas contas somem da árvore ("ENCARGOS S/ EMPRÉSTIMOS E
+  // FINANCIAMENTOS" no PNC da AOCP) e o Passivo recomputado deixa de fechar.
+  const raw = juntarNomeValorQuebrados(doc.raw);
 
   const cols = periodos.length || 1;
 

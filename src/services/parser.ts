@@ -519,47 +519,50 @@ export async function parsePDF(buffer: Buffer, tipo: string, filename?: string):
     const items = content.items as Array<{ str: string; transform: number[]; width?: number }>;
     if (!items || items.length === 0) return "";
 
-    // Group text items by y-coordinate (same visual line).
-    // Round y to nearest 4 units (±2 tolerance) to merge items on the same line.
-    // Store width for gap-based joining.
-    const lineMap = new Map<number, Array<{ str: string; x: number; width: number }>>();
+    // Group text items by PROXIMIDADE de y (mesma linha visual), não por bucket fixo.
+    // O arredondamento antigo (round(y) → round(y/4)*4) quebrava pares nome/valor com
+    // ~0,5pt de diferença de baseline quando o y caía na fronteira do .5 (SPED:
+    // "PATRIMÔNIO LÍQUIDO" y=169,1 → bucket 168; valores y=169,6 → 170 → bucket 172),
+    // virando linhas "só nome" e "só valor" que o extrator descartava. O espaçamento
+    // real entre linhas é ~16pt; tolerância 3 une baselines vizinhas sem fundir linhas.
+    const rawItems: Array<{ str: string; x: number; y: number; width: number }> = [];
     for (const item of items) {
       if (!item.str || !item.str.trim()) continue;
       if (!item.transform || item.transform.length < 6) continue;
-      const x = Math.round(item.transform[4]);
-      const y = Math.round(item.transform[5]);
-      const yKey = Math.round(y / 4) * 4;
-      if (!lineMap.has(yKey)) lineMap.set(yKey, []);
-      lineMap.get(yKey)!.push({ str: item.str, x, width: item.width || 0 });
+      rawItems.push({ str: item.str, x: item.transform[4], y: item.transform[5], width: item.width || 0 });
+    }
+    rawItems.sort((a, b) => b.y - a.y);
+    const Y_TOL = 3;
+    const clusters: Array<Array<{ str: string; x: number; width: number }>> = [];
+    let clusterY = Infinity;
+    for (const it of rawItems) {
+      if (!clusters.length || Math.abs(clusterY - it.y) > Y_TOL) {
+        clusters.push([]);
+        clusterY = it.y; // âncora = 1º item (y mais alto) da linha
+      }
+      clusters[clusters.length - 1].push({ str: it.str, x: it.x, width: it.width });
     }
 
     // Find minimum x across all text items (= left margin of this page)
     let minPageX = Infinity;
-    for (const lineItems of lineMap.values()) {
-      for (const item of lineItems) {
-        if (item.x < minPageX) minPageX = item.x;
-      }
+    for (const item of rawItems) {
+      if (item.x < minPageX) minPageX = item.x;
     }
     if (minPageX === Infinity) minPageX = 0;
 
     // Estimate average character width from all items on the page
     let totalWidth = 0;
     let totalChars = 0;
-    for (const lineItems of lineMap.values()) {
-      for (const item of lineItems) {
-        if (item.width > 0 && item.str.length > 0) {
-          totalWidth += item.width;
-          totalChars += item.str.length;
-        }
+    for (const item of rawItems) {
+      if (item.width > 0 && item.str.length > 0) {
+        totalWidth += item.width;
+        totalChars += item.str.length;
       }
     }
     const avgCharWidth = totalChars > 0 ? totalWidth / totalChars : 5;
 
-    // Sort lines top-to-bottom (descending y in PDF coordinate system)
-    const sortedLines = [...lineMap.entries()].sort((a, b) => b[0] - a[0]);
-
     const textLines: string[] = [];
-    for (const [, lineItems] of sortedLines) {
+    for (const lineItems of clusters) {
       lineItems.sort((a, b) => a.x - b.x);
 
       // Gap-based joining: only add spaces when there's a real visual gap
@@ -989,23 +992,71 @@ function extractMultiColumnPDF(text: string, periodos: string[]): ExtractedRow[]
   return result;
 }
 
+// BR number pattern: optional parens/negative, digits with dots, comma, 2 decimals.
+// `\s*` antes do `\)?` porque alguns balancetes escrevem o negativo como "(1.234,56 )".
+const BR_NUM_G = /\(?-?[\d.]+,\d{2}\s*\)?/g;
+
+/**
+ * Junta pares "nome órfão + linha de valores" numa linha só — PDFs do visualizador
+ * SPED renderizam algumas linhas com o nome e os valores em baselines ligeiramente
+ * diferentes, e quebram nomes longos em 2 linhas com os valores no MEIO:
+ *   "(-) ENCARGOS SOBRE" / "R$ (89.159,01) R$ (18.921,18)" / "PARCELAMENTOS"
+ * Regra: valores logo após um nome pertencem a ele; se a linha seguinte ao par for
+ * outro nome com indentação MENOR e a próxima não for de valores (i.e., não é uma
+ * conta esperando o próprio par), é a continuação do nome quebrado — junta.
+ * Usada pelo extractInlinePDF E pela árvore determinística do BP (bp-tree-indent).
+ */
+export function juntarNomeValorQuebrados(text: string): string {
+  const lines = text.split("\n");
+  const kindDe = (l: string | undefined): "nome" | "valores" | "outra" => {
+    const t = (l ?? "").trim();
+    if (!t || t.length < 3) return "outra";
+    const nums = t.match(BR_NUM_G);
+    const temLetras = /[A-Za-zÀ-ú]/.test(t.replace(BR_NUM_G, "").replace(/R\$/g, ""));
+    if (nums && !temLetras) return "valores";
+    if (!nums && temLetras) return "nome";
+    return "outra";
+  };
+  const kinds = lines.map(kindDe);
+  const indentDe = (l: string) => l.length - l.trimStart().length;
+  const sectionHeader = /^(ATIVO|PASSIVO|PATRIM[OÔ]NIO)/i;
+
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (kinds[i] !== "nome" || kinds[i + 1] !== "valores") { out.push(lines[i]); continue; }
+    let nome = lines[i].replace(/\s+$/, "");
+    let consome = 1;
+    if (
+      kinds[i + 2] === "nome" &&
+      indentDe(lines[i + 2]) < indentDe(lines[i]) &&
+      kinds[i + 3] !== "valores" &&
+      !sectionHeader.test(lines[i + 2].trim())
+    ) {
+      nome = `${nome} ${lines[i + 2].trim()}`;
+      consome = 2; // consome valores + fragmento de continuação
+    }
+    out.push(`${nome}   ${lines[i + 1].trim()}`);
+    i += consome;
+  }
+  return out.join("\n");
+}
+
 /**
  * Extract data from PDFs where account name and values are on the same line,
  * but concatenated without spaces.
  * Example: "RECEITA BRUTA DE VENDAS E SERVIÇOS105.491.499,80109.689.157,06"
  */
 function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
-  const lines = text.split("\n");
+  const lines = juntarNomeValorQuebrados(text).split("\n");
   const rawRows: Array<{ conta: string; valores: Record<string, number>; indent: number }> = [];
 
   // Skip patterns
-  const skipPatterns = /^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CRC|ADMINISTRADOR|TÉCNICO|ANTONIO|JOSE CARLOS|ROBERTO|MARCO|Diretor|Contador|INSCR|LACTOBOM|DEMONSTRATIVO|BALANCO|Conta\d|ContaSaldo)/i;
+  const skipPatterns = /^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CRC|ADMINISTRADOR|TÉCNICO|ANTONIO|JOSE CARLOS|ROBERTO|MARCO|Diretor|Contador|INSCR|LACTOBOM|DEMONSTRATIVO|BALANCO|Conta\d|ContaSaldo|Este (documento|relatório)|Versão|Página|Entidade|Período|Número de Ordem|Descri[çc][ãa]o\b)/i;
 
-  // BR number pattern: optional parens/negative, digits with dots, comma, 2 decimals.
-  // `\s*` antes do `\)?` porque alguns balancetes escrevem o negativo como "(1.234,56 )"
-  // — com espaço antes do parêntese de fechamento. Sem isso o ")" não era capturado e
-  // o valor (ex.: PL negativo) era lido como POSITIVO (ver parseBRNumber).
-  const brNumPattern = /\(?-?[\d.]+,\d{2}\s*\)?/g;
+  // Limpa um nome de conta: prefixos (=)/(-)/(+) — inclusive DUPLICADOS, o SPED
+  // imprime "(-) (-) ENCARGOS..." — e o "R$" da 1ª coluna que fica grudado no fim.
+  const limpaConta = (s: string) =>
+    s.replace(/^(\s*\(?[=\-+]\)?\s*)+/, "").replace(/\s*R\$\s*$/, "").trim();
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -1016,15 +1067,12 @@ function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
     const indent = line.length - line.trimStart().length;
 
     // Find all BR numbers in the line
-    const numMatches = [...trimmed.matchAll(brNumPattern)];
+    const numMatches = [...trimmed.matchAll(BR_NUM_G)];
     if (numMatches.length === 0) continue;
 
     // Extract account name: everything before the first number
     const firstNumIdx = numMatches[0].index!;
-    let conta = trimmed.slice(0, firstNumIdx).trim();
-
-    // Remove DRE prefix markers: (=), (-), (+), (-)  etc.
-    conta = conta.replace(/^\s*\(?[=\-+]\)?\s*/, "").trim();
+    const conta = limpaConta(trimmed.slice(0, firstNumIdx));
 
     // Skip lines that are just numbers (no account name)
     if (!conta || conta.length < 2) continue;
@@ -1068,36 +1116,11 @@ function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
     rawRows.push({ conta, valores, indent });
   }
 
-  // Derive hierarchy depth from indentation levels.
-  // PDFs without account codes use indentation to express hierarchy:
-  //   Level 1: "A T I V O" (minimal indent)
-  //   Level 2: "ATIVO CIRCULANTE" (slight indent)
-  //   Level 3: "DISPONIBILIDADES" (more indent)
-  //   Level 4: "CAIXA" (even more)
-  //   Level 5: "CAIXA MATRIZ" (most indent)
-  // We collect all unique indent values, sort them, and assign depth levels.
-  const uniqueIndents = [...new Set(rawRows.map(r => r.indent))].sort((a, b) => a - b);
-
-  // Only apply indent-based filtering if we have enough distinct levels (3+)
-  // This avoids false filtering on PDFs with uniform indentation.
-  const hasHierarchy = uniqueIndents.length >= 3;
-  const indentToDepth = new Map<number, number>();
-  if (hasHierarchy) {
-    for (let i = 0; i < uniqueIndents.length; i++) {
-      indentToDepth.set(uniqueIndents[i], i + 1); // depth starts at 1
-    }
-  }
-
-  const result: ExtractedRow[] = [];
-  for (const row of rawRows) {
-    const depth = indentToDepth.get(row.indent);
-    // Filter out depth > 3 when hierarchy is detected
-    if (hasHierarchy && depth && depth > 3) continue;
-
-    result.push({ conta: row.conta, valores: row.valores, indent: row.indent });
-  }
-
-  return result;
+  // SEM filtro de profundidade por indentação: o fold em árvore (ai-extraction) é
+  // quem decide absorção/descida — o corte "depth > 3" daqui MUTILAVA demonstrações
+  // cujos subtotais ocupam os níveis rasos e as contas reais vivem no 4º+ (SPED:
+  // a DRE inteira sumia, sobravam 3 subtotais; no BP as folhas nunca chegavam ao fold).
+  return rawRows;
 }
 
 /**

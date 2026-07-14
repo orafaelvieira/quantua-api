@@ -208,6 +208,11 @@ function fallbackSemanticoDRE(nome: string): string | null {
   // Impostos sobre vendas/serviços/faturamento têm linha canônica PRÓPRIA —
   // não são "Deduções" (lá ficam devoluções/cancelamentos/abatimentos).
   if (/impostos? (s |s\/|sobre |incidentes)/.test(n) && /venda|servic|faturamento/.test(n)) return "Impostos s/ Faturamento";
+  // "Receita Operacional (Bruta)" no TOPO da DRE é a receita bruta. Via caminho, dá
+  // herança às folhas da seção (SPED AOCP: "ARRENDAMENTO" sob "Receita Operacional"
+  // caía em Outras Receitas e a Receita Bruta ficava só com os serviços). Anclado no
+  // início: nunca casa "Outras Receitas Operacionais" nem "Receita Líquida".
+  if (/^receitas? operacion/.test(n) && !/liquida/.test(n)) return "Receita Bruta";
   return null;
 }
 
@@ -305,8 +310,15 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
           const blocoFilho = blocoDoCaminhoDRE([...caminho, it.nome]);
           const divergente = filhos.some((f) => {
             if (typeof f.valor !== "number" || f.valor === 0) return false;
-            const dF = mapAccountToDRE(f.nome, dict, candidatosDRE, blocoFilho);
-            return !!dF && dF !== CONFLITO_CONTEXTO_DRE && inputsSet.has(dF) && dF !== dest;
+            // A prova pode vir do dicionário OU da rede semântica determinística
+            // (fallbackSemanticoDRE) — ex.: "Impostos s/ Vendas" sob "Deduções".
+            let dF = mapAccountToDRE(f.nome, dict, candidatosDRE, blocoFilho);
+            if (!dF || dF === CONFLITO_CONTEXTO_DRE || !inputsSet.has(dF)) {
+              const fbF = fallbackSemanticoDRE(f.nome);
+              dF = fbF && inputsSet.has(fbF) ? fbF : null;
+            }
+            // Balde genérico não prova divergência (mesma regra do foldBP).
+            return !!dF && dF !== CONFLITO_CONTEXTO_DRE && inputsSet.has(dF) && dF !== dest && !BALDES_DRE.has(dF);
           });
           if (divergente) {
             it.destino = "(estrutural — filhos classificados)";
@@ -560,7 +572,11 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
             paiAgregado = filhos.some((f) => {
               if (typeof f.valor !== "number" || isCompensacao(f.nome)) return false;
               const df = mapAccountToBPGroup(f.nome, g, dict, model);
-              return df != null && !naoInputModelo.has(df) && df !== destBruto;
+              // Destino GENÉRICO ("Outros …") não prova divergência: descer para jogar
+              // o filho num balde perde a especificidade da linha do PAI (ex.: "Despesas
+              // do Exercício Seguinte" → Outros AC descia e esvaziava "Despesas Ant.").
+              if (df == null || naoInputModelo.has(df) || df === destBruto) return false;
+              return !(Object.values(OUTROS_GRUPO).includes(df) || /^outr[oa]s\b/.test(normNome(df)));
             });
           }
         }
