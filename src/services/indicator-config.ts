@@ -12,7 +12,15 @@ import { prisma } from "../db/client";
 import type { BPLineItem, DRELineItem, Indicador } from "../types/financial";
 import { calculateIndicators, statusPorSemaforo, type SemaforoDef } from "./indicator-calculator";
 
-export interface TermoFormula { origem: "BP" | "DRE"; conta: string; sinal?: 1 | -1; abs?: boolean }
+export interface TermoFormula {
+  origem: "BP" | "DRE";
+  conta: string;
+  sinal?: 1 | -1;
+  abs?: boolean;
+  /** Operação aplicada na SEQUÊNCIA (estilo calculadora, sem precedência):
+   *  acumulado (op) valor. Ausente = "+" (ou "−" via sinal legado). */
+  op?: "+" | "-" | "*" | "/";
+}
 
 export interface ConfigRow {
   nome: string; sistema: boolean; ativo: boolean; grupo: string; tipoDado: string;
@@ -26,15 +34,30 @@ function semaforoDe(c: ConfigRow): SemaforoDef | undefined {
   return { direcao: c.semDirecao, critico: c.semCritico, atencao: c.semAtencao };
 }
 
-function somaTermos(termos: TermoFormula[], bp: BPLineItem[], dre: DRELineItem[], p: string): number {
-  let s = 0;
-  for (const t of termos) {
+/** Avalia os termos NA ORDEM (calculadora, sem precedência): +, −, × e ÷.
+ *  Compat: termo sem `op` usa o sinal legado (+/−). Divisão por zero → null. */
+function avaliaTermos(termos: TermoFormula[], bp: BPLineItem[], dre: DRELineItem[], p: string): number | null {
+  let acc = 0;
+  for (let i = 0; i < termos.length; i++) {
+    const t = termos[i];
     const item = t.origem === "BP" ? bp.find((l) => l.conta === t.conta) : dre.find((l) => l.conta === t.conta);
     let v = item?.valores[p] ?? 0;
     if (t.abs) v = Math.abs(v);
-    s += v * (t.sinal ?? 1);
+    const op = t.op ?? ((t.sinal ?? 1) === -1 ? "-" : "+");
+    if (i === 0) {
+      // 1º termo é a BASE da sequência: × e ÷ não fazem sentido sobre 0.
+      acc = op === "-" ? -v : v;
+      continue;
+    }
+    if (op === "+") acc += v;
+    else if (op === "-") acc -= v;
+    else if (op === "*") acc *= v;
+    else {
+      if (v === 0) return null; // divisão por zero → sem valor (não NaN/Infinity)
+      acc /= v;
+    }
   }
-  return s;
+  return acc;
 }
 
 function computeCustom(c: ConfigRow, bp: BPLineItem[], dre: DRELineItem[], periodos: string[]): Indicador {
@@ -44,10 +67,10 @@ function computeCustom(c: ConfigRow, bp: BPLineItem[], dre: DRELineItem[], perio
   const valores: Record<string, number | string | null> = {};
   const status: Record<string, "ok" | "atencao" | "critico" | null> = {};
   for (const p of periodos) {
-    let v: number | null = num.length ? somaTermos(num, bp, dre, p) : null;
+    let v: number | null = num.length ? avaliaTermos(num, bp, dre, p) : null;
     if (v !== null && den && den.length) {
-      const d = somaTermos(den, bp, dre, p);
-      v = d === 0 ? null : v / d;
+      const d = avaliaTermos(den, bp, dre, p);
+      v = d === null || d === 0 ? null : v / d;
     }
     if (v !== null && c.multiplicador) v = v * c.multiplicador;
     if (v !== null && c.tipoDado === "Dias") v = Math.round(v);

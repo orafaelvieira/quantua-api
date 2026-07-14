@@ -483,6 +483,83 @@ describe("foldDRE — blindagem contextual (posição no documento × dicionári
   });
 });
 
+describe("foldDRE — descida por divergência (impostos aninhados em Deduções — caso de produção)", () => {
+  // O documento agrega "Impostos Incidentes sobre Vendas" DENTRO de
+  // "Deduções da Receita Bruta". Absorver no nó mais alto apagava a linha
+  // canônica "Impostos s/ Faturamento" — com filhos de destino DIVERGENTE
+  // (prova de dicionário) e soma fechada, o fold DESCE.
+  const dict = [
+    { nomeOriginal: "Deduções da Receita Bruta", contaDestino: "Deduções da Receita Bruta", grupoConta: "Deduções da Receita Bruta", tipo: "DRE" },
+    { nomeOriginal: "(-) Impostos Incidentes sobre Vendas", contaDestino: "Impostos s/ Faturamento", grupoConta: "Impostos s/ Faturamento", tipo: "DRE" },
+    { nomeOriginal: "Devoluções e Abatimentos", contaDestino: "Deduções da Receita Bruta", grupoConta: "Deduções da Receita Bruta", tipo: "DRE" },
+  ] as never[];
+  const arvore = {
+    "2025": [
+      { nome: "RECEITA OPERACIONAL BRUTA", valor: 30000 },
+      {
+        nome: "DEDUÇÕES DA RECEITA BRUTA", valor: -4000, filhos: [
+          {
+            nome: "IMPOSTOS INCIDENTES SOBRE VENDAS", valor: -3814, filhos: [
+              { nome: "(-) ICMS", valor: -3626 },
+              { nome: "(-) PIS", valor: -33 },
+              { nome: "(-) COFINS", valor: -155 },
+            ],
+          },
+          { nome: "(-) DEVOLUÇÕES E ABATIMENTOS", valor: -186 },
+        ],
+      },
+    ],
+  } as never;
+  const val = (dre: Array<{ conta: string; valores: Record<string, number> }>, c: string) => dre.find((l) => l.conta === c)?.valores["2025"] ?? 0;
+
+  it("separa Impostos s/ Faturamento das Deduções preservando o total (Receita Líquida intacta)", async () => {
+    const { foldDRE } = await import("./ai-extraction");
+    const { dre, naoMapeados } = foldDRE(arvore, ["2025"], dict);
+    expect(val(dre, "Impostos s/ Faturamento")).toBeCloseTo(-3814, 1);
+    expect(val(dre, "Deduções da Receita Bruta")).toBeCloseTo(-186, 1);
+    expect(val(dre, "Receita Líquida")).toBeCloseTo(30000 - 4000, 1);
+    // ICMS/PIS/COFINS absorvidos no nó de impostos — nada vaza para o balde
+    expect(val(dre, "Outras Despesas Operacionais")).toBeCloseTo(0, 1);
+    expect(naoMapeados.length).toBe(0);
+  });
+
+  it("sem filho divergente, a absorção no nó mais alto segue como sempre (regressão)", async () => {
+    const { foldDRE } = await import("./ai-extraction");
+    const soDeducoes = {
+      "2025": [
+        { nome: "RECEITA OPERACIONAL BRUTA", valor: 30000 },
+        {
+          nome: "DEDUÇÕES DA RECEITA BRUTA", valor: -4000, filhos: [
+            { nome: "(-) DEVOLUÇÕES E ABATIMENTOS", valor: -3000 },
+            { nome: "(-) CANCELAMENTOS", valor: -1000 },
+          ],
+        },
+      ],
+    } as never;
+    const { dre } = foldDRE(soDeducoes, ["2025"], dict);
+    expect(val(dre, "Deduções da Receita Bruta")).toBeCloseTo(-4000, 1);
+    expect(val(dre, "Impostos s/ Faturamento")).toBeCloseTo(0, 1);
+  });
+
+  it("soma dos filhos NÃO fecha com o declarado → absorve pelo valor declarado (fiel ao documento)", async () => {
+    const { foldDRE } = await import("./ai-extraction");
+    const somaAberta = {
+      "2025": [
+        { nome: "RECEITA OPERACIONAL BRUTA", valor: 30000 },
+        {
+          nome: "DEDUÇÕES DA RECEITA BRUTA", valor: -4000, filhos: [
+            // impostos divergente MAS a soma (−2000) ≠ declarado (−4000): absorção é mais segura
+            { nome: "IMPOSTOS INCIDENTES SOBRE VENDAS", valor: -2000 },
+          ],
+        },
+      ],
+    } as never;
+    const { dre } = foldDRE(somaAberta, ["2025"], dict);
+    expect(val(dre, "Deduções da Receita Bruta")).toBeCloseTo(-4000, 1);
+    expect(val(dre, "Impostos s/ Faturamento")).toBeCloseTo(0, 1);
+  });
+});
+
 describe("DRE — bridge do modelo do banco (conta adicionada pelo usuário)", () => {
   it("'Despesas com Pessoas' entra no fold e na cascata do Lucro Líquido (bloco EBITDA)", async () => {
     const { foldDRE } = await import("./ai-extraction");

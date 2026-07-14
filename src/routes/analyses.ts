@@ -1421,11 +1421,24 @@ router.get("/:id/indicador-config", async (req: AuthRequest, res: Response): Pro
   const dados = analysis.dadosEstruturados as any;
   let cfg = analysis.indicadorConfig as unknown as IBRIndicadorConfig | null;
   let mudou = false;
+  let calibrouAgora = false;
+  let ganhouPersonalizados = false;
+  const padraoCat = await catalogoPadraoEfetivo();
 
   if (!cfg || !Array.isArray(cfg.rows) || cfg.rows.length === 0) {
     // Seed: réplica do catálogo padrão do dia (a partir daqui, evolui só neste IBR).
-    cfg = { calibrado: false, pares: null, atualizadoEm: new Date().toISOString(), rows: await catalogoPadraoEfetivo() };
+    cfg = { calibrado: false, pares: null, atualizadoEm: new Date().toISOString(), rows: padraoCat };
     mudou = true;
+  } else {
+    // PERSONALIZADOS criados no catálogo GLOBAL depois do snapshot deste IBR
+    // entram por MERGE (por nome) — sem tocar em nada que o analista já
+    // configurou aqui. Era o buraco do "criei o indicador e não aparece".
+    const novos = padraoCat.filter((r) => !r.sistema && !cfg!.rows.some((x) => x.nome === r.nome));
+    if (novos.length) {
+      cfg = { ...cfg, rows: [...cfg.rows, ...novos], atualizadoEm: new Date().toISOString() };
+      mudou = true;
+      ganhouPersonalizados = true;
+    }
   }
   // Calibração automática ÚNICA: precisa dos VALORES da empresa (base do pareamento CVM),
   // então só acontece quando a extração validada já produziu indicadores. Depois disso,
@@ -1434,11 +1447,14 @@ router.get("/:id/indicador-config", async (req: AuthRequest, res: Response): Pro
     const pares = await calibrarSemaforoComPares(cfg.rows, analysis.sectorId, dados.indicadores, dados.periodos ?? []);
     cfg = { ...cfg, calibrado: true, pares, atualizadoEm: new Date().toISOString() };
     mudou = true;
+    calibrouAgora = true;
   }
   if (mudou) {
     await prisma.analysis.update({ where: { id }, data: { indicadorConfig: cfg as unknown as object } });
-    // O semáforo calibrado precisa aparecer nos indicadores já calculados.
-    if (cfg.calibrado && (cfg.pares?.calibrados ?? 0) > 0) await recalcularIndicadoresComConfig(id, dados, cfg.rows as unknown as ConfigRow[]);
+    // Recalcula quando o resultado VISÍVEL muda: semáforo calibrado agora ou
+    // personalizado novo que precisa aparecer nos indicadores já calculados.
+    const precisaRecalc = (calibrouAgora && (cfg.pares?.calibrados ?? 0) > 0) || ganhouPersonalizados;
+    if (precisaRecalc) await recalcularIndicadoresComConfig(id, dados, cfg.rows as unknown as ConfigRow[]);
   }
   res.json(cfg);
 });

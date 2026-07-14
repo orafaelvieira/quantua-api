@@ -205,7 +205,9 @@ function fallbackSemanticoDRE(nome: string): string | null {
   const n = normNome(nome);
   if (/^\(?\s*-?\s*\)?\s*custos?\b/.test(n) && !/despes/.test(n)) return "Custo Operacional";
   if (/\bcustos? (de|dos|da|das|com) /.test(n) && !/despes/.test(n)) return "Custo Operacional";
-  if (/impostos? (s |s\/|sobre |incidentes)/.test(n) && /venda|servic|faturamento/.test(n)) return "Deduções da Receita Bruta";
+  // Impostos sobre vendas/serviços/faturamento têm linha canônica PRÓPRIA —
+  // não são "Deduções" (lá ficam devoluções/cancelamentos/abatimentos).
+  if (/impostos? (s |s\/|sobre |incidentes)/.test(n) && /venda|servic|faturamento/.test(n)) return "Impostos s/ Faturamento";
   return null;
 }
 
@@ -265,7 +267,7 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
     const marcaAbsorvidos = (filhos: DRESecaoItem[], dest: string): void => {
       for (const f of filhos) { f.destino = `(absorvido em ${dest})`; if (f.filhos?.length) marcaAbsorvidos(f.filhos, dest); }
     };
-    const processa = (it: DRESecaoItem, caminho: string[]): void => {
+    const processa = (it: DRESecaoItem, caminho: string[], heranca?: string): void => {
       if (isContaIgnorada(it.nome, dict)) { it.destino = "(ignorada pelo analista)"; return; }
       const temValor = typeof it.valor === "number" && it.valor !== 0;
       const filhos = it.filhos ?? [];
@@ -287,9 +289,33 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
           : it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
       }
       if (dest && !inputsSet.has(dest)) { dest = null; conflitoCtx = false; }
-      if (!dest && !ehWrapper && temValor) dest = fallbackSemanticoDRE(it.nome);
+      if (!dest && !ehWrapper && temValor) {
+        dest = fallbackSemanticoDRE(it.nome);
+        if (dest && !inputsSet.has(dest)) dest = null; // modelo DRE custom pode não ter a linha
+      }
       if (dest && BALDES_DRE.has(dest) && filhos.length > 0) { dest = null; conflitoCtx = false; } // filhos podem ser mais específicos
       if (dest) {
+        // DESCIDA POR DIVERGÊNCIA: se algum filho DIRETO mapeia (com prova de
+        // dicionário) para um destino canônico DIFERENTE e a soma dos filhos
+        // FECHA com o valor declarado, classificar os filhos preserva o total
+        // E ganha o detalhe — ex.: o documento agrega "Impostos Incidentes
+        // sobre Vendas" dentro de "Deduções da Receita Bruta"; absorver
+        // apagaria a linha canônica "Impostos s/ Faturamento".
+        if (filhos.length && Math.abs(somaDireta(filhos) - it.valor) <= tolDe(it.valor)) {
+          const blocoFilho = blocoDoCaminhoDRE([...caminho, it.nome]);
+          const divergente = filhos.some((f) => {
+            if (typeof f.valor !== "number" || f.valor === 0) return false;
+            const dF = mapAccountToDRE(f.nome, dict, candidatosDRE, blocoFilho);
+            return !!dF && dF !== CONFLITO_CONTEXTO_DRE && inputsSet.has(dF) && dF !== dest;
+          });
+          if (divergente) {
+            it.destino = "(estrutural — filhos classificados)";
+            // Filho sem mapa próprio HERDA o destino do pai (é onde a
+            // absorção o teria colocado) — nunca cai no balde por causa da descida.
+            for (const f of filhos) processa(f, [...caminho, it.nome], dest);
+            return;
+          }
+        }
         addAcc(dest, p, it.valor);
         it.destino = dest;
         if (conflitoCtx) {
@@ -307,7 +333,7 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       }
       if (filhos.length) {
         it.destino = "(estrutural — filhos classificados)";
-        for (const f of filhos) processa(f, [...caminho, it.nome]);
+        for (const f of filhos) processa(f, [...caminho, it.nome], heranca);
         if (temValor) {
           const s = somaDireta(filhos);
           if (Math.abs(s - it.valor) > tolDe(it.valor)) {
@@ -324,7 +350,9 @@ export function foldDRE(arvore: ArvoreOriginalDRE, periodos: string[], dict?: Di
       const ctx = caminho.length ? mapAccountToDRE(`${caminho[caminho.length - 1]} ${it.nome}`, undefined, candidatosDRE) : null;
       if (ctx && inputsSet.has(ctx)) { addAcc(ctx, p, it.valor); it.destino = ctx; return; }
       const fb = fallbackSemanticoDRE(it.nome) ?? (caminho.length ? fallbackSemanticoDRE(caminho[caminho.length - 1]) : null);
-      if (fb) { addAcc(fb, p, it.valor); it.destino = fb; return; }
+      if (fb && inputsSet.has(fb)) { addAcc(fb, p, it.valor); it.destino = fb; return; }
+      // Herança da descida por divergência: o destino do pai mapeado.
+      if (heranca && inputsSet.has(heranca)) { addAcc(heranca, p, it.valor); it.destino = heranca; return; }
       const balde = it.valor < 0 ? "Outras Despesas Operacionais" : "Outras Receitas Operacionais";
       addAcc(balde, p, it.valor);
       it.destino = balde;

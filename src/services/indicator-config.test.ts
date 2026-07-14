@@ -139,3 +139,42 @@ describe("correções e novos indicadores (jul/2026)", () => {
     expect(diasDoPeriodo("31/12/2024", ["31/12/2024"])).toBe(365); // fechamento anual
   });
 });
+
+describe("indicador personalizado — operações × e ÷ (sequência de calculadora)", () => {
+  const rowBase = {
+    sistema: false, ativo: true, grupo: "Personalizados", tipoDado: "Índice",
+    formula: null, multiplicador: null, semDirecao: null, semCritico: null, semAtencao: null, ordem: 1,
+  };
+
+  it("multiplicação e divisão na sequência: (Receita × Custo) e (Receita ÷ Custo)", async () => {
+    const { buildIndicators } = await import("./indicator-config");
+    const inds = await buildIndicators(BP, DRE, ["2023"], [
+      { ...rowBase, nome: "Mult", numerador: [
+        { origem: "DRE", conta: "Receita Bruta" },
+        { origem: "DRE", conta: "Custo Operacional", op: "*", abs: true },
+      ], denominador: null },
+      { ...rowBase, nome: "Div", numerador: [
+        { origem: "DRE", conta: "Receita Bruta" },
+        { origem: "DRE", conta: "Custo Operacional", op: "/", abs: true },
+      ], denominador: null },
+    ] as never);
+    expect(inds.find((i) => i.nome === "Mult")?.valores["2023"]).toBeCloseTo(1000 * 600, 6);
+    expect(inds.find((i) => i.nome === "Div")?.valores["2023"]).toBeCloseTo(1000 / 600, 6);
+  });
+
+  it("divisão por zero vira null (sem NaN/Infinity) e sinal legado segue valendo", async () => {
+    const { buildIndicators } = await import("./indicator-config");
+    const inds = await buildIndicators(BP, DRE, ["2023"], [
+      { ...rowBase, nome: "DivZero", numerador: [
+        { origem: "DRE", conta: "Receita Bruta" },
+        { origem: "DRE", conta: "Linha Inexistente", op: "/" },
+      ], denominador: null },
+      { ...rowBase, nome: "Legado", numerador: [
+        { origem: "DRE", conta: "Receita Bruta", sinal: 1 },
+        { origem: "DRE", conta: "Custo Operacional", sinal: -1, abs: true },
+      ], denominador: null },
+    ] as never);
+    expect(inds.find((i) => i.nome === "DivZero")?.valores["2023"]).toBeNull();
+    expect(inds.find((i) => i.nome === "Legado")?.valores["2023"]).toBeCloseTo(1000 - 600, 6);
+  });
+});

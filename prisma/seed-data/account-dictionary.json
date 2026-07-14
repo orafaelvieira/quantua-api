@@ -7432,5 +7432,23 @@
     "contaDestino": "Outros Créditos a Receber - LP",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ICMS",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "ISS",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "ICMS sobre Faturamento",
+    "contaDestino": "Impostos s/ Faturamento",
+    "grupoConta": "Impostos s/ Faturamento",
+    "tipo": "DRE"
   }
 ]
