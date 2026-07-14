@@ -8,31 +8,71 @@ import { sugerirSetores } from "../services/cnae-b3";
 
 const router = Router();
 
-// CNPJ lookup proxy — avoids CORS issues when frontend calls BrasilAPI directly.
-// User-Agent header required: BrasilAPI returns 403 to default Node fetch UA.
+// CNPJ lookup proxy com CADEIA DE FALLBACK — a BrasilAPI cai junto com a
+// minhareceita (é o upstream dela), então a terceira perna é a ReceitaWS,
+// normalizada para o MESMO shape da BrasilAPI (o front não muda).
+// User-Agent obrigatório: a BrasilAPI devolve 403 para o UA default do Node.
+const CABECALHOS_CNPJ = { "User-Agent": "Quantua/1.0 (+https://quantua.com.br)", Accept: "application/json" };
+
+/** ReceitaWS → shape BrasilAPI (só os campos que o produto consome + extras). */
+function normalizarReceitaWs(d: Record<string, any>): Record<string, unknown> {
+  return {
+    razao_social: d.nome,
+    nome_fantasia: d.fantasia || null,
+    uf: d.uf,
+    municipio: d.municipio,
+    cnae_fiscal: Number(String(d.atividade_principal?.[0]?.code ?? "").replace(/\D/g, "")) || null,
+    cnae_fiscal_descricao: d.atividade_principal?.[0]?.text ?? null,
+    natureza_juridica: String(d.natureza_juridica ?? "").replace(/^[\d.\-\s]+-\s*/, "") || null,
+    data_inicio_atividade: d.abertura ? String(d.abertura).split("/").reverse().join("-") : null,
+    descricao_situacao_cadastral: d.situacao ?? null,
+    capital_social: Number(d.capital_social) || 0,
+    porte: d.porte ?? null,
+    opcao_pelo_simples: d.simples?.optante ?? null,
+    opcao_pelo_mei: d.simei?.optante ?? null,
+    qsa: Array.isArray(d.qsa) ? d.qsa.map((s: any) => ({ nome_socio: s.nome, qualificacao_socio: s.qual })) : [],
+    _fonte: "receitaws",
+  };
+}
+
 router.get("/cnpj/:cnpj", async (req: AuthRequest, res: Response): Promise<void> => {
   const digits = (req.params.cnpj as string).replace(/\D/g, "");
   if (digits.length !== 14) { res.status(400).json({ error: "CNPJ inválido" }); return; }
 
-  try {
-    const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`, {
-      headers: {
-        "User-Agent": "Quantua/1.0 (+https://quantua.com.br)",
-        Accept: "application/json",
-      },
-    });
-    if (response.status === 404) { res.status(404).json({ error: "CNPJ não encontrado na Receita Federal" }); return; }
-    if (!response.ok) {
-      console.error(`[BrasilAPI] CNPJ ${digits} → HTTP ${response.status}`);
-      res.status(502).json({ error: "Erro ao consultar CNPJ" });
+  let houve404 = false;
+
+  // 1ª e 2ª pernas: BrasilAPI e minhareceita (mesmo shape — passa direto)
+  for (const [nome, url] of [
+    ["BrasilAPI", `https://brasilapi.com.br/api/cnpj/v1/${digits}`],
+    ["minhareceita", `https://minhareceita.org/${digits}`],
+  ] as const) {
+    try {
+      const r = await fetch(url, { headers: CABECALHOS_CNPJ, signal: AbortSignal.timeout(6000) });
+      if (r.status === 404) { houve404 = true; continue; } // confirma na próxima fonte
+      if (!r.ok) { console.error(`[cnpj] ${nome} ${digits} → HTTP ${r.status}`); continue; }
+      res.json(await r.json());
       return;
+    } catch (err) {
+      console.error(`[cnpj] ${nome} falhou:`, err instanceof Error ? err.message : err);
     }
-    const data = await response.json();
-    res.json(data);
-  } catch (err) {
-    console.error("[BrasilAPI] fetch failed:", err);
-    res.status(502).json({ error: "Falha ao conectar com a Receita Federal" });
   }
+
+  // 3ª perna: ReceitaWS (shape próprio → normalizado)
+  try {
+    const r = await fetch(`https://receitaws.com.br/v1/cnpj/${digits}`, { headers: CABECALHOS_CNPJ, signal: AbortSignal.timeout(8000) });
+    if (r.ok) {
+      const d = (await r.json()) as Record<string, any>;
+      if (d.status !== "ERROR" && d.nome) { res.json(normalizarReceitaWs(d)); return; }
+      houve404 = houve404 || d.status === "ERROR";
+    } else {
+      console.error(`[cnpj] ReceitaWS ${digits} → HTTP ${r.status}`);
+    }
+  } catch (err) {
+    console.error("[cnpj] ReceitaWS falhou:", err instanceof Error ? err.message : err);
+  }
+
+  if (houve404) { res.status(404).json({ error: "CNPJ não encontrado na Receita Federal" }); return; }
+  res.status(502).json({ error: "Fontes da Receita indisponíveis no momento — preencha manualmente e reconsulte depois" });
 });
 
 router.use(requireAuth);
