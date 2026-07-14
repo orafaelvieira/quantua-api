@@ -13,7 +13,8 @@ import { sendTeamInviteEmail } from "../services/email";
 const router = Router();
 
 const workspaceSchema = z.object({
-  type: z.enum(["empresa", "consultoria"]),
+  // "bpo" = BPO · Contabilidade, o ICP atual — a tela oferece os 3 perfis.
+  type: z.enum(["empresa", "consultoria", "bpo"]),
   cnpj: z.string().trim().optional().nullable(),
   razaoSocial: z.string().trim().min(2),
   nomeFantasia: z.string().trim().optional().nullable(),

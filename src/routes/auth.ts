@@ -17,7 +17,7 @@ const registerSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
   password: z.string().min(8),
-  workspaceType: z.enum(["empresa", "consultoria"]).default("consultoria"),
+  workspaceType: z.enum(["empresa", "consultoria", "bpo"]).default("consultoria"),
   // Perfil de ICP escolhido na página /para/<perfil>. Opcional.
   partnerProfile: z.enum(["contabilidade", "bpo", "cfo"]).optional(),
 });
