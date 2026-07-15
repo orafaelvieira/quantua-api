@@ -158,4 +158,76 @@ describe("derivarAberturaCustos", () => {
     expect(abertura[0].valores["31/12/2024"]).toBe(500);
     expect(abertura[0].destino).toBe("Custo Operacional");
   });
+
+  // Caso real Move Farma 2023: a captura de IA aninhou contas IRMÃS do grupo de
+  // custos como "filhas" do CMV (o CMV não é subtotal delas — a soma não fecha
+  // com ele). Descer só um nível deixava as netas de fora: 7 contas zeradas no
+  // histórico e a abertura não fechava com o total do bloco.
+  it("netas mal aninhadas (irmãs sob a 1ª conta) entram na abertura e fecham com o grupo", () => {
+    const dados = {
+      periodos: ["31/12/2023"],
+      dre: [
+        { conta: "Receita Bruta", valores: { "31/12/2023": 842167.29 } },
+        { conta: "Receita Líquida", valores: { "31/12/2023": 775890.98 }, subtotal: true },
+        { conta: "Custo Operacional", valores: { "31/12/2023": -1181543.26 } },
+        { conta: "Lucro Bruto", valores: { "31/12/2023": -405652.28 }, subtotal: true },
+        { conta: "EBITDA", valores: { "31/12/2023": -405652.28 }, subtotal: true },
+      ],
+      arvoreOriginalDRE: {
+        "31/12/2023": [
+          {
+            nome: "(-) CUSTO DOS PRODUTOS/MERCADORIAS/SERVICOS", valor: -1181543.26, destino: "Custo Operacional",
+            filhos: [
+              {
+                nome: "Custo das Mercadorias Vendidas", valor: 845786.98,
+                filhos: [
+                  { nome: "Compras de Mercadorias", valor: -2025762.91 },
+                  { nome: "Perdas no Estoque de Mercadorias", valor: -42257.79 },
+                  { nome: "(-) Devoluções de Compras de Mercadorias", valor: 20912.91 },
+                  { nome: "(-) Créditos de ICMS", valor: 5386.27 },
+                  { nome: "(-) Doações Bonificações", valor: 3914.96 },
+                  { nome: "(-) Crédito PIS Lucro Real", valor: 4437.37 },
+                  { nome: "(-) Crédito Cofins Lucro Real", valor: 11561.25 },
+                ],
+              },
+              { nome: "Depreciações", valor: -5522.3 },
+            ],
+          },
+        ],
+      },
+    };
+    const abertura = derivarAberturaCustos(dados);
+    expect(abertura).toHaveLength(9);
+    const porConta = Object.fromEntries(abertura.map((a) => [a.conta, a.valores["31/12/2023"]]));
+    // O CMV é linha REAL (a soma dos "filhos" não fecha com ele) e as netas também.
+    expect(porConta["Custo das Mercadorias Vendidas"]).toBeCloseTo(845786.98, 2);
+    expect(porConta["Compras de Mercadorias"]).toBeCloseTo(2025762.91, 2);
+    expect(porConta["(-) Devoluções de Compras de Mercadorias"]).toBeCloseTo(20912.91, 2);
+    expect(porConta["Depreciações"]).toBeCloseTo(5522.3, 2);
+    // Prova de fechamento: as linhas (com sinal do documento) somam o total do bloco.
+    const somaAssinada = 845786.98 - 2025762.91 - 42257.79 + 20912.91 + 5386.27 + 3914.96 + 4437.37 + 11561.25 - 5522.3;
+    expect(somaAssinada).toBeCloseTo(-1181543.26, 2);
+  });
+
+  // Grupo cujo total declarado NÃO fecha com os filhos capturados (o documento
+  // neta linhas fora do texto — receita bruta da matriz Move Farma): a linha é o
+  // PRÓPRIO grupo, com o valor que o fold contabilizou — nada duplicado.
+  it("grupo que não fecha com os filhos vira linha única (valor do fold)", () => {
+    const dados = {
+      periodos: ["31/12/2023"],
+      dre: dreCanonica({ "31/12/2023": 842167.29, "31/12/2024": 0 }),
+      arvoreOriginalDRE: {
+        "31/12/2023": [
+          {
+            nome: "RECEITA OPERACIONAL BRUTA", valor: 842167.29, destino: "Receita Bruta",
+            filhos: [{ nome: "Vendas de Mercadorias", valor: 1798818.24 }],
+          },
+        ],
+      },
+    };
+    const abertura = derivarAberturaReceita(dados);
+    expect(abertura).toEqual([
+      { conta: "RECEITA OPERACIONAL BRUTA", valores: { "31/12/2023": 842167.29 } },
+    ]);
+  });
 });

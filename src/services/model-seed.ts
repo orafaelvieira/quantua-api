@@ -84,6 +84,45 @@ export interface LinhaReceitaHist {
 
 interface ItemArvoreDRE { nome?: string; valor?: number; destino?: string; filhos?: ItemArvoreDRE[] }
 
+const tolLinhas = (v: number) => Math.max(0.05, Math.abs(v) * 0.001);
+
+/** Achata o SUBTREE de um nó da árvore original em LINHAS do documento.
+ *  Nó sem filhos-com-valor é linha. Nó cujo valor ≈ soma PROFUNDA das linhas
+ *  dos filhos é subtotal impresso — as linhas são os filhos. Nó cujo valor NÃO
+ *  fecha com os filhos é linha própria E os filhos são linhas também: captura
+ *  de IA às vezes aninha contas irmãs sob a primeira (Move Farma 2023: 7
+ *  contas de custo viraram "filhas" do CMV), e descer só um nível zerava as
+ *  netas — a abertura deixava de fechar com o total do bloco. */
+function achatarLinhasArvore(no: ItemArvoreDRE): { linhas: ItemArvoreDRE[]; soma: number } {
+  const filhosComValor = (no.filhos ?? []).filter((f) => typeof f.valor === "number" && Number.isFinite(f.valor) && f.valor !== 0);
+  const v = typeof no.valor === "number" && Number.isFinite(no.valor) ? no.valor : null;
+  if (!filhosComValor.length) return v !== null && v !== 0 ? { linhas: [no], soma: v } : { linhas: [], soma: 0 };
+  const sub = filhosComValor.map(achatarLinhasArvore);
+  const linhas = sub.flatMap((s) => s.linhas);
+  const soma = sub.reduce((s, x) => s + x.soma, 0);
+  if (v !== null && v !== 0 && Math.abs(soma - v) > tolLinhas(v)) {
+    return { linhas: [no, ...linhas], soma: soma + v };
+  }
+  return { linhas, soma };
+}
+
+/** Abertura de um GRUPO mapeado (nó cujo destino casou): as linhas achatadas do
+ *  subtree — mas SÓ se elas fecharem com o valor declarado do grupo. Quando não
+ *  fecham (o documento imprime um total que os filhos capturados não explicam —
+ *  ex.: receita bruta da matriz Move Farma com transferências netadas fora do
+ *  texto), o próprio grupo vira a linha única: exatamente o valor que o fold
+ *  contabilizou, nada inventado nem duplicado. */
+function aberturaDoGrupo(no: ItemArvoreDRE): ItemArvoreDRE[] {
+  const filhosComValor = (no.filhos ?? []).filter((f) => typeof f.valor === "number" && Number.isFinite(f.valor) && f.valor !== 0);
+  if (!filhosComValor.length) return [no];
+  const sub = filhosComValor.map(achatarLinhasArvore);
+  const linhas = sub.flatMap((s) => s.linhas);
+  const soma = sub.reduce((s, x) => s + x.soma, 0);
+  const v = typeof no.valor === "number" && Number.isFinite(no.valor) ? no.valor : null;
+  if (v !== null && v !== 0 && Math.abs(soma - v) > tolLinhas(v)) return [no];
+  return linhas;
+}
+
 export function derivarAberturaReceita(dadosEstruturados: unknown): LinhaReceitaHist[] {
   const de = (dadosEstruturados ?? {}) as {
     periodos?: string[];
@@ -123,10 +162,9 @@ export function derivarAberturaReceita(dadosEstruturados: unknown): LinhaReceita
     for (const p of periodos) {
       const visita = (it: ItemArvoreDRE): void => {
         if (it.destino && destinosReceita.has(it.destino)) {
-          const filhosComValor = (it.filhos ?? []).filter((f) => typeof f.valor === "number" && f.valor !== 0);
-          // O item é o agregado do documento → a abertura são os filhos dele.
-          if (filhosComValor.length) filhosComValor.forEach((f) => add(f.nome, p, f.valor));
-          else add(it.nome, p, it.valor);
+          // O item é o agregado do documento → a abertura são as LINHAS do
+          // subtree inteiro (achatamento recursivo; netas mal aninhadas entram).
+          for (const l of aberturaDoGrupo(it)) add(l.nome, p, l.valor);
           return;
         }
         (it.filhos ?? []).forEach(visita);
@@ -215,10 +253,9 @@ export function derivarAberturaCustos(dadosEstruturados: unknown): LinhaReceitaH
     for (const p of periodos) {
       const visita = (it: ItemArvoreDRE): void => {
         if (it.destino && destinos.has(it.destino)) {
-          const filhosComValor = (it.filhos ?? []).filter((f) => typeof f.valor === "number" && f.valor !== 0);
-          // Filhos absorvidos herdam o destino do pai (foi onde o fold os somou).
-          if (filhosComValor.length) filhosComValor.forEach((f) => add(f.nome, it.destino!, p, f.valor));
-          else add(it.nome, it.destino!, p, it.valor);
+          // Linhas do subtree inteiro (achatamento recursivo; netas mal
+          // aninhadas entram), com o destino do pai (foi onde o fold as somou).
+          for (const l of aberturaDoGrupo(it)) add(l.nome, it.destino!, p, l.valor);
           return;
         }
         (it.filhos ?? []).forEach(visita);

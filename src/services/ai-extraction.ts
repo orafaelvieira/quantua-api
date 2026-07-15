@@ -173,6 +173,7 @@ function dreTreePrompt(periodos: string[]): string {
 - NÃO retorne como nó as linhas de RESULTADO/subtotal CALCULADO entre seções (Receita Líquida, Lucro Bruto, EBITDA, EBIT, Resultado/Lucro/Prejuízo Líquido) — elas vão em "declarados".
 - Sinais como impressos: RECEITAS positivas; DEDUÇÕES, CUSTOS, DESPESAS e IR/CSLL NEGATIVOS.
 - COLUNAS: se houver "do mês"/"no período" e "acumulado"/"até a data", use o ACUMULADO do exercício (fechamento), nunca o mensal.
+- DOCUMENTO COM MAIS DE UMA DRE (matriz e filiais — um bloco por CNPJ/estabelecimento, mesmo período): transcreva TODAS, até a última página; as seções de cada bloco entram na MESMA lista do período, na sequência. NÃO some blocos por conta própria e NUNCA descarte um bloco — perder uma filial subdimensiona a empresa inteira.
 - ${periodKeyInstruction(periodos)}
 Retorne APENAS JSON: { "secoes": { "<periodo>": [ {"nome":"<original>","valor":<n>,"filhos":[ {"nome":"<original>","valor":<n>} ]} ] }, "declarados": { "<periodo>": { "Receita Líquida": <exibido>, "Lucro Bruto": <exibido>, "Lucro Líquido": <exibido> } } }`;
 }
@@ -396,6 +397,7 @@ Para cada um dos 5 grupos, retorne a ÁRVORE de contas como aparece no documento
 - Níveis INTERMEDIÁRIOS entre o grupo e as contas-folha (ex.: "EXIGÍVEL A CURTO PRAZO" dentro do Passivo Circulante, "CRÉDITOS" dentro do Ativo Circulante) SÃO nós normais: transcreva cada um COM seus filhos aninhados, em QUALQUER profundidade (grau 4, 5, 6+). NUNCA resuma um nível intermediário numa linha única e NUNCA omita as contas-folha abaixo dele.
 - Valores negativos com sinal negativo (ex.: depreciação, encargos, retificadoras "(-)").
 - COLUNAS: se o documento (ex.: ECF/ECD/SPED, "Período da Escrituração DD/MM a DD/MM") trouxer "Saldo Inicial" e "Saldo Final" do MESMO período, use SEMPRE o Saldo FINAL (fechamento) — nunca o inicial. (Não confundir com colunas de ANOS diferentes, que são períodos distintos e cada um vale.)
+- DOCUMENTO COM MAIS DE UM BALANÇO (matriz e filiais — um bloco por CNPJ/estabelecimento, mesmo período): transcreva TODOS, até a última página; as contas de cada bloco entram nos MESMOS grupos do período, na sequência. NÃO some blocos por conta própria e NUNCA descarte um bloco.
 - ${periodKeyInstruction(periodos)}
 Grupos: "Ativo Circulante", "Ativo Não Circulante", "Passivo Circulante", "Passivo Não Circulante", "Patrimônio Líquido".
 Retorne APENAS JSON:
