@@ -416,6 +416,7 @@ model Analysis {
   documents   Document[]
   engagement  Engagement?
   auditEvents AuditEvent[]
+  versions    AnalysisVersion[]
   timeEntries TimeEntry[]
   allocations Allocation[]
   covenants   Covenant[]
@@ -439,6 +440,12 @@ model Document {
   dadosExtraidos     Json?    @map("dados_extraidos")
   editadoManualmente Boolean  @default(false) @map("editado_manualmente")
   tamanho            String?
+  // VERSIONAMENTO (política 2026-07-15): documento nunca é deletado depois de
+  // processado — é SUBSTITUÍDO. A versão antiga fica com status "Substituído",
+  // arquivo preservado no storage (evidência) e o ponteiro para a sucessora.
+  versao              Int      @default(1)
+  substituidoPorId    String?  @map("substituido_por_id")
+  motivoSubstituicao  String?  @map("motivo_substituicao")
   createdAt      DateTime @default(now()) @map("created_at")
 
   analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
@@ -448,6 +455,25 @@ model Document {
   company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@map("documents")
+}
+
+// HASH DE VERSÃO por extração (política 2026-07-15): cada processamento grava a
+// PROVENIÊNCIA completa dos insumos usados — documentos (hash sha256 + versão),
+// dicionário de contas e modelos padrão de BP/DRE — consultável por análise.
+// Produtos derivados (Valuation/BP/Orçamento) carimbam o hash da versão que os
+// semeou; divergência do hash atual = histórico desatualizado.
+model AnalysisVersion {
+  id         String   @id @default(uuid())
+  analysisId String   @map("analysis_id")
+  hash       String
+  motivo     String   @default("extração")
+  insumos    Json
+  criadoEm   DateTime @default(now()) @map("criado_em")
+
+  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId, criadoEm])
+  @@map("analysis_versions")
 }
 
 model Engagement {

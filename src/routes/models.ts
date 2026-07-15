@@ -309,10 +309,19 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     });
   }
 
-  const realizado = historicoAnual || parcial
+  // CARIMBO DE PROVENIÊNCIA do seed (política 2026-07-15): o modelo nasce
+  // apontando o HASH da versão da extração que o semeou. Se a análise-fonte for
+  // reprocessada depois (documento substituído, dicionário novo), o hash atual
+  // diverge e o GET do modelo acende "histórico desatualizado".
+  const deSeed = analysis?.dadosEstruturados as { versaoExtracao?: string; extraidoEm?: string } | null;
+  const seed_ = analysis
+    ? { analysisId: analysis.id, versaoExtracao: deSeed?.versaoExtracao ?? null, extraidoEm: deSeed?.extraidoEm ?? null, seedEm: new Date().toISOString() }
+    : null;
+  const realizado = historicoAnual || parcial || seed_
     ? {
         ...(historicoAnual ? { historicoAnual: { ...historicoAnual, ...(usarAbertura ? { receitaPorLinha } : {}), ...(usarAberturaCustos ? { custoPorLinha } : {}) } } : {}),
         ...(parcial ? { meses: parcial.meses, porGrupo: parcial.porGrupo } : {}),
+        ...(seed_ ? { seed: seed_ } : {}),
       }
     : null;
 
@@ -511,7 +520,20 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     where: { id: model.companyId },
     select: { razaoSocial: true, nomeFantasia: true },
   });
-  res.json({ ...completo, empresaNome: company?.nomeFantasia || company?.razaoSocial || null });
+  // HISTÓRICO DESATUALIZADO: o hash da extração que semeou o modelo diverge do
+  // hash atual da análise-fonte (documento substituído + reprocessado depois do
+  // seed). O modelo NÃO muda sozinho — a UI avisa e o analista decide.
+  let historicoDesatualizado = false;
+  const seedStamp = (completo?.realizado as { seed?: { versaoExtracao?: string | null } } | null)?.seed;
+  if (model.analysisSeedId && seedStamp?.versaoExtracao) {
+    const fonte = await prisma.analysis.findUnique({
+      where: { id: model.analysisSeedId },
+      select: { dadosEstruturados: true },
+    });
+    const hashAtual = (fonte?.dadosEstruturados as { versaoExtracao?: string } | null)?.versaoExtracao ?? null;
+    historicoDesatualizado = !!hashAtual && hashAtual !== seedStamp.versaoExtracao;
+  }
+  res.json({ ...completo, empresaNome: company?.nomeFantasia || company?.razaoSocial || null, historicoDesatualizado });
 });
 
 // GET /models/:id/dfs-origem — TRANSPARÊNCIA: as demonstrações EXTRAÍDAS

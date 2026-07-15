@@ -153,7 +153,35 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
-  res.json(analysis);
+  // EXTRAÇÃO DESATUALIZADA: algum documento financeiro vigente entrou DEPOIS da
+  // última extração (upload novo ou substituição de versão) — os números exibidos
+  // não refletem a base atual até reprocessar. Nada muda silencioso: só o aviso.
+  const extraidoEm = (analysis.dadosEstruturados as any)?.extraidoEm as string | undefined;
+  const extracaoDesatualizada = !!extraidoEm && analysis.documents.some((d) =>
+    d.tipo !== MATERIAL_TIPO && d.status !== "Substituído" && d.createdAt > new Date(extraidoEm)
+  );
+  res.json({ ...analysis, extracaoDesatualizada });
+});
+
+// VERSÕES da extração (política 2026-07-15): trilha consultável de cada hash de
+// versão com a proveniência completa dos insumos (documentos + dicionário +
+// modelos padrão BP/DRE). A vigente é a de hash igual ao dadosEstruturados atual.
+router.get("/:id/versoes", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, userId: { in: req.scopeUserIds! } },
+    select: { id: true, dadosEstruturados: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const versoes = await prisma.analysisVersion.findMany({
+    where: { analysisId: id },
+    orderBy: { criadoEm: "desc" },
+  });
+  const hashAtual = (analysis.dadosEstruturados as any)?.versaoExtracao ?? null;
+  res.json({
+    hashAtual,
+    versoes: versoes.map((v) => ({ hash: v.hash, motivo: v.motivo, criadoEm: v.criadoEm, insumos: v.insumos, vigente: v.hash === hashAtual })),
+  });
 });
 
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
@@ -539,8 +567,10 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   // Materiais complementares (notas/apresentações) NÃO entram na extração financeira —
-  // são resumidos depois, na geração da análise (buildMateriaisContext).
-  const financialDocs = analysis.documents.filter((d) => d.tipo !== MATERIAL_TIPO);
+  // são resumidos depois, na geração da análise (buildMateriaisContext). Documentos
+  // SUBSTITUÍDOS também não: a versão corrigida é quem representa o insumo (política
+  // 2026-07-15 — a antiga fica só como evidência das versões anteriores do produto).
+  const financialDocs = analysis.documents.filter((d) => d.tipo !== MATERIAL_TIPO && d.status !== "Substituído");
   if (financialDocs.length === 0) {
     res.status(400).json({ error: "Nenhuma demonstração contábil enviada para esta análise" });
     return;
@@ -951,6 +981,25 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       custoExtracao: { usd: custoExtracaoUsd, fonte: escolhido.fonte, fecha: escolhido.fecha, niveis: custos },
     } as DadosEstruturados;
 
+    // HASH DE VERSÃO da extração (política 2026-07-15): proveniência COMPLETA dos
+    // insumos usados — documentos (sha256 + versão), dicionário e modelos padrão de
+    // BP/DRE — consultável em /analyses/:id/versoes. Produtos derivados carimbam
+    // este hash no seed; divergência = histórico desatualizado.
+    const extraidoEm = new Date().toISOString();
+    const insumos = {
+      documentos: financialDocs.map((d) => ({ id: d.id, nome: d.nome, tipo: d.tipo, hash: d.hash, versao: d.versao, editadoManualmente: d.editadoManualmente })),
+      dicionarioVersao,
+      modeloVersaoBP: modeloVersoes.bp,
+      modeloVersaoDRE: modeloVersoes.dre,
+      fonteExtracao: escolhido.fonte,
+    };
+    const versaoExtracao = crypto.createHash("sha256")
+      .update(JSON.stringify({ documentos: insumos.documentos.map((d) => `${d.hash}:${d.versao}:${d.editadoManualmente}`).sort(), dicionarioVersao, modeloVersoes }))
+      .digest("hex").slice(0, 12);
+    (dadosEstruturados as any).extraidoEm = extraidoEm;
+    (dadosEstruturados as any).versaoExtracao = versaoExtracao;
+    (dadosEstruturados as any).insumos = insumos;
+
     // 3. GATE — régua ÚNICA de prontidão (prontidao-geracao.ts): documentos presentes
     //    (BP E DRE — "só BP" parava em 'Pronta para gerar' enganoso, flagrado pelo usuário),
     //    equação fechada, composição ok, 0 não classificadas com valor, DRE reconciliada
@@ -971,6 +1020,18 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         periodo: allPeriodos.join(" a "),
       },
     });
+    // Registro consultável da versão (idempotente por hash: reprocessar com os MESMOS
+    // insumos não duplica a trilha — só extração com insumo novo cria versão nova).
+    const versaoExistente = await prisma.analysisVersion.findFirst({ where: { analysisId: analysis.id, hash: versaoExtracao } });
+    if (!versaoExistente) {
+      await prisma.analysisVersion.create({
+        data: { analysisId: analysis.id, hash: versaoExtracao, motivo: "extração", insumos: insumos as object },
+      });
+      void registrarAuditoria({
+        userId: req.userId!, analysisId: analysis.id, entity: "analysis", entityId: analysis.id,
+        field: "nova versão da extração", after: { hash: versaoExtracao, insumos }, source: "process",
+      });
+    }
 
     if (!prontidao.pronta) {
       // Pendências (documento faltando / não fecha / não classificadas / DRE divergente)
@@ -1958,6 +2019,17 @@ router.delete("/:id/documents/:docId", async (req: AuthRequest, res: Response): 
     where: { id: docId, analysisId: analysis.id },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+
+  // POLÍTICA (2026-07-15): documento que já participou de qualquer produto NUNCA é
+  // deletado — é evidência; corrija com "Substituir" (POST /documents/:id/substituir).
+  // Exclusão real só para upload errado que nunca foi processado nem substituído.
+  const jaUsado = doc.status !== "Pendente" || !!doc.dadosExtraidos || !!doc.substituidoPorId || doc.versao > 1;
+  if (jaUsado) {
+    res.status(409).json({
+      error: "Documento já processado não pode ser excluído — use \"Substituir\" para enviar a versão corrigida (a antiga fica preservada como evidência).",
+    });
+    return;
+  }
 
   if (doc.storagePath) {
     try { await deleteFile(doc.storagePath); } catch (e) { console.warn("deleteFile failed:", e); }

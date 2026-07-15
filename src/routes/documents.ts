@@ -5,6 +5,7 @@ import { z } from "zod";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { uploadFile, deleteFile } from "../services/storage";
+import { registrarAuditoria } from "../services/audit-trail";
 
 const router = Router();
 router.use(requireAuth);
@@ -159,6 +160,96 @@ router.put("/:id/tipo", async (req: AuthRequest, res: Response): Promise<void> =
   res.json(updated);
 });
 
+// SUBSTITUIR documento (política 2026-07-15: nunca deletar o que foi processado).
+// A versão antiga vira status "Substituído" — arquivo PRESERVADO no storage como
+// evidência do que fundamentou versões anteriores dos produtos — e aponta para a
+// sucessora. A nova entra "Pendente" com versão incrementada; o reprocessamento
+// da análise passa a enxergar SÓ ela (o process filtra "Substituído").
+router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!req.file) { res.status(400).json({ error: "Nenhum arquivo enviado" }); return; }
+  const id = req.params.id as string;
+  const doc = await prisma.document.findFirst({
+    where: { id, company: { userId: { in: req.scopeUserIds! } } },
+  });
+  if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+  if (doc.status === "Substituído") {
+    res.status(409).json({ error: "Documento já foi substituído — substitua a versão vigente" });
+    return;
+  }
+
+  const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.trim().slice(0, 300) || null : null;
+  const nome = fixFilename(req.file.originalname);
+  const key = `uploads/${req.userId}/${doc.analysisId}/${Date.now()}-${nome}`;
+  const storagePath = await uploadFile(req.file.buffer, key, req.file.mimetype);
+  const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
+  const tamanho = req.file.size > 1024 * 1024
+    ? `${(req.file.size / 1024 / 1024).toFixed(1)} MB`
+    : `${Math.round(req.file.size / 1024)} KB`;
+
+  // Metadados herdam da versão anterior (tipo/competência/moeda) — o documento é o
+  // MESMO insumo lógico, em versão nova. Dados extraídos/edições NÃO herdam: o
+  // conteúdo mudou, a extração precisa ser refeita (reprocessar a análise).
+  const novo = await prisma.document.create({
+    data: {
+      analysisId: doc.analysisId,
+      companyId: doc.companyId,
+      nome,
+      tipo: doc.tipo,
+      competencia: doc.competencia,
+      moeda: doc.moeda,
+      storagePath,
+      hash,
+      tamanho,
+      status: "Pendente",
+      versao: doc.versao + 1,
+    },
+  });
+  await prisma.document.update({
+    where: { id: doc.id },
+    data: { status: "Substituído", substituidoPorId: novo.id, motivoSubstituicao: motivo },
+  });
+  void registrarAuditoria({
+    userId: req.userId!, analysisId: doc.analysisId, entity: "document", entityId: doc.id,
+    field: "substituição de documento",
+    before: { nome: doc.nome, hash: doc.hash, versao: doc.versao },
+    after: { nome: novo.nome, hash: novo.hash, versao: novo.versao, documentoNovoId: novo.id },
+    reason: motivo ?? undefined,
+  });
+
+  res.status(201).json(novo);
+});
+
+// Cadeia de VERSÕES do documento (da vigente até a original), seguindo os
+// ponteiros substituidoPorId para trás.
+router.get("/:id/versoes", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const doc = await prisma.document.findFirst({
+    where: { id, company: { userId: { in: req.scopeUserIds! } } },
+  });
+  if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+
+  // Anda para FRENTE até a versão vigente, depois para TRÁS coletando a cadeia.
+  let vigente = doc;
+  while (vigente.substituidoPorId) {
+    const prox = await prisma.document.findUnique({ where: { id: vigente.substituidoPorId } });
+    if (!prox) break;
+    vigente = prox;
+  }
+  const cadeia = [vigente];
+  let atual = vigente;
+  for (let i = 0; i < 50; i++) { // trava de segurança contra ciclo
+    const anterior = await prisma.document.findFirst({ where: { substituidoPorId: atual.id } });
+    if (!anterior) break;
+    cadeia.push(anterior);
+    atual = anterior;
+  }
+  res.json(cadeia.map((d) => ({
+    id: d.id, nome: d.nome, versao: d.versao, status: d.status, hash: d.hash,
+    tamanho: d.tamanho, criadoEm: d.createdAt, motivoSubstituicao: d.motivoSubstituicao,
+    vigente: d.id === vigente.id,
+  })));
+});
+
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const doc = await prisma.document.findFirst({
@@ -166,8 +257,24 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
 
+  // POLÍTICA (2026-07-15): documento que já participou de qualquer produto NUNCA é
+  // deletado — é evidência; corrija com "Substituir". Exclusão real só para upload
+  // errado que nunca foi processado nem substituído.
+  const jaUsado = doc.status !== "Pendente" || !!doc.dadosExtraidos || !!doc.substituidoPorId || doc.versao > 1;
+  if (jaUsado) {
+    res.status(409).json({
+      error: "Documento já processado não pode ser excluído — use \"Substituir\" para enviar a versão corrigida (a antiga fica preservada como evidência).",
+    });
+    return;
+  }
+
   if (doc.storagePath) await deleteFile(doc.storagePath);
   await prisma.document.delete({ where: { id } });
+  void registrarAuditoria({
+    userId: req.userId!, analysisId: doc.analysisId, entity: "document", entityId: id,
+    field: "exclusão de documento nunca processado",
+    before: { nome: doc.nome, tipo: doc.tipo, hash: doc.hash },
+  });
   res.status(204).send();
 });
 
