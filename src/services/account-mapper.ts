@@ -202,6 +202,15 @@ function findBestMatch(
   }
   // (sem fallback de alias que ignore grupo)
 
+  // Nome GENÉRICO de UMA palavra ("DESPESAS", "RECEITAS", "CUSTOS"...): não carrega
+  // sinal nenhum — contains/keyword casariam a PRIMEIRA linha do modelo que contém a
+  // palavra (no modelo do usuário, "DESPESAS" caía em "Despesas com Pessoas"; no
+  // template, em "Despesas Gerais e Administrativas"). Devolve null: o fold resolve
+  // pelo CONTEXTO do pai (posição no documento), que é a única informação real.
+  // Dicionário e aliases (acima) continuam valendo — são mapeamentos deliberados.
+  const GENERICO_SOLTO = new Set(["despesa", "despesas", "receita", "receitas", "custo", "custos", "imposto", "impostos", "gasto", "gastos"]);
+  if (GENERICO_SOLTO.has(norm)) return null;
+
   // 3. Contains match — prefer grupo-compatible
   for (const c of candidates) {
     const normC = normalize(c);

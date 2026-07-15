@@ -44,3 +44,22 @@ describe("fuzzy — conectivos não pontuam (stopwords)", () => {
     expect(mapAccountToDRE("DESPESAS C/ADMINISTRAÇÃO")).not.toBe("Despesas com P&D");
   });
 });
+
+describe("nome genérico de UMA palavra não casa linha específica", () => {
+  // Caso AOCP em produção: a folha "DESPESAS" (sob "Outras Despesas Operacionais")
+  // casava por contains a PRIMEIRA linha do modelo contendo a palavra — no modelo do
+  // usuário, "Despesas com Pessoas". Nome de 1 palavra genérica → null; o fold decide
+  // pelo contexto do pai (posição no documento).
+  it("DESPESAS / RECEITAS soltos → null (sem dicionário)", () => {
+    expect(mapAccountToDRE("DESPESAS")).toBeNull();
+    expect(mapAccountToDRE("(-) DESPESAS")).toBeNull();
+    expect(mapAccountToDRE("RECEITAS")).toBeNull();
+  });
+  it("entrada DELIBERADA de dicionário para o nome genérico continua valendo", () => {
+    const dict = [{ nomeOriginal: "Despesas", contaDestino: "Outras Despesas Operacionais", grupoConta: "Outras Despesas Operacionais" }];
+    expect(mapAccountToDRE("DESPESAS", dict)).toBe("Outras Despesas Operacionais");
+  });
+  it("com o contexto do pai concatenado, resolve na linha do pai", () => {
+    expect(mapAccountToDRE("Outras Despesas Operacionais DESPESAS")).toBe("Outras Despesas Operacionais");
+  });
+});

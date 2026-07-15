@@ -612,6 +612,22 @@ describe("foldDRE — herança da seção de receita (caso AOCP)", () => {
   });
 });
 
+describe("foldDRE — folha genérica segue a POSIÇÃO, não a primeira linha parecida (caso AOCP)", () => {
+  it("'DESPESAS' sob 'Outras Despesas Operacionais' → linha do pai (não DGA/Pessoas)", async () => {
+    const { foldDRE } = await import("./ai-extraction");
+    const arvore = {
+      "2025": [
+        { nome: "Receita Operacional", valor: 1000, filhos: [{ nome: "SERVIÇOS", valor: 1000 }] },
+        { nome: "Outras Despesas Operacionais", valor: -10380, filhos: [{ nome: "DESPESAS", valor: -10380 }] },
+      ],
+    } as any;
+    const { dre } = foldDRE(arvore, ["2025"], []);
+    const val = (c: string) => dre.find((l) => l.conta === c)?.valores["2025"] ?? 0;
+    expect(val("Outras Despesas Operacionais")).toBeCloseTo(-10380, 1);
+    expect(val("Despesas Gerais e Administrativas")).toBeCloseTo(0, 1);
+  });
+});
+
 describe("foldBP — destino GENÉRICO não prova divergência (caso AOCP)", () => {
   it("filho que só mapeia para 'Outros …' não força descida — o pai específico absorve", () => {
     const arvore = {
