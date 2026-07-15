@@ -3,7 +3,7 @@ import { env } from "../config/env";
 import { DRE_TEMPLATE } from "./financial-templates";
 import type { BPLineItem, DRELineItem } from "../types/financial";
 import type { DREModel } from "./model-version";
-import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, isContaIgnorada, blocoDoCaminhoDRE, CONFLITO_CONTEXTO_DRE, DEFAULT_BP_MODEL, type BPModel, type DictionaryEntry } from "./account-mapper";
+import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, isContaIgnorada, blocoDoCaminhoDRE, CONFLITO_CONTEXTO_DRE, DEFAULT_BP_MODEL, DRE_DESPESAS_OPERACIONAIS, type BPModel, type DictionaryEntry } from "./account-mapper";
 import { construirArvoreBPporIndentacao } from "./bp-tree-indent";
 import type { ParsedDocument } from "./parser";
 
@@ -193,8 +193,8 @@ const DRE_SUBTOTAIS = new Set([
 /** destinos que compõem o bloco operacional/financeiro — candidatos a "filhos" de um
  *  subtotal "Despesas Operacionais". Usados para decidir POR VALOR se o pai é redundante. */
 const DESP_OP_DESTINOS = new Set([
-  "Despesas com Vendas", "Despesas Gerais e Administrativas", "Despesas com Marketing",
-  "Despesas com P&D", "Outras Despesas Operacionais", "Outras Receitas Operacionais",
+  ...DRE_DESPESAS_OPERACIONAIS,
+  "Outras Despesas Operacionais", "Outras Receitas Operacionais",
   "Receitas Financeiras", "Despesas Financeiras",
 ]);
 

@@ -561,30 +561,50 @@ describe("foldDRE — descida por divergência (impostos aninhados em Deduções
 });
 
 describe("DRE — bridge do modelo do banco (conta adicionada pelo usuário)", () => {
-  it("'Despesas com Pessoas' entra no fold e na cascata do Lucro Líquido (bloco EBITDA)", async () => {
+  // "Despesas com Pessoas" virou linha do TEMPLATE (abertura v7, 15/07/2026) — o
+  // teste do bridge usa uma conta realmente CUSTOM para provar o mecanismo.
+  it("conta custom entra no fold e na cascata do Lucro Líquido (bloco EBITDA)", async () => {
     const { foldDRE } = await import("./ai-extraction");
     const { buildDREModel } = await import("./model-version");
     const { DRE_TEMPLATE } = await import("./financial-templates");
-    // Modelo do banco = template + "Despesas com Pessoas" inserida no bloco operacional
+    // Modelo do banco = template + conta do usuário inserida no bloco operacional
     const lines = DRE_TEMPLATE.map((t) => ({ conta: t.conta, subtotal: t.subtotal }));
     const idx = lines.findIndex((l) => l.conta === "Despesas Gerais e Administrativas");
-    lines.splice(idx + 1, 0, { conta: "Despesas com Pessoas", subtotal: false });
+    lines.splice(idx + 1, 0, { conta: "Despesas com Segurança Patrimonial", subtotal: false });
     const model = buildDREModel(lines);
-    expect(model.inputs.has("Despesas com Pessoas")).toBe(true);
-    expect(model.extrasPorBloco["EBITDA"]).toContain("Despesas com Pessoas");
+    expect(model.inputs.has("Despesas com Segurança Patrimonial")).toBe(true);
+    expect(model.extrasPorBloco["EBITDA"]).toContain("Despesas com Segurança Patrimonial");
+    // As linhas novas do template v7 NÃO são extras (têm componente fixo na cascata).
+    expect(model.extrasPorBloco["EBITDA"] ?? []).not.toContain("Despesas com Pessoas");
 
     const arvore = {
       "2023": [
         { nome: "RECEITA OPERACIONAL BRUTA", valor: 1000 },
-        { nome: "FOLHA E ENCARGOS XPTO", valor: -200 }, // classificada p/ a conta nova via dicionário
+        { nome: "VIGILÂNCIA E PORTARIA XPTO", valor: -200 }, // classificada p/ a conta nova via dicionário
       ],
     } as any;
-    const dict = [{ nomeOriginal: "FOLHA E ENCARGOS XPTO", contaDestino: "Despesas com Pessoas", grupoConta: "Despesas com Pessoas" }];
+    const dict = [{ nomeOriginal: "VIGILÂNCIA E PORTARIA XPTO", contaDestino: "Despesas com Segurança Patrimonial", grupoConta: "Despesas com Segurança Patrimonial" }];
     const { dre } = foldDRE(arvore, ["2023"], dict, model);
     const val = (c: string) => dre.find((l) => l.conta === c)?.valores["2023"] ?? 0;
-    expect(val("Despesas com Pessoas")).toBeCloseTo(-200, 1); // linha existe e recebeu o valor
+    expect(val("Despesas com Segurança Patrimonial")).toBeCloseTo(-200, 1); // linha existe e recebeu o valor
     expect(val("EBITDA")).toBeCloseTo(800, 1);                // entrou na cascata
     expect(val("Lucro Líquido")).toBeCloseTo(800, 1);         // fluiu até o LL
+  });
+
+  it("template v7: linha nova ('Despesas com Aluguel...') recebe valor e pesa no EBITDA", async () => {
+    const { foldDRE } = await import("./ai-extraction");
+    const arvore = {
+      "2023": [
+        { nome: "RECEITA OPERACIONAL BRUTA", valor: 1000 },
+        { nome: "ALUGUEL DA SEDE", valor: -150 },
+      ],
+    } as any;
+    const dict = [{ nomeOriginal: "Aluguel da Sede", contaDestino: "Despesas com Aluguel, Condomínio e IPTU", grupoConta: "Despesas com Aluguel, Condomínio e IPTU" }];
+    const { dre } = foldDRE(arvore, ["2023"], dict);
+    const val = (c: string) => dre.find((l) => l.conta === c)?.valores["2023"] ?? 0;
+    expect(val("Despesas com Aluguel, Condomínio e IPTU")).toBeCloseTo(-150, 1);
+    expect(val("EBITDA")).toBeCloseTo(850, 1);
+    expect(val("Lucro Líquido")).toBeCloseTo(850, 1);
   });
 });
 

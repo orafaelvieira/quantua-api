@@ -64,9 +64,26 @@ async function seedTipo(tipo: "BP" | "DRE") {
   }
 
   // Template do código REALMENTE mudou (ou primeira carga). Se a vigente é edição de
-  // USUÁRIO, a nova versão entra INATIVA (fica no histórico, sem atropelar a edição).
+  // USUÁRIO, a nova versão entra INATIVA (fica no histórico, sem atropelar a edição)
+  // — EXCETO quando o template novo PRESERVA a vigente por inteiro (toda linha dela
+  // aparece no novo, na mesma ordem relativa): aí nada do usuário se perde, o novo
+  // só ADICIONA — pode ativar (caso da abertura v7 da DRE, 15/07/2026).
   const vigenteEhDoUsuario = !!ativo && ativo.criadoPor !== "sistema";
-  const ativarNova = !vigenteEhDoUsuario;
+  const linhaId = (l: { nome: string; grupo: string; nivel: number; tipo: string }) => `${l.nome}|${l.grupo}|${l.nivel}|${l.tipo}`;
+  const preservaVigente = (() => {
+    if (!ativo) return false;
+    // subsequência ordenada: cada linha da vigente existe no template novo, na ordem
+    const novas = linhas.map(linhaId);
+    let i = 0;
+    for (const l of ativo.linhas) {
+      const alvo = linhaId(l);
+      while (i < novas.length && novas[i] !== alvo) i++;
+      if (i >= novas.length) return false;
+      i++;
+    }
+    return true;
+  })();
+  const ativarNova = !vigenteEhDoUsuario || preservaVigente;
   const proxVersao = ((await prisma.standardModel.aggregate({ where: { tipo }, _max: { versao: true } }))._max.versao ?? 0) + 1;
   await prisma.$transaction(async (tx) => {
     if (ativarNova) await tx.standardModel.updateMany({ where: { tipo, ativo: true }, data: { ativo: false } });
@@ -76,7 +93,7 @@ async function seedTipo(tipo: "BP" | "DRE") {
         nota: proxVersao === 1
           ? "Versão inicial (migrada dos templates do código)"
           : ativarNova
-            ? "Atualização do template do código"
+            ? (vigenteEhDoUsuario ? "Atualização do template do código (preserva a edição vigente — só adiciona linhas)" : "Atualização do template do código")
             : "Atualização do template do código (inativa — a vigente é edição do usuário)",
         criadoPor: "sistema",
         linhas: { create: linhas },

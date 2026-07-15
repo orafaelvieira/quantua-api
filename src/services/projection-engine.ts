@@ -20,6 +20,7 @@
  */
 
 import { getSectorPremises, SectorPremises } from "./sector-premises";
+import { DRE_DESPESAS_OPERACIONAIS } from "./account-mapper";
 
 export interface ProjectionMonth {
   mes: string;             // "Jul/2026"
@@ -124,10 +125,7 @@ function findLineExact(lines: LineWithValores[] | undefined, conta: string): Lin
 /** Linhas de despesa operacional do DRE_TEMPLATE (o bloco entre Lucro Bruto e EBITDA) —
  *  usadas no fallback quando a DRE não traz os subtotais. */
 const OPEX_LINHAS_MODELO = [
-  "Despesas Gerais e Administrativas",
-  "Despesas com Vendas",
-  "Despesas com Marketing",
-  "Despesas com P&D",
+  ...DRE_DESPESAS_OPERACIONAIS,
   "Outras Receitas Operacionais",
   "Outras Despesas Operacionais",
 ];

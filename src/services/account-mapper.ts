@@ -334,8 +334,9 @@ export const CONFLITO_CONTEXTO_DRE = "__CONFLITO_CONTEXTO__";
 /** Bloco do DESTINO: "custo" | "despesa" operacional | null (neutro — receitas,
  *  financeiras, não-operacionais, IR, D&A ficam FORA da blindagem). Determinístico. */
 export function blocoDoDestinoDRE(destino: string): "custo" | "despesa" | null {
-  if (destino === "Custo Operacional") return "custo";
   const n = normalize(destino);
+  // "Custo Operacional", "Custos com Pessoas (MOD)"… — o bloco de CUSTOS inteiro.
+  if (/^custos?\b/.test(n)) return "custo";
   if (/financeir|nao operacion/.test(n)) return null;
   if (/^(outras )?despesas /.test(n)) return "despesa";
   return null;
@@ -498,15 +499,33 @@ export function mapExtractedToDRE(
   };
 }
 
+// Despesas OPERACIONAIS do modelo padrão (pesam entre o Lucro Bruto e o EBITDA).
+// Abertura v7 (15/07/2026): despesas por natureza — o dicionário classifica direto.
+export const DRE_DESPESAS_OPERACIONAIS = [
+  "Despesas com Pessoas",
+  "Despesas Gerais e Administrativas",
+  "Despesas com Aluguel, Condomínio e IPTU",
+  "Despesas com Energia, Água, Telefone e Internet",
+  "Despesas com Sistemas e Softwares",
+  "Despesas com Limpeza, Manutenção e Reparos",
+  "Despesas com Viagens e Estadias",
+  "Despesas com Veículos",
+  "Despesas com Seguros",
+  "Despesas com Fretes",
+  "Despesas Taxas, Tributos e Contribuições",
+  "Despesas com Terceiros",
+  "Despesas com Vendas",
+  "Despesas com Marketing",
+  "Despesas com P&D",
+] as const;
+
 // Linhas de input do DRE de natureza REDUTORA (devem ser negativas no modelo).
 const DRE_LINHAS_REDUTORAS = new Set<string>([
   "Deduções da Receita Bruta",
   "Impostos s/ Faturamento",
   "Custo Operacional",
-  "Despesas Gerais e Administrativas",
-  "Despesas com Vendas",
-  "Despesas com Marketing",
-  "Despesas com P&D",
+  "Custos com Pessoas (MOD)",
+  ...DRE_DESPESAS_OPERACIONAIS,
   "Outras Despesas Operacionais",
   "Depreciação e Amortização",
   "Despesas Financeiras",
@@ -603,12 +622,15 @@ export function recomputeDRESubtotals(dre: DRELineItem[], periodos: string[], ex
     );
     set("Receita Líquida", p, receitaLiquida);
 
-    const lucroBruto = resolve(receitaLiquida + get("Custo Operacional", p) + extras("Lucro Bruto", p), "Lucro Bruto", p);
+    const lucroBruto = resolve(
+      receitaLiquida + get("Custo Operacional", p) + get("Custos com Pessoas (MOD)", p) + extras("Lucro Bruto", p),
+      "Lucro Bruto", p
+    );
     set("Lucro Bruto", p, lucroBruto);
 
     const ebitda = resolve(
-      lucroBruto + get("Despesas Gerais e Administrativas", p) + get("Despesas com Vendas", p) +
-        get("Despesas com Marketing", p) + get("Despesas com P&D", p) +
+      lucroBruto +
+        DRE_DESPESAS_OPERACIONAIS.reduce((s, c) => s + get(c, p), 0) +
         get("Outras Receitas Operacionais", p) + get("Outras Despesas Operacionais", p) +
         extras("EBITDA", p),
       "EBITDA", p
