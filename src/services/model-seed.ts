@@ -52,6 +52,10 @@ export interface HistoricoAnual {
   /** Histórico POR LINHA DE RECEITA do modelo ({linhaId: {período: valor}}) —
    *  preenchido quando o seed traz a abertura da DRE (uma linha por conta). */
   receitaPorLinha?: Record<string, Record<string, number>>;
+  /** Histórico POR LINHA DE CUSTO/DESPESA ({linhaId: {período: valor ABS}}) —
+   *  preenchido quando o seed abre custos/despesas por conta original do
+   *  documento. Travado: é a referência de tendência ao lado da projeção. */
+  custoPorLinha?: Record<string, Record<string, number>>;
 }
 
 /** Abertura de RECEITA do histórico: as contas de receita da DRE extraída
@@ -70,6 +74,12 @@ export interface HistoricoAnual {
 export interface LinhaReceitaHist {
   conta: string;
   valores: Record<string, number>;
+  /** Linha canônica em que a conta original foi dobrada pelo fold (abertura de
+   *  custos/despesas: separa bloco Custos × Despesas no seed do modelo). */
+  destino?: string;
+  /** Bloco do modelo em que a linha entra — decidido pela POSIÇÃO do destino na
+   *  DRE extraída (antes do Lucro Bruto = custo; depois = despesa). */
+  bloco?: "custo" | "despesa";
 }
 
 interface ItemArvoreDRE { nome?: string; valor?: number; destino?: string; filhos?: ItemArvoreDRE[] }
@@ -176,42 +186,61 @@ export function derivarAberturaCustos(dadosEstruturados: unknown): LinhaReceitaH
   const candidatas = dre.slice(idxLiquida + 1, fim).filter((l) => !l.subtotal && valorEm(l, ultimo!) < 0);
   if (!candidatas.length) return [];
   const destinos = new Set(candidatas.map((l) => l.conta?.trim()).filter(Boolean) as string[]);
+  // Bloco por POSIÇÃO da conta canônica na DRE: antes do Lucro Bruto = CUSTO;
+  // depois = DESPESA. Vale para o modelo padrão e para modelos DRE editados
+  // (linhas custom de custo ficam acima do LB por construção da cascata).
+  const idxLucroBruto = dre.findIndex((l) => l.conta?.trim().toLowerCase() === "lucro bruto");
+  const contasCusto = new Set(
+    (idxLucroBruto > idxLiquida ? dre.slice(idxLiquida + 1, idxLucroBruto) : [])
+      .map((l) => l.conta?.trim())
+      .filter(Boolean) as string[]
+  );
+  const blocoDe = (destino: string): "custo" | "despesa" =>
+    contasCusto.has(destino) || destino === "Custo Operacional" ? "custo" : "despesa";
 
-  // Caminho 1: árvore original — nomes exatos do documento do cliente.
+  // Caminho 1: árvore original — nomes exatos do documento do cliente. A chave
+  // agrega por (nome, destino): o DESTINO canônico do fold acompanha cada linha
+  // para o seed separar bloco Custos × Despesas sem re-classificar nada.
   const arvore = de.arvoreOriginalDRE;
   if (arvore) {
-    const porNome = new Map<string, Record<string, number>>();
-    const add = (nome: string | undefined, p: string, v: number | undefined) => {
-      const chave = (nome ?? "").trim();
-      if (!chave || typeof v !== "number" || !Number.isFinite(v) || v === 0) return;
-      const vals = porNome.get(chave) ?? {};
-      vals[p] = (vals[p] ?? 0) + v;
-      porNome.set(chave, vals);
+    const porChave = new Map<string, { conta: string; destino: string; vals: Record<string, number> }>();
+    const add = (nome: string | undefined, destino: string, p: string, v: number | undefined) => {
+      const conta = (nome ?? "").trim();
+      if (!conta || typeof v !== "number" || !Number.isFinite(v) || v === 0) return;
+      const chave = `${conta} ${destino}`;
+      const ent = porChave.get(chave) ?? { conta, destino, vals: {} };
+      ent.vals[p] = (ent.vals[p] ?? 0) + v;
+      porChave.set(chave, ent);
     };
     for (const p of periodos) {
       const visita = (it: ItemArvoreDRE): void => {
         if (it.destino && destinos.has(it.destino)) {
           const filhosComValor = (it.filhos ?? []).filter((f) => typeof f.valor === "number" && f.valor !== 0);
-          if (filhosComValor.length) filhosComValor.forEach((f) => add(f.nome, p, f.valor));
-          else add(it.nome, p, it.valor);
+          // Filhos absorvidos herdam o destino do pai (foi onde o fold os somou).
+          if (filhosComValor.length) filhosComValor.forEach((f) => add(f.nome, it.destino!, p, f.valor));
+          else add(it.nome, it.destino!, p, it.valor);
           return;
         }
         (it.filhos ?? []).forEach(visita);
       };
       (arvore[p] ?? []).forEach(visita);
     }
-    const linhasArvore = [...porNome.entries()]
-      .filter(([, vals]) => Math.abs(vals[ultimo!] ?? 0) > 0)
-      .map(([conta, vals]) => ({
+    const linhasArvore = [...porChave.values()]
+      .filter(({ vals }) => Math.abs(vals[ultimo!] ?? 0) > 0)
+      .map(({ conta, destino, vals }) => ({
         conta,
+        destino,
+        bloco: blocoDe(destino),
         valores: Object.fromEntries(periodos.map((p) => [p, Math.abs(vals[p] ?? 0)])),
       }));
     if (linhasArvore.length) return linhasArvore;
   }
 
-  // Fallback: contas canônicas (capturas legadas sem árvore).
+  // Fallback: contas canônicas (capturas legadas sem árvore) — destino = a própria conta.
   return candidatas.map((l) => ({
     conta: l.conta ?? "Custo",
+    destino: l.conta ?? "Custo",
+    bloco: blocoDe(l.conta?.trim() ?? ""),
     valores: Object.fromEntries(periodos.map((p) => [p, Math.abs(valorEm(l, p))])),
   }));
 }

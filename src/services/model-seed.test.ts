@@ -119,11 +119,43 @@ describe("derivarAberturaCustos", () => {
     expect(abertura.map((a) => a.conta)).toEqual(["Aluguel e Condomínio", "Energia Elétrica", "CMV"]);
     expect(abertura[0].valores).toEqual({ "31/12/2023": 60, "31/12/2024": 70 });
     expect(abertura[2].valores).toEqual({ "31/12/2023": 400, "31/12/2024": 500 });
+    // DESTINO canônico acompanha cada linha — é ele que separa o bloco Custos ×
+    // Despesas no seed do modelo (F1 do histórico nas projeções).
+    expect(abertura.map((a) => a.destino)).toEqual([
+      "Despesas Gerais e Administrativas", "Despesas Gerais e Administrativas", "Custo Operacional",
+    ]);
+  });
+
+  it("filhos absorvidos herdam o destino do pai (agregado do documento)", () => {
+    const dados = {
+      periodos: ["31/12/2023"],
+      dre: [
+        { conta: "Receita Bruta", valores: { "31/12/2023": 1000 } },
+        { conta: "Receita Líquida", valores: { "31/12/2023": 950 }, subtotal: true },
+        { conta: "Despesas Gerais e Administrativas", valores: { "31/12/2023": -100 } },
+        { conta: "EBITDA", valores: { "31/12/2023": 850 }, subtotal: true },
+      ],
+      arvoreOriginalDRE: {
+        "31/12/2023": [
+          {
+            nome: "Despesas Administrativas", valor: -100, destino: "Despesas Gerais e Administrativas",
+            filhos: [
+              { nome: "Despesas c/ Pessoal", valor: -60 },
+              { nome: "Despesas c/ Administração", valor: -40 },
+            ],
+          },
+        ],
+      },
+    };
+    const abertura = derivarAberturaCustos(dados);
+    expect(abertura.map((a) => a.conta)).toEqual(["Despesas c/ Pessoal", "Despesas c/ Administração"]);
+    expect(abertura.every((a) => a.destino === "Despesas Gerais e Administrativas")).toBe(true);
   });
 
   it("sem árvore: cai nas contas canônicas (ABS), sem subtotais", () => {
     const abertura = derivarAberturaCustos({ periodos: ["31/12/2023", "31/12/2024"], dre: dreComCustos });
     expect(abertura.map((a) => a.conta)).toEqual(["Custo Operacional", "Despesas Gerais e Administrativas"]);
     expect(abertura[0].valores["31/12/2024"]).toBe(500);
+    expect(abertura[0].destino).toBe("Custo Operacional");
   });
 });

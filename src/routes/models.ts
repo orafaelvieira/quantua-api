@@ -19,6 +19,7 @@ import { derivarSeed, derivarHistoricoAnual, derivarRealizadoParcial, derivarAbe
 import { rodarMonteCarlo, McVariavelSpec } from "../services/monte-carlo";
 import { ConfigReforma } from "../services/reforma-tributaria";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
+import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 
 const router = Router();
 router.use(requireAuth);
@@ -273,9 +274,44 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     }));
   }
 
+  // ABERTURA DE CUSTOS/DESPESAS: cada conta original do documento (nome exato)
+  // vira uma linha do modelo com % da RECEITA BRUTA do último ano — padrão da
+  // casa: projeta-se por % de receita e o analista troca o tipo por linha quando
+  // a conta pedir (fixo, por variável...). O destino canônico do fold separa o
+  // bloco (Custo Operacional → Custos; demais → Despesas). O histórico por linha
+  // fica TRAVADO em custoPorLinha — referência de tendência, nunca editável.
+  const aberturaCustos = derivarAberturaCustos(analysis?.dadosEstruturados ?? null);
+  const receitaBrutaUlt = (() => {
+    const hs = historicoAnual?.linhas.receita ?? {};
+    const ps = historicoAnual?.periodos ?? [];
+    for (let i = ps.length - 1; i >= 0; i--) if ((hs[ps[i]] ?? 0) > 0) return hs[ps[i]];
+    return 0;
+  })();
+  const usarAberturaCustos = aberturaCustos.length > 0 && receitaBrutaUlt > 0;
+  const linhasCustoSeed: Array<{ id: string; nome: string; modo: string; pct: number }> = [];
+  const linhasDespesaSeed: Array<{ id: string; nome: string; modo: string; pct: number }> = [];
+  const custoPorLinha: Record<string, Record<string, number>> = {};
+  const memoriaCustos: string[] = [];
+  if (usarAberturaCustos) {
+    aberturaCustos.forEach((ab, idx) => {
+      const ehCusto = ab.bloco === "custo";
+      const alvo = ehCusto ? linhasCustoSeed : linhasDespesaSeed;
+      const linhaId = `${ehCusto ? "custo" : "desp"}h${idx + 1}`;
+      const periodosCom = Object.entries(ab.valores).filter(([, v]) => v > 0).map(([k]) => k);
+      const ultimoP = periodosCom[periodosCom.length - 1];
+      const vUlt = ultimoP ? ab.valores[ultimoP] : 0;
+      const pct = Math.max(0, Math.min(1, vUlt / receitaBrutaUlt));
+      // Nome SEM o marcador "(-)"/"(=)" do documento — o sinal é do bloco, não do nome.
+      const nome = ab.conta.replace(/^(\s*\(?[=\-−+]\)?\s*)+/, "").trim() || ab.conta;
+      alvo.push({ id: linhaId, nome, modo: "pctReceita", pct });
+      custoPorLinha[linhaId] = ab.valores;
+      memoriaCustos.push(`"${nome}" (${ehCusto ? "custo" : "despesa"}): ${vUlt.toFixed(2)} em ${ultimoP ?? "—"} = ${(pct * 100).toFixed(2)}% da receita bruta`);
+    });
+  }
+
   const realizado = historicoAnual || parcial
     ? {
-        ...(historicoAnual ? { historicoAnual: { ...historicoAnual, ...(usarAbertura ? { receitaPorLinha } : {}) } } : {}),
+        ...(historicoAnual ? { historicoAnual: { ...historicoAnual, ...(usarAbertura ? { receitaPorLinha } : {}), ...(usarAberturaCustos ? { custoPorLinha } : {}) } } : {}),
         ...(parcial ? { meses: parcial.meses, porGrupo: parcial.porGrupo } : {}),
       }
     : null;
@@ -297,13 +333,26 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
           // Deduções da receita (vendas canceladas/abatimentos) ancoradas no
           // histórico: % sobre a bruta do último período extraído.
           { tipo: "receitas", nome: "Receitas", ordem: 0, config: { linhasReceita, ...(seed.deducoesPct > 0 ? { deducoesPct: seed.deducoesPct } : {}) } as object },
+          // Custos/Despesas: com histórico, UMA LINHA POR CONTA ORIGINAL do
+          // documento (% da receita bruta do último ano; o analista troca o tipo
+          // por linha). Sem abertura NENHUMA, as linhas agregadas de sempre.
+          // NUNCA misturar: agregado + abertura no outro bloco somaria o mesmo
+          // gasto DUAS vezes (a abertura já carrega o total do bloco vazio).
           {
             tipo: "custos", nome: "Custos", ordem: 1,
-            config: { linhasCusto: [{ id: "custos1", nome: "Custos sobre a receita", modo: "pctReceita", pct: seed.pctCustos }] } as object,
+            config: {
+              linhasCusto: usarAberturaCustos
+                ? linhasCustoSeed
+                : [{ id: "custos1", nome: "Custos sobre a receita", modo: "pctReceita", pct: seed.pctCustos }],
+            } as object,
           },
           {
             tipo: "despesas", nome: "Despesas", ordem: 2,
-            config: { linhasCusto: [{ id: "desp1", nome: "Despesas operacionais", modo: "pctReceita", pct: seed.pctDespesas }] } as object,
+            config: {
+              linhasCusto: usarAberturaCustos
+                ? linhasDespesaSeed
+                : [{ id: "desp1", nome: "Despesas operacionais", modo: "pctReceita", pct: seed.pctDespesas }],
+            } as object,
           },
           // NÃO OPERACIONAIS (abaixo do EBITDA): nascem vazios — só aparecem na
           // Demonstração quando o analista adicionar linhas.
@@ -344,7 +393,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     entity: "financial_model",
     entityId: model.id,
     field: "criação",
-    after: { nome: model.nome, objetivo: model.objetivo, templateReceita: templateReceita || "generico", seedDe: analysis?.id ?? null, memoriaSeed: [...seed.memoria, ...(parcial?.memoria ?? []), ...(memoriaAbertura.length ? [`Abertura de receita do histórico (${memoriaAbertura.length} linha(s)):`, ...memoriaAbertura] : [])] },
+    after: { nome: model.nome, objetivo: model.objetivo, templateReceita: templateReceita || "generico", seedDe: analysis?.id ?? null, memoriaSeed: [...seed.memoria, ...(parcial?.memoria ?? []), ...(memoriaAbertura.length ? [`Abertura de receita do histórico (${memoriaAbertura.length} linha(s)):`, ...memoriaAbertura] : []), ...(memoriaCustos.length ? [`Abertura de custos/despesas do histórico (${memoriaCustos.length} linha(s), % da receita bruta do último ano):`, ...memoriaCustos] : [])] },
     source: "models",
   });
 
@@ -542,6 +591,95 @@ router.get("/:id/historico-balanco", async (req: AuthRequest, res: Response): Pr
   if (!model.analysisSeedId) { res.json({ periodo: null, itens: [] }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
   res.json(derivarOutrosBalanco(analysis?.dadosEstruturados ?? null));
+});
+
+// GET /models/:id/historico-dfs — colunas HISTÓRICAS do BP e do Fluxo de Caixa
+// para a aba DFs: o BP extraído mapeado nas linhas do BP PROJETADO (ids do
+// motor) e o FC histórico CALCULADO pelo método indireto (precisa de 2+ BPs —
+// com N balanços saem N−1 colunas de fluxo). Nada é persistido: derivação
+// determinística da análise-fonte, travada para edição por construção.
+router.get("/:id/historico-dfs", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const vazio = { temHistorico: false, periodosBP: [], periodosFC: [], bp: {}, fc: {}, avisoFC: null };
+  if (!model.analysisSeedId) { res.json(vazio); return; }
+  const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
+  const de = analysis?.dadosEstruturados as {
+    periodos?: string[];
+    bp?: Array<{ conta: string; valores: Record<string, number>; classificacao?: string; nivel?: number }>;
+    dre?: Array<{ conta: string; valores: Record<string, number>; subtotal?: boolean }>;
+  } | null;
+  if (!de?.bp?.length) { res.json(vazio); return; }
+  const bpExt = de.bp;
+  const periodos = (de.periodos ?? []).filter((p) => bpExt.some((l) => Math.abs(l.valores?.[p] ?? 0) > 0));
+  if (!periodos.length) { res.json(vazio); return; }
+
+  const val = (conta: string, p: string): number => bpExt.find((l) => l.conta === conta)?.valores?.[p] ?? 0;
+  const soma = (contas: string[], p: string): number => contas.reduce((s, c) => s + val(c, p), 0);
+  // Linha do BP PROJETADO (id do motor) ← conta(s) canônica(s) do BP extraído.
+  const MAPA_BP: Record<string, string[]> = {
+    "bp-ativo": ["Ativo Total"],
+    "bp-ativo-circ": ["Ativo Circulante"],
+    "bp-caixa": ["Caixa e Equivalentes de Caixa"],
+    "bp-cr": ["Contas a Receber - CP"],
+    "bp-estoques": ["Estoques - CP"],
+    "bp-ativo-nc": ["Ativo Não Circulante"],
+    "bp-imobilizado": ["Imobilizado", "Intangível", "Ativos Biológicos - LP"],
+    "bp-passivo-pl": ["Passivo Total"],
+    "bp-passivo-circ": ["Passivo Circulante"],
+    "bp-fornecedores": ["Fornecedores - CP"],
+    "bp-divida-cp": ["Empréstimos e Financiamentos - CP"],
+    "bp-passivo-nc": ["Passivo Não Circulante"],
+    "bp-divida-lp": ["Empréstimos e Financiamentos - LP"],
+    "bp-pl": ["Patrimônio Líquido"],
+  };
+  const bpHist: Record<string, Record<string, number>> = {};
+  for (const [linhaId, contas] of Object.entries(MAPA_BP)) {
+    const vals: Record<string, number> = {};
+    for (const p of periodos) {
+      const v = soma(contas, p);
+      if (Math.abs(v) > 0) vals[p] = v;
+    }
+    if (Object.keys(vals).length) bpHist[linhaId] = vals;
+  }
+  // Itens de balanço do bloco giro (seed veio do próprio BP histórico): casa por NOME.
+  const blocoGiro = await prisma.modelBlock.findFirst({ where: { modelId: model.id, tipo: "giro" } });
+  const itensBalanco = ((blocoGiro?.config ?? {}) as { itensBalanco?: Array<{ id: string; nome: string }> }).itensBalanco ?? [];
+  for (const item of itensBalanco) {
+    const linha = bpExt.find((l) => l.conta.trim().toLowerCase() === item.nome.trim().toLowerCase());
+    if (!linha) continue;
+    const vals: Record<string, number> = {};
+    for (const p of periodos) {
+      const v = Math.abs(linha.valores?.[p] ?? 0);
+      if (v > 0) vals[p] = v;
+    }
+    if (Object.keys(vals).length) bpHist[`bp-item-${item.id}`] = vals;
+  }
+
+  // FC histórico (método indireto, com prova de fechamento vs ΔCaixa do BP).
+  let fcHist: Record<string, Record<string, number>> = {};
+  let periodosFC: string[] = [];
+  let avisoFC: string | null = null;
+  if (periodos.length >= 2 && de.dre?.length) {
+    const fc = buildIndirectCashFlow(bpExt as never, de.dre as never, periodos);
+    if (fc) {
+      periodosFC = fc.colunas;
+      fcHist = {
+        "fc-fco": fc.totais.fco,
+        "fc-fci": fc.totais.fci,
+        "fc-fcf": fc.totais.fcf,
+        "fc-variacao": fc.totais.geracaoTotal,
+        "fc-caixa-inicio": Object.fromEntries(fc.prova.map((pr) => [pr.periodo, pr.caixaInicial])),
+        "fc-caixa-fim": Object.fromEntries(fc.prova.map((pr) => [pr.periodo, pr.caixaFinal])),
+      };
+      const naoFecha = fc.prova.filter((pr) => !pr.fecha);
+      if (naoFecha.length) avisoFC = `FC indireto não fecha com o ΔCaixa em: ${naoFecha.map((pr) => pr.periodo).join(", ")} — confira a extração desses períodos.`;
+    }
+  } else if (periodos.length < 2) {
+    avisoFC = "Fluxo de caixa histórico precisa de 2+ balanços consecutivos — este modelo tem 1 período extraído.";
+  }
+
+  res.json({ temHistorico: true, periodosBP: periodos, periodosFC, bp: bpHist, fc: fcHist, avisoFC });
 });
 
 // GET /models/:id/historico-divida — saldo de Empréstimos e Financiamentos
