@@ -128,7 +128,7 @@ router.get("/fontes-dfs", async (req: AuthRequest, res: Response): Promise<void>
   });
   const fontes = analises
     .map((a) => {
-      const de = a.dadosEstruturados as { periodos?: string[]; bp?: unknown[]; dre?: unknown[] } | null;
+      const de = a.dadosEstruturados as { periodos?: string[]; bp?: unknown[]; dre?: unknown[]; versaoExtracao?: string } | null;
       if (!de || (!de.bp?.length && !de.dre?.length)) return null;
       let fechada = false;
       let pendencias: string[] = [];
@@ -137,19 +137,28 @@ router.get("/fontes-dfs", async (req: AuthRequest, res: Response): Promise<void>
         fechada = p.pronta;
         pendencias = p.pendencias ?? [];
       } catch { /* dados antigos sem validação: fica como não-fechada, sem quebrar */ }
+      // Código de exibição do IBR (mesma derivação do cabeçalho da análise) e os
+      // ANOS de histórico — o picker do valuation mostra "IBR-2026-042 · 2023-2025".
+      const num = a.id.replace(/[^0-9]/g, "").slice(-3).padStart(3, "0");
+      const codigo = `IBR-${new Date(a.createdAt).getFullYear()}-${num}`;
+      const anos = [...new Set((de.periodos ?? []).map((p) => (p.match(/(\d{4})/) ?? [])[1]).filter(Boolean))].sort();
       return {
         id: a.id,
         nome: a.nome,
+        codigo,
         status: a.status,
         criadaEm: a.createdAt,
         periodos: de.periodos ?? [],
+        anos,
+        versaoExtracao: de.versaoExtracao ?? null,
         documentos: docs.filter((d) => d.analysisId === a.id).map((d) => d.nome),
         fechada,
         pendencias,
       };
     })
     .filter((x): x is NonNullable<typeof x> => !!x);
-  res.json({ empresa: company.nomeFantasia || company.razaoSocial, fontes });
+  // "mais recente" = primeira da lista (ordenada por createdAt desc) — o picker destaca.
+  res.json({ empresa: company.nomeFantasia || company.razaoSocial, fontes: fontes.map((f, i) => ({ ...f, maisRecente: i === 0 })) });
 });
 
 // GET /models/seed-preview?companyId=&analysisId= — o que o seed encontraria:
@@ -218,6 +227,15 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
   const company = await companyNoEscopo(companyId, req.scopeUserIds!);
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+
+  // REGRA (2026-07-15): todo VALUATION nasce vinculado a um IBR — o histórico da
+  // projeção são as DFs do IBR (BP/DRE/FC já formatados e validados). Nem todo
+  // IBR tem valuation; todo valuation tem IBR. "ambos" inclui valuation → exige.
+  const exigeIBR = objetivo === "valuation" || objetivo === "ambos" || !objetivo;
+  if (exigeIBR && !analysisSeedId) {
+    res.status(400).json({ error: "Valuation exige um IBR vinculado — selecione o IBR da empresa que fornece o histórico (ou processe as demonstrações para criar um)." });
+    return;
+  }
 
   // Seed determinístico do histórico: análise indicada ou a mais recente com dados
   // (mesma seleção do seed-preview — o wizard e a criação enxergam a mesma fonte).
@@ -333,6 +351,9 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       // já tem coluna própria na lista; repetir o nome dela aqui só duplica.
       nome: nome || `${({ valuation: "Valuation", orcamento: "Orçamento", "business-plan": "Business Plan" } as Record<string, string>)[objetivo] ?? "Modelo"} ${mesInicialEfetivo.slice(0, 4)}`,
       objetivo: objetivo || "ambos",
+      // Ciclo de vida (2026-07-15): "Em produção" → "Concluído" → "Cancelado".
+      // Enquanto "Em produção" pode ser excluído; depois de "Concluído", nunca.
+      status: "Em produção",
       mesInicial: mesInicialEfetivo,
       horizonteMeses: horizonteEfetivo,
       analysisSeedId: analysis?.id ?? null,
@@ -552,6 +573,9 @@ router.get("/:id/dfs-origem", async (req: AuthRequest, res: Response): Promise<v
     bp?: Array<{ classificacao: string; conta: string; valores: Record<string, number>; nivel: number; editado?: boolean }>;
     dre?: Array<{ conta: string; valores: Record<string, number>; subtotal?: boolean; editado?: boolean }>;
     dicionarioVersao?: number;
+    versaoExtracao?: string;
+    arvoreOriginalDRE?: Record<string, unknown[]>;
+    arvoreOriginalBP?: Record<string, unknown>;
   } | null;
   if (!de || (!de.bp?.length && !de.dre?.length)) { res.json({ temOrigem: false }); return; }
   res.json({
@@ -561,9 +585,15 @@ router.get("/:id/dfs-origem", async (req: AuthRequest, res: Response): Promise<v
     analysisStatus: analysis!.status,
     atualizadaEm: analysis!.createdAt,
     dicionarioVersao: de.dicionarioVersao ?? null,
+    versaoExtracao: de.versaoExtracao ?? null,
     periodos: de.periodos ?? [],
     bp: de.bp ?? [],
     dre: de.dre ?? [],
+    // DOCUMENTO ORIGINAL da empresa (árvore fiel, nomes/valores como impressos):
+    // o histórico da projeção usa as DFs FORMATADAS do IBR; esta aba preserva a
+    // visão original para o analista rastrear cada número até o documento.
+    arvoreOriginalDRE: de.arvoreOriginalDRE ?? null,
+    arvoreOriginalBP: de.arvoreOriginalBP ?? null,
   });
 });
 
@@ -1148,12 +1178,44 @@ router.post("/:id/reforma", async (req: AuthRequest, res: Response): Promise<voi
 });
 
 // DELETE /models/:id — exclusão (trilha com entityId; cascade apaga blocos/cenários).
+// CICLO DE VIDA (2026-07-15): "Em produção" → "Concluído" → "Cancelado".
+// Concluir congela o marco (o modelo passa a ser um produto emitido); depois
+// disso ele nunca é excluído — só cancelado, com motivo na trilha.
+router.put("/:id/status", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const { status, motivo } = (req.body ?? {}) as { status?: string; motivo?: string };
+  const atual = model.status === "Rascunho" ? "Em produção" : model.status; // legado
+  const TRANSICOES: Record<string, string[]> = {
+    "Em produção": ["Concluído", "Cancelado"],
+    "Concluído": ["Cancelado"],
+    "Cancelado": [],
+  };
+  if (!status || !(TRANSICOES[atual] ?? []).includes(status)) {
+    res.status(409).json({ error: `Transição inválida: "${atual}" → "${status ?? "?"}". Fluxo: Em produção → Concluído → Cancelado.` });
+    return;
+  }
+  await prisma.financialModel.update({ where: { id: model.id }, data: { status } });
+  void registrarAuditoria({
+    userId: req.userId!, analysisId: model.analysisSeedId ?? null, entity: "financial_model", entityId: model.id,
+    field: "status do modelo", before: { status: atual }, after: { status }, source: "models",
+    reason: motivo?.trim().slice(0, 300) || undefined,
+  });
+  res.json({ ok: true, status });
+});
+
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  // POLÍTICA (2026-07-15): modelo Concluído/Cancelado é produto emitido — nunca
+  // some da base. Excluir só enquanto "Em produção" (ou legado "Rascunho").
+  if (model.status === "Concluído" || model.status === "Cancelado") {
+    res.status(409).json({ error: `Modelo "${model.status}" não pode ser excluído — cancele (com motivo) para tirá-lo de circulação mantendo a evidência.` });
+    return;
+  }
   await registrarAuditoria({
     userId: req.userId!, entity: "financial_model", entityId: model.id, field: "exclusão",
-    before: { nome: model.nome, companyId: model.companyId }, source: "models",
+    before: { nome: model.nome, companyId: model.companyId, status: model.status }, source: "models",
   });
   await prisma.financialModel.delete({ where: { id: model.id } });
   res.json({ ok: true });

@@ -188,6 +188,18 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
   const id = req.params.id as string;
   const existing = await prisma.analysis.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
   if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  // POLÍTICA (2026-07-15): IBR concluído é produto emitido (pode ter valuation
+  // vinculado e relatório entregue) — nunca some da base. Só CANCELAR, com motivo.
+  if (existing.status === "Concluída") {
+    res.status(409).json({ error: "IBR concluído não pode ser excluído — cancele (com motivo) para tirá-lo de circulação mantendo a evidência." });
+    return;
+  }
+  // Valuation/modelo vinculado a este IBR perderia a fonte do histórico — bloqueia.
+  const modelosVinculados = await prisma.financialModel.count({ where: { analysisSeedId: id } });
+  if (modelosVinculados > 0) {
+    res.status(409).json({ error: `Este IBR é a fonte de ${modelosVinculados} modelo(s) financeiro(s) (valuation/orçamento) — exclua ou cancele os modelos primeiro.` });
+    return;
+  }
   await prisma.analysis.delete({ where: { id } });
   // TRILHA da exclusão do IBR — analysisId NULL de propósito: com o id preenchido, o
   // cascade da análise apagaria a própria trilha da exclusão. entityId guarda o id.
@@ -196,6 +208,26 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
     before: { nome: existing.nome, status: existing.status, companyId: existing.companyId, criadoEm: existing.createdAt },
   });
   res.status(204).send();
+});
+
+// CANCELAMENTO DEFINITIVO de IBR concluído (política 2026-07-15: concluído nunca
+// é excluído — cancelar tira de circulação mantendo a evidência e a trilha).
+router.post("/:id/cancelar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const existing = await prisma.analysis.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
+  if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  if (existing.status !== "Concluída") {
+    res.status(409).json({ error: `Cancelamento definitivo é para IBR concluído (status atual: "${existing.status}"). Enquanto não concluído, exclua normalmente.` });
+    return;
+  }
+  const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.trim().slice(0, 300) : "";
+  await prisma.analysis.update({ where: { id }, data: { status: "Cancelada" } });
+  void registrarAuditoria({
+    userId: req.userId!, analysisId: id, entity: "analysis", entityId: id,
+    field: "cancelamento definitivo do IBR", before: { status: "Concluída" }, after: { status: "Cancelada" },
+    reason: motivo || undefined,
+  });
+  res.json({ ok: true, status: "Cancelada" });
 });
 
 // Cancela um processamento em andamento. Marca "Cancelada" SÓ se ainda está processando.
