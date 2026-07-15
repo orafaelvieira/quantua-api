@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapAccountToBPGroup, mapAccountToDRE } from "./account-mapper";
+import { mapAccountToBPGroup, mapAccountToDRE, normalizeDRESigns } from "./account-mapper";
 
 // Regressões do caso AOCP (visualizador SPED, 2026-07-14).
 
@@ -61,5 +61,39 @@ describe("nome genérico de UMA palavra não casa linha específica", () => {
   });
   it("com o contexto do pai concatenado, resolve na linha do pai", () => {
     expect(mapAccountToDRE("Outras Despesas Operacionais DESPESAS")).toBe("Outras Despesas Operacionais");
+  });
+});
+
+describe("normalizeDRESigns — receita negativa é informação, não erro (caso AOCP 2023)", () => {
+  const linha = (conta: string, v: number, subtotal = false) =>
+    ({ conta, valores: { "31/12/2023": v }, subtotal, editado: false } as any);
+  const P = ["31/12/2023"];
+  const val = (dre: any[], c: string) => dre.find((l: any) => l.conta === c).valores["31/12/2023"];
+
+  it("estorno: receita NÃO operacional negativa com Receita Bruta positiva → sinal PRESERVADO", () => {
+    // Doc AOCP 2023: "(-) RESULTADOS NÃO-OPERACIONAIS R$ (140.908,48)" — forçar o
+    // positivo dobrava o erro no LL (calculado 4.277.329 vs declarado 3.995.512).
+    const dre = [linha("Receita Bruta", 7354504), linha("Outras Receitas Não Operacionais", -140908.48)];
+    normalizeDRESigns(dre, P);
+    expect(val(dre, "Outras Receitas Não Operacionais")).toBeCloseTo(-140908.48, 2);
+  });
+
+  it("convenção CRÉDITO-NEGATIVO (Receita Bruta < 0): receitas viram positivas como antes", () => {
+    const dre = [linha("Receita Bruta", -1000), linha("Receitas Financeiras", -27.5)];
+    normalizeDRESigns(dre, P);
+    expect(val(dre, "Receita Bruta")).toBe(1000);
+    expect(val(dre, "Receitas Financeiras")).toBe(27.5);
+  });
+
+  it("sem Receita Bruta no período: soma das receitas negativa decide a convenção", () => {
+    const dre = [linha("Receitas Financeiras", -500), linha("Outras Receitas Operacionais", -30)];
+    normalizeDRESigns(dre, P);
+    expect(val(dre, "Receitas Financeiras")).toBe(500);
+  });
+
+  it("redutoras continuam forçadas ao negativo (docs que imprimem despesa positiva)", () => {
+    const dre = [linha("Receita Bruta", 1000), linha("Despesas Financeiras", 457123.28)];
+    normalizeDRESigns(dre, P);
+    expect(val(dre, "Despesas Financeiras")).toBeCloseTo(-457123.28, 2);
   });
 });

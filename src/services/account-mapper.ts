@@ -527,11 +527,27 @@ const DRE_LINHAS_RECEITAS = new Set<string>([
  * Normaliza os sinais das linhas de input do DRE pela NATUREZA da conta, antes da
  * cascata de subtotais. Muitos documentos trazem deduções/custos/despesas como
  * valores POSITIVOS (sem parênteses); sem isto a cascata somaria onde deveria
- * subtrair. Redutoras → −|valor|; receitas → +|valor|. Idempotente (não altera
- * sinais já corretos) e robusto a valor positivo, negativo ou entre parênteses.
+ * subtrair. Redutoras → −|valor|. Receitas → +|valor| SÓ na convenção
+ * CRÉDITO-NEGATIVO (Receita Bruta do período negativa — balancetes que imprimem
+ * receitas como crédito). Fora dela, receita NEGATIVA é informação real do
+ * documento (estorno/reversão — AOCP 2023: "RESULTADOS NÃO-OPERACIONAIS"
+ * R$ (140.908,48)) e forçar o positivo dobrava o erro no Lucro Líquido.
  * Não toca subtotais (recalculados depois) nem linhas editadas manualmente.
  */
 export function normalizeDRESigns(dre: DRELineItem[], periodos: string[]): void {
+  // Convenção do documento POR PERÍODO, medida ANTES de qualquer mutação (a própria
+  // Receita Bruta é normalizada no loop — decidir depois leria o valor já virado).
+  const rbLine = dre.find((l) => l.conta === "Receita Bruta");
+  const creditoNegativo: Record<string, boolean> = {};
+  for (const p of periodos) {
+    const rb = rbLine?.valores[p];
+    if (rb !== undefined && rb !== 0) { creditoNegativo[p] = rb < 0; continue; }
+    // Sem Receita Bruta no período: decide pela SOMA das linhas de receita.
+    let soma = 0;
+    for (const item of dre) if (DRE_LINHAS_RECEITAS.has(item.conta)) soma += item.valores[p] ?? 0;
+    creditoNegativo[p] = soma < 0;
+  }
+
   for (const item of dre) {
     if (item.subtotal || item.editado) continue;
     const redutora = DRE_LINHAS_REDUTORAS.has(item.conta);
@@ -540,7 +556,10 @@ export function normalizeDRESigns(dre: DRELineItem[], periodos: string[]): void 
     for (const p of periodos) {
       const v = item.valores[p];
       if (v === undefined || v === 0) continue;
-      item.valores[p] = redutora ? -Math.abs(v) : Math.abs(v);
+      if (redutora) { item.valores[p] = -Math.abs(v); continue; }
+      // Receita Bruta sempre positiva; demais receitas só viram na convenção do doc.
+      if (item.conta === "Receita Bruta" || creditoNegativo[p]) item.valores[p] = Math.abs(v);
+      // (receita negativa com Receita Bruta positiva = estorno — sinal preservado)
     }
   }
 }
