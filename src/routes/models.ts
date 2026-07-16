@@ -20,6 +20,7 @@ import { rodarMonteCarlo, McVariavelSpec } from "../services/monte-carlo";
 import { ConfigReforma } from "../services/reforma-tributaria";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
 import { resolveSectorPremises } from "../services/sector-benchmark";
+import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 
 const router = Router();
@@ -194,6 +195,39 @@ router.get("/seed-preview", async (req: AuthRequest, res: Response): Promise<voi
 // GET /models/templates — catálogo de templates de receita (cards do wizard).
 router.get("/templates", async (_req: AuthRequest, res: Response): Promise<void> => {
   res.json({ templates: TEMPLATES_RECEITA });
+});
+
+// GET /models/contas-destino — contas dos MODELOS PADRÃO ATIVOS de DRE e BP
+// (sempre a versão vigente do banco). Alimenta o dropdown "Destino na DRE/
+// Balanço": uma linha nova pode SOMAR/REDUZIR numa conta canônica existente em
+// vez de abrir linha própria. DRE separa receita × custo × despesa pela POSIÇÃO
+// da conta (antes/depois de Lucro Bruto / EBITDA) — o dropdown já vem agrupado.
+router.get("/contas-destino", async (_req: AuthRequest, res: Response): Promise<void> => {
+  const [dreModel, bpModel] = await Promise.all([loadActiveDREModel(), loadActiveBPModel()]);
+  const inputs = dreModel.lines.filter((l) => !l.subtotal).map((l) => l.conta);
+  const contaIdx = (conta: string) => dreModel.lines.findIndex((l) => l.conta === conta);
+  const idxRL = contaIdx("Receita Líquida");
+  const idxLB = contaIdx("Lucro Bruto");
+  const idxEbitda = contaIdx("EBITDA");
+  // Classificação por POSIÇÃO na cascata (robusta, não por palavra): antes da
+  // Receita Líquida = receita/deduções; RL→Lucro Bruto = custo; LB→EBITDA =
+  // despesa; depois do EBITDA = financeiro/não-op/IR (grupo próprio).
+  const receitaDed: string[] = [];
+  const custos: string[] = [];
+  const despesas: string[] = [];
+  const abaixoEbitda: string[] = [];
+  for (const c of inputs) {
+    const i = contaIdx(c);
+    if (idxRL >= 0 && i < idxRL) receitaDed.push(c);
+    else if (idxRL >= 0 && idxLB >= 0 && i > idxRL && i < idxLB) custos.push(c);
+    else if (idxLB >= 0 && idxEbitda >= 0 && i > idxLB && i < idxEbitda) despesas.push(c);
+    else if (idxEbitda >= 0 && i > idxEbitda) abaixoEbitda.push(c);
+    else receitaDed.push(c);
+  }
+  res.json({
+    dre: { receita: receitaDed, custos, despesas, abaixoEbitda },
+    bp: bpModel.lines.filter((l) => l.tipo === "input").map((l) => l.conta),
+  });
 });
 
 // GET /models?companyId= — lista modelos do escopo (opcionalmente por empresa).

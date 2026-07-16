@@ -26,6 +26,47 @@ export type TipoNode = "estoque" | "fluxo" | "taxa" | "preco" | "capacidade" | "
 /** Série mensal: chave "YYYY-MM". */
 export type Serie = Record<string, number>;
 
+/** Linha de DRE em construção que pode carregar um DESTINO (soma/reduz numa
+ *  conta canônica). Compartilhada por receitas, custos e despesas. */
+type LinhaComDestino = { id: string; nome: string; valores: Serie; destino?: { conta: string; sinal: "soma" | "reduz" } };
+
+/** Normaliza nome de conta para casar destino ↔ linha canônica (acentos/caixa/espaços). */
+function normNomeConta(s: string): string {
+  return (s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Aplica os DESTINOS de um grupo (2026-07-16): linhas COM destino não viram
+ *  linha própria — o valor é SOMADO (ou SUBTRAÍDO) na conta canônica-alvo,
+ *  criada zerada se ainda não existir no grupo. O total do grupo (soma das
+ *  linhas resultantes) fica correto nos dois casos. Sem destino = linha própria. */
+function aplicarDestinos(linhas: LinhaComDestino[], meses: string[]): LinhaComDestino[] {
+  if (!linhas.some((l) => l.destino?.conta)) return linhas;
+  const out: LinhaComDestino[] = [];
+  const porNome = new Map<string, LinhaComDestino>();
+  for (const l of linhas) {
+    if (l.destino?.conta) continue;
+    out.push(l);
+    porNome.set(normNomeConta(l.nome), l);
+  }
+  for (const l of linhas) {
+    if (!l.destino?.conta) continue;
+    const sinal = l.destino.sinal === "reduz" ? -1 : 1;
+    const chave = normNomeConta(l.destino.conta);
+    let alvo = porNome.get(chave);
+    if (!alvo) {
+      alvo = { id: `dest_${chave.replace(/[^a-z0-9]+/g, "-")}`, nome: l.destino.conta, valores: {} };
+      for (const mes of meses) alvo.valores[mes] = 0;
+      out.push(alvo);
+      porNome.set(chave, alvo);
+    }
+    // Clona (nunca muta a série original, que pode ser series[nodeRaiz]).
+    const somada: Serie = {};
+    for (const mes of meses) somada[mes] = (alvo.valores[mes] ?? 0) + sinal * (l.valores[mes] ?? 0);
+    alvo.valores = somada;
+  }
+  return out;
+}
+
 export interface DriverNode {
   id: string;
   tipo: TipoNode;
@@ -63,6 +104,9 @@ export interface LinhaReceita {
   carenciaMeses?: number;
   /** Só em bloco CAPEX: tipo do ativo (metadado do dropdown da tela). */
   tipoAtivo?: string;
+  /** DESTINO na DRE (2026-07-16): idem LinhaCusto.destino — soma/reduz numa
+   *  conta canônica em vez de virar linha própria. */
+  destino?: { conta: string; sinal: "soma" | "reduz" };
   /** Posição de exibição na lista (nova linha = fim). Metadado da tela. */
   ordem?: number;
 }
@@ -96,6 +140,11 @@ export interface LinhaCusto {
   carenciaMeses?: number;
   /** Só em bloco CAPEX: tipo do ativo (metadado do dropdown da tela). */
   tipoAtivo?: string;
+  /** DESTINO na DRE (2026-07-16): quando definido, esta linha NÃO vira uma linha
+   *  própria — o valor SOMA (ou REDUZ) numa CONTA CANÔNICA existente (ex.: um novo
+   *  "Aluguel 2" soma em "Despesas com Aluguel, Condomínio e IPTU"). Ausente =
+   *  linha própria (comportamento de sempre). */
+  destino?: { conta: string; sinal: "soma" | "reduz" };
   /** Posição de exibição na lista (nova linha = fim). Metadado da tela. */
   ordem?: number;
 }
@@ -1375,7 +1424,7 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   }
 
   // ── Linhas de receita ──
-  const linhasReceita: Array<{ id: string; nome: string; valores: Serie }> = [];
+  let linhasReceita: Array<LinhaComDestino> = [];
   for (const b of input.blocks) {
     if (!b.ativo || b.tipo !== "receitas") continue;
     for (const linha of b.config.linhasReceita ?? []) {
@@ -1387,9 +1436,12 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
       if (raiz.node.unidade !== "R$") {
         dimProblemas.push(`Linha de receita "${linha.nome}" fecha em [${raiz.node.unidade}], deveria fechar em [R$]`);
       }
-      linhasReceita.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {} });
+      linhasReceita.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {}, destino: linha.destino });
     }
   }
+  // DESTINO: linha de receita direcionada SOMA/REDUZ num produto canônico
+  // (não vira linha própria). A receita total é a mesma; muda quais linhas aparecem.
+  linhasReceita = aplicarDestinos(linhasReceita, meses);
 
   // Linhas de CUSTOS/DESPESAS (operacionais e não operacionais) com drivers:
   // a raiz também deve fechar em R$.
@@ -1423,8 +1475,8 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   }
 
   // ── Custos e despesas (modo simples) ──
-  function calcularGrupo(tipo: string): Array<{ id: string; nome: string; valores: Serie }> {
-    const out: Array<{ id: string; nome: string; valores: Serie }> = [];
+  function calcularGrupo(tipo: string): Array<LinhaComDestino> {
+    const out: Array<LinhaComDestino> = [];
     const anosHorizonte = [...new Set(meses.map((m) => m.slice(0, 4)))];
     for (const b of input.blocks) {
       if (!b.ativo || b.tipo !== tipo) continue;
@@ -1471,21 +1523,25 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
             valores[mes] = num(linha.valores?.[mes]) * multiLinha;
           }
         }
-        out.push({ id: linha.id, nome: linha.nome, valores });
+        out.push({ id: linha.id, nome: linha.nome, valores, destino: linha.destino });
       }
       // Linhas com ÁRVORE DE DRIVERS (mesma estrutura das receitas): o valor da
       // linha é a série do nó raiz — % via fórmula (pode referenciar receita_total
       // e raízes de receita), variável do negócio × custo unitário, crescimento…
       for (const linha of b.config.linhasReceita ?? []) {
         if (!nos.has(linha.nodeRaiz)) continue; // erro já registrado acima
-        out.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {} });
+        out.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {}, destino: linha.destino });
       }
     }
     return out;
   }
 
-  const linhasCustos = calcularGrupo("custos");
-  const linhasDespesas = calcularGrupo("despesas");
+  // Grupos operacionais com DESTINO aplicado: uma linha nova ("Aluguel 2")
+  // direcionada a "Despesas com Aluguel…" soma NAQUELA linha em vez de abrir
+  // uma própria. Total do grupo inalterado (soma/reduz certos). A folha do
+  // bloco Pessoas ainda soma na linha canônica DEPOIS (abaixo).
+  const linhasCustos = aplicarDestinos(calcularGrupo("custos"), meses);
+  const linhasDespesas = aplicarDestinos(calcularGrupo("despesas"), meses);
 
   // ── B4: PESSOAS (folha por posição) ──
   const blocoFolha = input.blocks.find((b) => b.ativo && b.tipo === "folha");

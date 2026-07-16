@@ -165,6 +165,35 @@ describe("fixture transacional (TPV × take rate — modelo Quantua de Valuation
     const lucroBruto = r.dre.find((l) => l.id === "lucro-bruto")!;
     expect(lucroBruto.valores["2026-01"]).toBeCloseTo(receita1 - receita1 * 0.3 - 10_000, 2);
   });
+
+  it("DESTINO: linha direcionada SOMA na conta-alvo e não vira linha própria", () => {
+    // "Aluguel 2" (5.000/mês) direcionado a somar em "Aluguel" (10.000/mês).
+    const custos: BlocoModelo = {
+      id: "b3", tipo: "custos", nome: "Custos", ativo: true,
+      config: { linhasCusto: [
+        { id: "aluguel", nome: "Aluguel", modo: "fixoReajuste", valorMensal: 10_000, reajusteAnual: 0 },
+        { id: "aluguel2", nome: "Aluguel 2", modo: "fixoReajuste", valorMensal: 5_000, reajusteAnual: 0, destino: { conta: "Aluguel", sinal: "soma" } },
+      ] },
+    };
+    const r = calcularModelo(inputDe([blocoReceitaSerie({ valorMensal: 100_000 }), custos]));
+    expect(r.dre.find((l) => l.id === "aluguel")!.valores["2026-01"]).toBe(15_000); // 10k + 5k
+    expect(r.dre.some((l) => l.id === "aluguel2")).toBe(false); // não vira linha própria
+    // Custos totais incluem o valor somado uma única vez.
+    expect(r.dre.find((l) => l.id === "custos-total")!.valores["2026-01"]).toBe(15_000);
+  });
+
+  it("DESTINO reduz: linha direcionada SUBTRAI da conta-alvo", () => {
+    const custos: BlocoModelo = {
+      id: "b3", tipo: "custos", nome: "Custos", ativo: true,
+      config: { linhasCusto: [
+        { id: "aluguel", nome: "Aluguel", modo: "fixoReajuste", valorMensal: 10_000, reajusteAnual: 0 },
+        { id: "credito", nome: "Crédito de aluguel", modo: "fixoReajuste", valorMensal: 3_000, reajusteAnual: 0, destino: { conta: "Aluguel", sinal: "reduz" } },
+      ] },
+    };
+    const r = calcularModelo(inputDe([blocoReceitaSerie({ valorMensal: 100_000 }), custos]));
+    expect(r.dre.find((l) => l.id === "aluguel")!.valores["2026-01"]).toBe(7_000); // 10k − 3k
+    expect(r.dre.find((l) => l.id === "custos-total")!.valores["2026-01"]).toBe(7_000);
+  });
 });
 
 // ── Preenchimento por ano e por mês (agilidade estilo Excel) ────────────────
