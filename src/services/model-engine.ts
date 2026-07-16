@@ -394,6 +394,10 @@ export interface BlocoModelo {
     /** Só em bloco CAPEX: ativos existentes POR CLASSE (substitui os 2 campos
      *  acima quando presente — eles ficam como retrocompatibilidade). */
     ativosExistentes?: AtivoExistente[];
+    /** Só em bloco CAPEX (seed, 2026-07-16): BRUTO + acumulada por natureza do
+     *  BP v3 do IBR — o balanço projetado CONTINUA os saldos brutos e as
+     *  redutoras "(-) Depreciação"/"(-) Amortização" do histórico. */
+    aberturaSegregada?: { imobilizadoBruto?: number; depreciacaoAcumulada?: number; intangivelBruto?: number; amortizacaoAcumulada?: number };
     /** Só em bloco GIRO (capital de giro): dias de PMR/PME/PMP — flat + por ano
      *  (ano sem valor repete o vigente, como os %s dos custos). */
     pmr?: number;
@@ -1640,53 +1644,108 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   const capexTotal: Serie = {};
   const depreciacaoTotal: Serie = {};
   const imobilizadoLiquido: Serie = {};
+  // SEGREGAÇÃO IMOBILIZADO × INTANGÍVEL (2026-07-16, espelho do BP v3): a
+  // natureza vem da classe fiscal (tipoAtivo) — intangível AMORTIZA, o resto
+  // DEPRECIA — e o balanço projetado abre BRUTO + redutora por natureza
+  // ("Imobilizado"/"(-) Depreciação"/"Intangível"/"(-) Amortização"), como o
+  // modelo padrão. Totais (capex/D&A/líquido) permanecem — DRE e FC intactos.
+  const brutoImobS: Serie = {}; const brutoIntangS: Serie = {};
+  const deprAcumS: Serie = {}; const amortAcumS: Serie = {};
+  const liqImobS: Serie = {}; const liqIntangS: Serie = {};
+  const capexImobS: Serie = {}; const capexIntangS: Serie = {};
+  const deprImobS: Serie = {}; const amortIntangS: Serie = {};
   if (temCapex) {
+    // Classes INTANGÍVEIS do catálogo da tela (manter em sincronia com
+    // TIPOS_ATIVO em custoTemplates.ts); sem classe (ou "outro"), o nome decide.
+    const TIPOS_INTANGIVEL = new Set(["intangivelGeral", "software", "marcas"]);
+    const ehIntangivel = (tipoAtivo?: string, nome?: string): boolean => {
+      if (tipoAtivo && TIPOS_INTANGIVEL.has(tipoAtivo)) return true;
+      if (tipoAtivo && tipoAtivo !== "outro" && tipoAtivo !== "seed-historico") return false;
+      const n = (nome ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase();
+      return /intangivel|software|licenc|marca|patente|agio|fundo de comercio/.test(n);
+    };
     const taxaPorLinha = new Map<string, number>();
     const carenciaPorLinha = new Map<string, number>();
+    const naturezaPorLinha = new Map<string, "imob" | "intang">();
     for (const l of [...(blocoCapex!.config.linhasCusto ?? []), ...(blocoCapex!.config.linhasReceita ?? [])]) {
       taxaPorLinha.set(l.id, num(l.depreciacaoAnual, 0.1));
       carenciaPorLinha.set(l.id, Math.max(0, Math.round(num(l.carenciaMeses))));
+      naturezaPorLinha.set(l.id, ehIntangivel((l as { tipoAtivo?: string }).tipoAtivo, l.nome) ? "intang" : "imob");
     }
     const legados = ativosExistentes
       .filter((a) => a.valor > 0)
-      .map((a) => ({ residuo: a.valor, deprMensal: a.valor * (Math.max(0, a.taxaAnual) / 12) }));
+      .map((a) => ({ residuo: a.valor, deprMensal: a.valor * (Math.max(0, a.taxaAnual) / 12), nat: ehIntangivel(a.tipoAtivo, a.nome) ? "intang" as const : "imob" as const }));
+    const liqIniImobNat = legados.filter((lg) => lg.nat === "imob").reduce((s, lg) => s + lg.residuo, 0);
+    const liqIniIntangNat = legados.filter((lg) => lg.nat === "intang").reduce((s, lg) => s + lg.residuo, 0);
+    // Abertura SEGREGADA do seed (bruto/acumulada do BP do IBR) — o BP projetado
+    // CONTINUA os saldos brutos e as redutoras do histórico. Sem o carimbo
+    // (modelo antigo/extração sem redutoras), bruto = líquido e acumulada = 0.
+    // Identidade FORÇADA: acumulada inicial = bruto − líquido (nunca negativa).
+    const seg = blocoCapex!.config.aberturaSegregada;
+    const brutoIniImob = Math.max(liqIniImobNat, num(seg?.imobilizadoBruto, liqIniImobNat));
+    const brutoIniIntang = Math.max(liqIniIntangNat, num(seg?.intangivelBruto, liqIniIntangNat));
+    const acumIniImob = brutoIniImob - liqIniImobNat;
+    const acumIniIntang = brutoIniIntang - liqIniIntangNat;
     // Safra com CARÊNCIA: deprecia a partir de inicioEm (mês seguinte + carência).
-    const safras: Array<{ valor: number; residuo: number; taxaMensal: number; inicioEm: number }> = [];
-    let saldo = saldoIniImob;
+    const safras: Array<{ valor: number; residuo: number; taxaMensal: number; inicioEm: number; nat: "imob" | "intang" }> = [];
+    let saldoImob = liqIniImobNat;
+    let saldoIntang = liqIniIntangNat;
+    let capexAcumImob = 0; let capexAcumIntang = 0;
+    let deprAcum = acumIniImob; let amortAcum = acumIniIntang;
     for (let i = 0; i < meses.length; i++) {
       const mes = meses[i];
-      // Deprecia o que já existe (legados por classe + safras liberadas)…
-      let depr = 0;
+      // Deprecia/amortiza o que já existe (legados por classe + safras liberadas)…
+      let deprImobMes = 0; let amortIntangMes = 0;
       for (const lg of legados) {
         if (lg.residuo <= 0 || lg.deprMensal <= 0) continue;
         const d = Math.min(lg.deprMensal, lg.residuo);
-        depr += d;
+        if (lg.nat === "intang") amortIntangMes += d; else deprImobMes += d;
         lg.residuo -= d;
       }
       for (const sf of safras) {
         if (sf.residuo <= 0 || i < sf.inicioEm) continue;
         const d = Math.min(sf.valor * sf.taxaMensal, sf.residuo);
-        depr += d;
+        if (sf.nat === "intang") amortIntangMes += d; else deprImobMes += d;
         sf.residuo -= d;
       }
       // …e só DEPOIS o capex do mês vira safra (mês seguinte + carência da linha).
-      let capexMes = 0;
+      let capexImobMes = 0; let capexIntangMes = 0;
       for (const l of linhasCapex) {
         const v = l.valores[mes] ?? 0;
+        const nat = naturezaPorLinha.get(l.id) ?? "imob";
         if (v > 0) {
-          safras.push({ valor: v, residuo: v, taxaMensal: (taxaPorLinha.get(l.id) ?? 0.1) / 12, inicioEm: i + 1 + (carenciaPorLinha.get(l.id) ?? 0) });
+          safras.push({ valor: v, residuo: v, taxaMensal: (taxaPorLinha.get(l.id) ?? 0.1) / 12, inicioEm: i + 1 + (carenciaPorLinha.get(l.id) ?? 0), nat });
         }
-        capexMes += Math.max(0, v);
+        if (nat === "intang") capexIntangMes += Math.max(0, v); else capexImobMes += Math.max(0, v);
       }
-      saldo = saldo + capexMes - depr;
-      capexTotal[mes] = capexMes;
-      depreciacaoTotal[mes] = depr;
-      imobilizadoLiquido[mes] = saldo;
+      saldoImob = saldoImob + capexImobMes - deprImobMes;
+      saldoIntang = saldoIntang + capexIntangMes - amortIntangMes;
+      capexAcumImob += capexImobMes; capexAcumIntang += capexIntangMes;
+      deprAcum += deprImobMes; amortAcum += amortIntangMes;
+      capexTotal[mes] = capexImobMes + capexIntangMes;
+      depreciacaoTotal[mes] = deprImobMes + amortIntangMes;
+      imobilizadoLiquido[mes] = saldoImob + saldoIntang;
+      capexImobS[mes] = capexImobMes; capexIntangS[mes] = capexIntangMes;
+      deprImobS[mes] = deprImobMes; amortIntangS[mes] = amortIntangMes;
+      liqImobS[mes] = saldoImob; liqIntangS[mes] = saldoIntang;
+      brutoImobS[mes] = brutoIniImob + capexAcumImob;
+      brutoIntangS[mes] = brutoIniIntang + capexAcumIntang;
+      deprAcumS[mes] = deprAcum; amortAcumS[mes] = amortAcum;
     }
-    // Séries sintéticas para a tela/export (memória do imobilizado).
+    // Séries sintéticas para a tela/export (memória por natureza + agregados).
     series["capex_total"] = capexTotal;
     series["depreciacao_total"] = depreciacaoTotal;
     series["imobilizado_liquido"] = imobilizadoLiquido;
+    series["capex_imobilizado"] = capexImobS;
+    series["capex_intangivel"] = capexIntangS;
+    series["depreciacao_imobilizado"] = deprImobS;
+    series["amortizacao_intangivel"] = amortIntangS;
+    series["imob_liquido"] = liqImobS;
+    series["intang_liquido"] = liqIntangS;
+    series["imobilizado_bruto"] = brutoImobS;
+    series["intangivel_bruto"] = brutoIntangS;
+    series["depreciacao_acumulada"] = deprAcumS;
+    series["amortizacao_acumulada"] = amortAcumS;
   }
 
   // ── B8: DÍVIDA POR CONTRATO (corkscrew) ──
@@ -2316,7 +2375,12 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     { id: "bp-estoques", nome: "Estoques - CP", grupo: "receita", valores: temGiro ? series["estoques_giro"] : zeroSerie, pctReceita: pctDe(temGiro ? series["estoques_giro"] : zeroSerie) },
     ...linhasItens("ac"),
     { id: "bp-ativo-nc", nome: "Ativo Não Circulante", grupo: "subtotal", valores: ancS, pctReceita: pctDe(ancS) },
-    { id: "bp-imobilizado", nome: "Imobilizado", grupo: "receita", valores: temCapex ? imobilizadoLiquido : zeroSerie, pctReceita: pctDe(temCapex ? imobilizadoLiquido : zeroSerie) },
+    // Segregação BP v3 (2026-07-16): BRUTO + redutora por natureza — a soma das
+    // 4 linhas É o líquido do corkscrew (identidade garantida no waterfall).
+    { id: "bp-imobilizado", nome: "Imobilizado", grupo: "receita", valores: temCapex ? brutoImobS : zeroSerie, pctReceita: pctDe(temCapex ? brutoImobS : zeroSerie) },
+    { id: "bp-depreciacao", nome: "(-) Depreciação", grupo: "receita", valores: temCapex ? negativoDe(deprAcumS, meses) : zeroSerie, pctReceita: pctDe(temCapex ? negativoDe(deprAcumS, meses) : zeroSerie) },
+    { id: "bp-intangivel", nome: "Intangível", grupo: "receita", valores: temCapex ? brutoIntangS : zeroSerie, pctReceita: pctDe(temCapex ? brutoIntangS : zeroSerie) },
+    { id: "bp-amortizacao", nome: "(-) Amortização", grupo: "receita", valores: temCapex ? negativoDe(amortAcumS, meses) : zeroSerie, pctReceita: pctDe(temCapex ? negativoDe(amortAcumS, meses) : zeroSerie) },
     ...linhasItens("anc"),
     { id: "bp-passivo-pl", nome: "Passivo Total", grupo: "subtotal", valores: somaDe(passivoS, plS, meses), pctReceita: pctDe(ativoS) },
     { id: "bp-passivo-circ", nome: "Passivo Circulante", grupo: "subtotal", valores: pcS, pctReceita: pctDe(pcS) },

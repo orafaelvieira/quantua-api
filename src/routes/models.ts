@@ -617,15 +617,30 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
           { tipo: "receitasNaoOp", nome: "Receitas não operacionais", ordem: 3, config: {} as object },
           { tipo: "despesasNaoOp", nome: "Despesas não operacionais", ordem: 4, config: {} as object },
           // CAPEX nasce com os ATIVOS EXISTENTES do BP do IBR (Imobilizado/
-          // Intangível líquidos) — depreciação padrão 10% a.a. DECLARADA (o
-          // analista ajusta por classe). Sem isso a DRE nascia sem D&A e o BP
-          // sem Imobilizado (F2 do roadmap, entregue 2026-07-16).
+          // Intangível líquidos, classe fiscal do catálogo: intangível AMORTIZA
+          // a 20%, imobilizado DEPRECIA a 10% — declarado, o analista ajusta) +
+          // a ABERTURA SEGREGADA (bruto/acumulada do BP v3) para o balanço
+          // projetado continuar os saldos brutos e as redutoras do histórico.
           {
             tipo: "capex", nome: "Investimentos (Capex)", ordem: 5,
             config: {
-              ativosExistentes: derivarImobilizadoHistorico(analysis?.dadosEstruturados ?? null).itens.map((it, k) => ({
-                id: `ativo_hist_${k}`, nome: `${it.conta} (histórico)`, valor: it.valor, taxaAnual: 0.10, tipoAtivo: "seed-historico",
-              })),
+              ativosExistentes: derivarImobilizadoHistorico(analysis?.dadosEstruturados ?? null).itens.map((it, k) => {
+                const ehIntang = /intang/i.test(it.conta);
+                const ehBio = /biol/i.test(it.conta);
+                return {
+                  id: `ativo_hist_${k}`, nome: `${it.conta} (histórico)`, valor: it.valor,
+                  taxaAnual: ehIntang ? 0.20 : 0.10,
+                  tipoAtivo: ehIntang ? "intangivelGeral" : ehBio ? "biologicoGeral" : "imobilizadoGeral",
+                };
+              }),
+              ...(() => {
+                const bpF = (analysis?.dadosEstruturados as { periodos?: string[]; bp?: Array<{ conta: string; valores: Record<string, number> }> } | null);
+                const periodo = derivarImobilizadoHistorico(analysis?.dadosEstruturados ?? null).periodo;
+                if (!periodo || !bpF?.bp) return {};
+                const val = (conta: string) => Math.abs(bpF.bp!.find((l) => l.conta.trim().toLowerCase() === conta.toLowerCase())?.valores?.[periodo] ?? 0);
+                const seg = { imobilizadoBruto: val("Imobilizado"), depreciacaoAcumulada: val("(-) Depreciação"), intangivelBruto: val("Intangível"), amortizacaoAcumulada: val("(-) Amortização") };
+                return seg.imobilizadoBruto > 0 || seg.intangivelBruto > 0 ? { aberturaSegregada: seg } : {};
+              })(),
             } as object,
           },
           // A projeção DÁ SEQUÊNCIA ao balanço inteiro: as contas do BP
@@ -1038,9 +1053,12 @@ router.get("/:id/historico-dfs", async (req: AuthRequest, res: Response): Promis
     "bp-cr": ["Contas a Receber - CP"],
     "bp-estoques": ["Estoques - CP"],
     "bp-ativo-nc": ["Ativo Não Circulante"],
-    // Segregação 2026-07-16: redutoras (negativas) somam junto — o histórico da
-    // linha "Imobilizado" projetada segue LÍQUIDO, comparável com a projeção.
-    "bp-imobilizado": ["Imobilizado", "(-) Depreciação", "Intangível", "(-) Amortização", "Ativos Biológicos - LP"],
+    // Segregação BP v3 (2026-07-16): 1:1 com as linhas projetadas — bruto e
+    // redutora por natureza (extração antiga sem redutoras mostra "—" nelas).
+    "bp-imobilizado": ["Imobilizado", "Ativos Biológicos - LP"],
+    "bp-depreciacao": ["(-) Depreciação"],
+    "bp-intangivel": ["Intangível"],
+    "bp-amortizacao": ["(-) Amortização"],
     "bp-passivo-pl": ["Passivo Total"],
     "bp-passivo-circ": ["Passivo Circulante"],
     "bp-fornecedores": ["Fornecedores - CP"],
