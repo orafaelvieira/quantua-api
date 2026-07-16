@@ -15,7 +15,7 @@ import { buscarDadosWacc } from "../services/wacc-dados";
 import { ERP_REFERENCIA, BETAS_EMERGING, BETAS_DATA, KROLL_DECIS, KROLL_FONTE, CSRP_FATORES } from "../services/wacc-referencias";
 import { perguntarJson } from "../services/ai-extraction";
 import { montarLinhaReceita, TEMPLATES_RECEITA } from "../services/model-templates";
-import { derivarSeed, derivarHistoricoAnual, derivarRealizadoParcial, derivarAberturaReceita, derivarAberturaCustos, derivarImobilizadoHistorico, derivarGiroHistorico, derivarDividaHistorico, derivarOutrosBalanco } from "../services/model-seed";
+import { derivarSeed, derivarHistoricoAnual, derivarRealizadoParcial, derivarAberturaReceita, derivarAberturaCustos, derivarAberturaCustosCanonica, derivarImobilizadoHistorico, derivarGiroHistorico, derivarDividaHistorico, derivarOutrosBalanco } from "../services/model-seed";
 import { rodarMonteCarlo, McVariavelSpec } from "../services/monte-carlo";
 import { ConfigReforma } from "../services/reforma-tributaria";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
@@ -308,13 +308,13 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     }));
   }
 
-  // ABERTURA DE CUSTOS/DESPESAS: cada conta original do documento (nome exato)
-  // vira uma linha do modelo com % da RECEITA BRUTA do último ano — padrão da
-  // casa: projeta-se por % de receita e o analista troca o tipo por linha quando
-  // a conta pedir (fixo, por variável...). O destino canônico do fold separa o
-  // bloco (Custo Operacional → Custos; demais → Despesas). O histórico por linha
-  // fica TRAVADO em custoPorLinha — referência de tendência, nunca editável.
-  const aberturaCustos = derivarAberturaCustos(analysis?.dadosEstruturados ?? null);
+  // ABERTURA DE CUSTOS/DESPESAS (decisão 2026-07-16): as VARIÁVEIS do modelo são
+  // as contas CANÔNICAS do modelo padrão de DRE do IBR (o de-para documento →
+  // padrão já foi feito pelo fold; o documento original fica nas DFs de origem).
+  // Cada conta canônica vira uma linha com % da RECEITA BRUTA do último ano —
+  // o analista troca o tipo por linha quando a conta pedir (fixo, variável...).
+  // O histórico por linha fica TRAVADO em custoPorLinha — nunca editável.
+  const aberturaCustos = derivarAberturaCustosCanonica(analysis?.dadosEstruturados ?? null);
   const receitaBrutaUlt = (() => {
     const hs = historicoAnual?.linhas.receita ?? {};
     const ps = historicoAnual?.periodos ?? [];
@@ -343,9 +343,9 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       const pct = Math.max(-1, Math.min(1, contribuicaoUlt / receitaBrutaUlt));
       // Nome SEM o marcador "(-)"/"(=)" do documento — o sinal é do bloco, não do nome.
       const nome = ab.conta.replace(/^(\s*\(?[=\-−+]\)?\s*)+/, "").trim() || ab.conta;
-      // grupoDre = conta canônica do modelo padrão em que o fold dobrou a linha —
-      // a Demonstração agrupa as variáveis pela ESTRUTURA DO IBR (decisão 2026-07-15).
-      alvo.push({ id: linhaId, nome, modo: "pctReceita", pct, ...(ab.destino ? { grupoDre: ab.destino } : {}) });
+      // A linha JÁ É a conta canônica do modelo padrão (2026-07-16) — sem
+      // grupoDre: cabeçalho de grupo 1:1 com a própria linha seria redundância.
+      alvo.push({ id: linhaId, nome, modo: "pctReceita", pct });
       custoPorLinha[linhaId] = ab.valores;
       // Histórico ASSINADO (contribuição p/ o bloco): a Demonstração exibe a
       // linha e o subtotal do grupo com o MESMO sinal que fecha com o total.
@@ -611,10 +611,12 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
       motivoDesatualizado = "o IBR foi re-extraído depois que este modelo foi criado. Rode uma nova versão do valuation com o IBR atualizado.";
     }
 
-    // MODELO LEGADO sem grupoDre nas linhas: enriquece NA LEITURA (sem persistir)
-    // casando pelo nome com a abertura atual da fonte — a Demonstração agrupa
-    // pela estrutura do modelo padrão sem o analista precisar recriar o modelo.
-    const precisaGrupo = (completo?.blocks ?? []).some((b) =>
+    // MODELO LEGADO (pré-carimbo, linhas com nomes do DOCUMENTO) sem grupoDre:
+    // enriquece NA LEITURA (sem persistir) casando pelo nome com a abertura da
+    // fonte. Modelos novos (com carimbo de seed) usam contas CANÔNICAS como
+    // variáveis (2026-07-16) — agrupar 1:1 seria redundância, então ficam fora.
+    const seedNovo = !!(completo?.realizado as { historicoAnual?: { custoPorLinhaAssinado?: unknown } } | null)?.historicoAnual?.custoPorLinhaAssinado;
+    const precisaGrupo = !seedNovo && (completo?.blocks ?? []).some((b) =>
       (b.tipo === "custos" || b.tipo === "despesas") &&
       ((b.config as { linhasCusto?: Array<{ grupoDre?: string }> })?.linhasCusto ?? []).some((l) => !l.grupoDre)
     );

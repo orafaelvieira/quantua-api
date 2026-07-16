@@ -289,6 +289,45 @@ export function derivarAberturaCustos(dadosEstruturados: unknown): LinhaReceitaH
   }));
 }
 
+/** Abertura CANÔNICA de custos/despesas (decisão 2026-07-16): as VARIÁVEIS de
+ *  projeção do valuation são as contas do MODELO PADRÃO de DRE do IBR — o
+ *  de-para documento→padrão já foi feito pelo fold; as contas originais do
+ *  cliente ficam na aba "DFs de origem". Linha POSITIVA dentro do bloco (ex.:
+ *  Outras Receitas Operacionais) entra como REDUTORA (contribuição negativa). */
+export function derivarAberturaCustosCanonica(dadosEstruturados: unknown): LinhaReceitaHist[] {
+  const de = (dadosEstruturados ?? {}) as { periodos?: string[]; dre?: Array<LinhaDados & { subtotal?: boolean }> };
+  const dre = de.dre ?? [];
+  const periodos = de.periodos ?? [];
+  const idxLiquida = dre.findIndex((l) => l.conta?.trim().toLowerCase() === "receita líquida");
+  if (idxLiquida < 0) return [];
+  const idxEbitda = dre.findIndex((l) => l.conta?.trim().toLowerCase() === "ebitda");
+  const fim = idxEbitda > idxLiquida ? idxEbitda : dre.length;
+
+  // Último período com receita — mesma referência das demais aberturas.
+  const receitaLiq = dre[idxLiquida];
+  let ultimo: string | null = null;
+  for (let i = periodos.length - 1; i >= 0; i--) {
+    if (Math.abs(valorEm(receitaLiq, periodos[i])) > 0) { ultimo = periodos[i]; break; }
+  }
+  if (!ultimo) return [];
+
+  const idxLucroBruto = dre.findIndex((l) => l.conta?.trim().toLowerCase() === "lucro bruto");
+  const candidatas = dre.slice(idxLiquida + 1, fim).filter((l) => !l.subtotal && Math.abs(valorEm(l, ultimo!)) > 0);
+  return candidatas.map((l) => {
+    const pos = dre.indexOf(l);
+    const conta = l.conta ?? "Custo";
+    const bloco: "custo" | "despesa" =
+      (idxLucroBruto > idxLiquida ? pos < idxLucroBruto : conta === "Custo Operacional") ? "custo" : "despesa";
+    return {
+      conta,
+      destino: conta,
+      bloco,
+      valores: Object.fromEntries(periodos.map((p) => [p, Math.abs(valorEm(l, p))])),
+      valoresAssinados: Object.fromEntries(periodos.map((p) => [p, valorEm(l, p)])),
+    };
+  });
+}
+
 /** Ativos de LONGO PRAZO do BP extraído (Imobilizado, Intangível, Ativos
  *  Biológicos/cultura em formação) no último período com valor — âncora dos
  *  "ativos existentes" do bloco de investimentos. Valores em ABS (líquidos de

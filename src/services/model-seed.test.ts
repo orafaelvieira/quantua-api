@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { derivarAberturaReceita, derivarAberturaCustos } from "./model-seed";
+import { derivarAberturaReceita, derivarAberturaCustos, derivarAberturaCustosCanonica } from "./model-seed";
 
 const PERIODOS = ["31/12/2023", "31/12/2024"];
 
@@ -214,6 +214,32 @@ describe("derivarAberturaCustos", () => {
     expect(porContaAssinado["(-) Devoluções de Compras de Mercadorias"]).toBeCloseTo(20912.91, 2);
     const somaViaAssinados = abertura.reduce((s, a) => s + (a.valoresAssinados?.["31/12/2023"] ?? 0), 0);
     expect(somaViaAssinados).toBeCloseTo(-1181543.26, 2);
+  });
+
+  // Decisão 2026-07-16: as VARIÁVEIS do valuation são as contas do MODELO
+  // PADRÃO (o de-para já foi feito no fold) — não as contas originais do doc.
+  it("abertura CANÔNICA: variáveis = contas do modelo padrão, com sinal", () => {
+    const dados = {
+      periodos: ["31/12/2023", "31/12/2024"],
+      dre: [
+        { conta: "Receita Bruta", valores: { "31/12/2023": 1000, "31/12/2024": 1200 } },
+        { conta: "Receita Líquida", valores: { "31/12/2023": 950, "31/12/2024": 1140 }, subtotal: true },
+        { conta: "Custo Operacional", valores: { "31/12/2023": -400, "31/12/2024": -500 } },
+        { conta: "Lucro Bruto", valores: { "31/12/2023": 550, "31/12/2024": 640 }, subtotal: true },
+        { conta: "Despesas com Pessoas", valores: { "31/12/2023": -90, "31/12/2024": -110 } },
+        { conta: "Outras Receitas Operacionais", valores: { "31/12/2023": 30, "31/12/2024": 20 } },
+        { conta: "EBITDA", valores: { "31/12/2023": 490, "31/12/2024": 550 }, subtotal: true },
+      ],
+      // Árvore presente NÃO muda nada: a abertura canônica ignora o documento.
+      arvoreOriginalDRE: { "31/12/2023": [{ nome: "CMV do doc", valor: -400, destino: "Custo Operacional" }] },
+    };
+    const abertura = derivarAberturaCustosCanonica(dados);
+    expect(abertura.map((a) => a.conta)).toEqual(["Custo Operacional", "Despesas com Pessoas", "Outras Receitas Operacionais"]);
+    expect(abertura.map((a) => a.bloco)).toEqual(["custo", "despesa", "despesa"]);
+    // Sinal preservado: linha POSITIVA no bloco (Outras Receitas Op.) é REDUTORA.
+    expect(abertura[0].valoresAssinados).toEqual({ "31/12/2023": -400, "31/12/2024": -500 });
+    expect(abertura[2].valoresAssinados).toEqual({ "31/12/2023": 30, "31/12/2024": 20 });
+    expect(abertura[2].valores).toEqual({ "31/12/2023": 30, "31/12/2024": 20 });
   });
 
   // Grupo cujo total declarado NÃO fecha com os filhos capturados (o documento
