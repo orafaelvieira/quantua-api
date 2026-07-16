@@ -880,19 +880,25 @@ router.get("/:id/dfs-origem", async (req: AuthRequest, res: Response): Promise<v
 });
 
 // GET /models/:id/historico-custos — abertura de CUSTOS/DESPESAS do histórico
-// (nomes exatos do documento, até 3 últimos períodos): âncora do custo unitário
-// nas linhas "Por variável" — o analista usa o valor do último ano ÷ quantidade.
+// nas CONTAS CANÔNICAS do modelo padrão de DRE (2026-07-16: as variáveis do
+// modelo SÃO as contas padrão — a âncora do custo unitário das linhas "Por
+// variável" fala a mesma língua, não os nomes do documento original da
+// empresa, que ficam na aba DFs de origem). Valores = CONTRIBUIÇÃO assinada
+// (gasto positivo, redutora negativa), até 3 últimos períodos.
 router.get("/:id/historico-custos", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   if (!model.analysisSeedId) { res.json({ periodos: [], linhas: [] }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
-  const linhas = derivarAberturaCustos(analysis?.dadosEstruturados ?? null);
+  const linhas = derivarAberturaCustosCanonica(analysis?.dadosEstruturados ?? null);
   const de = analysis?.dadosEstruturados as { periodos?: string[] } | null;
   const periodos = (de?.periodos ?? []).slice(-3); // 1 a 3 períodos de histórico
   res.json({
     periodos,
-    linhas: linhas.map((l) => ({ conta: l.conta, valores: Object.fromEntries(periodos.map((p) => [p, l.valores[p] ?? 0])) })),
+    linhas: linhas.map((l) => ({
+      conta: l.conta.replace(/^(\s*\(?[=\-−+]\)?\s*)+/, "").trim() || l.conta,
+      valores: Object.fromEntries(periodos.map((p) => [p, -(l.valoresAssinados?.[p] ?? -(l.valores[p] ?? 0))])),
+    })),
   });
 });
 
