@@ -477,6 +477,21 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     : null;
   const regimeSeed = regimeAuto ?? "presumido";
 
+  // WACC AUTOMÁTICO (2026-07-16): a aba já abre com os DADOS DE MERCADO
+  // (Rf mediana 60m do T-Bond, risco-país EMBI+, diferencial de volatilidade —
+  // snapshot com fonte e janela, auditável) e o SETOR DAMODARAN mapeado do
+  // setor da empresa (damodaran_mappings). Tudo editável; o checklist cobra a
+  // confirmação. Falha de fonte externa não trava a criação (campos ficam
+  // vazios como antes — o botão Atualizar da aba cobre depois).
+  const [dadosMercadoWacc, setorBetaAuto] = await Promise.all([
+    buscarDadosWacc(60).catch(() => null),
+    (async () => {
+      if (!fonteMeta?.sectorId) return null;
+      const m = await prisma.damodaranMapping.findFirst({ where: { sectorCode: fonteMeta.sectorId } });
+      return m?.damodaranIndustry ?? null;
+    })().catch(() => null),
+  ]);
+
   // CHECKLIST DE VALIDAÇÃO DO ANALISTA: os pontos que a automação NÃO decide
   // sozinha (ou decidiu por premissa-padrão) — exibidos no topo do modelo.
   const pontosValidacao = [
@@ -498,7 +513,12 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       })(),
     }] : []),
     ...(linhasFixoAuto > 0 ? [{ id: "modos", titulo: `Contas em modo FIXO automático (${linhasFixoAuto})`, detalhe: "Séries estáveis em R$ nasceram como 'fixo + reajuste IPCA' (aluguéis, honorários, licenças…) — a prova de cada decisão está na memória do seed; revise na aba Custos e despesas." }] : []),
-    { id: "wacc", titulo: "WACC e perpetuidade", detalhe: "Confirme a taxa de desconto e o crescimento na perpetuidade (abas WACC e Valuation) antes de concluir." },
+    {
+      id: "wacc", titulo: "WACC e perpetuidade",
+      detalhe: dadosMercadoWacc
+        ? `A aba WACC já abre com Rf ${(dadosMercadoWacc.rf.valor * 100).toFixed(2)}% e risco-país ${(dadosMercadoWacc.riscoPais.valor * 100).toFixed(2)}% (medianas de 60 meses, fontes no snapshot)${setorBetaAuto ? ` e o setor Damodaran "${setorBetaAuto}"` : " — escolha o setor Damodaran do beta"}. Confirme prêmios (tamanho/iliquidez), estrutura de capital e o crescimento na perpetuidade antes de concluir.`
+        : "Confirme a taxa de desconto e o crescimento na perpetuidade (abas WACC e Valuation) antes de concluir.",
+    },
   ];
 
   // CARIMBO DE PROVENIÊNCIA do seed (política 2026-07-15): o modelo nasce
@@ -600,7 +620,15 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
           // validação (pontosValidacao); o analista confirma, não monta do zero.
           { tipo: "divida", nome: "Dívida", ordem: 8, config: (contratosDividaSeed.length ? { contratos: contratosDividaSeed } : {}) as object },
           { tipo: "impostos", nome: "Impostos", ordem: 9, config: { impostos: { regime: regimeSeed } } as object },
-          { tipo: "wacc", nome: "WACC", ordem: 10, config: {} as object },
+          // WACC nasce com dados de mercado + setor Damodaran (2026-07-16) —
+          // Rf/CDS/vol com fonte e janela no snapshot; tudo editável na aba.
+          {
+            tipo: "wacc", nome: "WACC", ordem: 10,
+            config: {
+              ...(dadosMercadoWacc ? { dadosMercado: dadosMercadoWacc } : {}),
+              ...(setorBetaAuto ? { setorBeta: setorBetaAuto } : {}),
+            } as object,
+          },
           { tipo: "valuation", nome: "Valuation", ordem: 11, config: {} as object },
           { tipo: "reforma", nome: "Reforma tributária", ordem: 12, config: {} as object },
           { tipo: "dashboard", nome: "Dashboard", ordem: 13, config: {} as object },
