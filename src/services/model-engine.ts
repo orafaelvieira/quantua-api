@@ -2189,13 +2189,13 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   // Estrutura de exibição (mesma forma da DRE; a tela agrega anual: FC soma,
   // BP usa o FIM do ano por ser saldo).
   const fc: LinhaDre[] = [
-    { id: "fc-resultado", nome: "Resultado do período", grupo: "subtotal", valores: resultadoFinal, pctReceita: pctDe(resultadoFinal) },
-    ...(temCapex ? [{ id: "fc-depreciacao", nome: "(+) Depreciação e amortização (não é caixa)", grupo: "receita" as const, valores: depreciacaoTotal, pctReceita: pctDe(depreciacaoTotal) }] : []),
+    { id: "fc-resultado", nome: "Lucro Líquido do período", grupo: "subtotal", valores: resultadoFinal, pctReceita: pctDe(resultadoFinal) },
+    ...(temCapex ? [{ id: "fc-depreciacao", nome: "(+) Depreciação e Amortização (não-caixa)", grupo: "receita" as const, valores: depreciacaoTotal, pctReceita: pctDe(depreciacaoTotal) }] : []),
     ...(temGiro ? [{ id: "fc-ncg", nome: "(−) Variação do capital de giro (NCG)", grupo: "despesas" as const, valores: negativoDe(series["delta_ncg"], meses), pctReceita: pctDe(series["delta_ncg"]) }] : []),
     ...(itensCalc.length ? [{ id: "fc-outros", nome: "(±) Variação de outros itens do balanço", grupo: "despesas" as const, valores: deltaOutros, pctReceita: pctDe(deltaOutros) }] : []),
     { id: "fc-fco", nome: "Caixa das operações (FCO)", grupo: "subtotal", valores: fcoS, pctReceita: pctDe(fcoS) },
     ...(temCapex ? [
-      { id: "fc-capex", nome: "(−) Compra de ativos (capex)", grupo: "despesas" as const, valores: fciS, pctReceita: pctDe(fciS) },
+      { id: "fc-capex", nome: "(−) Aquisições de Imobilizado/Intangível (capex)", grupo: "despesas" as const, valores: fciS, pctReceita: pctDe(fciS) },
       { id: "fc-fci", nome: "Caixa dos investimentos (FCI)", grupo: "subtotal" as const, valores: fciS, pctReceita: pctDe(fciS) },
     ] : []),
     ...(temDivida ? [
@@ -2221,26 +2221,26 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
         pctReceita: pctDe(s),
       }));
   const bp: LinhaDre[] = [
-    { id: "bp-ativo", nome: "ATIVO", grupo: "subtotal", valores: ativoS, pctReceita: pctDe(ativoS) },
-    { id: "bp-ativo-circ", nome: "Ativo circulante", grupo: "subtotal", valores: acS, pctReceita: pctDe(acS) },
-    { id: "bp-caixa", nome: "Caixa e equivalentes", grupo: "receita", valores: caixaS, pctReceita: pctDe(caixaS) },
+    { id: "bp-ativo", nome: "Ativo Total", grupo: "subtotal", valores: ativoS, pctReceita: pctDe(ativoS) },
+    { id: "bp-ativo-circ", nome: "Ativo Circulante", grupo: "subtotal", valores: acS, pctReceita: pctDe(acS) },
+    { id: "bp-caixa", nome: "Caixa e Equivalentes de Caixa", grupo: "receita", valores: caixaS, pctReceita: pctDe(caixaS) },
     ...(temGiro ? [
-      { id: "bp-cr", nome: "Contas a receber", grupo: "receita" as const, valores: series["contas_a_receber"], pctReceita: pctDe(series["contas_a_receber"]) },
-      { id: "bp-estoques", nome: "Estoques", grupo: "receita" as const, valores: series["estoques_giro"], pctReceita: pctDe(series["estoques_giro"]) },
+      { id: "bp-cr", nome: "Contas a Receber - CP", grupo: "receita" as const, valores: series["contas_a_receber"], pctReceita: pctDe(series["contas_a_receber"]) },
+      { id: "bp-estoques", nome: "Estoques - CP", grupo: "receita" as const, valores: series["estoques_giro"], pctReceita: pctDe(series["estoques_giro"]) },
     ] : []),
     ...linhasItens("ac"),
-    { id: "bp-ativo-nc", nome: "Ativo não circulante", grupo: "subtotal", valores: ancS, pctReceita: pctDe(ancS) },
-    ...(temCapex ? [{ id: "bp-imobilizado", nome: "Imobilizado líquido", grupo: "receita" as const, valores: imobilizadoLiquido, pctReceita: pctDe(imobilizadoLiquido) }] : []),
+    { id: "bp-ativo-nc", nome: "Ativo Não Circulante", grupo: "subtotal", valores: ancS, pctReceita: pctDe(ancS) },
+    ...(temCapex ? [{ id: "bp-imobilizado", nome: "Imobilizado", grupo: "receita" as const, valores: imobilizadoLiquido, pctReceita: pctDe(imobilizadoLiquido) }] : []),
     ...linhasItens("anc"),
-    { id: "bp-passivo-pl", nome: "PASSIVO + PATRIMÔNIO LÍQUIDO", grupo: "subtotal", valores: somaDe(passivoS, plS, meses), pctReceita: pctDe(ativoS) },
-    { id: "bp-passivo-circ", nome: "Passivo circulante", grupo: "subtotal", valores: pcS, pctReceita: pctDe(pcS) },
-    ...(temGiro ? [{ id: "bp-fornecedores", nome: "Fornecedores", grupo: "despesas" as const, valores: series["fornecedores_giro"], pctReceita: pctDe(series["fornecedores_giro"]) }] : []),
-    ...(temDivida ? [{ id: "bp-divida-cp", nome: "Empréstimos e financiamentos (curto prazo)", grupo: "despesas" as const, valores: dividaCpTotal, pctReceita: pctDe(dividaCpTotal) }] : []),
+    { id: "bp-passivo-pl", nome: "Passivo Total", grupo: "subtotal", valores: somaDe(passivoS, plS, meses), pctReceita: pctDe(ativoS) },
+    { id: "bp-passivo-circ", nome: "Passivo Circulante", grupo: "subtotal", valores: pcS, pctReceita: pctDe(pcS) },
+    ...(temGiro ? [{ id: "bp-fornecedores", nome: "Fornecedores - CP", grupo: "despesas" as const, valores: series["fornecedores_giro"], pctReceita: pctDe(series["fornecedores_giro"]) }] : []),
+    ...(temDivida ? [{ id: "bp-divida-cp", nome: "Empréstimos e Financiamentos - CP", grupo: "despesas" as const, valores: dividaCpTotal, pctReceita: pctDe(dividaCpTotal) }] : []),
     ...linhasItens("pc"),
-    { id: "bp-passivo-nc", nome: "Passivo não circulante", grupo: "subtotal", valores: pncS, pctReceita: pctDe(pncS) },
-    ...(temDivida ? [{ id: "bp-divida-lp", nome: "Empréstimos e financiamentos (longo prazo)", grupo: "despesas" as const, valores: dividaLpTotal, pctReceita: pctDe(dividaLpTotal) }] : []),
+    { id: "bp-passivo-nc", nome: "Passivo Não Circulante", grupo: "subtotal", valores: pncS, pctReceita: pctDe(pncS) },
+    ...(temDivida ? [{ id: "bp-divida-lp", nome: "Empréstimos e Financiamentos - LP", grupo: "despesas" as const, valores: dividaLpTotal, pctReceita: pctDe(dividaLpTotal) }] : []),
     ...linhasItens("pnc"),
-    { id: "bp-pl", nome: "Patrimônio líquido (abertura + resultados acumulados)", grupo: "subtotal", valores: plS, pctReceita: pctDe(plS) },
+    { id: "bp-pl", nome: "Patrimônio Líquido", grupo: "subtotal", valores: plS, pctReceita: pctDe(plS) },
   ];
   series["bp_ativo_circulante"] = acS;
   series["bp_ativo_nao_circulante"] = ancS;

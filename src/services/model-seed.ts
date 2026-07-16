@@ -48,6 +48,14 @@ export interface HistoricoAnual {
     lucroBruto: Record<string, number>;
     despesas: Record<string, number>;
     ebitda: Record<string, number>;
+    /** Abaixo do EBITDA (estrutura do modelo padrão do IBR, 2026-07-16):
+     *  a Demonstração vai até o Lucro Líquido com o realizado ao lado. */
+    depreciacao: Record<string, number>;
+    ebit: Record<string, number>;
+    despesasFinanceiras: Record<string, number>;
+    resultadoAntesIr: Record<string, number>;
+    irCsll: Record<string, number>;
+    lucroLiquido: Record<string, number>;
   };
   /** Histórico POR LINHA DE RECEITA do modelo ({linhaId: {período: valor}}) —
    *  preenchido quando o seed traz a abertura da DRE (uma linha por conta). */
@@ -469,9 +477,17 @@ export function derivarHistoricoAnual(dadosEstruturados: unknown, excluirPeriodo
   const impostosFatLinha = achar(dre, "Impostos s/ Faturamento");
   const lbLinha = achar(dre, "Lucro Bruto");
   const ebitdaLinha = achar(dre, "EBITDA");
+  // Abaixo do EBITDA (modelo padrão do IBR): a Demonstração mostra o realizado
+  // ao lado da projeção até o Lucro Líquido.
+  const depreciacaoLinha = achar(dre, "Depreciação e Amortização");
+  const ebitLinha = achar(dre, "EBIT");
+  const despFinLinha = achar(dre, "Despesas Financeiras");
+  const lairLinha = achar(dre, "Resultado Antes do IR e CSLL");
+  const irLinha = achar(dre, "IR e CSLL");
+  const llLinha = achar(dre, "Lucro Líquido");
   if (!receitaLinha) return null;
 
-  const linhas: HistoricoAnual["linhas"] = { receita: {}, deducoes: {}, impostosFat: {}, receitaLiquida: {}, custos: {}, lucroBruto: {}, despesas: {}, ebitda: {} };
+  const linhas: HistoricoAnual["linhas"] = { receita: {}, deducoes: {}, impostosFat: {}, receitaLiquida: {}, custos: {}, lucroBruto: {}, despesas: {}, ebitda: {}, depreciacao: {}, ebit: {}, despesasFinanceiras: {}, resultadoAntesIr: {}, irCsll: {}, lucroLiquido: {} };
   const periodos: string[] = [];
   for (const p of de.periodos ?? []) {
     if (excluirPeriodos.includes(p)) continue; // absorvido pelo horizonte (realizado parcial)
@@ -500,6 +516,14 @@ export function derivarHistoricoAnual(dadosEstruturados: unknown, excluirPeriodo
     linhas.custos[p] = liquida - lb;
     linhas.despesas[p] = lb - ebitda;
     linhas.ebitda[p] = ebitda;
+    // Abaixo do EBITDA: gastos em ABS (o sinal fica no rótulo "(−)" da linha),
+    // resultados com o sinal do canônico.
+    linhas.depreciacao[p] = Math.abs(valorEm(depreciacaoLinha, p));
+    linhas.ebit[p] = valorEm(ebitLinha, p);
+    linhas.despesasFinanceiras[p] = Math.abs(valorEm(despFinLinha, p));
+    linhas.resultadoAntesIr[p] = valorEm(lairLinha, p);
+    linhas.irCsll[p] = Math.abs(valorEm(irLinha, p));
+    linhas.lucroLiquido[p] = valorEm(llLinha, p);
   }
   return periodos.length ? { periodos, linhas } : null;
 }

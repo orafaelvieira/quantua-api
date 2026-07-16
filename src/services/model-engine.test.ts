@@ -1216,7 +1216,7 @@ describe("F2 — Fluxo de Caixa indireto + Balanço projetado (prova de fechamen
     // Estruturas de exibição existem, com os grupos contábeis.
     expect(r.fc.find((l) => l.id === "fc-caixa-fim")).toBeDefined();
     expect(r.fc.find((l) => l.id === "fc-fci")).toBeDefined(); // FCI separado do FCF
-    expect(r.bp.find((l) => l.id === "bp-ativo")!.nome).toBe("ATIVO");
+    expect(r.bp.find((l) => l.id === "bp-ativo")!.nome).toBe("Ativo Total");
     expect(r.bp.find((l) => l.id === "bp-ativo-circ")).toBeDefined();
     expect(r.bp.find((l) => l.id === "bp-passivo-nc")).toBeDefined();
     // AC + ANC = ATIVO e PC + PNC + PL = ATIVO, mês a mês.
