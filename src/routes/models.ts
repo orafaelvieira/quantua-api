@@ -293,13 +293,22 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       const linhaId = `lin${idx + 1}`;
       const periodosCom = Object.entries(ab.valores).filter(([, v]) => v > 0).map(([k]) => k);
       const ultimoP = periodosCom[periodosCom.length - 1];
-      const anteriorP = periodosCom[periodosCom.length - 2];
+      const primeiroP = periodosCom[0];
       const vUlt = ultimoP ? ab.valores[ultimoP] : 0;
-      const vAnt = anteriorP ? ab.valores[anteriorP] : 0;
-      const cresc = vAnt > 0 ? Math.max(-0.5, Math.min(1, vUlt / vAnt - 1)) : 0.1;
+      const v0 = primeiroP ? ab.valores[primeiroP] : 0;
+      // CAGR do histórico COMPLETO da linha (1º→último ano com valor), não o
+      // último YoY — um ano atípico deixa de ditar a projeção inteira
+      // (valuation automático 2026-07-16). Mesma trava de sanidade de sempre.
+      const anosSpan = (() => {
+        const y = (p?: string) => Number((p?.match(/(\d{4})/) ?? [])[1] ?? 0);
+        return Math.max(1, y(ultimoP) - y(primeiroP));
+      })();
+      const cresc = v0 > 0 && vUlt > 0 && periodosCom.length >= 2
+        ? Math.max(-0.5, Math.min(1, Math.pow(vUlt / v0, 1 / anosSpan) - 1))
+        : 0.1;
       linhasReceita.push(montarLinhaReceita("generico", linhaId, ab.conta, { receitaMensal: vUlt / 12, crescimentoAnual: cresc }));
       receitaPorLinha[linhaId] = ab.valores;
-      memoriaAbertura.push(`"${ab.conta}": base ${vUlt.toFixed(2)} (${ultimoP ?? "—"}), crescimento ${(cresc * 100).toFixed(1)}%`);
+      memoriaAbertura.push(`"${ab.conta}": base ${vUlt.toFixed(2)} (${ultimoP ?? "—"}), crescimento ${(cresc * 100).toFixed(1)}% a.a. (CAGR ${primeiroP ?? "—"}→${ultimoP ?? "—"})`);
     });
   } else {
     linhasReceita.push(montarLinhaReceita(templateReceita === "historico" ? "generico" : (templateReceita || "generico"), "lin1", "Receita principal", {
@@ -322,11 +331,19 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     return 0;
   })();
   const usarAberturaCustos = aberturaCustos.length > 0 && receitaBrutaUlt > 0;
-  const linhasCustoSeed: Array<{ id: string; nome: string; modo: string; pct: number; grupoDre?: string }> = [];
-  const linhasDespesaSeed: Array<{ id: string; nome: string; modo: string; pct: number; grupoDre?: string }> = [];
+  const linhasCustoSeed: Array<{ id: string; nome: string; modo: string; pct: number; grupoDre?: string; valorMensal?: number; reajusteAnual?: number; reajusteIndice?: string }> = [];
+  const linhasDespesaSeed: typeof linhasCustoSeed = [];
   const custoPorLinha: Record<string, Record<string, number>> = {};
   const custoPorLinhaAssinado: Record<string, Record<string, number>> = {};
   const memoriaCustos: string[] = [];
+  let linhasFixoAuto = 0;
+  // Coeficiente de variação: régua da estabilidade de uma série (σ/μ).
+  const cvDe = (xs: number[]): number => {
+    if (xs.length < 2) return Infinity;
+    const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+    if (m <= 0) return Infinity;
+    return Math.sqrt(xs.reduce((s, x) => s + (x - m) ** 2, 0) / xs.length) / m;
+  };
   if (usarAberturaCustos) {
     aberturaCustos.forEach((ab, idx) => {
       const ehCusto = ab.bloco === "custo";
@@ -343,18 +360,88 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       const pct = Math.max(-1, Math.min(1, contribuicaoUlt / receitaBrutaUlt));
       // Nome SEM o marcador "(-)"/"(=)" do documento — o sinal é do bloco, não do nome.
       const nome = ab.conta.replace(/^(\s*\(?[=\-−+]\)?\s*)+/, "").trim() || ab.conta;
-      // A linha JÁ É a conta canônica do modelo padrão (2026-07-16) — sem
-      // grupoDre: cabeçalho de grupo 1:1 com a própria linha seria redundância.
-      alvo.push({ id: linhaId, nome, modo: "pctReceita", pct });
+
+      // MODO AUTOMÁTICO POR EVIDÊNCIA (valuation automático, 2026-07-16): a
+      // série histórica decide como a conta se comporta — mais estável em R$
+      // (aluguéis, honorários, licenças) projeta FIXO + reajuste IPCA; mais
+      // estável como % da receita (comissões, fretes, insumos) projeta %.
+      // Mesma leitura que um analista faria, DECLARADA na memória do seed.
+      // Redutoras e séries curtas (<2 anos) ficam em % (comportamento de sempre).
+      const contribPorAno = periodosCom
+        .map((p) => ({ v: -(ab.valoresAssinados?.[p] ?? -ab.valores[p]), rec: historicoAnual?.linhas.receita[p] ?? 0 }))
+        .filter((x) => x.v > 0 && x.rec > 0);
+      let modoAuto: "pctReceita" | "fixoReajuste" = "pctReceita";
+      let provaModo = "";
+      if (contribPorAno.length >= 2 && pct > 0) {
+        const cvRs = cvDe(contribPorAno.map((x) => x.v));
+        const cvPct = cvDe(contribPorAno.map((x) => x.v / x.rec));
+        if (cvRs < 0.20 && cvRs < cvPct - 0.03) {
+          modoAuto = "fixoReajuste";
+          provaModo = `fixo por estabilidade em R$ (CV ${(cvRs * 100).toFixed(0)}% em R$ vs ${(cvPct * 100).toFixed(0)}% como %)`;
+          linhasFixoAuto++;
+        }
+      }
+      if (modoAuto === "fixoReajuste") {
+        // Fallback de reajuste declarado (4% a.a.) para modelo sem snapshot macro;
+        // com snapshot, o índice oficial (IPCA) manda.
+        alvo.push({ id: linhaId, nome, modo: "fixoReajuste", pct, valorMensal: contribuicaoUlt / 12, reajusteIndice: "ipca", reajusteAnual: 0.04 });
+      } else {
+        alvo.push({ id: linhaId, nome, modo: "pctReceita", pct });
+      }
       custoPorLinha[linhaId] = ab.valores;
       // Histórico ASSINADO (contribuição p/ o bloco): a Demonstração exibe a
       // linha e o subtotal do grupo com o MESMO sinal que fecha com o total.
       custoPorLinhaAssinado[linhaId] = Object.fromEntries(
         Object.entries(ab.valoresAssinados ?? {}).map(([p, v]) => [p, -v])
       );
-      memoriaCustos.push(`"${nome}" (${ehCusto ? "custo" : "despesa"}${pct < 0 ? ", redutora" : ""}): ${contribuicaoUlt.toFixed(2)} em ${ultimoP ?? "—"} = ${(pct * 100).toFixed(2)}% da receita bruta`);
+      memoriaCustos.push(`"${nome}" (${ehCusto ? "custo" : "despesa"}${pct < 0 ? ", redutora" : ""}): ${contribuicaoUlt.toFixed(2)} em ${ultimoP ?? "—"} = ${(pct * 100).toFixed(2)}% da receita bruta${provaModo ? ` — ${provaModo}` : ""}`);
     });
   }
+
+  // ── VALUATION AUTOMÁTICO (2026-07-16): dívida e impostos também nascem
+  // preenchidos a partir do IBR/cadastro, com PREMISSA DECLARADA — o modelo
+  // nasce calculável de ponta a ponta e o analista valida um checklist curto
+  // em vez de montar tudo à mão. Nada silencioso: cada palpite vira ponto de
+  // validação com a prova de onde veio.
+
+  // DÍVIDA: saldo do último BP + taxa IMPLÍCITA da própria empresa (Despesas
+  // Financeiras do ano ÷ saldo) — dado real do IBR, não chute de mercado.
+  // Prazo/sistema são premissa-padrão (Price 48m) até o analista confirmar.
+  const dividaHist = derivarDividaHistorico(analysis?.dadosEstruturados ?? null);
+  const taxaImplicitaDivida = (() => {
+    const hs = historicoAnual?.linhas.despesasFinanceiras ?? {};
+    const ps = historicoAnual?.periodos ?? [];
+    let despFinUlt = 0;
+    for (let i = ps.length - 1; i >= 0; i--) if ((hs[ps[i]] ?? 0) > 0) { despFinUlt = hs[ps[i]]; break; }
+    if (dividaHist.total > 0 && despFinUlt > 0) return Math.max(0.08, Math.min(0.45, despFinUlt / dividaHist.total));
+    return 0.18; // premissa-padrão declarada quando o histórico não dá a taxa
+  })();
+  const contratosDividaSeed = dividaHist.total > 0
+    ? [{
+        id: "divida_hist", nome: `Dívida existente (BP ${dividaHist.periodo})`, sistema: "price",
+        saldoInicial: Math.round(dividaHist.total * 100) / 100, prazoMeses: 48, taxaAnual: Math.round(taxaImplicitaDivida * 1000) / 1000,
+      }]
+    : [];
+
+  // IMPOSTOS: regime lido do CADASTRO da empresa (Receita/CNPJ); sem cadastro,
+  // Lucro Presumido como premissa-padrão declarada no checklist.
+  const regimeCadastro = (company.regimeTributario ?? "").toLowerCase();
+  const regimeAuto = regimeCadastro.includes("simples") ? "simples"
+    : regimeCadastro.includes("real") ? "real"
+    : regimeCadastro.includes("presumido") ? "presumido"
+    : null;
+  const regimeSeed = regimeAuto ?? "presumido";
+
+  // CHECKLIST DE VALIDAÇÃO DO ANALISTA: os pontos que a automação NÃO decide
+  // sozinha (ou decidiu por premissa-padrão) — exibidos no topo do modelo.
+  const pontosValidacao = [
+    { id: "pessoas", titulo: "Pessoas (headcount)", detalhe: "A folha está projetada como custo agregado da DRE (Despesas com Pessoas). É o único dado que não existe nas DFs — se o valuation exigir abertura por posição/headcount, preencha o bloco Pessoas." },
+    ...(contratosDividaSeed.length ? [{ id: "divida", titulo: "Dívida: prazo e taxa", detalhe: `Saldo de R$ ${dividaHist.total.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} do BP (${dividaHist.periodo}) com taxa implícita de ${(taxaImplicitaDivida * 100).toFixed(1)}% a.a. (Despesas Financeiras ÷ saldo) em Price 48 meses — confirme com os contratos reais.` }] : []),
+    { id: "impostos", titulo: "Regime tributário", detalhe: regimeAuto ? `"${company.regimeTributario}" lido do cadastro da empresa — confirme na aba Impostos.` : "Sem regime no cadastro — assumido LUCRO PRESUMIDO como premissa-padrão. Confirme na aba Impostos." },
+    { id: "crescimento", titulo: "Crescimento da receita", detalhe: "CAGR do histórico aplicado por produto — valide contra pipeline/estratégia comercial e refine por ano se preciso." },
+    ...(linhasFixoAuto > 0 ? [{ id: "modos", titulo: `Contas em modo FIXO automático (${linhasFixoAuto})`, detalhe: "Séries estáveis em R$ nasceram como 'fixo + reajuste IPCA' (aluguéis, honorários, licenças…) — a prova de cada decisão está na memória do seed; revise na aba Custos e despesas." }] : []),
+    { id: "wacc", titulo: "WACC e perpetuidade", detalhe: "Confirme a taxa de desconto e o crescimento na perpetuidade (abas WACC e Valuation) antes de concluir." },
+  ];
 
   // CARIMBO DE PROVENIÊNCIA do seed (política 2026-07-15): o modelo nasce
   // apontando o HASH da versão da extração que o semeou. Se a análise-fonte for
@@ -362,7 +449,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   // diverge e o GET do modelo acende "histórico desatualizado".
   const deSeed = analysis?.dadosEstruturados as { versaoExtracao?: string; extraidoEm?: string } | null;
   const seed_ = analysis
-    ? { analysisId: analysis.id, versaoExtracao: deSeed?.versaoExtracao ?? null, extraidoEm: deSeed?.extraidoEm ?? null, seedEm: new Date().toISOString() }
+    ? { analysisId: analysis.id, versaoExtracao: deSeed?.versaoExtracao ?? null, extraidoEm: deSeed?.extraidoEm ?? null, seedEm: new Date().toISOString(), pontosValidacao }
     : null;
   const realizado = historicoAnual || parcial || seed_
     ? {
@@ -450,8 +537,11 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
             } as object,
           },
           { tipo: "folha", nome: "Pessoas", ordem: 7, config: {} as object },
-          { tipo: "divida", nome: "Dívida", ordem: 8, config: {} as object },
-          { tipo: "impostos", nome: "Impostos", ordem: 9, config: {} as object },
+          // Dívida/Impostos AUTOMÁTICOS (2026-07-16): saldo+taxa implícita do
+          // IBR e regime do cadastro — premissas declaradas no checklist de
+          // validação (pontosValidacao); o analista confirma, não monta do zero.
+          { tipo: "divida", nome: "Dívida", ordem: 8, config: (contratosDividaSeed.length ? { contratos: contratosDividaSeed } : {}) as object },
+          { tipo: "impostos", nome: "Impostos", ordem: 9, config: { impostos: { regime: regimeSeed } } as object },
           { tipo: "wacc", nome: "WACC", ordem: 10, config: {} as object },
           { tipo: "valuation", nome: "Valuation", ordem: 11, config: {} as object },
           { tipo: "reforma", nome: "Reforma tributária", ordem: 12, config: {} as object },
