@@ -19,6 +19,7 @@ import { derivarSeed, derivarHistoricoAnual, derivarRealizadoParcial, derivarAbe
 import { rodarMonteCarlo, McVariavelSpec } from "../services/monte-carlo";
 import { ConfigReforma } from "../services/reforma-tributaria";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
+import { resolveSectorPremises } from "../services/sector-benchmark";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 
 const router = Router();
@@ -288,6 +289,31 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const linhasReceita: ReturnType<typeof montarLinhaReceita>[] = [];
   const receitaPorLinha: Record<string, Record<string, number>> = {};
   const memoriaAbertura: string[] = [];
+
+  // PREMISSAS DE MERCADO (valuation automático, 2026-07-16): o crescimento do
+  // SETOR (pares CVM/benchmark) vira o ALVO do fade — CAGR da empresa no 1º ano
+  // convergindo linearmente para o setor até o fim do horizonte. Crescimento
+  // constante eterno superavalia; o fade é a regra de ouro do FCD, declarada e
+  // editável ano a ano na tela (Por ano · % de crescimento).
+  const fonteMeta = analysis
+    ? await prisma.analysis.findFirst({ where: { id: analysis.id }, select: { sectorId: true, sectorCustom: true } })
+    : null;
+  const premissasSetor = await resolveSectorPremises({
+    sectorCode: fonteMeta?.sectorId ?? null,
+    setorText: fonteMeta?.sectorCustom ?? company.setor ?? null,
+  }).catch(() => null);
+  const crescTerminal = Math.max(0.02, Math.min(0.15, premissasSetor?.receitaGrowth ?? 0.065));
+  const anosHorizonte: Array<{ ano: string; meses: number }> = (() => {
+    const [y0, m0] = mesInicialEfetivo.split("-").map(Number);
+    const cont = new Map<string, number>();
+    for (let i = 0; i < horizonteEfetivo; i++) {
+      const d = new Date(y0, (m0 ?? 1) - 1 + i, 1);
+      const ano = String(d.getFullYear());
+      cont.set(ano, (cont.get(ano) ?? 0) + 1);
+    }
+    return [...cont.entries()].map(([ano, meses]) => ({ ano, meses }));
+  })();
+
   if (usarAbertura) {
     abertura.forEach((ab, idx) => {
       const linhaId = `lin${idx + 1}`;
@@ -306,9 +332,28 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       const cresc = v0 > 0 && vUlt > 0 && periodosCom.length >= 2
         ? Math.max(-0.5, Math.min(1, Math.pow(vUlt / v0, 1 / anosSpan) - 1))
         : 0.1;
-      linhasReceita.push(montarLinhaReceita("generico", linhaId, ab.conta, { receitaMensal: vUlt / 12, crescimentoAnual: cresc }));
+      const linhaMontada = montarLinhaReceita("generico", linhaId, ab.conta, { receitaMensal: vUlt / 12, crescimentoAnual: cresc });
+      // FADE: CAGR no 1º ano → crescimento do setor no último, linear — gravado
+      // como "Por ano · % de crescimento" (o analista vê e edita cada ano).
+      const raiz = linhaMontada.nodes.find((n) => n.id === linhaMontada.nodeRaiz);
+      if (raiz && anosHorizonte.length >= 2 && vUlt > 0) {
+        const N = anosHorizonte.length;
+        const crescimentoPorAno: Record<string, number> = {};
+        for (let k = 1; k < N; k++) {
+          const g = cresc + (crescTerminal - cresc) * (k / (N - 1));
+          crescimentoPorAno[anosHorizonte[k].ano] = Math.round(g * 10000) / 10000;
+        }
+        raiz.params = {
+          ...raiz.params,
+          modoPreenchimento: "ano",
+          modoAno: "crescimento",
+          valoresAno: { [anosHorizonte[0].ano]: Math.round(vUlt * (1 + cresc) * (anosHorizonte[0].meses / 12) * 100) / 100 },
+          crescimentoPorAno,
+        };
+      }
+      linhasReceita.push(linhaMontada);
       receitaPorLinha[linhaId] = ab.valores;
-      memoriaAbertura.push(`"${ab.conta}": base ${vUlt.toFixed(2)} (${ultimoP ?? "—"}), crescimento ${(cresc * 100).toFixed(1)}% a.a. (CAGR ${primeiroP ?? "—"}→${ultimoP ?? "—"})`);
+      memoriaAbertura.push(`"${ab.conta}": base ${vUlt.toFixed(2)} (${ultimoP ?? "—"}), crescimento ${(cresc * 100).toFixed(1)}% (CAGR ${primeiroP ?? "—"}→${ultimoP ?? "—"}) em FADE até ${(crescTerminal * 100).toFixed(1)}% a.a. (setor) no último ano`);
     });
   } else {
     linhasReceita.push(montarLinhaReceita(templateReceita === "historico" ? "generico" : (templateReceita || "generico"), "lin1", "Receita principal", {
@@ -438,7 +483,20 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     { id: "pessoas", titulo: "Pessoas (headcount)", detalhe: "A folha está projetada como custo agregado da DRE (Despesas com Pessoas). É o único dado que não existe nas DFs — se o valuation exigir abertura por posição/headcount, preencha o bloco Pessoas." },
     ...(contratosDividaSeed.length ? [{ id: "divida", titulo: "Dívida: prazo e taxa", detalhe: `Saldo de R$ ${dividaHist.total.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} do BP (${dividaHist.periodo}) com taxa implícita de ${(taxaImplicitaDivida * 100).toFixed(1)}% a.a. (Despesas Financeiras ÷ saldo) em Price 48 meses — confirme com os contratos reais.` }] : []),
     { id: "impostos", titulo: "Regime tributário", detalhe: regimeAuto ? `"${company.regimeTributario}" lido do cadastro da empresa — confirme na aba Impostos.` : "Sem regime no cadastro — assumido LUCRO PRESUMIDO como premissa-padrão. Confirme na aba Impostos." },
-    { id: "crescimento", titulo: "Crescimento da receita", detalhe: "CAGR do histórico aplicado por produto — valide contra pipeline/estratégia comercial e refine por ano se preciso." },
+    { id: "crescimento", titulo: "Crescimento da receita (fade p/ o setor)", detalhe: `CAGR do histórico no 1º ano convergindo linearmente para ${(crescTerminal * 100).toFixed(1)}% a.a. (crescimento do setor) no último — os % de cada ano estão editáveis na aba Receitas (Por ano · % de crescimento). Valide contra pipeline/estratégia comercial.` },
+    ...(premissasSetor ? [{
+      id: "benchmark", titulo: "Benchmark setorial",
+      detalhe: (() => {
+        const ps = historicoAnual?.periodos ?? [];
+        let mgEmpresa: number | null = null;
+        for (let i = ps.length - 1; i >= 0; i--) {
+          const rec = historicoAnual?.linhas.receita[ps[i]] ?? 0;
+          const lb = historicoAnual?.linhas.lucroBruto[ps[i]] ?? 0;
+          if (rec > 0) { mgEmpresa = lb / rec; break; }
+        }
+        return `Setor: crescimento ${(premissasSetor.receitaGrowth * 100).toFixed(1)}% a.a. · margem bruta ${(premissasSetor.margemBruta * 100).toFixed(0)}%${mgEmpresa !== null ? ` — a empresa fez ${(mgEmpresa * 100).toFixed(0)}% de margem bruta no último ano` : ""}. Use como régua ao afinar crescimento, custos e despesas.`;
+      })(),
+    }] : []),
     ...(linhasFixoAuto > 0 ? [{ id: "modos", titulo: `Contas em modo FIXO automático (${linhasFixoAuto})`, detalhe: "Séries estáveis em R$ nasceram como 'fixo + reajuste IPCA' (aluguéis, honorários, licenças…) — a prova de cada decisão está na memória do seed; revise na aba Custos e despesas." }] : []),
     { id: "wacc", titulo: "WACC e perpetuidade", detalhe: "Confirme a taxa de desconto e o crescimento na perpetuidade (abas WACC e Valuation) antes de concluir." },
   ];
