@@ -147,6 +147,9 @@ router.get("/fontes-dfs", async (req: AuthRequest, res: Response): Promise<void>
         nome: a.nome,
         codigo,
         status: a.status,
+        // REGRA (2026-07-16): só IBR CONCLUÍDO ancora valuation — o picker mostra
+        // todos, mas os não concluídos aparecem bloqueados com a orientação.
+        concluido: a.status === "Concluída",
         criadaEm: a.createdAt,
         periodos: de.periodos ?? [],
         anos,
@@ -235,6 +238,19 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   if (exigeIBR && !analysisSeedId) {
     res.status(400).json({ error: "Valuation exige um IBR vinculado — selecione o IBR da empresa que fornece o histórico (ou processe as demonstrações para criar um)." });
     return;
+  }
+  // REGRA (2026-07-16): o IBR vinculado precisa estar CONCLUÍDO — pendência
+  // contábil ou análise não gerada = produto inacabado, não ancora valuation.
+  if (exigeIBR && analysisSeedId) {
+    const fonte = await prisma.analysis.findFirst({
+      where: { id: analysisSeedId, companyId },
+      select: { status: true, nome: true },
+    });
+    if (!fonte) { res.status(404).json({ error: "IBR vinculado não encontrado nesta empresa." }); return; }
+    if (fonte.status !== "Concluída") {
+      res.status(409).json({ error: `O IBR "${fonte.nome}" ainda não foi concluído (status: ${fonte.status}) — finalize a extração e gere a análise; só após a conclusão ele pode ancorar um valuation.` });
+      return;
+    }
   }
 
   // Seed determinístico do histórico: análise indicada ou a mais recente com dados
