@@ -965,6 +965,10 @@ router.get("/:id/dfs-origem", async (req: AuthRequest, res: Response): Promise<v
     // visão original para o analista rastrear cada número até o documento.
     arvoreOriginalDRE: de.arvoreOriginalDRE ?? null,
     arvoreOriginalBP: de.arvoreOriginalBP ?? null,
+    // SUBTOTAIS DECLARADOS no documento (Receita Líquida/Lucro Bruto/Lucro
+    // Líquido como IMPRESSOS): a árvore captura só as contas-insumo — os
+    // resultados calculados ficam aqui e fecham o quadro até o Lucro Líquido.
+    declarados: (de as { declarados?: Record<string, Record<string, number>> }).declarados ?? null,
   });
 });
 
