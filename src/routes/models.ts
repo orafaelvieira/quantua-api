@@ -1005,14 +1005,28 @@ router.get("/:id/historico-imobilizado", async (req: AuthRequest, res: Response)
   res.json(derivarImobilizadoHistorico(analysis?.dadosEstruturados ?? null));
 });
 
-// GET /models/:id/historico-giro — dias de giro do último período extraído
-// (PMR/PME/PMP): âncora das premissas do Capital de giro.
+// GET /models/:id/historico-giro — dias de giro do HISTÓRICO COMPLETO
+// (PMR/PME/PMP por período, travados na mesma linha da projeção) + saldos por
+// conta do BP extraído (o histórico dos "outros itens do balanço" — inclusive
+// itens adicionados depois: o de-para é pelo nome canônico da conta).
 router.get("/:id/historico-giro", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
-  if (!model.analysisSeedId) { res.json({ periodo: null, pmr: null, pme: null, pmp: null }); return; }
+  if (!model.analysisSeedId) { res.json({ periodo: null, pmr: null, pme: null, pmp: null, porPeriodo: [], periodos: [], saldosPorConta: {} }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
-  res.json(derivarGiroHistorico(analysis?.dadosEstruturados ?? null));
+  const giro = derivarGiroHistorico(analysis?.dadosEstruturados ?? null);
+  const de = analysis?.dadosEstruturados as { periodos?: string[]; bp?: Array<{ conta: string; valores: Record<string, number>; nivel?: number }> } | null;
+  const saldosPorConta: Record<string, Record<string, number>> = {};
+  for (const l of de?.bp ?? []) {
+    if ((l.nivel ?? 2) < 2) continue; // só contas-folha (subtotais não são itens)
+    const vals: Record<string, number> = {};
+    for (const p of de?.periodos ?? []) {
+      const v = Math.abs(l.valores?.[p] ?? 0);
+      if (v > 0) vals[p] = v;
+    }
+    if (Object.keys(vals).length) saldosPorConta[l.conta.trim()] = vals;
+  }
+  res.json({ ...giro, periodos: de?.periodos ?? [], saldosPorConta });
 });
 
 // GET /models/:id/historico-balanco — OUTRAS contas do BP extraído (fora de

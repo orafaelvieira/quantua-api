@@ -449,7 +449,7 @@ export function derivarOutrosBalanco(dadosEstruturados: unknown): {
 /** DIAS DE GIRO do histórico (mesma régua dos indicadores do IBR, base anual):
  *  PMR = Contas a Receber CP × 365 ÷ Receita Líquida · PME/PMP = conta × 365 ÷
  *  Custo Operacional. Último período com receita; arredondado a dias inteiros. */
-export function derivarGiroHistorico(dadosEstruturados: unknown): { periodo: string | null; pmr: number | null; pme: number | null; pmp: number | null } {
+export function derivarGiroHistorico(dadosEstruturados: unknown): { periodo: string | null; pmr: number | null; pme: number | null; pmp: number | null; porPeriodo: Array<{ periodo: string; pmr: number | null; pme: number | null; pmp: number | null }> } {
   const de = (dadosEstruturados ?? {}) as { periodos?: string[]; bp?: LinhaDados[]; dre?: LinhaDados[] };
   const bp = de.bp ?? [];
   const dre = de.dre ?? [];
@@ -460,17 +460,31 @@ export function derivarGiroHistorico(dadosEstruturados: unknown): { periodo: str
   for (let i = periodos.length - 1; i >= 0; i--) {
     if (Math.abs(valorEm(receitaLinha, periodos[i])) > 0) { ultimo = periodos[i]; break; }
   }
-  if (!ultimo) return { periodo: null, pmr: null, pme: null, pmp: null };
-  const receita = Math.abs(valorEm(receitaLinha, ultimo));
-  const custo = Math.abs(valorEm(custoLinha, ultimo));
-  const conta = (nome: string) => Math.abs(valorEm(achar(bp, nome), ultimo!));
+  if (!ultimo) return { periodo: null, pmr: null, pme: null, pmp: null, porPeriodo: [] };
   const dias = (saldo: number, base: number): number | null =>
     base > 0 && saldo > 0 ? Math.round((saldo * 365) / base) : null;
+  // TODOS os períodos com receita (2026-07-16): a tela mostra o histórico
+  // completo travado na mesma linha da projeção, não só o último ano.
+  const porPeriodo = periodos
+    .filter((p) => Math.abs(valorEm(receitaLinha, p)) > 0)
+    .map((p) => {
+      const receitaP = Math.abs(valorEm(receitaLinha, p));
+      const custoP = Math.abs(valorEm(custoLinha, p));
+      const contaP = (nome: string) => Math.abs(valorEm(achar(bp, nome), p));
+      return {
+        periodo: p,
+        pmr: dias(contaP("Contas a Receber - CP"), receitaP),
+        pme: dias(contaP("Estoques - CP"), custoP),
+        pmp: dias(contaP("Fornecedores - CP"), custoP),
+      };
+    });
+  const doUltimo = porPeriodo[porPeriodo.length - 1];
   return {
     periodo: ultimo,
-    pmr: dias(conta("Contas a Receber - CP"), receita),
-    pme: dias(conta("Estoques - CP"), custo),
-    pmp: dias(conta("Fornecedores - CP"), custo),
+    pmr: doUltimo?.pmr ?? null,
+    pme: doUltimo?.pme ?? null,
+    pmp: doUltimo?.pmp ?? null,
+    porPeriodo,
   };
 }
 
