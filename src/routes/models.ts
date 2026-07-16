@@ -869,6 +869,46 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
         }
       }
     }
+
+    // AUTO-RECUPERAÇÃO de linha do histórico excluída (2026-07-16): se alguma
+    // linha semeada (id presente em custoPorLinha) sumiu dos blocos — exclusões
+    // feitas antes da trava —, ela volta com a premissa ZERADA e é PERSISTIDA
+    // (com trilha). Vale quando o hash do seed bate com o da fonte (mesma
+    // derivação ⇒ mesmos ids/nomes); com hash divergente o banner de
+    // desatualizado já manda recriar.
+    const histLinhas = (completo?.realizado as { historicoAnual?: { custoPorLinha?: Record<string, unknown> } } | null)?.historicoAnual?.custoPorLinha;
+    if (histLinhas && seedStamp?.versaoExtracao && seedStamp.versaoExtracao === (fonte?.dadosEstruturados as { versaoExtracao?: string } | null)?.versaoExtracao) {
+      const idsPresentes = new Set<string>();
+      for (const b of completo?.blocks ?? []) {
+        for (const l of (b.config as { linhasCusto?: Array<{ id: string }> })?.linhasCusto ?? []) idsPresentes.add(l.id);
+        for (const l of (b.config as { linhasReceita?: Array<{ id: string }> })?.linhasReceita ?? []) idsPresentes.add(l.id);
+      }
+      const faltando = Object.keys(histLinhas).filter((id) => !idsPresentes.has(id));
+      if (faltando.length) {
+        const abertura = derivarAberturaCustosCanonica(fonte?.dadosEstruturados ?? null);
+        const restauradas: string[] = [];
+        for (let idx = 0; idx < abertura.length; idx++) {
+          const ab = abertura[idx];
+          const ehCusto = ab.bloco === "custo";
+          const linhaId = `${ehCusto ? "custo" : "desp"}h${idx + 1}`;
+          if (!faltando.includes(linhaId)) continue;
+          const blocoAlvo = completo?.blocks.find((b) => b.tipo === (ehCusto ? "custos" : "despesas"));
+          if (!blocoAlvo) continue;
+          const nome = ab.conta.replace(/^(\s*\(?[=\-−+]\)?\s*)+/, "").trim() || ab.conta;
+          const cfg = blocoAlvo.config as { linhasCusto?: Array<{ id: string; nome: string; modo: string; pct: number }> };
+          (cfg.linhasCusto ??= []).push({ id: linhaId, nome, modo: "pctReceita", pct: 0 });
+          await prisma.modelBlock.update({ where: { id: blocoAlvo.id }, data: { config: cfg as object } });
+          restauradas.push(nome);
+        }
+        if (restauradas.length) {
+          void registrarAuditoria({
+            userId: req.userId!, analysisId: model.analysisSeedId, entity: "financial_model", entityId: model.id,
+            field: "linha(s) do histórico restaurada(s) com premissa zerada", after: { linhas: restauradas }, source: "models",
+          });
+          await calcularEGravar(model.id).catch(() => null);
+        }
+      }
+    }
   }
   res.json({ ...completo, empresaNome: company?.nomeFantasia || company?.razaoSocial || null, historicoDesatualizado, motivoDesatualizado, ibrVinculado, setorBetaSugerido });
 });
@@ -1148,6 +1188,41 @@ router.put("/:id/blocks/:blockId", async (req: AuthRequest, res: Response): Prom
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
   if (!block) { res.status(404).json({ error: "Bloco não encontrado" }); return; }
   const { config, modo, ativo, nome } = req.body ?? {};
+
+  // LINHA DO HISTÓRICO NUNCA É EXCLUÍDA (2026-07-16): as linhas semeadas do IBR
+  // carregam o realizado da Demonstração e recebem somas de outras origens
+  // (headcount, destino de linhas novas). Se a config recebida REMOVEU uma
+  // dessas linhas, ela volta — custo/despesa com a premissa ZERADA (só as somas
+  // passam a valer); receita/driver volta como estava. Trilha registra.
+  if (config !== undefined && ["custos", "despesas", "receitas"].includes(block.tipo)) {
+    const hist = (model.realizado as { historicoAnual?: { custoPorLinha?: Record<string, unknown>; receitaPorLinha?: Record<string, unknown> } } | null)?.historicoAnual;
+    const idsHist = new Set([...Object.keys(hist?.custoPorLinha ?? {}), ...Object.keys(hist?.receitaPorLinha ?? {})]);
+    if (idsHist.size) {
+      type LinhaAny = { id: string; nome: string; [k: string]: unknown };
+      const cfgNova = config as { linhasCusto?: LinhaAny[]; linhasReceita?: LinhaAny[] };
+      const cfgVelha = block.config as { linhasCusto?: LinhaAny[]; linhasReceita?: LinhaAny[] };
+      const existeNaNova = (id: string) =>
+        (cfgNova.linhasCusto ?? []).some((l) => l.id === id) || (cfgNova.linhasReceita ?? []).some((l) => l.id === id);
+      const restauradas: string[] = [];
+      for (const antiga of cfgVelha.linhasCusto ?? []) {
+        if (!idsHist.has(antiga.id) || existeNaNova(antiga.id)) continue;
+        (cfgNova.linhasCusto ??= []).push({ id: antiga.id, nome: antiga.nome, modo: "pctReceita", pct: 0 });
+        restauradas.push(String(antiga.nome));
+      }
+      for (const antiga of cfgVelha.linhasReceita ?? []) {
+        if (!idsHist.has(antiga.id) || existeNaNova(antiga.id)) continue;
+        (cfgNova.linhasReceita ??= []).push(antiga);
+        restauradas.push(String(antiga.nome));
+      }
+      if (restauradas.length) {
+        void registrarAuditoria({
+          userId: req.userId!, analysisId: model.analysisSeedId ?? null, entity: "financial_model_block", entityId: block.id,
+          field: "linha do histórico preservada (exclusão vira zerar)", after: { linhas: restauradas }, source: "models",
+        });
+      }
+    }
+  }
+
   const atualizado = await prisma.modelBlock.update({
     where: { id: block.id },
     data: {
