@@ -1534,13 +1534,32 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
 
     series["headcount_total"] = headcountTotal;
     series["folha_total"] = folhaTotal;
-    // A folha entra na DRE como PRIMEIRA linha aberta de cada grupo — logo
-    // abaixo de "(−) Custos" / "(−) Despesas" (pedido do produto).
+    // FOLHA DÁ SEQUÊNCIA À LINHA CANÔNICA (2026-07-16): quando o modelo tem a
+    // conta do modelo padrão correspondente ("Despesas com Pessoas" no bloco de
+    // despesas; "Custo Operacional" na produção), o valor do bloco Pessoas SOMA
+    // NELA — a projeção continua na MESMA linha do histórico do IBR, sem linha
+    // paralela. Uso típico é INCREMENTAL (contratações além da folha corrente,
+    // que segue na premissa da linha); ao modelar a folha INTEIRA no bloco,
+    // zere a premissa da linha (o realizado ao lado dá a régua). Sem a conta
+    // canônica no modelo, o comportamento antigo (linha própria) permanece.
+    const normNomeLinha = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+    const somaNaLinha = (linhas: Array<{ id: string; nome: string; valores: Serie }>, alvoNome: string, extra: Serie): boolean => {
+      const alvo = linhas.find((l) => normNomeLinha(l.nome) === alvoNome);
+      if (!alvo) return false;
+      const somada: Serie = {};
+      for (const mes of meses) somada[mes] = (alvo.valores[mes] ?? 0) + (extra[mes] ?? 0);
+      alvo.valores = somada;
+      return true;
+    };
     if (Object.values(folhaCusto).some((v) => v !== 0)) {
-      linhasCustos.unshift({ id: "folha-custos", nome: "Folha e encargos (produção)", valores: folhaCusto });
+      if (!somaNaLinha(linhasCustos, "custo operacional", folhaCusto)) {
+        linhasCustos.unshift({ id: "folha-custos", nome: "Folha e encargos (produção)", valores: folhaCusto });
+      }
     }
     if (Object.values(folhaDespesa).some((v) => v !== 0)) {
-      linhasDespesas.unshift({ id: "folha-despesas", nome: "Folha e encargos (adm/comercial)", valores: folhaDespesa });
+      if (!somaNaLinha(linhasDespesas, "despesas com pessoas", folhaDespesa)) {
+        linhasDespesas.unshift({ id: "folha-despesas", nome: "Folha e encargos (adm/comercial)", valores: folhaDespesa });
+      }
     }
   }
   // NÃO OPERACIONAIS (abaixo do EBITDA): o valuation separa o operacional do
