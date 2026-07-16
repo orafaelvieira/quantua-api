@@ -74,6 +74,11 @@ export interface HistoricoAnual {
 export interface LinhaReceitaHist {
   conta: string;
   valores: Record<string, number>;
+  /** Valores COM O SINAL do documento (a linha pode ser REDUTORA do bloco —
+   *  créditos/devoluções dentro dos custos). Sem isso, projetar tudo em ABS
+   *  soma as redutoras como custo e infla o bloco (caso Move Farma: custos
+   *  projetados a 88% da receita contra 63% no histórico). */
+  valoresAssinados?: Record<string, number>;
   /** Linha canônica em que a conta original foi dobrada pelo fold (abertura de
    *  custos/despesas: separa bloco Custos × Despesas no seed do modelo). */
   destino?: string;
@@ -269,6 +274,7 @@ export function derivarAberturaCustos(dadosEstruturados: unknown): LinhaReceitaH
         destino,
         bloco: blocoDe(destino),
         valores: Object.fromEntries(periodos.map((p) => [p, Math.abs(vals[p] ?? 0)])),
+        valoresAssinados: Object.fromEntries(periodos.map((p) => [p, vals[p] ?? 0])),
       }));
     if (linhasArvore.length) return linhasArvore;
   }
@@ -279,6 +285,7 @@ export function derivarAberturaCustos(dadosEstruturados: unknown): LinhaReceitaH
     destino: l.conta ?? "Custo",
     bloco: blocoDe(l.conta?.trim() ?? ""),
     valores: Object.fromEntries(periodos.map((p) => [p, Math.abs(valorEm(l, p))])),
+    valoresAssinados: Object.fromEntries(periodos.map((p) => [p, valorEm(l, p)])),
   }));
 }
 

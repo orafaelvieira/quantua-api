@@ -309,6 +309,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const linhasCustoSeed: Array<{ id: string; nome: string; modo: string; pct: number; grupoDre?: string }> = [];
   const linhasDespesaSeed: Array<{ id: string; nome: string; modo: string; pct: number; grupoDre?: string }> = [];
   const custoPorLinha: Record<string, Record<string, number>> = {};
+  const custoPorLinhaAssinado: Record<string, Record<string, number>> = {};
   const memoriaCustos: string[] = [];
   if (usarAberturaCustos) {
     aberturaCustos.forEach((ab, idx) => {
@@ -317,15 +318,25 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       const linhaId = `${ehCusto ? "custo" : "desp"}h${idx + 1}`;
       const periodosCom = Object.entries(ab.valores).filter(([, v]) => v > 0).map(([k]) => k);
       const ultimoP = periodosCom[periodosCom.length - 1];
-      const vUlt = ultimoP ? ab.valores[ultimoP] : 0;
-      const pct = Math.max(0, Math.min(1, vUlt / receitaBrutaUlt));
+      // CONTRIBUIÇÃO assinada da linha para o bloco: −v do documento. Conta de
+      // gasto (v negativo) → % positivo; conta REDUTORA (créditos/devoluções,
+      // v positivo dentro do bloco de custo) → % NEGATIVO — o motor subtrai e o
+      // bloco projetado fecha com o histórico (não infla; caso Move Farma).
+      const vAssinadoUlt = ultimoP ? (ab.valoresAssinados?.[ultimoP] ?? -ab.valores[ultimoP]) : 0;
+      const contribuicaoUlt = -vAssinadoUlt;
+      const pct = Math.max(-1, Math.min(1, contribuicaoUlt / receitaBrutaUlt));
       // Nome SEM o marcador "(-)"/"(=)" do documento — o sinal é do bloco, não do nome.
       const nome = ab.conta.replace(/^(\s*\(?[=\-−+]\)?\s*)+/, "").trim() || ab.conta;
       // grupoDre = conta canônica do modelo padrão em que o fold dobrou a linha —
       // a Demonstração agrupa as variáveis pela ESTRUTURA DO IBR (decisão 2026-07-15).
       alvo.push({ id: linhaId, nome, modo: "pctReceita", pct, ...(ab.destino ? { grupoDre: ab.destino } : {}) });
       custoPorLinha[linhaId] = ab.valores;
-      memoriaCustos.push(`"${nome}" (${ehCusto ? "custo" : "despesa"}): ${vUlt.toFixed(2)} em ${ultimoP ?? "—"} = ${(pct * 100).toFixed(2)}% da receita bruta`);
+      // Histórico ASSINADO (contribuição p/ o bloco): a Demonstração exibe a
+      // linha e o subtotal do grupo com o MESMO sinal que fecha com o total.
+      custoPorLinhaAssinado[linhaId] = Object.fromEntries(
+        Object.entries(ab.valoresAssinados ?? {}).map(([p, v]) => [p, -v])
+      );
+      memoriaCustos.push(`"${nome}" (${ehCusto ? "custo" : "despesa"}${pct < 0 ? ", redutora" : ""}): ${contribuicaoUlt.toFixed(2)} em ${ultimoP ?? "—"} = ${(pct * 100).toFixed(2)}% da receita bruta`);
     });
   }
 
@@ -339,7 +350,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     : null;
   const realizado = historicoAnual || parcial || seed_
     ? {
-        ...(historicoAnual ? { historicoAnual: { ...historicoAnual, ...(usarAbertura ? { receitaPorLinha } : {}), ...(usarAberturaCustos ? { custoPorLinha } : {}) } } : {}),
+        ...(historicoAnual ? { historicoAnual: { ...historicoAnual, ...(usarAbertura ? { receitaPorLinha } : {}), ...(usarAberturaCustos ? { custoPorLinha, custoPorLinhaAssinado } : {}) } } : {}),
         ...(parcial ? { meses: parcial.meses, porGrupo: parcial.porGrupo } : {}),
         ...(seed_ ? { seed: seed_ } : {}),
       }
@@ -446,9 +457,19 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
 // POST /models/:id/atualizar-indices — renova o SNAPSHOT dos índices macro do
 // modelo (BCB: Focus + PTAX, IGNORANDO o cache — botão "Atualizar" da tela) e
 // recalcula. Auditado com antes/depois.
+
+/** Concluído/Cancelado = produto emitido (política 2026-07-16): premissas e
+ *  estrutura TRAVADAS. Para mexer, reabra o modelo (Concluído → Em produção,
+ *  com motivo na trilha) ou rode uma nova versão do valuation. */
+const travaEdicao = (model: { status: string }): string | null =>
+  model.status === "Concluído" || model.status === "Cancelado"
+    ? `Modelo "${model.status}" está travado para edição — reabra o modelo (com motivo) ou crie uma nova versão a partir do IBR.`
+    : null;
+
 router.post("/:id/atualizar-indices", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const [y0, m0] = model.mesInicial.split("-").map(Number);
   const anos = [...new Set(Array.from({ length: model.horizonteMeses }, (_, i) => String(y0 + Math.floor((m0 - 1 + i) / 12))))];
   try {
@@ -790,6 +811,7 @@ router.get("/:id/historico-divida", async (req: AuthRequest, res: Response): Pro
 router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const { nome, visao, cenarioAtivoId, status, horizonteMeses, mesInicial } = req.body ?? {};
   const horizonte = horizonteMeses !== undefined ? Number(horizonteMeses) : undefined;
   if (horizonte !== undefined && (!Number.isInteger(horizonte) || horizonte < 12 || horizonte > 180)) {
@@ -822,6 +844,9 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     }
   }
 
+  // status NÃO muda por aqui: o ciclo de vida tem transições e trilha próprias
+  // (PUT /models/:id/status) — aceitar status solto pularia as regras.
+  void status;
   const before = { nome: model.nome, visao: model.visao, cenarioAtivoId: model.cenarioAtivoId, status: model.status, horizonteMeses: model.horizonteMeses, mesInicial: model.mesInicial };
   const atualizado = await prisma.financialModel.update({
     where: { id: model.id },
@@ -829,7 +854,6 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
       ...(nome !== undefined ? { nome } : {}),
       ...(visao !== undefined ? { visao } : {}),
       ...(cenarioAtivoId !== undefined ? { cenarioAtivoId } : {}),
-      ...(status !== undefined ? { status } : {}),
       ...(horizonte !== undefined ? { horizonteMeses: horizonte } : {}),
       ...(mesInicial !== undefined ? { mesInicial: String(mesInicial) } : {}),
     },
@@ -848,6 +872,7 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 router.put("/:id/blocks/:blockId", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
   if (!block) { res.status(404).json({ error: "Bloco não encontrado" }); return; }
   const { config, modo, ativo, nome } = req.body ?? {};
@@ -875,6 +900,7 @@ router.put("/:id/blocks/:blockId", async (req: AuthRequest, res: Response): Prom
 router.post("/:id/blocks/:blockId/linhas", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
   if (!block || block.tipo !== "receitas") { res.status(404).json({ error: "Bloco de receitas não encontrado" }); return; }
   const { template, nome } = req.body ?? {};
@@ -897,6 +923,7 @@ router.post("/:id/blocks/:blockId/linhas", async (req: AuthRequest, res: Respons
 router.put("/:id/blocks/:blockId/linhas/:linhaId/template", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
   if (!block || block.tipo !== "receitas") { res.status(404).json({ error: "Bloco de receitas não encontrado" }); return; }
   const config = block.config as BlocoModelo["config"];
@@ -923,6 +950,7 @@ router.put("/:id/blocks/:blockId/linhas/:linhaId/template", async (req: AuthRequ
 router.post("/:id/blocks/:blockId/linhas/:linhaId/gerar-formula", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
   if (!block) { res.status(404).json({ error: "Bloco não encontrado" }); return; }
   const config = block.config as BlocoModelo["config"];
@@ -1045,6 +1073,7 @@ SUA RESPOSTA ANTERIOR FOI REJEITADA: "${r.formula ?? ""}" — problema: ${r.prob
 router.put("/:id/scenarios/:sid", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const cenario = await prisma.modelScenario.findFirst({ where: { id: req.params.sid as string, modelId: model.id } });
   if (!cenario) { res.status(404).json({ error: "Cenário não encontrado" }); return; }
   const { nome, overrides } = req.body ?? {};
@@ -1071,6 +1100,7 @@ router.put("/:id/scenarios/:sid", async (req: AuthRequest, res: Response): Promi
 router.post("/:id/incluir-realizado", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   if (!model.analysisSeedId) { res.status(400).json({ error: "Modelo sem análise-fonte para buscar o realizado" }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
   const anoInicio = model.mesInicial.slice(0, 4);
@@ -1230,7 +1260,9 @@ router.put("/:id/status", async (req: AuthRequest, res: Response): Promise<void>
   const atual = model.status === "Rascunho" ? "Em produção" : model.status; // legado
   const TRANSICOES: Record<string, string[]> = {
     "Em produção": ["Concluído", "Cancelado"],
-    "Concluído": ["Cancelado"],
+    // Reabrir (Concluído → Em produção) destrava a edição COM REGISTRO — o
+    // marco da conclusão e o motivo da reabertura ficam na trilha de auditoria.
+    "Concluído": ["Cancelado", "Em produção"],
     "Cancelado": [],
   };
   if (!status || !(TRANSICOES[atual] ?? []).includes(status)) {

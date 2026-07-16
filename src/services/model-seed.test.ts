@@ -207,6 +207,13 @@ describe("derivarAberturaCustos", () => {
     // Prova de fechamento: as linhas (com sinal do documento) somam o total do bloco.
     const somaAssinada = 845786.98 - 2025762.91 - 42257.79 + 20912.91 + 5386.27 + 3914.96 + 4437.37 + 11561.25 - 5522.3;
     expect(somaAssinada).toBeCloseTo(-1181543.26, 2);
+    // valoresAssinados preserva o SINAL do documento (redutoras positivas no
+    // bloco negativo) — é dele que o seed tira o % negativo das redutoras.
+    const porContaAssinado = Object.fromEntries(abertura.map((a) => [a.conta, a.valoresAssinados?.["31/12/2023"]]));
+    expect(porContaAssinado["Compras de Mercadorias"]).toBeCloseTo(-2025762.91, 2);
+    expect(porContaAssinado["(-) Devoluções de Compras de Mercadorias"]).toBeCloseTo(20912.91, 2);
+    const somaViaAssinados = abertura.reduce((s, a) => s + (a.valoresAssinados?.["31/12/2023"] ?? 0), 0);
+    expect(somaViaAssinados).toBeCloseTo(-1181543.26, 2);
   });
 
   // Grupo cujo total declarado NÃO fecha com os filhos capturados (o documento
