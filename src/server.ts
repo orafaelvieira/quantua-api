@@ -28,6 +28,7 @@ import { startJobs } from "./jobs";
 import { estadoHistorico, anotaSinal, autoRetomarSeInterrompido } from "./services/cvm-sync";
 import { runtimeState } from "./services/runtime-state";
 import { prisma } from "./db/client";
+import { Prisma } from "@prisma/client";
 import { exec } from "node:child_process";
 
 const app = express();
@@ -60,7 +61,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-16.v82.cascata-completa-seed-giro-capex";
+const BUILD_VERSION = "2026-07-16.v83.ibr-cancelado-somente-consulta";
 
 // Sonda de diagnóstico dos restarts: health-check/deploy manda SIGTERM (dá tempo de
 // anotar no snapshot); OOM manda SIGKILL (não aparece). A anotação só ocorre com o
@@ -194,4 +195,14 @@ async function recoverOrphanAnalyses(): Promise<void> {
   }
   if (recuperadas > 0) console.log(`[boot] ${recuperadas} análise(s) com resultado completo recuperada(s) → "Concluída"`);
   if (marcadasErro > 0) console.log(`[boot] ${marcadasErro} análise(s) órfã(s) sem resultado → "Erro" (reprocessável, com mensagem)`);
+
+  // MIGRAÇÃO ÚNICA (2026-07-16, idempotente): "Cancelada" passou a ser o
+  // cancelamento DEFINITIVO (somente consulta). Cancelamentos de PROCESSAMENTO
+  // legados (sem resultado de análise) viram "Interrompida" — reprocessáveis,
+  // como sempre foram. Cancelada definitiva tem resultado (exigia "Concluída").
+  const migradas = await prisma.analysis.updateMany({
+    where: { status: "Cancelada", resultado: { equals: Prisma.DbNull } },
+    data: { status: "Interrompida" },
+  });
+  if (migradas.count > 0) console.log(`[boot] ${migradas.count} cancelamento(s) de processamento legado(s) → "Interrompida"`);
 }

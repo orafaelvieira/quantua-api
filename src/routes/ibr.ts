@@ -9,6 +9,22 @@ import { resolveSectorPremises } from "../services/sector-benchmark";
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
+// IBR CANCELADO É SOMENTE CONSULTA (política 2026-07-16): mesmo guarda do
+// router de análises — STCF, cenários, SWOT, recomendações, options (War
+// Room), sumário executivo, review, assinatura e apontamentos ficam
+// bloqueados; consulta (GET) segue livre.
+router.use("/:id", async (req: AuthRequest, res: Response, next: () => void): Promise<void> => {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") { next(); return; }
+  const id = String(req.params.id ?? ""); // em router.use o param é string|string[]
+  if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id)) { next(); return; }
+  const a = await prisma.analysis.findUnique({ where: { id }, select: { status: true } }).catch(() => null);
+  if (a?.status === "Cancelada") {
+    res.status(409).json({ error: "IBR cancelado é somente consulta — nenhuma alteração é permitida. Se precisar retrabalhar, crie um novo IBR (a evidência deste fica preservada)." });
+    return;
+  }
+  next();
+});
+
 async function loadAnalysis(req: AuthRequest) {
   const id = req.params.id;
   if (!id || typeof id !== "string") return null;

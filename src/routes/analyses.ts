@@ -31,6 +31,22 @@ import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } fro
 const router = Router();
 router.use(requireAuth);
 
+// IBR CANCELADO É SOMENTE CONSULTA (política 2026-07-16): consulta (GET) livre;
+// NENHUMA mutação passa — reprocessar, regerar análise, indicadores, War Room,
+// escopo, dores, documentos, assinatura, STCF, cenários… Guarda ÚNICO no router
+// (fonte da verdade): qualquer botão esquecido na UI morre aqui com 409.
+router.use("/:id", async (req: AuthRequest, res: Response, next: () => void): Promise<void> => {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") { next(); return; }
+  const id = String(req.params.id ?? ""); // em router.use o param é string|string[]
+  if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id)) { next(); return; }
+  const a = await prisma.analysis.findUnique({ where: { id }, select: { status: true } }).catch(() => null);
+  if (a?.status === "Cancelada") {
+    res.status(409).json({ error: "IBR cancelado é somente consulta — nenhuma alteração é permitida. Se precisar retrabalhar, crie um novo IBR (a evidência deste fica preservada)." });
+    return;
+  }
+  next();
+});
+
 const dataRoomUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
@@ -237,7 +253,9 @@ router.post("/:id/cancelar", async (req: AuthRequest, res: Response): Promise<vo
   res.json({ ok: true, status: "Cancelada" });
 });
 
-// Cancela um processamento em andamento. Marca "Cancelada" SÓ se ainda está processando.
+// Cancela um processamento em andamento. Marca "Interrompida" SÓ se ainda está
+// processando — estado REPROCESSÁVEL, diferente de "Cancelada" (cancelamento
+// DEFINITIVO de IBR concluído, somente consulta — política 2026-07-16).
 // O job em background (assíncrono) checa o status nos pontos de transição e aborta — então
 // um cancelamento durante a EXTRAÇÃO evita até a chamada de análise da IA (economiza crédito).
 router.post("/:id/cancel", async (req: AuthRequest, res: Response): Promise<void> => {
@@ -246,9 +264,9 @@ router.post("/:id/cancel", async (req: AuthRequest, res: Response): Promise<void
   if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const r = await prisma.analysis.updateMany({
     where: { id, status: { in: ["Extraindo", "Gerando diagnóstico"] } },
-    data: { status: "Cancelada" },
+    data: { status: "Interrompida" },
   });
-  res.json({ cancelled: r.count > 0, status: r.count > 0 ? "Cancelada" : existing.status });
+  res.json({ cancelled: r.count > 0, status: r.count > 0 ? "Interrompida" : existing.status });
 });
 
 /**
@@ -431,11 +449,11 @@ async function runAnalysisBackground(
   modelKey?: string | null,
   opts?: { reuseWeb?: boolean },
 ): Promise<void> {
-  // "Extraindo" cobre o fluxo automático do /process (extração → geração). "Erro"/"Cancelada"
+  // "Extraindo" cobre o fluxo automático do /process (extração → geração). "Erro"/"Interrompida"
   // entram para permitir "Regerar só a análise" (reusa a extração já feita, sem re-extrair — o
-  // /generate valida antes que há indicadores).
+  // /generate valida antes que há indicadores). "Cancelada" (definitivo) NUNCA entra: somente consulta.
   const iniciou = await prisma.analysis.updateMany({
-    where: { id: analysisId, status: { in: ["Extraindo", "Pronta para gerar", "Revisão necessária", "Concluída", "Erro", "Cancelada"] } },
+    where: { id: analysisId, status: { in: ["Extraindo", "Pronta para gerar", "Revisão necessária", "Concluída", "Erro", "Interrompida"] } },
     data: { status: "Gerando diagnóstico" },
   });
   if (iniciou.count === 0) { console.log(`[generate] ${analysisId}: estado não permite gerar (cancelado/corrida) — abortado`); return; }

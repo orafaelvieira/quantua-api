@@ -27,6 +27,14 @@ function fixFilename(raw: string): string {
   return raw;
 }
 
+/** IBR cancelado é SOMENTE CONSULTA (2026-07-16): documento de análise
+ *  cancelada não pode ser editado/substituído/excluído — evidência congelada. */
+async function analiseCancelada(analysisId: string): Promise<boolean> {
+  const a = await prisma.analysis.findUnique({ where: { id: analysisId }, select: { status: true } }).catch(() => null);
+  return a?.status === "Cancelada";
+}
+const ERRO_CANCELADA = "IBR cancelado é somente consulta — documentos ficam congelados como evidência.";
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
@@ -119,6 +127,7 @@ router.put("/:id/dados-extraidos", async (req: AuthRequest, res: Response): Prom
     where: { id, company: { userId: { in: req.scopeUserIds! } } },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+  if (await analiseCancelada(doc.analysisId)) { res.status(409).json({ error: ERRO_CANCELADA }); return; }
 
   const updated = await prisma.document.update({
     where: { id },
@@ -146,6 +155,7 @@ router.put("/:id/tipo", async (req: AuthRequest, res: Response): Promise<void> =
     where: { id, company: { userId: { in: req.scopeUserIds! } } },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+  if (await analiseCancelada(doc.analysisId)) { res.status(409).json({ error: ERRO_CANCELADA }); return; }
 
   const updated = await prisma.document.update({
     where: { id },
@@ -172,6 +182,7 @@ router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, r
     where: { id, company: { userId: { in: req.scopeUserIds! } } },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+  if (await analiseCancelada(doc.analysisId)) { res.status(409).json({ error: ERRO_CANCELADA }); return; }
   if (doc.status === "Substituído") {
     res.status(409).json({ error: "Documento já foi substituído — substitua a versão vigente" });
     return;
@@ -256,6 +267,7 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
     where: { id, company: { userId: { in: req.scopeUserIds! } } },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+  if (await analiseCancelada(doc.analysisId)) { res.status(409).json({ error: ERRO_CANCELADA }); return; }
 
   // POLÍTICA (2026-07-15): documento que já participou de qualquer produto NUNCA é
   // deletado — é evidência; corrija com "Substituir". Exclusão real só para upload
