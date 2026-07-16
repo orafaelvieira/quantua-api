@@ -160,7 +160,14 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const extracaoDesatualizada = !!extraidoEm && analysis.documents.some((d) =>
     d.tipo !== MATERIAL_TIPO && d.status !== "Substituído" && d.createdAt > new Date(extraidoEm)
   );
-  res.json({ ...analysis, extracaoDesatualizada });
+  // VALUATIONS/MODELOS vinculados a este IBR (pode ser mais de um): o cabeçalho
+  // do IBR mostra os links — a relação IBR↔produto fica visível dos dois lados.
+  const modelosVinculados = await prisma.financialModel.findMany({
+    where: { analysisSeedId: id },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, nome: true, objetivo: true, status: true },
+  });
+  res.json({ ...analysis, extracaoDesatualizada, modelosVinculados });
 });
 
 // VERSÕES da extração (política 2026-07-15): trilha consultável de cada hash de

@@ -543,19 +543,24 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     where: { id: model.companyId },
     select: { razaoSocial: true, nomeFantasia: true },
   });
-  // HISTÓRICO DESATUALIZADO — dois estágios, ambos avisados (nada silencioso):
-  // 1. Documento do IBR substituído/adicionado e AINDA NÃO reprocessado
-  //    (extração da fonte desatualizada) → reprocessar o IBR primeiro.
-  // 2. IBR re-extraído DEPOIS do seed (hash de versão divergente) → rodar a
-  //    nova versão do valuation com o IBR atualizado.
+  // HISTÓRICO DESATUALIZADO — três critérios, todos avisados (nada silencioso):
+  // 1. IBR re-extraído DEPOIS do seed (hash de versão divergente).
+  // 2. Documento substituído/adicionado e AINDA NÃO reprocessado.
+  // 3. Modelo LEGADO sem carimbo de seed: fonte re-extraída depois da CRIAÇÃO
+  //    do modelo (extraidoEm > createdAt) — cobre valuations pré-v74.
   let historicoDesatualizado = false;
   let motivoDesatualizado: string | null = null;
+  let ibrVinculado: { id: string; nome: string; codigo: string; status: string } | null = null;
   const seedStamp = (completo?.realizado as { seed?: { versaoExtracao?: string | null } } | null)?.seed;
   if (model.analysisSeedId) {
     const fonte = await prisma.analysis.findUnique({
       where: { id: model.analysisSeedId },
-      select: { dadosEstruturados: true, documents: { select: { tipo: true, status: true, createdAt: true } } },
+      select: { id: true, nome: true, status: true, createdAt: true, dadosEstruturados: true, documents: { select: { tipo: true, status: true, createdAt: true } } },
     });
+    if (fonte) {
+      const num = fonte.id.replace(/[^0-9]/g, "").slice(-3).padStart(3, "0");
+      ibrVinculado = { id: fonte.id, nome: fonte.nome, codigo: `IBR-${new Date(fonte.createdAt).getFullYear()}-${num}`, status: fonte.status };
+    }
     const deFonte = fonte?.dadosEstruturados as { versaoExtracao?: string; extraidoEm?: string } | null;
     const hashAtual = deFonte?.versaoExtracao ?? null;
     if (seedStamp?.versaoExtracao && hashAtual && hashAtual !== seedStamp.versaoExtracao) {
@@ -564,9 +569,34 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     } else if (deFonte?.extraidoEm && (fonte?.documents ?? []).some((d) => d.tipo !== "Material complementar" && d.status !== "Substituído" && d.createdAt > new Date(deFonte.extraidoEm!))) {
       historicoDesatualizado = true;
       motivoDesatualizado = "documento substituído/adicionado na Data room ainda não reprocessado. Reprocesse a extração do IBR e depois atualize o valuation.";
+    } else if (!seedStamp?.versaoExtracao && deFonte?.extraidoEm && completo?.createdAt && new Date(deFonte.extraidoEm) > completo.createdAt) {
+      historicoDesatualizado = true;
+      motivoDesatualizado = "o IBR foi re-extraído depois que este modelo foi criado. Rode uma nova versão do valuation com o IBR atualizado.";
+    }
+
+    // MODELO LEGADO sem grupoDre nas linhas: enriquece NA LEITURA (sem persistir)
+    // casando pelo nome com a abertura atual da fonte — a Demonstração agrupa
+    // pela estrutura do modelo padrão sem o analista precisar recriar o modelo.
+    const precisaGrupo = (completo?.blocks ?? []).some((b) =>
+      (b.tipo === "custos" || b.tipo === "despesas") &&
+      ((b.config as { linhasCusto?: Array<{ grupoDre?: string }> })?.linhasCusto ?? []).some((l) => !l.grupoDre)
+    );
+    if (precisaGrupo && fonte?.dadosEstruturados) {
+      const norm = (s: string) => s.replace(/^(\s*\(?[=\-−+]\)?\s*)+/, "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+      const grupoPorNome = new Map<string, string>();
+      for (const ab of derivarAberturaCustos(fonte.dadosEstruturados)) {
+        if (ab.destino && !grupoPorNome.has(norm(ab.conta))) grupoPorNome.set(norm(ab.conta), ab.destino);
+      }
+      for (const b of completo?.blocks ?? []) {
+        if (b.tipo !== "custos" && b.tipo !== "despesas") continue;
+        const cfg = b.config as { linhasCusto?: Array<{ nome: string; grupoDre?: string }> };
+        for (const l of cfg?.linhasCusto ?? []) {
+          if (!l.grupoDre) { const g = grupoPorNome.get(norm(l.nome)); if (g) l.grupoDre = g; }
+        }
+      }
     }
   }
-  res.json({ ...completo, empresaNome: company?.nomeFantasia || company?.razaoSocial || null, historicoDesatualizado, motivoDesatualizado });
+  res.json({ ...completo, empresaNome: company?.nomeFantasia || company?.razaoSocial || null, historicoDesatualizado, motivoDesatualizado, ibrVinculado });
 });
 
 // GET /models/:id/dfs-origem — TRANSPARÊNCIA: as demonstrações EXTRAÍDAS
