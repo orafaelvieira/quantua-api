@@ -306,8 +306,8 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     return 0;
   })();
   const usarAberturaCustos = aberturaCustos.length > 0 && receitaBrutaUlt > 0;
-  const linhasCustoSeed: Array<{ id: string; nome: string; modo: string; pct: number }> = [];
-  const linhasDespesaSeed: Array<{ id: string; nome: string; modo: string; pct: number }> = [];
+  const linhasCustoSeed: Array<{ id: string; nome: string; modo: string; pct: number; grupoDre?: string }> = [];
+  const linhasDespesaSeed: Array<{ id: string; nome: string; modo: string; pct: number; grupoDre?: string }> = [];
   const custoPorLinha: Record<string, Record<string, number>> = {};
   const memoriaCustos: string[] = [];
   if (usarAberturaCustos) {
@@ -321,7 +321,9 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       const pct = Math.max(0, Math.min(1, vUlt / receitaBrutaUlt));
       // Nome SEM o marcador "(-)"/"(=)" do documento — o sinal é do bloco, não do nome.
       const nome = ab.conta.replace(/^(\s*\(?[=\-−+]\)?\s*)+/, "").trim() || ab.conta;
-      alvo.push({ id: linhaId, nome, modo: "pctReceita", pct });
+      // grupoDre = conta canônica do modelo padrão em que o fold dobrou a linha —
+      // a Demonstração agrupa as variáveis pela ESTRUTURA DO IBR (decisão 2026-07-15).
+      alvo.push({ id: linhaId, nome, modo: "pctReceita", pct, ...(ab.destino ? { grupoDre: ab.destino } : {}) });
       custoPorLinha[linhaId] = ab.valores;
       memoriaCustos.push(`"${nome}" (${ehCusto ? "custo" : "despesa"}): ${vUlt.toFixed(2)} em ${ultimoP ?? "—"} = ${(pct * 100).toFixed(2)}% da receita bruta`);
     });
@@ -541,20 +543,30 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     where: { id: model.companyId },
     select: { razaoSocial: true, nomeFantasia: true },
   });
-  // HISTÓRICO DESATUALIZADO: o hash da extração que semeou o modelo diverge do
-  // hash atual da análise-fonte (documento substituído + reprocessado depois do
-  // seed). O modelo NÃO muda sozinho — a UI avisa e o analista decide.
+  // HISTÓRICO DESATUALIZADO — dois estágios, ambos avisados (nada silencioso):
+  // 1. Documento do IBR substituído/adicionado e AINDA NÃO reprocessado
+  //    (extração da fonte desatualizada) → reprocessar o IBR primeiro.
+  // 2. IBR re-extraído DEPOIS do seed (hash de versão divergente) → rodar a
+  //    nova versão do valuation com o IBR atualizado.
   let historicoDesatualizado = false;
+  let motivoDesatualizado: string | null = null;
   const seedStamp = (completo?.realizado as { seed?: { versaoExtracao?: string | null } } | null)?.seed;
-  if (model.analysisSeedId && seedStamp?.versaoExtracao) {
+  if (model.analysisSeedId) {
     const fonte = await prisma.analysis.findUnique({
       where: { id: model.analysisSeedId },
-      select: { dadosEstruturados: true },
+      select: { dadosEstruturados: true, documents: { select: { tipo: true, status: true, createdAt: true } } },
     });
-    const hashAtual = (fonte?.dadosEstruturados as { versaoExtracao?: string } | null)?.versaoExtracao ?? null;
-    historicoDesatualizado = !!hashAtual && hashAtual !== seedStamp.versaoExtracao;
+    const deFonte = fonte?.dadosEstruturados as { versaoExtracao?: string; extraidoEm?: string } | null;
+    const hashAtual = deFonte?.versaoExtracao ?? null;
+    if (seedStamp?.versaoExtracao && hashAtual && hashAtual !== seedStamp.versaoExtracao) {
+      historicoDesatualizado = true;
+      motivoDesatualizado = "o IBR foi re-extraído depois que este modelo foi criado. Rode uma nova versão do valuation com o IBR atualizado.";
+    } else if (deFonte?.extraidoEm && (fonte?.documents ?? []).some((d) => d.tipo !== "Material complementar" && d.status !== "Substituído" && d.createdAt > new Date(deFonte.extraidoEm!))) {
+      historicoDesatualizado = true;
+      motivoDesatualizado = "documento substituído/adicionado na Data room ainda não reprocessado. Reprocesse a extração do IBR e depois atualize o valuation.";
+    }
   }
-  res.json({ ...completo, empresaNome: company?.nomeFantasia || company?.razaoSocial || null, historicoDesatualizado });
+  res.json({ ...completo, empresaNome: company?.nomeFantasia || company?.razaoSocial || null, historicoDesatualizado, motivoDesatualizado });
 });
 
 // GET /models/:id/dfs-origem — TRANSPARÊNCIA: as demonstrações EXTRAÍDAS
