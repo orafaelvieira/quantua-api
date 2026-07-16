@@ -484,12 +484,12 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   // confirmação. Falha de fonte externa não trava a criação (campos ficam
   // vazios como antes — o botão Atualizar da aba cobre depois).
   const [dadosMercadoWacc, setorBetaAuto] = await Promise.all([
-    buscarDadosWacc(60).catch(() => null),
+    buscarDadosWacc(60).catch((e) => { console.error("[models/create] dados de mercado do WACC falharam (a aba auto-carrega ao abrir):", e instanceof Error ? e.message : e); return null; }),
     (async () => {
       if (!fonteMeta?.sectorId) return null;
       const m = await prisma.damodaranMapping.findFirst({ where: { sectorCode: fonteMeta.sectorId } });
       return m?.damodaranIndustry ?? null;
-    })().catch(() => null),
+    })().catch((e) => { console.error("[models/create] mapeamento Damodaran falhou:", e instanceof Error ? e.message : e); return null; }),
   ]);
 
   // CHECKLIST DE VALIDAÇÃO DO ANALISTA: os pontos que a automação NÃO decide
@@ -782,12 +782,19 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   let historicoDesatualizado = false;
   let motivoDesatualizado: string | null = null;
   let ibrVinculado: { id: string; nome: string; codigo: string; status: string } | null = null;
+  let setorBetaSugerido: string | null = null;
   const seedStamp = (completo?.realizado as { seed?: { versaoExtracao?: string | null } } | null)?.seed;
   if (model.analysisSeedId) {
     const fonte = await prisma.analysis.findUnique({
       where: { id: model.analysisSeedId },
-      select: { id: true, nome: true, status: true, createdAt: true, dadosEstruturados: true, documents: { select: { tipo: true, status: true, createdAt: true } } },
+      select: { id: true, nome: true, status: true, createdAt: true, sectorId: true, dadosEstruturados: true, documents: { select: { tipo: true, status: true, createdAt: true } } },
     });
+    // Sugestão de SETOR DAMODARAN (auto-cura da aba WACC): modelos criados antes
+    // do seed automático (ou com setor confirmado depois) ganham a seleção ao abrir.
+    if (fonte?.sectorId) {
+      const map = await prisma.damodaranMapping.findFirst({ where: { sectorCode: fonte.sectorId } }).catch(() => null);
+      setorBetaSugerido = map?.damodaranIndustry ?? null;
+    }
     if (fonte) {
       const num = fonte.id.replace(/[^0-9]/g, "").slice(-3).padStart(3, "0");
       ibrVinculado = { id: fonte.id, nome: fonte.nome, codigo: `IBR-${new Date(fonte.createdAt).getFullYear()}-${num}`, status: fonte.status };
@@ -829,7 +836,7 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
       }
     }
   }
-  res.json({ ...completo, empresaNome: company?.nomeFantasia || company?.razaoSocial || null, historicoDesatualizado, motivoDesatualizado, ibrVinculado });
+  res.json({ ...completo, empresaNome: company?.nomeFantasia || company?.razaoSocial || null, historicoDesatualizado, motivoDesatualizado, ibrVinculado, setorBetaSugerido });
 });
 
 // GET /models/:id/dfs-origem — TRANSPARÊNCIA: as demonstrações EXTRAÍDAS
@@ -1437,6 +1444,10 @@ router.post("/:id/monte-carlo", async (req: AuthRequest, res: Response): Promise
       taxaImpostos: Math.max(0, Math.min(1, Number(val.taxaImpostos) || 0)),
       caixaDataBase: Math.max(0, Number(val.caixaDataBase) || 0),
       dlom: Math.max(0, Math.min(0.9, Number(val.dlom) || 0)),
+      // Ponte editável (2026-07-16): o Monte Carlo usa a MESMA ponte da aba.
+      dividaDataBaseManual: Number.isFinite(Number(val.dividaDataBaseManual)) && val.dividaDataBaseManual !== null && val.dividaDataBaseManual !== undefined
+        ? Math.max(0, Number(val.dividaDataBaseManual)) : null,
+      ajustesLiquidos: Number.isFinite(Number(val.ajustesLiquidos)) ? Number(val.ajustesLiquidos) : 0,
     },
   });
   if (!resultado.ok) { res.status(422).json({ error: resultado.motivo, avisos: resultado.avisos }); return; }

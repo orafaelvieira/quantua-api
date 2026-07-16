@@ -19,6 +19,11 @@ export interface ParamsFcd {
   g: number;
   /** DLOM sobre o Equity (0.25 = 25%); default 0. */
   dlom?: number;
+  /** Override da dívida bruta da data-base (null/ausente = a do modelo) —
+   *  espelho da ponte editável da aba Valuation (2026-07-16). */
+  dividaDataBaseManual?: number | null;
+  /** Soma líquida dos ajustes extras da ponte EV→Equity (com sinal). */
+  ajustesLiquidos?: number;
 }
 
 export interface ValorFcd {
@@ -64,10 +69,13 @@ export function equityFcd(resultado: ResultadoModelo, p: ParamsFcd): ValorFcd {
 
   const ev = vpFluxos + vpValorTerminal;
   const m1 = meses[0];
-  const dividaDataBase = s["divida_total"]
+  // Ponte espelha a aba Valuation: dívida com override do analista quando
+  // houver, e ajustes extras (± com sinal) somados ao Equity.
+  const dividaAuto = s["divida_total"]
     ? (s["divida_total"][m1] ?? 0) - (s["captacao_divida_total"]?.[m1] ?? 0) + (s["amortizacao_divida_total"]?.[m1] ?? 0)
     : 0;
-  const equity = ev + Math.max(0, p.caixaDataBase) - dividaDataBase;
+  const dividaDataBase = p.dividaDataBaseManual ?? dividaAuto;
+  const equity = ev + Math.max(0, p.caixaDataBase) - dividaDataBase + (p.ajustesLiquidos ?? 0);
   const dlom = Math.min(0.9, Math.max(0, p.dlom ?? 0));
   return { ok: true, ev, equity, equityFinal: equity * (1 - dlom) };
 }
