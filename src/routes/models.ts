@@ -417,13 +417,31 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
           // Demonstração quando o analista adicionar linhas.
           { tipo: "receitasNaoOp", nome: "Receitas não operacionais", ordem: 3, config: {} as object },
           { tipo: "despesasNaoOp", nome: "Despesas não operacionais", ordem: 4, config: {} as object },
-          { tipo: "capex", nome: "Investimentos (Capex)", ordem: 5, config: {} as object },
+          // CAPEX nasce com os ATIVOS EXISTENTES do BP do IBR (Imobilizado/
+          // Intangível líquidos) — depreciação padrão 10% a.a. DECLARADA (o
+          // analista ajusta por classe). Sem isso a DRE nascia sem D&A e o BP
+          // sem Imobilizado (F2 do roadmap, entregue 2026-07-16).
+          {
+            tipo: "capex", nome: "Investimentos (Capex)", ordem: 5,
+            config: {
+              ativosExistentes: derivarImobilizadoHistorico(analysis?.dadosEstruturados ?? null).itens.map((it, k) => ({
+                id: `ativo_hist_${k}`, nome: `${it.conta} (histórico)`, valor: it.valor, taxaAnual: 0.10, tipoAtivo: "seed-historico",
+              })),
+            } as object,
+          },
           // A projeção DÁ SEQUÊNCIA ao balanço inteiro: as contas do BP
           // histórico fora do giro/imobilizado/dívida nascem como "outros itens"
           // (saldo constante = repete o último valor; o analista muda o modo).
           {
             tipo: "giro", nome: "Capital de giro", ordem: 6,
             config: {
+              // GIRO nasce ancorado nos DIAS do histórico do IBR (PMR/PME/PMP,
+              // mesma régua dos indicadores) — sem isso o BP projetado nascia
+              // sem Contas a Receber/Estoques/Fornecedores (F2, 2026-07-16).
+              ...(() => {
+                const g = derivarGiroHistorico(analysis?.dadosEstruturados ?? null);
+                return { ...(g.pmr ? { pmr: g.pmr } : {}), ...(g.pme ? { pme: g.pme } : {}), ...(g.pmp ? { pmp: g.pmp } : {}) };
+              })(),
               itensBalancoSeed: true,
               itensBalanco: derivarOutrosBalanco(analysis?.dadosEstruturados ?? null).itens.map((h, k) => ({
                 id: `bi${k}_${Date.now().toString(36)}`, nome: h.conta, classificacao: h.classificacao,
@@ -797,7 +815,18 @@ router.get("/:id/historico-dfs", async (req: AuthRequest, res: Response): Promis
     const fc = buildIndirectCashFlow(bpExt as never, de.dre as never, periodos);
     if (fc) {
       periodosFC = fc.colunas;
+      // Linhas nomeadas do FC indireto do IBR → linhas do FC projetado (mesma
+      // estrutura): Lucro Líquido do período e D&A não-caixa acompanham o
+      // realizado (antes ficavam "—" na aba DFs).
+      const linhaFC = (busca: RegExp): Record<string, number> | null => {
+        const l = (fc.fco ?? []).find((x) => busca.test(x.nome));
+        return l ? l.valores : null;
+      };
+      const llHist = linhaFC(/lucro l[ií]quido/i);
+      const daHist = linhaFC(/deprecia/i);
       fcHist = {
+        ...(llHist ? { "fc-resultado": llHist } : {}),
+        ...(daHist ? { "fc-depreciacao": daHist } : {}),
         "fc-fco": fc.totais.fco,
         "fc-fci": fc.totais.fci,
         "fc-fcf": fc.totais.fcf,

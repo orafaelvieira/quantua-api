@@ -812,10 +812,12 @@ describe("B6 — capex, waterfall de depreciação e imobilizado", () => {
     expect(r.series["depreciacao_total"]["2027-12"]).toBeCloseTo(0, 6);
   });
 
-  it("sem bloco capex a DRE não ganha D&A/EBIT (modelos antigos intactos)", () => {
+  it("sem bloco capex a cascata segue COMPLETA com D&A zerada (estrutura do IBR, 2026-07-16)", () => {
     const r = calcularModelo(inputDe([blocoReceitaSerie({ valorMensal: 100_000 }), blocoCustosSimples()]));
-    expect(r.dre.some((l) => l.id === "ebit")).toBe(false);
-    expect(r.dre.some((l) => l.id === "depreciacao-total")).toBe(false);
+    expect(r.dre.find((l) => l.id === "depreciacao-total")!.valores["2026-01"]).toBe(0);
+    // EBIT = EBITDA quando não há depreciação — nada muda nos números.
+    expect(r.dre.find((l) => l.id === "ebit")!.valores["2026-01"])
+      .toBeCloseTo(r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"], 2);
   });
 
   it("com capex E não operacionais, o resultado após não op parte do EBIT", () => {
@@ -1160,7 +1162,8 @@ describe("B8 — dívida por contrato", () => {
     // DRE: juros abaixo do EBITDA e LAIR fecha a cascata
     const ids = r.dre.map((l) => l.id);
     expect(ids.indexOf("juros-divida")).toBeGreaterThan(ids.indexOf("ebitda"));
-    expect(ids[ids.length - 1]).toBe("lair");
+    // Cascata completa (2026-07-16): depois do LAIR vêm IR zerado e Lucro Líquido.
+    expect(ids[ids.length - 1]).toBe("lucro-liquido");
     const ebitda = r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"];
     const lair = r.dre.find((l) => l.id === "lair")!.valores["2026-01"];
     expect(lair).toBeCloseTo(ebitda - 600, 2); // 60.000 × 1%
@@ -1178,10 +1181,12 @@ describe("B8 — dívida por contrato", () => {
     expect(r.series["divida_d5_juros"]["2027-06"]).toBeCloseTo(2_000, 1);
   });
 
-  it("sem contratos: nada de dívida na DRE nem nas séries", () => {
+  it("sem contratos: séries de dívida ausentes; DRE mantém a linha de juros ZERADA (estrutura do IBR)", () => {
     const r = calcularModelo(inputDe([blocoReceitaSerie({ valorMensal: 100_000 }), blocoDivida([])]));
     expect(r.series["divida_total"]).toBeUndefined();
-    expect(r.dre.find((l) => l.id === "juros-divida")).toBeUndefined();
+    expect(r.dre.find((l) => l.id === "juros-divida")!.valores["2026-01"]).toBe(0);
+    expect(r.dre.find((l) => l.id === "lair")!.valores["2026-01"])
+      .toBeCloseTo(r.dre.find((l) => l.id === "ebit")!.valores["2026-01"], 2);
   });
 });
 
@@ -1415,10 +1420,12 @@ describe("F3 — impostos (Simples, Presumido, Real)", () => {
     expect(r.dre.find((l) => l.id === "lucro-liquido")!.valores["2026-03"]).toBeCloseTo(78_200, 2);
   });
 
-  it("sem regime configurado, a DRE não muda (retrocompatível)", () => {
+  it("sem regime configurado: IR zerado DECLARADO e Lucro Líquido = LAIR (cascata completa)", () => {
     const r = calcularModelo(inputDe([blocoReceitaSerie({ valorMensal: 100_000 }), blocoImp({})]));
     expect(r.dre.find((l) => l.id === "impostos-receita")).toBeUndefined();
-    expect(r.dre.find((l) => l.id === "lucro-liquido")).toBeUndefined();
+    expect(r.dre.find((l) => l.id === "irpj-csll")!.valores["2026-01"]).toBe(0);
+    expect(r.dre.find((l) => l.id === "lucro-liquido")!.valores["2026-01"])
+      .toBeCloseTo(r.dre.find((l) => l.id === "lair")!.valores["2026-01"], 2);
     expect(r.dre.find((l) => l.id === "lucro-bruto")!.valores["2026-01"]).toBeCloseTo(100_000, 2);
   });
 });

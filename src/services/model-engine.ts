@@ -1955,16 +1955,17 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   dre.push({ id: "despesas-total", nome: "(−) Despesas", grupo: "subtotal", valores: despesasTotal, pctReceita: pctDe(despesasTotal) });
   for (const l of linhasDespesas) dre.push({ id: l.id, nome: l.nome, grupo: "despesas", valores: l.valores, pctReceita: pctDe(l.valores) });
   dre.push({ id: "ebitda", nome: "EBITDA", grupo: "subtotal", valores: ebitda, pctReceita: pctDe(ebitda) });
-  // D&A e EBIT só aparecem quando há capex/imobilizado no modelo.
+  // CASCATA COMPLETA SEMPRE (2026-07-16): a Demonstração replica o modelo
+  // padrão do IBR até o Lucro Líquido — bloco vazio = linha ZERADA, nunca
+  // omitida (o realizado do IBR acompanha ao lado; zero não muda os números).
+  const zeroSerie: Serie = {};
+  for (const mes of meses) zeroSerie[mes] = 0;
   const ebit: Serie = {};
   for (const mes of meses) ebit[mes] = ebitda[mes] - (temCapex ? depreciacaoTotal[mes] ?? 0 : 0);
-  // Último subtotal da cascata (EBITDA → EBIT → após não-op) — base dos juros.
-  let resultadoCorrente: Serie = ebitda;
-  if (temCapex) {
-    dre.push({ id: "depreciacao-total", nome: "(−) Depreciação e amortização", grupo: "despesas", valores: depreciacaoTotal, pctReceita: pctDe(depreciacaoTotal) });
-    dre.push({ id: "ebit", nome: "EBIT (resultado operacional)", grupo: "subtotal", valores: ebit, pctReceita: pctDe(ebit) });
-    resultadoCorrente = ebit;
-  }
+  dre.push({ id: "depreciacao-total", nome: "(−) Depreciação e amortização", grupo: "despesas", valores: temCapex ? depreciacaoTotal : zeroSerie, pctReceita: pctDe(temCapex ? depreciacaoTotal : zeroSerie) });
+  dre.push({ id: "ebit", nome: "EBIT (resultado operacional)", grupo: "subtotal", valores: ebit, pctReceita: pctDe(ebit) });
+  // Último subtotal da cascata (EBIT → após não-op) — base dos juros.
+  let resultadoCorrente: Serie = ebit;
   if (linhasRecNaoOp.length || linhasDespNaoOp.length) {
     const recNaoOpTotal: Serie = {};
     const despNaoOpTotal: Serie = {};
@@ -1982,11 +1983,13 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     dre.push({ id: "resultado-apos-naoop", nome: "Resultado após não operacionais", grupo: "subtotal", valores: resultadoAposNaoOp, pctReceita: pctDe(resultadoAposNaoOp) });
     resultadoCorrente = resultadoAposNaoOp;
   }
-  // B8: juros da dívida descem para a DRE; LAIR fecha a cascata (IR entra na F3).
-  if (temDivida) {
+  // B8: juros da dívida descem para a DRE; LAIR fecha a cascata (IR na F3).
+  // Sem dívida configurada, a linha vem ZERADA — a estrutura não some.
+  {
+    const jurosExibidos = temDivida ? jurosDividaTotal : zeroSerie;
     const lair: Serie = {};
-    for (const mes of meses) lair[mes] = resultadoCorrente[mes] - (jurosDividaTotal[mes] ?? 0);
-    dre.push({ id: "juros-divida", nome: "(−) Juros de empréstimos e financiamentos", grupo: "despesas", valores: jurosDividaTotal, pctReceita: pctDe(jurosDividaTotal) });
+    for (const mes of meses) lair[mes] = resultadoCorrente[mes] - (jurosExibidos[mes] ?? 0);
+    dre.push({ id: "juros-divida", nome: "(−) Juros de empréstimos e financiamentos", grupo: "despesas", valores: jurosExibidos, pctReceita: pctDe(jurosExibidos) });
     dre.push({ id: "lair", nome: "Resultado antes dos impostos", grupo: "subtotal", valores: lair, pctReceita: pctDe(lair) });
     resultadoCorrente = lair;
   }
@@ -2065,6 +2068,13 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
           : `Receita ACIMA do limite do Lucro Presumido em: ${estourosSimples.join(", ")} — a partir do ano seguinte o Lucro Real é obrigatório`)
         : provaImpostos,
     });
+  } else {
+    // Sem regime configurado (bloco Impostos vazio): IR ZERADO declarado — a
+    // cascata fecha no Lucro Líquido mesmo assim (estrutura do modelo padrão
+    // sempre completa; configurar o regime muda os números, não a estrutura).
+    dre.push({ id: "irpj-csll", nome: "(−) IRPJ e CSLL", grupo: "despesas", valores: zeroSerie, pctReceita: pctDe(zeroSerie) });
+    dre.push({ id: "lucro-liquido", nome: "Lucro líquido", grupo: "subtotal", valores: { ...resultadoCorrente }, pctReceita: pctDe(resultadoCorrente) });
+    series["lucro_liquido"] = { ...resultadoCorrente };
   }
 
   // ── F2: FLUXO DE CAIXA INDIRETO + BALANÇO PROJETADO (com prova) ──
@@ -2220,25 +2230,26 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
         valores: s,
         pctReceita: pctDe(s),
       }));
+  // ESTRUTURA FIXA do modelo padrão do IBR (2026-07-16): as linhas-padrão
+  // aparecem SEMPRE — bloco não configurado = ZERO na projeção, nunca omissão
+  // (as colunas de realizado do IBR acompanham cada linha).
   const bp: LinhaDre[] = [
     { id: "bp-ativo", nome: "Ativo Total", grupo: "subtotal", valores: ativoS, pctReceita: pctDe(ativoS) },
     { id: "bp-ativo-circ", nome: "Ativo Circulante", grupo: "subtotal", valores: acS, pctReceita: pctDe(acS) },
     { id: "bp-caixa", nome: "Caixa e Equivalentes de Caixa", grupo: "receita", valores: caixaS, pctReceita: pctDe(caixaS) },
-    ...(temGiro ? [
-      { id: "bp-cr", nome: "Contas a Receber - CP", grupo: "receita" as const, valores: series["contas_a_receber"], pctReceita: pctDe(series["contas_a_receber"]) },
-      { id: "bp-estoques", nome: "Estoques - CP", grupo: "receita" as const, valores: series["estoques_giro"], pctReceita: pctDe(series["estoques_giro"]) },
-    ] : []),
+    { id: "bp-cr", nome: "Contas a Receber - CP", grupo: "receita", valores: temGiro ? series["contas_a_receber"] : zeroSerie, pctReceita: pctDe(temGiro ? series["contas_a_receber"] : zeroSerie) },
+    { id: "bp-estoques", nome: "Estoques - CP", grupo: "receita", valores: temGiro ? series["estoques_giro"] : zeroSerie, pctReceita: pctDe(temGiro ? series["estoques_giro"] : zeroSerie) },
     ...linhasItens("ac"),
     { id: "bp-ativo-nc", nome: "Ativo Não Circulante", grupo: "subtotal", valores: ancS, pctReceita: pctDe(ancS) },
-    ...(temCapex ? [{ id: "bp-imobilizado", nome: "Imobilizado", grupo: "receita" as const, valores: imobilizadoLiquido, pctReceita: pctDe(imobilizadoLiquido) }] : []),
+    { id: "bp-imobilizado", nome: "Imobilizado", grupo: "receita", valores: temCapex ? imobilizadoLiquido : zeroSerie, pctReceita: pctDe(temCapex ? imobilizadoLiquido : zeroSerie) },
     ...linhasItens("anc"),
     { id: "bp-passivo-pl", nome: "Passivo Total", grupo: "subtotal", valores: somaDe(passivoS, plS, meses), pctReceita: pctDe(ativoS) },
     { id: "bp-passivo-circ", nome: "Passivo Circulante", grupo: "subtotal", valores: pcS, pctReceita: pctDe(pcS) },
-    ...(temGiro ? [{ id: "bp-fornecedores", nome: "Fornecedores - CP", grupo: "despesas" as const, valores: series["fornecedores_giro"], pctReceita: pctDe(series["fornecedores_giro"]) }] : []),
-    ...(temDivida ? [{ id: "bp-divida-cp", nome: "Empréstimos e Financiamentos - CP", grupo: "despesas" as const, valores: dividaCpTotal, pctReceita: pctDe(dividaCpTotal) }] : []),
+    { id: "bp-fornecedores", nome: "Fornecedores - CP", grupo: "despesas", valores: temGiro ? series["fornecedores_giro"] : zeroSerie, pctReceita: pctDe(temGiro ? series["fornecedores_giro"] : zeroSerie) },
+    { id: "bp-divida-cp", nome: "Empréstimos e Financiamentos - CP", grupo: "despesas", valores: temDivida ? dividaCpTotal : zeroSerie, pctReceita: pctDe(temDivida ? dividaCpTotal : zeroSerie) },
     ...linhasItens("pc"),
     { id: "bp-passivo-nc", nome: "Passivo Não Circulante", grupo: "subtotal", valores: pncS, pctReceita: pctDe(pncS) },
-    ...(temDivida ? [{ id: "bp-divida-lp", nome: "Empréstimos e Financiamentos - LP", grupo: "despesas" as const, valores: dividaLpTotal, pctReceita: pctDe(dividaLpTotal) }] : []),
+    { id: "bp-divida-lp", nome: "Empréstimos e Financiamentos - LP", grupo: "despesas", valores: temDivida ? dividaLpTotal : zeroSerie, pctReceita: pctDe(temDivida ? dividaLpTotal : zeroSerie) },
     ...linhasItens("pnc"),
     { id: "bp-pl", nome: "Patrimônio Líquido", grupo: "subtotal", valores: plS, pctReceita: pctDe(plS) },
   ];
