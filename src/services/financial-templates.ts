@@ -30,8 +30,13 @@ export const BP_TEMPLATE: Array<{ classificacao: string; conta: string; nivel: n
   { classificacao: "ANC", conta: "Outros Ativos Não Circulantes", nivel: 2 },
   { classificacao: "ANC", conta: "Realizável a Longo Prazo", nivel: 2 },
   { classificacao: "ANC", conta: "Investimentos", nivel: 2 },
+  // Segregação p/ valuation (2026-07-16): Imobilizado/Intangível BRUTOS com as
+  // redutoras "(-) Depreciação"/"(-) Amortização" em linha própria (valores
+  // NEGATIVOS — os subtotais seguem fechando por soma). O líquido = bruto + redutora.
   { classificacao: "ANC", conta: "Imobilizado", nivel: 2 },
+  { classificacao: "ANC", conta: "(-) Depreciação", nivel: 2 },
   { classificacao: "ANC", conta: "Intangível", nivel: 2 },
+  { classificacao: "ANC", conta: "(-) Amortização", nivel: 2 },
   { classificacao: "ANC", conta: "Bens a Alienar", nivel: 2 },
   { classificacao: "ANC", conta: "Ativo Diferido", nivel: 2 },
   { classificacao: "PT", conta: "Passivo Total", nivel: 0 },

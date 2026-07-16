@@ -33,6 +33,10 @@ const BUCKET_EXPLICITO: Record<string, BucketFC> = {
   "investimentos": "fci",
   "imobilizado": "fci",
   "intangivel": "fci",
+  // Redutoras da segregação 2026-07-16 — mesmo bloco do imob/intangível (o Δ
+  // delas compõe o Δ LÍQUIDO no capex bruto; no fallback cairiam no FCO).
+  "(-) depreciacao": "fci",
+  "(-) amortizacao": "fci",
   "bens a alienar": "fci",
   "ativo diferido": "fci",
   "ativos com partes relacionadas - cp": "fci",
@@ -65,7 +69,7 @@ export function bucketDaConta(conta: string): BucketFC {
   if (/dividendo.*receber|receber.*dividendo/.test(n)) return "fci";
   if (/emprest|financiament|debentur|arrendament/.test(n)) return "fcf";
   if (/dividendo|jcp|juros sobre o capital|aumento capital/.test(n)) return "fcf";
-  if (/imobilizado|intangivel|investimento|aplicac|realizavel a longo prazo/.test(n)) return "fci";
+  if (/imobilizado|intangivel|investimento|aplicac|realizavel a longo prazo|deprecia|amortiza/.test(n)) return "fci";
   return "fco"; // capital de giro / operacional por padrão
 }
 
@@ -176,7 +180,11 @@ export function buildIndirectCashFlow(
       const bucket = bucketDaConta(l.conta);
       if (bucket === "caixa") continue;                    // caixa é o ALVO da prova, não componente
       const nomeIt = norm(l.conta);
-      if (bucket === "fci" && /imobilizado|intangivel/.test(nomeIt)) { deltaImobIntang += delta; continue; }
+      // Segregação 2026-07-16: "(-) Depreciação"/"(-) Amortização" (redutoras do
+      // BP, valores negativos) entram no MESMO bloco do imob/intangível — o Δ do
+      // bloco volta a ser o Δ LÍQUIDO e o capex bruto (Δ líquido + D&A) fica
+      // idêntico ao de antes da segregação. Sem isso, o capex dobraria a D&A.
+      if (bucket === "fci" && /imobilizado|intangivel|deprecia|amortiza/.test(nomeIt)) { deltaImobIntang += delta; continue; }
       if (bucket === "fci" && nomeIt === "investimentos") { deltaInvest += delta; continue; }
       // Ativo: aumento CONSOME caixa (−Δ). Passivo: aumento GERA caixa (+Δ).
       const efeito = ehPassivo(l) ? delta : -delta;

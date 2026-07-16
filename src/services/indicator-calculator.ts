@@ -117,9 +117,12 @@ function computeIndicator(
   const ativoTotal = bpVal(bp, "Ativo Total", periodo);
   const ativoCirculante = bpVal(bp, "Ativo Circulante", periodo);
   const ativoNaoCirculante = bpVal(bp, "Ativo Não Circulante", periodo);
-  const imobilizado = bpVal(bp, "Imobilizado", periodo);
+  // Segregação 2026-07-16: com "(-) Depreciação"/"(-) Amortização" em linha
+  // própria (negativas), Imobilizado/Intangível vêm BRUTOS — os indicadores
+  // usam o LÍQUIDO (bruto + redutora; extração antiga sem as linhas → +0).
+  const imobilizado = bpVal(bp, "Imobilizado", periodo) + bpVal(bp, "(-) Depreciação", periodo);
   const investimentosBP = bpVal(bp, "Investimentos", periodo);
-  const intangivel = bpVal(bp, "Intangível", periodo);
+  const intangivel = bpVal(bp, "Intangível", periodo) + bpVal(bp, "(-) Amortização", periodo);
   const lucrosAcumulados = bpVal(bp, "Lucros/Prejuízos Acumulados", periodo) + bpVal(bp, "Reservas de Lucros", periodo);
   const caixa = bpVal(bp, "Caixa e Equivalentes de Caixa", periodo);
   const contasReceber = bpVal(bp, "Contas a Receber - CP", periodo);

@@ -775,7 +775,9 @@ router.get("/:id/historico-dfs", async (req: AuthRequest, res: Response): Promis
     "bp-cr": ["Contas a Receber - CP"],
     "bp-estoques": ["Estoques - CP"],
     "bp-ativo-nc": ["Ativo Não Circulante"],
-    "bp-imobilizado": ["Imobilizado", "Intangível", "Ativos Biológicos - LP"],
+    // Segregação 2026-07-16: redutoras (negativas) somam junto — o histórico da
+    // linha "Imobilizado" projetada segue LÍQUIDO, comparável com a projeção.
+    "bp-imobilizado": ["Imobilizado", "(-) Depreciação", "Intangível", "(-) Amortização", "Ativos Biológicos - LP"],
     "bp-passivo-pl": ["Passivo Total"],
     "bp-passivo-circ": ["Passivo Circulante"],
     "bp-fornecedores": ["Fornecedores - CP"],

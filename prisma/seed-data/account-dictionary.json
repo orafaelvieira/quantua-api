@@ -1987,7 +1987,7 @@
   },
   {
     "nomeOriginal": "(-) Computadores E Perifericos",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
@@ -1999,85 +1999,85 @@
   },
   {
     "nomeOriginal": "(-) Dep. Acum. Instalaçoes",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "Depreciacao Acumulada",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "(-) Depreciação Acumulada",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "(-) Depreciação Acumulada - Edificações",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "(-) Depreciação Acumulada - Máquinas e Equipamentos",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "(-) Depreciação Acumulada - Veículos",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "Depreciação/Amortização/Exaustão Acumulada",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "(-) Depreciaçoes Acumuladas",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "(-) Depreciações Acumuladas",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "(-) Depreciações/Amortizações Acumuladadas",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "Deprec. S/ Comput. Perifericos",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "Deprec. S/ Instalacoes",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "Deprec. S/ Maquinas E Equiptos",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "Deprec. S/ Moveis E Utensilios",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
@@ -2143,7 +2143,7 @@
   },
   {
     "nomeOriginal": "(-) Exaustão Acumulada",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
@@ -2275,7 +2275,7 @@
   },
   {
     "nomeOriginal": "(-) Moveis E Utensilios",
-    "contaDestino": "Imobilizado",
+    "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
@@ -2341,13 +2341,13 @@
   },
   {
     "nomeOriginal": "(-) Amortização Acumulada",
-    "contaDestino": "Intangível",
+    "contaDestino": "(-) Amortização",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
   {
     "nomeOriginal": "(-) Amortização Acumulada - Intangível",
-    "contaDestino": "Intangível",
+    "contaDestino": "(-) Amortização",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
   },
@@ -8410,5 +8410,53 @@
     "contaDestino": "Resultado Não Operacional",
     "grupoConta": "Resultado Não Operacional",
     "tipo": "DRE"
+  },
+  {
+    "nomeOriginal": "CLASSE I CREDITOS TRABALHISTAS",
+    "contaDestino": "Depósitos Judiciais - CP",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "CLASSE III CREDITOS GERAIS",
+    "contaDestino": "Depósitos Judiciais - CP",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "CLASSE IV CREDITOS EPP-ME-EIRELI",
+    "contaDestino": "Depósitos Judiciais - CP",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ADIANTAMENTO P/ VIAGEM",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ANTECIPAÇÕES",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
+    "grupoConta": "Ativo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "ANTECIPACAO DE RECEITAS",
+    "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "RECUPERAÇÃO JUDICIAL",
+    "contaDestino": "Outros Passivos Circulantes",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
+  },
+  {
+    "nomeOriginal": "EMPRESTIMOS A PAGAR AOS SÓCIOS",
+    "contaDestino": "Passivos com Partes Relacionadas - CP",
+    "grupoConta": "Passivo Circulante",
+    "tipo": "BP"
   }
 ]

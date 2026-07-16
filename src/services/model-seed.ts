@@ -338,27 +338,39 @@ export function derivarAberturaCustosCanonica(dadosEstruturados: unknown): Linha
 
 /** Ativos de LONGO PRAZO do BP extraído (Imobilizado, Intangível, Ativos
  *  Biológicos/cultura em formação) no último período com valor — âncora dos
- *  "ativos existentes" do bloco de investimentos. Valores em ABS (líquidos de
- *  depreciação acumulada: o fold já compensa as contas redutoras). */
+ *  "ativos existentes" do bloco de investimentos. Sempre LÍQUIDOS: com a
+ *  segregação (2026-07-16) o BP traz o BRUTO e as redutoras "(-) Depreciação"/
+ *  "(-) Amortização" (negativas) em linha própria — o item soma bruto+redutora;
+ *  extração antiga (sem as linhas) segue como era (fold já compensava). */
 export function derivarImobilizadoHistorico(dadosEstruturados: unknown): { periodo: string | null; itens: Array<{ conta: string; valor: number }> } {
   const de = (dadosEstruturados ?? {}) as { periodos?: string[]; bp?: Array<LinhaDados & { subtotal?: boolean }> };
   const bp = de.bp ?? [];
   const periodos = de.periodos ?? [];
-  const CONTAS = ["Imobilizado", "Intangível", "Ativos Biológicos - CP", "Ativos Biológicos - LP"];
-  const linhas = CONTAS
-    .map((c) => bp.find((l) => l.conta?.trim().toLowerCase() === c.toLowerCase()))
-    .filter((l): l is LinhaDados => !!l);
-  if (!linhas.length) return { periodo: null, itens: [] };
+  // Cada item: conta BRUTA + redutoras que a levam ao líquido.
+  const ITENS: Array<{ conta: string; redutoras: string[] }> = [
+    { conta: "Imobilizado", redutoras: ["(-) Depreciação"] },
+    { conta: "Intangível", redutoras: ["(-) Amortização"] },
+    { conta: "Ativos Biológicos - CP", redutoras: [] },
+    { conta: "Ativos Biológicos - LP", redutoras: [] },
+  ];
+  const achaLinha = (c: string) => bp.find((l) => l.conta?.trim().toLowerCase() === c.toLowerCase());
+  const itensBP = ITENS
+    .map((it) => ({ ...it, linha: achaLinha(it.conta), linhasRedutoras: it.redutoras.map(achaLinha).filter((l): l is LinhaDados => !!l) }))
+    .filter((it) => !!it.linha);
+  if (!itensBP.length) return { periodo: null, itens: [] };
   // Último período em que ALGUMA dessas contas tem valor.
   let ultimo: string | null = null;
   for (let i = periodos.length - 1; i >= 0; i--) {
-    if (linhas.some((l) => Math.abs(valorEm(l, periodos[i])) > 0)) { ultimo = periodos[i]; break; }
+    if (itensBP.some((it) => Math.abs(valorEm(it.linha, periodos[i])) > 0)) { ultimo = periodos[i]; break; }
   }
   if (!ultimo) return { periodo: null, itens: [] };
   return {
     periodo: ultimo,
-    itens: linhas
-      .map((l) => ({ conta: l.conta ?? "Ativo", valor: Math.abs(valorEm(l, ultimo!)) }))
+    itens: itensBP
+      .map((it) => {
+        const liquido = valorEm(it.linha, ultimo!) + it.linhasRedutoras.reduce((s, l) => s + valorEm(l, ultimo!), 0);
+        return { conta: it.conta, valor: Math.max(0, liquido) };
+      })
       .filter((x) => x.valor > 0),
   };
 }

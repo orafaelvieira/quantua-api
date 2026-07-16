@@ -35,8 +35,10 @@ export const GUIA_LINHAS: Record<string, string> = {
   "Ativos com Partes Relacionadas - CP": "Entra: empréstimos/mútuos a sócios, controladas ou coligadas a receber no curto prazo. NÃO entra: clientes normais.",
   "Realizável a Longo Prazo": "Entra: créditos com vencimento após 12 meses sem linha específica — depósitos compulsórios, créditos diversos LP. NÃO entra: imobilizado, investimentos.",
   "Investimentos": "Entra: participações societárias em outras empresas, imóveis para renda. NÃO entra: aplicações financeiras (Caixa/Aplicações), imobilizado de uso.",
-  "Imobilizado": "Entra: máquinas, veículos, móveis, imóveis de uso, benfeitorias, obras em andamento — LÍQUIDO de depreciação acumulada. NÃO entra: bens para revenda (Estoque).",
-  "Intangível": "Entra: marcas, patentes, softwares, fundo de comércio, ágio. NÃO entra: bens físicos.",
+  "Imobilizado": "Entra: máquinas, veículos, móveis, imóveis de uso, benfeitorias, obras em andamento — valor BRUTO (a depreciação acumulada vai na linha (-) Depreciação). NÃO entra: bens para revenda (Estoque).",
+  "(-) Depreciação": "Entra: depreciação/exaustão ACUMULADA do imobilizado — valor NEGATIVO (redutora). O líquido do imobilizado = Imobilizado + esta linha. NÃO entra: a despesa de depreciação do ano (essa é da DRE).",
+  "Intangível": "Entra: marcas, patentes, softwares, fundo de comércio, ágio — valor BRUTO (a amortização acumulada vai na linha (-) Amortização). NÃO entra: bens físicos.",
+  "(-) Amortização": "Entra: amortização ACUMULADA do intangível — valor NEGATIVO (redutora). O líquido do intangível = Intangível + esta linha. NÃO entra: a despesa de amortização do ano (essa é da DRE).",
 
   // ── BP · Passivo ──
   "Fornecedores - CP": "Entra: duplicatas a pagar a fornecedores de mercadorias/insumos/serviços no curto prazo. NÃO entra: empréstimos bancários, parcelamentos de tributos.",
