@@ -83,9 +83,13 @@ interface LinhaInput {
 router.post("/:tipo/versions", async (req: AuthRequest, res: Response): Promise<void> => {
   const tipo = String(req.params.tipo).toUpperCase();
   if (tipo !== "BP" && tipo !== "DRE") { res.status(400).json({ error: "Tipo inválido (use BP ou DRE)" }); return; }
-  if (!(await podeEditar(req.userId))) { res.status(403).json({ error: "Apenas partner pode editar os modelos padrão" }); return; }
   const companyId = await companyNoEscopo(req);
   if (companyId === "negada") { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  // Gate por ESCOPO (2026-07-17): o modelo GLOBAL segue só-partner (afeta toda
+  // empresa nova). O modelo DA EMPRESA pode ser editado por qualquer usuário
+  // com a empresa no escopo (requireInternal já barrou o portal) — a mudança
+  // vale só para os IBRs dela, então o risco fica contido.
+  if (!companyId && !(await podeEditar(req.userId))) { res.status(403).json({ error: "Apenas partner pode editar o modelo padrão GLOBAL" }); return; }
 
   const linhasIn: LinhaInput[] = Array.isArray(req.body?.linhas) ? req.body.linhas : [];
   const nota: string | null = typeof req.body?.nota === "string" ? req.body.nota.trim() || null : null;

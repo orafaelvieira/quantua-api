@@ -136,6 +136,13 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
       select: { companyId: true },
     });
     templateCompanyId = a?.companyId ?? null;
+  } else if (typeof req.query.companyId === "string" && req.query.companyId) {
+    // Aba Dicionário & Modelos (contexto direto de empresa, sem análise)
+    const c = await prisma.company.findFirst({
+      where: { id: req.query.companyId, userId: { in: req.scopeUserIds! } },
+      select: { id: true },
+    });
+    templateCompanyId = c?.id ?? null;
   }
   // Bridge: o dropdown da DRE reflete o MODELO VIGENTE do banco (contas adicionadas no
   // editor de modelos aparecem aqui na hora).
@@ -304,12 +311,15 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
     return;
   }
 
+  // Entrada de EMPRESA: remover é permitido no contexto dela (a conta volta a
+  // herdar o global). Escopo validado pela POSSE da empresa, não pelo autor.
   if (existing.companyId !== null) {
-    res.status(403).json({ error: "Entrada de empresa — gerencie pela tela Validação de contas." });
-    return;
-  }
-
-  if (!req.scopeUserIds!.includes(existing.userId)) {
+    const dona = await prisma.company.findFirst({
+      where: { id: existing.companyId, userId: { in: req.scopeUserIds! } },
+      select: { id: true },
+    });
+    if (!dona) { res.status(403).json({ error: "Sem permissão" }); return; }
+  } else if (!req.scopeUserIds!.includes(existing.userId)) {
     res.status(403).json({ error: "Sem permissão" });
     return;
   }
@@ -340,6 +350,15 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
       select: { companyId: true },
     });
     companyIdClassify = a?.companyId ?? null;
+  } else if (typeof req.body?.companyId === "string" && req.body.companyId) {
+    // Aba "Dicionário & Modelos" do IBR: edição direta do dicionário DA EMPRESA
+    // (sem análise específica) — mesma gravação por empresa, escopo validado.
+    const c = await prisma.company.findFirst({
+      where: { id: req.body.companyId, userId: { in: req.scopeUserIds! } },
+      select: { id: true },
+    });
+    if (!c) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+    companyIdClassify = c.id;
   }
 
   const created = [];
@@ -394,6 +413,12 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
           created.push(vencedor);
           continue;
         }
+        // Regra da fila (decisão 2026-07-17): só conta NOVA (sem equivalente no
+        // GLOBAL) entra na validação da Quantua ("pendente"). Personalizar uma
+        // conta que o global já mapeia é ajuste LOCAL da empresa ("local") —
+        // vale só para ela, sem fila.
+        const globalEquivalente = existentes.find((e) => e.companyId === null && e.userId === null);
+        const revisaoNova = globalEquivalente ? "local" : "pendente";
         const daEmpresa = existentes.find((e) => e.companyId === companyIdClassify);
         let result;
         let mudou = false;
@@ -403,13 +428,13 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
             ? await prisma.accountDictionary.update({
                 where: { id: daEmpresa.id },
                 // Reclassificar reabre a revisão (o destino proposto mudou).
-                data: { contaDestino: entry.contaDestino, userId: req.userId!, revisao: "pendente", revisadoPor: null, revisadoEm: null },
+                data: { contaDestino: entry.contaDestino, userId: req.userId!, revisao: revisaoNova, revisadoPor: null, revisadoEm: null },
               })
             : daEmpresa;
         } else {
           mudou = true;
           result = await prisma.accountDictionary.create({
-            data: { ...chaveBase, contaDestino: entry.contaDestino, userId: req.userId!, companyId: companyIdClassify, revisao: "pendente" },
+            data: { ...chaveBase, contaDestino: entry.contaDestino, userId: req.userId!, companyId: companyIdClassify, revisao: revisaoNova },
           });
         }
         created.push(result);
@@ -518,6 +543,9 @@ router.post("/validacao/:id/aprovar", async (req: AuthRequest, res: Response): P
     where: { id: req.params.id as string, companyId: { in: [...nomes.keys()] } },
   });
   if (!row || !row.companyId) { res.status(404).json({ error: "Entrada de empresa não encontrada" }); return; }
+  // Só o que está NA FILA é promovível: ajustes "local" (personalização de conta
+  // que o global já tem) não vão ao global — decisão do usuário 2026-07-17.
+  if (row.revisao !== "pendente") { res.status(409).json({ error: `Entrada não está pendente (${row.revisao ?? "sem revisão"}).` }); return; }
 
   // Mesmas travas do classify — o global protege TODOS os clientes.
   if (row.contaDestino !== IGNORAR_DESTINO) {
@@ -561,6 +589,7 @@ router.post("/validacao/:id/reprovar", async (req: AuthRequest, res: Response): 
     where: { id: req.params.id as string, companyId: { in: [...nomes.keys()] } },
   });
   if (!row || !row.companyId) { res.status(404).json({ error: "Entrada de empresa não encontrada" }); return; }
+  if (row.revisao !== "pendente") { res.status(409).json({ error: `Entrada não está pendente (${row.revisao ?? "sem revisão"}).` }); return; }
 
   const validador = await nomeUsuario(req.userId);
   const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.slice(0, 400) : null;
