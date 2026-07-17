@@ -1026,7 +1026,21 @@ router.get("/:id/historico-giro", async (req: AuthRequest, res: Response): Promi
     }
     if (Object.keys(vals).length) saldosPorConta[l.conta.trim()] = vals;
   }
-  res.json({ ...giro, periodos: de?.periodos ?? [], saldosPorConta });
+  // BASES HISTÓRICAS anuais das réguas de prazo médio dos "outros itens"
+  // (mesmas bases do motor: receita/custos/impostos/folha) — a tela calcula os
+  // DIAS IMPLÍCITOS do passado (saldo × 360 ÷ base do ano, a régua do motor:
+  // saldo = base do mês × dias ÷ 30) para o item escolhido, em qualquer base.
+  const deDre = analysis?.dadosEstruturados as { dre?: Array<{ conta: string; valores: Record<string, number> }> } | null;
+  const linhaDre = (conta: string) => deDre?.dre?.find((l) => l.conta.trim().toLowerCase() === conta.toLowerCase());
+  const somaAbs = (contas: string[], p: string) => contas.reduce((s, c) => s + Math.abs(linhaDre(c)?.valores?.[p] ?? 0), 0);
+  const basesHistoricas: Record<string, Record<string, number>> = { receita: {}, custos: {}, impostos: {}, folha: {} };
+  for (const p of de?.periodos ?? []) {
+    basesHistoricas.receita[p] = somaAbs(["Receita Líquida"], p) || somaAbs(["Receita Bruta"], p);
+    basesHistoricas.custos[p] = somaAbs(["Custo Operacional"], p);
+    basesHistoricas.impostos[p] = somaAbs(["Impostos s/ Faturamento", "IR e CSLL"], p);
+    basesHistoricas.folha[p] = somaAbs(["Despesas com Pessoas"], p);
+  }
+  res.json({ ...giro, periodos: de?.periodos ?? [], saldosPorConta, basesHistoricas });
 });
 
 // GET /models/:id/historico-balanco — OUTRAS contas do BP extraído (fora de
