@@ -131,10 +131,13 @@ router.post("/convites/:token/aceitar", async (req, res): Promise<void> => {
     return;
   }
 
+  // A DATA DE INÍCIO do acesso do membro = o momento do aceite (primeiro acesso).
+  // No re-aceite, preserva a data original (não reinicia a vigência de quem já entrou).
+  const agora = new Date();
   await prisma.organizacaoMembro.upsert({
     where: { organizacaoId_userId: { organizacaoId: convite.organizacaoId, userId: user.id } },
     update: { papel: convite.papel },
-    create: { organizacaoId: convite.organizacaoId, userId: user.id, papel: convite.papel },
+    create: { organizacaoId: convite.organizacaoId, userId: user.id, papel: convite.papel, dataInicio: agora },
   });
   await prisma.organizacaoConvite.update({
     where: { id: convite.id },
@@ -320,6 +323,11 @@ router.post("/:id/convites", async (req: AuthRequest, res: Response): Promise<vo
   // Organização CANCELADA não dá acesso — convidar seria inútil/confuso.
   if (statusOrganizacao(org, new Date()) === "cancelado") {
     res.status(409).json({ error: "Organização cancelada (fim do acesso no passado) — reative a vigência antes de convidar." }); return;
+  }
+  // Exige DATA DE INÍCIO do acesso antes de convidar (a vigência é definida pela
+  // Quantua). Sem ela não há período de acesso contratado — nada de onboarding.
+  if (!org.dataInicio) {
+    res.status(409).json({ error: "Defina a data de início do acesso (vigência) antes de convidar." }); return;
   }
 
   const pendente = await prisma.organizacaoConvite.findFirst({ where: { organizacaoId: id, email: emailNorm, status: "pending" } });
