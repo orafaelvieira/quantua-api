@@ -92,6 +92,9 @@ router.post("/convites/:token/aceitar", async (req, res): Promise<void> => {
           role: null,
           emailConfirmedAt: new Date(), // o magic link chegou pelo e-mail convidado
           invitedAt: new Date(),
+          // Externo NÃO passa pelo onboarding de workspace (fluxo de firma) —
+          // o aceite do convite é o onboarding dele.
+          onboardedAt: new Date(),
         },
         select: { id: true, tipoUsuario: true },
       });
