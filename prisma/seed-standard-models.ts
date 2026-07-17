@@ -43,7 +43,7 @@ async function seedTipo(tipo: "BP" | "DRE") {
         }));
 
   const ativo = await prisma.standardModel.findFirst({
-    where: { tipo, ativo: true },
+    where: { tipo, ativo: true, companyId: null }, // seed governa SÓ o global — modelos de empresa ficam intactos
     include: { linhas: { orderBy: { ordem: "asc" } } },
   });
   const assinatura = (ls: Array<{ nome: string; grupo: string; nivel: number; tipo: string }>) =>
@@ -54,7 +54,7 @@ async function seedTipo(tipo: "BP" | "DRE") {
   // ATROPELAR edições do usuário a cada deploy (uma edição também "diverge do
   // template"). Vale para BP e DRE — esta função atende os dois.
   const ultimaSeed = await prisma.standardModel.findFirst({
-    where: { tipo, criadoPor: "sistema" },
+    where: { tipo, criadoPor: "sistema", companyId: null },
     orderBy: { versao: "desc" },
     include: { linhas: { orderBy: { ordem: "asc" } } },
   });
@@ -84,9 +84,9 @@ async function seedTipo(tipo: "BP" | "DRE") {
     return true;
   })();
   const ativarNova = !vigenteEhDoUsuario || preservaVigente;
-  const proxVersao = ((await prisma.standardModel.aggregate({ where: { tipo }, _max: { versao: true } }))._max.versao ?? 0) + 1;
+  const proxVersao = ((await prisma.standardModel.aggregate({ where: { tipo, companyId: null }, _max: { versao: true } }))._max.versao ?? 0) + 1;
   await prisma.$transaction(async (tx) => {
-    if (ativarNova) await tx.standardModel.updateMany({ where: { tipo, ativo: true }, data: { ativo: false } });
+    if (ativarNova) await tx.standardModel.updateMany({ where: { tipo, ativo: true, companyId: null }, data: { ativo: false } });
     await tx.standardModel.create({
       data: {
         tipo, versao: proxVersao, ativo: ativarNova,

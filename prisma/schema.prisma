@@ -125,13 +125,23 @@ model AccountDictionary {
   grupoConta    String   @map("grupo_conta")
   tipo          String   @default("BP")
   userId        String?  @map("user_id")
+  // Cascata de escopo (2026-07-17): companyId null + userId null = GLOBAL (seed);
+  // companyId null + userId = workspace (legado/manual); companyId = EMPRESA
+  // (autofeed do IBR — vale só para os IBRs daquela empresa, com userId = autor).
+  companyId     String?  @map("company_id")
+  // Só entradas de EMPRESA: "pendente" | "aprovada" | "reprovada" — fila da tela
+  // "Validação de contas" (aprovar promove ao dicionário global).
+  revisao       String?
+  revisadoPor   String?   @map("revisado_por")
+  revisadoEm    DateTime? @map("revisado_em")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
   user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([nomeOriginal, tipo, grupoConta, userId])
+  @@unique([nomeOriginal, tipo, grupoConta, userId, companyId])
   @@index([userId])
+  @@index([companyId])
   @@index([nomeOriginal])
   @@map("account_dictionaries")
 }
@@ -144,14 +154,18 @@ model StandardModel {
   tipo      String // "BP" | "DRE"
   versao    Int
   ativo     Boolean  @default(false)
+  // companyId null = modelo GLOBAL; preenchido = modelo da EMPRESA (copy-on-write:
+  // a 1ª versão da empresa nasce cópia do global vigente + edições; a empresa
+  // passa a usar o seu; as demais seguem no global). Sequência de versão por escopo.
+  companyId String?  @map("company_id")
   nota      String? // changelog da versão
   criadoPor String?  @map("criado_por")
   createdAt DateTime @default(now()) @map("created_at")
 
   linhas StandardModelLine[]
 
-  @@unique([tipo, versao])
-  @@index([tipo, ativo])
+  @@unique([tipo, versao, companyId])
+  @@index([tipo, ativo, companyId])
   @@map("standard_models")
 }
 
@@ -290,6 +304,7 @@ model DictionaryVersion {
   nota         String? // resumo (ex.: importação oficial em lote)
   criadoPor    String?  @map("criado_por")
   analysisId   String?  @map("analysis_id") // IBR que originou (autofeed via /classify)
+  companyId    String?  @map("company_id") // empresa dona da entrada (cascata por empresa)
   createdAt    DateTime @default(now()) @map("created_at")
 
   @@index([versao])

@@ -14,8 +14,8 @@ export async function getCurrentDictionaryVersion(): Promise<number> {
 }
 
 export interface DictionaryChange {
-  acao: "add" | "edit" | "delete" | "classify" | "import";
-  fonte?: "manual" | "autofeed";
+  acao: "add" | "edit" | "delete" | "classify" | "import" | "promover" | "reprovar";
+  fonte?: "manual" | "autofeed" | "validacao";
   nomeOriginal?: string | null;
   contaDestino?: string | null;
   grupoConta?: string | null;
@@ -23,6 +23,8 @@ export interface DictionaryChange {
   nota?: string | null;
   criadoPor?: string | null;
   analysisId?: string | null;
+  /** Empresa dona da entrada (cascata por empresa) — proveniência no changelog. */
+  companyId?: string | null;
 }
 
 /**
@@ -46,6 +48,7 @@ export async function bumpDictionaryVersion(change: DictionaryChange): Promise<n
           nota: change.nota ?? null,
           criadoPor: change.criadoPor ?? null,
           analysisId: change.analysisId ?? null,
+          companyId: change.companyId ?? null,
         },
       });
       return next;

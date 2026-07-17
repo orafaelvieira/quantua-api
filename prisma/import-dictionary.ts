@@ -55,6 +55,9 @@ async function main() {
         where: { nomeOriginal: entry.nomeOriginal, tipo: entry.tipo, grupoConta: entry.grupoConta, userId: null },
       });
       if (existing) {
+        // Entrada PROMOVIDA pela tela "Validação de contas" (revisao "promovida"):
+        // a decisão humana vence o arquivo — o sync não reverte o destino.
+        if (existing.revisao === "promovida") continue;
         if (existing.contaDestino !== entry.contaDestino) {
           await prisma.accountDictionary.update({ where: { id: existing.id }, data: { contaDestino: entry.contaDestino } });
           updated++;
@@ -70,10 +73,13 @@ async function main() {
   }
 
   // 2) Delete: globais que NÃO estão no arquivo oficial (remove duplicatas/revisados fora).
+  //    Entradas PROMOVIDAS pela Validação de contas (revisao "promovida") ficam FORA do
+  //    delete — não estão no arquivo por definição e a aprovação humana não pode evaporar
+  //    no próximo deploy.
   if (oficiais.length >= MIN_ENTRADAS_PARA_SYNC) {
     const oficiaisKeys = new Set(oficiais.map(keyOf));
     const globais = await prisma.accountDictionary.findMany({
-      where: { userId: null },
+      where: { userId: null, companyId: null, revisao: null },
       select: { id: true, nomeOriginal: true, tipo: true, grupoConta: true },
     });
     const orfas = globais.filter((g) => !oficiaisKeys.has(keyOf(g)));

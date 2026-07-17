@@ -4,6 +4,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { bumpDictionaryVersion, getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { DEFAULT_BP_MODEL, IGNORAR_DESTINO } from "../services/account-mapper";
 import { avaliaBloqueioEstrutural } from "../services/conta-estrutural";
+import { prioridadeEscopo, whereCascataDicionario } from "../services/dicionario-escopo";
 
 const router = Router();
 router.use(requireAuth);
@@ -26,7 +27,7 @@ const normGrp = (s: string) => (s || "").toLowerCase().normalize("NFD").replace(
 router.get("/audit", async (req: AuthRequest, res: Response): Promise<void> => {
   const rows = await prisma.accountDictionary.findMany({
     where: { OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }] },
-    select: { id: true, nomeOriginal: true, contaDestino: true, grupoConta: true, tipo: true, userId: true },
+    select: { id: true, nomeOriginal: true, contaDestino: true, grupoConta: true, tipo: true, userId: true, companyId: true },
   });
   const suspeitas: Array<Record<string, unknown>> = [];
   for (const r of rows) {
@@ -39,7 +40,7 @@ router.get("/audit", async (req: AuthRequest, res: Response): Promise<void> => {
     if (grupoDestino !== grupoEntry) {
       suspeitas.push({
         id: r.id, nomeOriginal: r.nomeOriginal, contaDestino: r.contaDestino,
-        grupoConta: r.grupoConta, grupoDoDestino: grupoDestino, escopo: r.userId ? "usuário" : "global",
+        grupoConta: r.grupoConta, grupoDoDestino: grupoDestino, escopo: r.companyId ? "empresa" : r.userId ? "usuário" : "global",
         motivo: `Cruza grupo: destino "${r.contaDestino}" é ${grupoDestino}, mas a conta foi vista em ${grupoEntry}.`,
       });
     }
@@ -76,6 +77,9 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const { search, tipo, grupo } = req.query;
 
   const where: any = {
+    // Entradas de EMPRESA ficam FORA desta lista (companyId null): elas são
+    // geridas na tela "Validação de contas" — aqui é o dicionário global+workspace.
+    companyId: null,
     OR: [
       { userId: null },                        // global seed entries
       { userId: { in: req.scopeUserIds! } },   // entries do workspace (firma)
@@ -110,9 +114,19 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
 router.get("/template", async (req: AuthRequest, res: Response): Promise<void> => {
   const { BP_TEMPLATE } = require("../services/financial-templates");
   const { loadActiveDREModel } = require("../services/model-version");
+  // ?analysisId= → contexto de EMPRESA: o dropdown reflete o modelo DAQUELA
+  // empresa (cascata empresa→global). Sem o parâmetro, modelo global (como antes).
+  let templateCompanyId: string | null = null;
+  if (typeof req.query.analysisId === "string" && req.query.analysisId) {
+    const a = await prisma.analysis.findFirst({
+      where: { id: req.query.analysisId, userId: { in: req.scopeUserIds! } },
+      select: { companyId: true },
+    });
+    templateCompanyId = a?.companyId ?? null;
+  }
   // Bridge: o dropdown da DRE reflete o MODELO VIGENTE do banco (contas adicionadas no
   // editor de modelos aparecem aqui na hora).
-  const dreModel = await loadActiveDREModel();
+  const dreModel = await loadActiveDREModel(templateCompanyId);
 
   const grouped: Record<string, string[]> = {};
   const add = (grupo: string, conta: string): void => {
@@ -143,6 +157,7 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
   };
   const used = await prisma.accountDictionary.findMany({
     where: {
+      companyId: null, // destinos das entradas de empresa já são contas do modelo
       OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }],
     },
     select: { grupoConta: true, contaDestino: true, tipo: true },
@@ -156,7 +171,10 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
 
   // Guia "entra/não entra" por conta (linhas dos modelos VIGENTES) — tooltips dos dropdowns.
   const linhasGuia = await prisma.standardModelLine.findMany({
-    where: { model: { ativo: true }, NOT: { descricao: null } },
+    where: {
+      model: { ativo: true, OR: [{ companyId: null }, ...(templateCompanyId ? [{ companyId: templateCompanyId }] : [])] },
+      NOT: { descricao: null },
+    },
     select: { nome: true, descricao: true },
   });
   const descricoes: Record<string, string> = {};
@@ -213,6 +231,13 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     return;
   }
 
+  // Entradas de EMPRESA são geridas pela tela "Validação de contas" (aprovar/
+  // reprovar) — editar aqui misturaria escopos.
+  if (existing.companyId !== null) {
+    res.status(403).json({ error: "Entrada de empresa — gerencie pela tela Validação de contas." });
+    return;
+  }
+
   // Pode editar entradas do próprio workspace (não as globais do sistema)
   if (existing.userId !== null && !req.scopeUserIds!.includes(existing.userId)) {
     res.status(403).json({ error: "Sem permissão para editar esta entrada" });
@@ -266,6 +291,11 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
     return;
   }
 
+  if (existing.companyId !== null) {
+    res.status(403).json({ error: "Entrada de empresa — gerencie pela tela Validação de contas." });
+    return;
+  }
+
   if (!req.scopeUserIds!.includes(existing.userId)) {
     res.status(403).json({ error: "Sem permissão" });
     return;
@@ -284,6 +314,19 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
   if (!entries || !Array.isArray(entries)) {
     res.status(400).json({ error: "entries deve ser um array" });
     return;
+  }
+
+  // CASCATA POR EMPRESA (2026-07-17): o autofeed do IBR grava no escopo da
+  // EMPRESA do IBR (companyId), nunca mais no workspace inteiro — uma conta nova
+  // classificada aqui não "suja" os IBRs das outras empresas. A promoção ao
+  // global é humana, na tela "Validação de contas".
+  let companyIdClassify: string | null = null;
+  if (typeof analysisId === "string" && analysisId) {
+    const a = await prisma.analysis.findFirst({
+      where: { id: analysisId, userId: { in: req.scopeUserIds! } },
+      select: { companyId: true },
+    });
+    companyIdClassify = a?.companyId ?? null;
   }
 
   const created = [];
@@ -322,19 +365,56 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
     }
 
     try {
-      const chave = { nomeOriginal: entry.nomeOriginal, tipo: tipoE, grupoConta: entry.grupoConta, userId: req.userId! };
-      const antes = await prisma.accountDictionary.findUnique({ where: { nomeOriginal_tipo_grupoConta_userId: chave } });
-      const result = await prisma.accountDictionary.upsert({
-        where: { nomeOriginal_tipo_grupoConta_userId: chave },
-        update: { contaDestino: entry.contaDestino },
-        create: {
-          nomeOriginal: entry.nomeOriginal,
-          contaDestino: entry.contaDestino,
-          grupoConta: entry.grupoConta,
-          tipo: tipoE,
-          userId: req.userId!,
-        },
-      });
+      const chaveBase = { nomeOriginal: entry.nomeOriginal, tipo: tipoE, grupoConta: entry.grupoConta };
+
+      if (companyIdClassify) {
+        // Cascata atual desta conta (global + workspace + a empresa do IBR)
+        const existentes = await prisma.accountDictionary.findMany({
+          where: { ...chaveBase, ...whereCascataDicionario(req.scopeUserIds!, companyIdClassify) },
+        });
+        const vencedor = existentes.length
+          ? existentes.reduce((a, b) => (prioridadeEscopo(b) >= prioridadeEscopo(a) ? b : a))
+          : null;
+        // Já resolvido pelo global/workspace com o MESMO destino → nada a gravar
+        // (não cria entrada de empresa redundante nem fila de validação à toa).
+        if (vencedor && vencedor.companyId === null && vencedor.contaDestino === entry.contaDestino) {
+          created.push(vencedor);
+          continue;
+        }
+        const daEmpresa = existentes.find((e) => e.companyId === companyIdClassify);
+        let result;
+        let mudou = false;
+        if (daEmpresa) {
+          mudou = daEmpresa.contaDestino !== entry.contaDestino;
+          result = mudou
+            ? await prisma.accountDictionary.update({
+                where: { id: daEmpresa.id },
+                // Reclassificar reabre a revisão (o destino proposto mudou).
+                data: { contaDestino: entry.contaDestino, userId: req.userId!, revisao: "pendente", revisadoPor: null, revisadoEm: null },
+              })
+            : daEmpresa;
+        } else {
+          mudou = true;
+          result = await prisma.accountDictionary.create({
+            data: { ...chaveBase, contaDestino: entry.contaDestino, userId: req.userId!, companyId: companyIdClassify, revisao: "pendente" },
+          });
+        }
+        created.push(result);
+        if (mudou) {
+          await bumpDictionaryVersion({
+            acao: "classify", fonte: "autofeed",
+            nomeOriginal: entry.nomeOriginal, contaDestino: entry.contaDestino, grupoConta: entry.grupoConta, tipo: tipoE,
+            criadoPor: autor, analysisId, companyId: companyIdClassify,
+          });
+        }
+        continue;
+      }
+
+      // Sem análise (chamada avulsa/legado): comportamento anterior — entrada de workspace.
+      const antes = await prisma.accountDictionary.findFirst({ where: { ...chaveBase, userId: req.userId!, companyId: null } });
+      const result = antes
+        ? await prisma.accountDictionary.update({ where: { id: antes.id }, data: { contaDestino: entry.contaDestino } })
+        : await prisma.accountDictionary.create({ data: { ...chaveBase, contaDestino: entry.contaDestino, userId: req.userId! } });
       created.push(result);
       // Autofeed: bumpa a versão SÓ quando a entrada é nova ou a conta-destino mudou
       // (re-classificar igual não infla a versão). Registra o IBR de origem.
@@ -352,6 +432,136 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
   }
 
   res.json({ classified: created.length, entries: created, rejeitadas });
+});
+
+// ── VALIDAÇÃO DE CONTAS (2026-07-17) ─────────────────────────────────────────
+// Entradas criadas no escopo de EMPRESA durante um IBR entram numa fila de
+// revisão humana. APROVAR promove ao dicionário GLOBAL (novas empresas herdam);
+// REPROVAR mantém a entrada valendo SÓ para aquela empresa. Nada é automático.
+
+// Aprovar/reprovar mexe no dicionário global → mesmo gate do modelo padrão
+// (partner; role null = contas antigas de sócio).
+async function podeValidarGlobal(userId?: string): Promise<boolean> {
+  if (!userId) return false;
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+  return !u?.role || u.role === "partner";
+}
+
+async function companiesDoEscopo(scopeUserIds: string[]): Promise<Map<string, string>> {
+  const companies = await prisma.company.findMany({
+    where: { userId: { in: scopeUserIds } },
+    select: { id: true, razaoSocial: true, nomeFantasia: true },
+  });
+  return new Map(companies.map((c) => [c.id, c.nomeFantasia || c.razaoSocial]));
+}
+
+// GET /dictionary/validacao?status=pendente|todas — fila de revisão + histórico.
+router.get("/validacao", async (req: AuthRequest, res: Response): Promise<void> => {
+  const status = String(req.query.status ?? "pendente");
+  const nomes = await companiesDoEscopo(req.scopeUserIds!);
+  const companyIds = [...nomes.keys()];
+  if (!companyIds.length) { res.json({ itens: [], pendentes: 0, podeValidar: await podeValidarGlobal(req.userId) }); return; }
+
+  const [rows, pendentes] = await Promise.all([
+    prisma.accountDictionary.findMany({
+      where: { companyId: { in: companyIds }, ...(status === "todas" ? {} : { revisao: "pendente" }) },
+      orderBy: [{ revisao: "asc" }, { updatedAt: "desc" }],
+      take: 500,
+    }),
+    prisma.accountDictionary.count({ where: { companyId: { in: companyIds }, revisao: "pendente" } }),
+  ]);
+
+  // Conflito com o global: se já existe entrada global para a MESMA conta, a
+  // aprovação vai ALTERAR o destino global — o analista precisa ver isso.
+  const globais = rows.length
+    ? await prisma.accountDictionary.findMany({
+        where: {
+          userId: null, companyId: null,
+          OR: rows.map((r) => ({ nomeOriginal: r.nomeOriginal, tipo: r.tipo, grupoConta: r.grupoConta })),
+        },
+        select: { nomeOriginal: true, tipo: true, grupoConta: true, contaDestino: true },
+      })
+    : [];
+  const globalDe = new Map(globais.map((g) => [`${g.nomeOriginal.toLowerCase()}|${g.tipo}|${g.grupoConta.toLowerCase()}`, g.contaDestino]));
+
+  res.json({
+    itens: rows.map((r) => ({
+      id: r.id, nomeOriginal: r.nomeOriginal, contaDestino: r.contaDestino, grupoConta: r.grupoConta,
+      tipo: r.tipo, revisao: r.revisao, revisadoPor: r.revisadoPor, revisadoEm: r.revisadoEm,
+      criadoEm: r.createdAt, atualizadoEm: r.updatedAt,
+      empresa: nomes.get(r.companyId!) ?? r.companyId,
+      globalAtual: globalDe.get(`${r.nomeOriginal.toLowerCase()}|${r.tipo}|${r.grupoConta.toLowerCase()}`) ?? null,
+    })),
+    pendentes,
+    podeValidar: await podeValidarGlobal(req.userId),
+  });
+});
+
+// POST /dictionary/validacao/:id/aprovar — promove a entrada ao dicionário GLOBAL.
+router.post("/validacao/:id/aprovar", async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!(await podeValidarGlobal(req.userId))) { res.status(403).json({ error: "Aprovar contas para o dicionário global é ação de sócio (partner)." }); return; }
+  const nomes = await companiesDoEscopo(req.scopeUserIds!);
+  const row = await prisma.accountDictionary.findFirst({
+    where: { id: req.params.id as string, companyId: { in: [...nomes.keys()] } },
+  });
+  if (!row || !row.companyId) { res.status(404).json({ error: "Entrada de empresa não encontrada" }); return; }
+
+  // Mesmas travas do classify — o global protege TODOS os clientes.
+  if (row.contaDestino !== IGNORAR_DESTINO) {
+    const bloqueio = avaliaBloqueioEstrutural(row.nomeOriginal, row.contaDestino);
+    if (bloqueio.bloqueado) { res.status(422).json({ error: bloqueio.motivo }); return; }
+  }
+
+  const validador = await nomeUsuario(req.userId);
+  const global = await prisma.accountDictionary.findFirst({
+    where: { nomeOriginal: row.nomeOriginal, tipo: row.tipo, grupoConta: row.grupoConta, userId: null, companyId: null },
+  });
+  // revisao "promovida" na entrada GLOBAL = marcador para o sync do seed no boot:
+  // decisão humana não é revertida nem apagada pelo arquivo oficial.
+  if (global && global.contaDestino !== row.contaDestino) {
+    await prisma.accountDictionary.update({ where: { id: global.id }, data: { contaDestino: row.contaDestino, revisao: "promovida" } });
+  } else if (!global) {
+    await prisma.accountDictionary.create({
+      data: { nomeOriginal: row.nomeOriginal, contaDestino: row.contaDestino, grupoConta: row.grupoConta, tipo: row.tipo, userId: null, companyId: null, revisao: "promovida" },
+    });
+  }
+  const atualizado = await prisma.accountDictionary.update({
+    where: { id: row.id },
+    data: { revisao: "aprovada", revisadoPor: validador, revisadoEm: new Date() },
+  });
+  await bumpDictionaryVersion({
+    acao: "promover", fonte: "validacao",
+    nomeOriginal: row.nomeOriginal, contaDestino: row.contaDestino, grupoConta: row.grupoConta, tipo: row.tipo,
+    criadoPor: validador, companyId: row.companyId,
+    nota: global && global.contaDestino !== row.contaDestino
+      ? `Destino global alterado: "${global.contaDestino}" → "${row.contaDestino}" (promoção da empresa ${nomes.get(row.companyId)}).`
+      : `Promovida ao global a partir da empresa ${nomes.get(row.companyId)}.`,
+  });
+  res.json({ ok: true, entrada: atualizado });
+});
+
+// POST /dictionary/validacao/:id/reprovar — mantém a entrada SÓ na empresa.
+router.post("/validacao/:id/reprovar", async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!(await podeValidarGlobal(req.userId))) { res.status(403).json({ error: "Reprovar contas da fila de validação é ação de sócio (partner)." }); return; }
+  const nomes = await companiesDoEscopo(req.scopeUserIds!);
+  const row = await prisma.accountDictionary.findFirst({
+    where: { id: req.params.id as string, companyId: { in: [...nomes.keys()] } },
+  });
+  if (!row || !row.companyId) { res.status(404).json({ error: "Entrada de empresa não encontrada" }); return; }
+
+  const validador = await nomeUsuario(req.userId);
+  const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.slice(0, 400) : null;
+  const atualizado = await prisma.accountDictionary.update({
+    where: { id: row.id },
+    data: { revisao: "reprovada", revisadoPor: validador, revisadoEm: new Date() },
+  });
+  await bumpDictionaryVersion({
+    acao: "reprovar", fonte: "validacao",
+    nomeOriginal: row.nomeOriginal, contaDestino: row.contaDestino, grupoConta: row.grupoConta, tipo: row.tipo,
+    criadoPor: validador, companyId: row.companyId,
+    nota: motivo ?? `Mantida somente na empresa ${nomes.get(row.companyId)} (não promovida ao global).`,
+  });
+  res.json({ ok: true, entrada: atualizado });
 });
 
 export default router;

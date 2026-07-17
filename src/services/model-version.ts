@@ -7,11 +7,27 @@ import { DRE_TEMPLATE } from "./financial-templates";
  * É o "bridge": o cálculo passa a usar o modelo editável do banco em vez do template
  * do código. Se não houver modelo no banco, cai no DEFAULT (template do código).
  */
-export async function loadActiveBPModel(): Promise<BPModel> {
-  const m = await prisma.standardModel.findFirst({
-    where: { tipo: "BP", ativo: true },
+/**
+ * Cascata por EMPRESA (2026-07-17): se a empresa tem modelo próprio ativo
+ * (copy-on-write a partir do global), ele vence; senão vale o global.
+ * Sem companyId, comporta-se exatamente como antes (só global).
+ */
+async function findActiveModel(tipo: "BP" | "DRE", companyId?: string | null) {
+  if (companyId) {
+    const daEmpresa = await prisma.standardModel.findFirst({
+      where: { tipo, ativo: true, companyId },
+      include: { linhas: { orderBy: { ordem: "asc" } } },
+    });
+    if (daEmpresa && daEmpresa.linhas.length > 0) return daEmpresa;
+  }
+  return prisma.standardModel.findFirst({
+    where: { tipo, ativo: true, companyId: null },
     include: { linhas: { orderBy: { ordem: "asc" } } },
   });
+}
+
+export async function loadActiveBPModel(companyId?: string | null): Promise<BPModel> {
+  const m = await findActiveModel("BP", companyId);
   if (!m || m.linhas.length === 0) return DEFAULT_BP_MODEL;
   return buildBPModel(m.linhas.map((l) => ({
     classificacao: l.grupo, conta: l.nome, nivel: l.nivel,
@@ -54,27 +70,31 @@ export function buildDREModel(lines: Array<{ conta: string; subtotal: boolean }>
 }
 export const DEFAULT_DRE_MODEL: DREModel = buildDREModel(DRE_TEMPLATE.map((t) => ({ conta: t.conta, subtotal: t.subtotal })));
 
-export async function loadActiveDREModel(): Promise<DREModel> {
-  const m = await prisma.standardModel.findFirst({
-    where: { tipo: "DRE", ativo: true },
-    include: { linhas: { orderBy: { ordem: "asc" } } },
-  });
+export async function loadActiveDREModel(companyId?: string | null): Promise<DREModel> {
+  const m = await findActiveModel("DRE", companyId);
   if (!m || m.linhas.length === 0) return DEFAULT_DRE_MODEL;
   return buildDREModel(m.linhas.map((l) => ({ conta: l.nome, subtotal: l.tipo === "subtotal" || l.tipo === "total" })));
 }
 
 /**
- * Versões VIGENTES dos modelos padrão (BP/DRE) no momento da chamada.
- * Usado para "carimbar" cada análise com a versão de modelo usada (pinagem):
- * mudanças futuras no modelo não alteram análises já processadas.
+ * Versões VIGENTES dos modelos padrão (BP/DRE) no momento da chamada, com o
+ * ESCOPO de onde cada uma veio (global ou empresa) — pinagem de proveniência.
+ * Mudanças futuras no modelo não alteram análises já processadas.
  */
-export async function getActiveModelVersions(): Promise<{ bp: number | null; dre: number | null }> {
+export async function getActiveModelVersions(companyId?: string | null): Promise<{
+  bp: number | null; dre: number | null;
+  bpEscopo: "global" | "empresa" | null; dreEscopo: "global" | "empresa" | null;
+}> {
   const models = await prisma.standardModel.findMany({
-    where: { ativo: true },
-    select: { tipo: true, versao: true },
+    where: { ativo: true, OR: [{ companyId: null }, ...(companyId ? [{ companyId }] : [])] },
+    select: { tipo: true, versao: true, companyId: true },
   });
-  return {
-    bp: models.find((m) => m.tipo === "BP")?.versao ?? null,
-    dre: models.find((m) => m.tipo === "DRE")?.versao ?? null,
+  const de = (tipo: string) => {
+    const daEmpresa = companyId ? models.find((m) => m.tipo === tipo && m.companyId === companyId) : undefined;
+    const global = models.find((m) => m.tipo === tipo && m.companyId === null);
+    const usado = daEmpresa ?? global;
+    return { versao: usado?.versao ?? null, escopo: usado ? (usado.companyId ? "empresa" as const : "global" as const) : null };
   };
+  const bp = de("BP"); const dre = de("DRE");
+  return { bp: bp.versao, dre: dre.versao, bpEscopo: bp.escopo, dreEscopo: dre.escopo };
 }

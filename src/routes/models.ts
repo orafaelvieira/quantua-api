@@ -202,8 +202,10 @@ router.get("/templates", async (_req: AuthRequest, res: Response): Promise<void>
 // Balanço": uma linha nova pode SOMAR/REDUZIR numa conta canônica existente em
 // vez de abrir linha própria. DRE separa receita × custo × despesa pela POSIÇÃO
 // da conta (antes/depois de Lucro Bruto / EBITDA) — o dropdown já vem agrupado.
-router.get("/contas-destino", async (_req: AuthRequest, res: Response): Promise<void> => {
-  const [dreModel, bpModel] = await Promise.all([loadActiveDREModel(), loadActiveBPModel()]);
+router.get("/contas-destino", async (req: AuthRequest, res: Response): Promise<void> => {
+  // ?companyId= → cascata empresa→global (modelo próprio da empresa, se houver)
+  const companyId = typeof req.query.companyId === "string" && req.query.companyId ? req.query.companyId : null;
+  const [dreModel, bpModel] = await Promise.all([loadActiveDREModel(companyId), loadActiveBPModel(companyId)]);
   const inputs = dreModel.lines.filter((l) => !l.subtotal).map((l) => l.conta);
   const contaIdx = (conta: string) => dreModel.lines.findIndex((l) => l.conta === conta);
   const idxRL = contaIdx("Receita Líquida");

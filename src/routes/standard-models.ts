@@ -5,20 +5,39 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 const router = Router();
 router.use(requireAuth);
 
-// GET /standard-models — modelos padrão BP e DRE VIGENTES (ativo=true), com as linhas
-// ordenadas. Base da tela de governança dos modelos (somente leitura por enquanto).
-router.get("/", async (_req: AuthRequest, res: Response): Promise<void> => {
+// ── ESCOPO POR EMPRESA (2026-07-17) ──────────────────────────────────────────
+// companyId null = modelo GLOBAL (padrão Quantua, herdado por toda empresa nova).
+// companyId preenchido = modelo PRÓPRIO da empresa (copy-on-write): a 1ª versão
+// da empresa nasce da cópia do global vigente + edições; dali em diante os IBRs
+// daquela empresa usam o modelo dela e os demais seguem no global.
+
+/** Valida que a empresa pertence ao escopo do usuário; devolve o id ou null. */
+async function companyNoEscopo(req: AuthRequest): Promise<string | null | "negada"> {
+  const raw = req.query.companyId ?? req.body?.companyId;
+  const companyId = typeof raw === "string" && raw ? raw : null;
+  if (!companyId) return null;
+  const c = await prisma.company.findFirst({ where: { id: companyId, userId: { in: req.scopeUserIds! } }, select: { id: true } });
+  return c ? c.id : "negada";
+}
+
+// GET /standard-models?companyId= — modelos VIGENTES efetivos (empresa ?? global),
+// com o escopo de onde cada um veio. Sem companyId: global puro (como sempre).
+router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
+  const companyId = await companyNoEscopo(req);
+  if (companyId === "negada") { res.status(404).json({ error: "Empresa não encontrada" }); return; }
   const models = await prisma.standardModel.findMany({
-    where: { ativo: true },
+    where: { ativo: true, OR: [{ companyId: null }, ...(companyId ? [{ companyId }] : [])] },
     include: { linhas: { orderBy: { ordem: "asc" } } },
   });
   const pick = (tipo: string) => {
-    const m = models.find((x) => x.tipo === tipo);
+    const daEmpresa = companyId ? models.find((x) => x.tipo === tipo && x.companyId === companyId) : undefined;
+    const m = daEmpresa ?? models.find((x) => x.tipo === tipo && x.companyId === null);
     if (!m) return null;
     return {
       id: m.id,
       tipo: m.tipo,
       versao: m.versao,
+      escopo: m.companyId ? "empresa" : "global",
       nota: m.nota,
       criadoEm: m.createdAt,
       linhas: m.linhas.map((l) => ({
@@ -57,11 +76,14 @@ interface LinhaInput {
 }
 
 // POST /standard-models/:tipo/versions — publica uma NOVA versão (rascunho → publicar).
-// A versão vigente anterior é preservada (ativo=false) para auditoria e pinagem.
+// Com companyId (body): versão da EMPRESA (copy-on-write) — só os IBRs dela mudam.
+// A versão vigente anterior do MESMO escopo é preservada (ativo=false) para auditoria.
 router.post("/:tipo/versions", async (req: AuthRequest, res: Response): Promise<void> => {
   const tipo = String(req.params.tipo).toUpperCase();
   if (tipo !== "BP" && tipo !== "DRE") { res.status(400).json({ error: "Tipo inválido (use BP ou DRE)" }); return; }
   if (!(await podeEditar(req.userId))) { res.status(403).json({ error: "Apenas partner pode editar os modelos padrão" }); return; }
+  const companyId = await companyNoEscopo(req);
+  if (companyId === "negada") { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
   const linhasIn: LinhaInput[] = Array.isArray(req.body?.linhas) ? req.body.linhas : [];
   const nota: string | null = typeof req.body?.nota === "string" ? req.body.nota.trim() || null : null;
@@ -90,11 +112,13 @@ router.post("/:tipo/versions", async (req: AuthRequest, res: Response): Promise<
 
   if (linhas.some((l) => !l.nome)) { res.status(400).json({ error: "Há contas sem nome" }); return; }
 
-  // PROTEÇÃO DO ESQUELETO: nenhum subtotal/total da versão vigente pode sumir (por código).
-  // Renomear o rótulo é permitido; remover/trocar o código não — a cascata depende dele.
-  const vigente = await prisma.standardModel.findFirst({
-    where: { tipo, ativo: true }, include: { linhas: true },
-  });
+  // PROTEÇÃO DO ESQUELETO: nenhum subtotal/total do modelo EFETIVO atual (empresa ??
+  // global) pode sumir (por código). Renomear o rótulo é permitido; remover/trocar o
+  // código não — a cascata depende dele.
+  const vigente = (companyId
+    ? await prisma.standardModel.findFirst({ where: { tipo, ativo: true, companyId }, include: { linhas: true } })
+    : null)
+    ?? await prisma.standardModel.findFirst({ where: { tipo, ativo: true, companyId: null }, include: { linhas: true } });
   if (vigente) {
     const esqueletoAtual = vigente.linhas.filter((l) => l.tipo !== "input").map((l) => l.codigo);
     const novos = new Set(linhas.map((l) => l.codigo));
@@ -105,13 +129,14 @@ router.post("/:tipo/versions", async (req: AuthRequest, res: Response): Promise<
     }
   }
 
-  const proxVersao = ((await prisma.standardModel.aggregate({ where: { tipo }, _max: { versao: true } }))._max.versao ?? 0) + 1;
+  // Sequência de versão POR ESCOPO (global e cada empresa contam separado).
+  const proxVersao = ((await prisma.standardModel.aggregate({ where: { tipo, companyId }, _max: { versao: true } }))._max.versao ?? 0) + 1;
 
   const criado = await prisma.$transaction(async (tx) => {
-    await tx.standardModel.updateMany({ where: { tipo, ativo: true }, data: { ativo: false } });
+    await tx.standardModel.updateMany({ where: { tipo, ativo: true, companyId }, data: { ativo: false } });
     return tx.standardModel.create({
       data: {
-        tipo, versao: proxVersao, ativo: true, nota,
+        tipo, versao: proxVersao, ativo: true, nota, companyId,
         criadoPor: req.userId ?? null,
         linhas: { create: linhas },
       },
@@ -119,15 +144,18 @@ router.post("/:tipo/versions", async (req: AuthRequest, res: Response): Promise<
     });
   });
 
-  res.json({ ok: true, versao: criado.versao, totalLinhas: criado.linhas.length });
+  res.json({ ok: true, versao: criado.versao, escopo: companyId ? "empresa" : "global", totalLinhas: criado.linhas.length });
 });
 
-// GET /standard-models/:tipo/versions — histórico (todas as versões, mais nova primeiro).
+// GET /standard-models/:tipo/versions?companyId= — histórico do ESCOPO pedido
+// (empresa ou global), mais nova primeiro.
 router.get("/:tipo/versions", async (req: AuthRequest, res: Response): Promise<void> => {
   const tipo = String(req.params.tipo).toUpperCase();
   if (tipo !== "BP" && tipo !== "DRE") { res.status(400).json({ error: "Tipo inválido" }); return; }
+  const companyId = await companyNoEscopo(req);
+  if (companyId === "negada") { res.status(404).json({ error: "Empresa não encontrada" }); return; }
   const versoes = await prisma.standardModel.findMany({
-    where: { tipo },
+    where: { tipo, companyId },
     orderBy: { versao: "desc" },
     select: { versao: true, ativo: true, nota: true, criadoPor: true, createdAt: true, _count: { select: { linhas: true } } },
   });
@@ -137,17 +165,21 @@ router.get("/:tipo/versions", async (req: AuthRequest, res: Response): Promise<v
   })));
 });
 
-// GET /standard-models/:tipo/versions/:versao — estrutura completa de UMA versão (histórica ou vigente).
+// GET /standard-models/:tipo/versions/:versao?companyId= — estrutura completa de UMA
+// versão (histórica ou vigente) do escopo pedido.
 router.get("/:tipo/versions/:versao", async (req: AuthRequest, res: Response): Promise<void> => {
   const tipo = String(req.params.tipo).toUpperCase();
   const versao = parseInt(String(req.params.versao), 10);
   if ((tipo !== "BP" && tipo !== "DRE") || !Number.isFinite(versao)) { res.status(400).json({ error: "Parâmetros inválidos" }); return; }
+  const companyId = await companyNoEscopo(req);
+  if (companyId === "negada") { res.status(404).json({ error: "Empresa não encontrada" }); return; }
   const m = await prisma.standardModel.findFirst({
-    where: { tipo, versao }, include: { linhas: { orderBy: { ordem: "asc" } } },
+    where: { tipo, versao, companyId }, include: { linhas: { orderBy: { ordem: "asc" } } },
   });
   if (!m) { res.status(404).json({ error: "Versão não encontrada" }); return; }
   res.json({
     id: m.id, tipo: m.tipo, versao: m.versao, ativo: m.ativo, nota: m.nota, criadoEm: m.createdAt,
+    escopo: m.companyId ? "empresa" : "global",
     linhas: m.linhas.map((l) => ({ codigo: l.codigo, nome: l.nome, grupo: l.grupo, ordem: l.ordem, tipo: l.tipo, nivel: l.nivel, sinal: l.sinal })),
   });
 });

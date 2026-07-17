@@ -25,6 +25,7 @@ import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from ".
 import { getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
+import { resolverCascataDicionario, whereCascataDicionario } from "../services/dicionario-escopo";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
@@ -696,39 +697,23 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     let structuredBP: BPLineItem[] = [];
     let structuredDRE: DRELineItem[] = [];
 
-    // Pre-fetch dictionary entries for this user (BP + DRE)
+    // Dicionário em CASCATA (global → workspace → EMPRESA): entradas da empresa
+    // deste IBR vencem; entradas de OUTRAS empresas nunca entram (isolamento).
     const dictEntries = await prisma.accountDictionary.findMany({
-      where: {
-        OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }],
-      },
-      select: { nomeOriginal: true, contaDestino: true, grupoConta: true, userId: true, tipo: true },
+      where: whereCascataDicionario(req.scopeUserIds!, analysis.companyId),
+      select: { nomeOriginal: true, contaDestino: true, grupoConta: true, userId: true, companyId: true, tipo: true },
     });
-
-    // User entries override global entries with same nomeOriginal+grupoConta
-    type DictRow = typeof dictEntries[number];
-    const buildDictForType = (tipo: string) => {
-      // Key: nomeOriginal_lower|grupoConta_lower for group-aware dedup
-      const dictMap = new Map<string, { contaDestino: string; grupoConta: string }>();
-      // First add global entries
-      for (const e of dictEntries.filter((e: DictRow) => e.userId === null && e.tipo === tipo)) {
-        const key = `${e.nomeOriginal.toLowerCase()}|${(e.grupoConta || "").toLowerCase()}`;
-        dictMap.set(key, { contaDestino: e.contaDestino, grupoConta: e.grupoConta || "" });
-      }
-      // Then override with user entries
-      for (const e of dictEntries.filter((e: DictRow) => e.userId !== null && e.tipo === tipo)) {
-        const key = `${e.nomeOriginal.toLowerCase()}|${(e.grupoConta || "").toLowerCase()}`;
-        dictMap.set(key, { contaDestino: e.contaDestino, grupoConta: e.grupoConta || "" });
-      }
-      return Array.from(dictMap.entries()).map(([key, val]) => ({
-        nomeOriginal: key.split("|")[0],
-        contaDestino: val.contaDestino,
-        grupoConta: val.grupoConta,
+    const dicionarioEntradasEmpresa = dictEntries.filter((e) => e.companyId !== null).length;
+    const buildDictForType = (tipo: string) =>
+      resolverCascataDicionario(dictEntries, tipo).map((e) => ({
+        nomeOriginal: e.nomeOriginal.toLowerCase(),
+        contaDestino: e.contaDestino,
+        grupoConta: e.grupoConta || "",
       }));
-    };
     const dictForBP = buildDictForType("BP");
     const dictForDRE = buildDictForType("DRE");
-    const bpModel = await loadActiveBPModel(); // bridge: BP padrão vem do banco (editável), não do template do código
-    const dreModel = await loadActiveDREModel(); // bridge: DRE padrão idem (contas do editor entram no dropdown e na cascata)
+    const bpModel = await loadActiveBPModel(analysis.companyId); // bridge: BP padrão vem do banco (cascata empresa→global)
+    const dreModel = await loadActiveDREModel(analysis.companyId); // bridge: DRE padrão idem (contas do editor entram no dropdown e na cascata)
 
     // Auto-detect document type — content-first, tipo as fallback
     function detectDocType(doc: ParsedDocument): "BP" | "DRE" | "BOTH" | "UNKNOWN" {
@@ -996,7 +981,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const nmParaSugerir = (usouIA ? hibridoNaoMapeados : []) as import("../services/ai-extraction").NaoMapeado[];
     if (nmParaSugerir.length > 0) {
       try {
-        const dreModelAtivo = await loadActiveDREModel();
+        const dreModelAtivo = await loadActiveDREModel(analysis.companyId);
         const dreInputs = dreModelAtivo.lines.filter((l: { subtotal: boolean }) => !l.subtotal).map((l: { conta: string }) => l.conta);
         const receitaLinha = structuredDRE.find((l) => l.conta === "Receita Bruta");
         const ultimoP = [...allPeriodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b)).slice(-1)[0];
@@ -1015,7 +1000,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
 
     // Tela de classificação manual = N3 não-mapeados do vencedor (já é N3-only por
     // construção: heurístico entrega []; híbrido entrega os N3 de BP). NUNCA folhas N4+.
-    const modeloVersoes = await getActiveModelVersions();
+    const modeloVersoes = await getActiveModelVersions(analysis.companyId);
     const dicionarioVersao = await getCurrentDictionaryVersion(); // carimba a versão do dicionário usada no fold (pinagem interna)
     const dadosEstruturados: DadosEstruturados = {
       bp: structuredBP,
@@ -1046,8 +1031,15 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const insumos = {
       documentos: financialDocs.map((d) => ({ id: d.id, nome: d.nome, tipo: d.tipo, hash: d.hash, versao: d.versao, editadoManualmente: d.editadoManualmente })),
       dicionarioVersao,
+      // Cascata por empresa: quantas entradas PRÓPRIAS da empresa participaram
+      // do fold (proveniência — o global sozinho não reproduz este resultado).
+      dicionarioEntradasEmpresa,
       modeloVersaoBP: modeloVersoes.bp,
       modeloVersaoDRE: modeloVersoes.dre,
+      // De onde veio cada modelo: "empresa" = modelo próprio (copy-on-write);
+      // "global" = padrão Quantua. A versão sozinha não diz o escopo.
+      modeloEscopoBP: modeloVersoes.bpEscopo,
+      modeloEscopoDRE: modeloVersoes.dreEscopo,
       fonteExtracao: escolhido.fonte,
     };
     const versaoExtracao = crypto.createHash("sha256")
@@ -1371,7 +1363,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, userId: { in: req.scopeUserIds! } },
-    select: { dadosEstruturados: true, indicadorConfig: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true },
+    select: { companyId: true, dadosEstruturados: true, indicadorConfig: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const dados = analysis.dadosEstruturados as any;
@@ -1379,18 +1371,21 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const arvoreDRE = dados?.arvoreOriginalDRE;
   if (!arvoreBP && !arvoreDRE) { res.status(400).json({ error: "Sem árvore original — rode 'Conciliar com IA' primeiro" }); return; }
 
-  const dictRows = await prisma.accountDictionary.findMany({
-    where: { OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }] },
-    select: { nomeOriginal: true, contaDestino: true, grupoConta: true },
+  // Cascata global → workspace → EMPRESA, resolvida POR TIPO (BP e DRE têm
+  // dicionários próprios — dedup misturado poderia derrubar uma entrada homônima).
+  const dictRowsBrutos = await prisma.accountDictionary.findMany({
+    where: whereCascataDicionario(req.scopeUserIds!, analysis.companyId),
+    select: { nomeOriginal: true, contaDestino: true, grupoConta: true, userId: true, companyId: true, tipo: true },
   });
+  const dictRows = [...resolverCascataDicionario(dictRowsBrutos, "BP"), ...resolverCascataDicionario(dictRowsBrutos, "DRE")];
   // Ordena e PERSISTE em ordem cronológica — o refold é o caminho que conserta os
   // IBRs antigos gravados com períodos na ordem dos documentos.
   const periodos: string[] = [...(dados.periodos ?? Object.keys(arvoreBP ?? arvoreDRE ?? {}))]
     .sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
   dados.periodos = periodos;
   const naoMapeados: any[] = [];
-  const bpModelRefold = await loadActiveBPModel(); // bridge: re-dobra com o modelo de BP vigente do banco
-  const dreModelRefold = await loadActiveDREModel();
+  const bpModelRefold = await loadActiveBPModel(analysis.companyId); // bridge: re-dobra com o modelo vigente (cascata empresa→global)
+  const dreModelRefold = await loadActiveDREModel(analysis.companyId);
   const alertasComp: any[] = [];
   if (arvoreBP) { const r = foldBP(arvoreBP, periodos, dictRows, bpModelRefold); dados.bp = r.bp; dados.arvoreOriginalBP = arvoreBP; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
   if (arvoreDRE) { const r = foldDRE(arvoreDRE, periodos, dictRows, dreModelRefold); dados.dre = r.dre; dados.arvoreOriginalDRE = arvoreDRE; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
@@ -1463,7 +1458,7 @@ router.put("/:id/dados-estruturados/arvore", async (req: AuthRequest, res: Respo
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, userId: { in: req.scopeUserIds! } },
-    select: { dadosEstruturados: true },
+    select: { companyId: true, dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
 
@@ -1472,7 +1467,7 @@ router.put("/:id/dados-estruturados/arvore", async (req: AuthRequest, res: Respo
   dados.arvoreOriginalDRE = req.body.arvoreOriginalDRE ?? null;
   dados.naoMapeados = req.body.naoMapeados ?? [];
   if (req.body.declarados) dados.declarados = req.body.declarados; // base da trava de reconciliação após aplicar a IA
-  const mv = await getActiveModelVersions(); // carimba a versão de modelo usada (pinagem)
+  const mv = await getActiveModelVersions(analysis.companyId); // carimba a versão de modelo usada (pinagem)
   dados.modeloVersaoBP = mv.bp;
   dados.modeloVersaoDRE = mv.dre;
   dados.dicionarioVersao = await getCurrentDictionaryVersion(); // versão do dicionário no re-fold
@@ -1720,14 +1715,15 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
       docs.map(async (d) => ({ buffer: await downloadFile(d.storagePath!), tipo: d.tipo }))
     );
 
-    // Dicionário (global + workspace) para o fold das árvores BP e DRE
-    const dictRows = await prisma.accountDictionary.findMany({
-      where: { OR: [{ userId: null }, { userId: { in: req.scopeUserIds! } }] },
-      select: { nomeOriginal: true, contaDestino: true, grupoConta: true },
+    // Dicionário em cascata (global → workspace → EMPRESA) para o fold das árvores
+    const dictBrutosIA = await prisma.accountDictionary.findMany({
+      where: whereCascataDicionario(req.scopeUserIds!, analysis.companyId),
+      select: { nomeOriginal: true, contaDestino: true, grupoConta: true, userId: true, companyId: true, tipo: true },
     });
+    const dictRows = [...resolverCascataDicionario(dictBrutosIA, "BP"), ...resolverCascataDicionario(dictBrutosIA, "DRE")];
 
-    const bpModel = await loadActiveBPModel(); // bridge: usa o modelo de BP vigente do banco
-    const dreModelIA = await loadActiveDREModel();
+    const bpModel = await loadActiveBPModel(analysis.companyId); // bridge: modelo vigente (cascata empresa→global)
+    const dreModelIA = await loadActiveDREModel(analysis.companyId);
     const { bp, dre, periodos, declarados, arvoreOriginalBP, arvoreOriginalDRE, naoMapeados } =
       await extractFinancialsWithAI(buffers, periodosAlvo, dictRows, bpModel, { dreModel: dreModelIA });
     const indicadores = await buildIndicators(bp, dre, periodos, rowsIBRDe(analysis.indicadorConfig));
