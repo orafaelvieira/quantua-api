@@ -17,6 +17,13 @@ model User {
   // Opcional: nulo em cadastros que não vieram de uma página de perfil.
   partnerProfile          String?    @map("partner_profile")
   role                    String?
+  // TIPO DE USUÁRIO (2026-07-17, fundação SaaS): "quantua" = equipe interna
+  // (funcionário/diretor/sócio — o nível fino segue em `role`: operator/
+  // reviewer/partner); "empresa" = responsável/funcionário do cliente (acessa a
+  // empresa dele e as do GRUPO via Organizacao tipo "grupo"); "parceiro" =
+  // contabilidade/advocacia etc. (acessa as empresas ATENDIDAS pela organização).
+  // O portal legado continua marcado por role "client".
+  tipoUsuario             String     @default("quantua") @map("tipo_usuario")
   professionalRegistration String?   @map("professional_registration")
   invitedAt               DateTime?  @map("invited_at")
   mustChangePassword      Boolean    @default(false) @map("must_change_password")
@@ -42,6 +49,7 @@ model User {
   createdTeamInvites  TeamInvite[]          @relation("TeamInviteCreator")
   passwordResets      PasswordResetToken[]
   emailConfirmations  EmailConfirmationToken[]
+  organizacoes        OrganizacaoMembro[]
 
   @@index([role])
   @@index([workspaceId])
@@ -357,8 +365,63 @@ model Company {
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   analyses  Analysis[]
   documents Document[]
+  organizacoes OrganizacaoEmpresa[]
 
   @@map("companies")
+}
+
+// ── ACESSO POR ORGANIZAÇÃO (2026-07-17) — fundação do modelo SaaS ────────────
+// Três tipos de usuário externo à equipe Quantua:
+//   GRUPO (tipo "grupo"): o grupo econômico do cliente — holding + investidas/
+//     filiais. Usuário "empresa" membro do grupo acessa TODAS as empresas dele.
+//   PARCEIRO (tipo "parceiro"): contabilidade/advocacia/consultoria — os membros
+//     acessam as empresas ATENDIDAS (uma ou várias, de clientes distintos).
+// A equipe Quantua NÃO usa Organizacao (escopo por workspace, como sempre).
+// FUNDAÇÃO INERTE: as tabelas existem e a resolução de escopo já as entende;
+// nenhuma rota muda de comportamento até a Fase 2 (queries por scopeCompanyIds).
+model Organizacao {
+  id        String   @id @default(uuid())
+  nome      String
+  tipo      String // "grupo" | "parceiro"
+  subtipo   String? // parceiro: "contabilidade" | "advocacia" | "consultoria" | ...
+  cnpj      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  membros  OrganizacaoMembro[]
+  empresas OrganizacaoEmpresa[]
+
+  @@map("organizacoes")
+}
+
+model OrganizacaoMembro {
+  id            String   @id @default(uuid())
+  organizacaoId String   @map("organizacao_id")
+  userId        String   @map("user_id")
+  papel         String   @default("membro") // "gestor" (concede acessos) | "membro"
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  organizacao Organizacao @relation(fields: [organizacaoId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizacaoId, userId])
+  @@index([userId])
+  @@map("organizacao_membros")
+}
+
+model OrganizacaoEmpresa {
+  id            String   @id @default(uuid())
+  organizacaoId String   @map("organizacao_id")
+  companyId     String   @map("company_id")
+  vinculo       String   @default("atendida") // "dona" (grupo econômico) | "atendida" (parceiro)
+  papelGrupo    String?  @map("papel_grupo") // grupo: "holding" | "investida" | "filial"
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  organizacao Organizacao @relation(fields: [organizacaoId], references: [id], onDelete: Cascade)
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([organizacaoId, companyId])
+  @@index([companyId])
+  @@map("organizacao_empresas")
 }
 
 model Analysis {

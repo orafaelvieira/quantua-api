@@ -12,6 +12,13 @@ export interface AuthRequest extends Request {
    * Resolvido em requireAuth; use em `where: { userId: { in: req.scopeUserIds! } }`.
    */
   scopeUserIds?: string[];
+  /**
+   * Fundação SaaS (2026-07-17): lista FECHADA de empresas visíveis para usuário
+   * externo (tipoUsuario "empresa"/"parceiro"); null = sem restrição (Quantua).
+   * Resolvido em requireAuth quando o usuário é externo; as rotas passam a
+   * consultá-lo na Fase 2 do rollout (queries por companyId).
+   */
+  scopeCompanyIds?: string[] | null;
 }
 
 /**
@@ -67,6 +74,12 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
   req.userId = userId;
   try {
     req.scopeUserIds = await resolveScopeUserIds(userId);
+    // Fundação SaaS: escopo por EMPRESA para usuários externos (empresa/parceiro).
+    // Import tardio para evitar ciclo (escopo-acesso importa resolveScopeUserIds).
+    const { resolverEscopoAcesso } = await import("../services/escopo-acesso");
+    const escopo = await resolverEscopoAcesso(userId);
+    req.scopeCompanyIds = escopo.scopeCompanyIds;
+    if (escopo.tipoUsuario !== "quantua") req.scopeUserIds = escopo.scopeUserIds;
   } catch {
     res.status(500).json({ error: "Erro ao resolver sessão" });
     return;
