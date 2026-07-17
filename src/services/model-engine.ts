@@ -2230,7 +2230,17 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   const anosDoHorizonte = anosInfo.map((a) => a.ano);
   const baseItemDe = (b?: ItemBalanco["base"]): Serie => {
     if (b === "custos") return custosTotal;
-    if (b === "folha") return series["folha_total"] ?? {};
+    if (b === "folha") {
+      // Base FOLHA = a linha canônica "Despesas com Pessoas" PROJETADA (premissa
+      // da linha + bloco Pessoas, que soma nela desde a v90) — a mesma régua dos
+      // dias implícitos do histórico. O bloco vazio zerava a base ("Obrigações
+      // Trabalhistas" por prazo médio calculava R$ 0 mesmo com folha projetada,
+      // 2026-07-16). Sem a linha canônica, cai no total do bloco Pessoas.
+      const normN = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+      const linhaPessoas = linhasDespesas.find((l) => normN(l.nome) === "despesas com pessoas");
+      if (linhaPessoas && Object.values(linhaPessoas.valores).some((v) => v > 0)) return linhaPessoas.valores;
+      return series["folha_total"] ?? {};
+    }
     if (b === "impostos") return somaDe(series["impostos_receita_total"] ?? {}, series["irpj_csll_total"] ?? {}, meses);
     return receitaTotal;
   };
