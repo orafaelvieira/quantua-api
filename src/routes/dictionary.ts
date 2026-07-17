@@ -400,9 +400,17 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
       const chaveBase = { nomeOriginal: entry.nomeOriginal, tipo: tipoE, grupoConta: entry.grupoConta };
 
       if (companyIdClassify) {
-        // Cascata atual desta conta (global + workspace + a empresa do IBR)
+        // Cascata atual desta conta (global + workspace + a empresa do IBR).
+        // CASE-INSENSITIVE: o documento traz "CLIENTES", o seed tem "Clientes" —
+        // é a mesma conta (o fold já compara sem caixa; aqui precisa igualar,
+        // senão a personalização entraria na fila como se fosse conta nova).
         const existentes = await prisma.accountDictionary.findMany({
-          where: { ...chaveBase, ...whereCascataDicionario(req.scopeUserIds!, companyIdClassify) },
+          where: {
+            nomeOriginal: { equals: entry.nomeOriginal, mode: "insensitive" },
+            grupoConta: { equals: entry.grupoConta, mode: "insensitive" },
+            tipo: tipoE,
+            ...whereCascataDicionario(req.scopeUserIds!, companyIdClassify),
+          },
         });
         const vencedor = existentes.length
           ? existentes.reduce((a, b) => (prioridadeEscopo(b) >= prioridadeEscopo(a) ? b : a))
@@ -515,7 +523,11 @@ router.get("/validacao", async (req: AuthRequest, res: Response): Promise<void> 
     ? await prisma.accountDictionary.findMany({
         where: {
           userId: null, companyId: null,
-          OR: rows.map((r) => ({ nomeOriginal: r.nomeOriginal, tipo: r.tipo, grupoConta: r.grupoConta })),
+          OR: rows.map((r) => ({
+            nomeOriginal: { equals: r.nomeOriginal, mode: "insensitive" as const },
+            tipo: r.tipo,
+            grupoConta: { equals: r.grupoConta, mode: "insensitive" as const },
+          })),
         },
         select: { nomeOriginal: true, tipo: true, grupoConta: true, contaDestino: true },
       })
@@ -554,8 +566,15 @@ router.post("/validacao/:id/aprovar", async (req: AuthRequest, res: Response): P
   }
 
   const validador = await nomeUsuario(req.userId);
+  // Case-insensitive: promover "CLIENTES" quando o global tem "Clientes" deve
+  // ATUALIZAR a entrada existente, nunca criar uma quase-duplicata de caixa.
   const global = await prisma.accountDictionary.findFirst({
-    where: { nomeOriginal: row.nomeOriginal, tipo: row.tipo, grupoConta: row.grupoConta, userId: null, companyId: null },
+    where: {
+      nomeOriginal: { equals: row.nomeOriginal, mode: "insensitive" },
+      tipo: row.tipo,
+      grupoConta: { equals: row.grupoConta, mode: "insensitive" },
+      userId: null, companyId: null,
+    },
   });
   // revisao "promovida" na entrada GLOBAL = marcador para o sync do seed no boot:
   // decisão humana não é revertida nem apagada pelo arquivo oficial.
