@@ -35,6 +35,21 @@ export async function resolveScopeUserIds(userId: string): Promise<string[]> {
   return members.length ? members.map((m) => m.id) : [userId];
 }
 
+/**
+ * Bloqueia usuários de PORTAL (role "client"). Use após requireAuth em routers
+ * de ativos internos da firma — dicionário de contas, modelos padrão etc.
+ * O cliente enxerga só o portal dele; esses ativos são IP da Quantua e, com os
+ * parâmetros de contexto (?companyId=), nunca podem vazar entre empresas.
+ */
+export async function requireInternal(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+  const user = await prisma.user.findUnique({ where: { id: req.userId! }, select: { role: true } });
+  if (user?.role === "client") {
+    res.status(403).json({ error: "Acesso restrito à equipe interna" });
+    return;
+  }
+  next();
+}
+
 export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   const token = req.headers.authorization?.replace("Bearer ", "");
   if (!token) {

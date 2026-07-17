@@ -1,9 +1,11 @@
 import { Router, Response } from "express";
 import { prisma } from "../db/client";
-import { requireAuth, AuthRequest } from "../middleware/auth";
+import { requireAuth, requireInternal, AuthRequest } from "../middleware/auth";
 
 const router = Router();
 router.use(requireAuth);
+// Modelos padrão são ativo interno da firma — cliente de portal não lê nem lista.
+router.use(requireInternal);
 
 // ── ESCOPO POR EMPRESA (2026-07-17) ──────────────────────────────────────────
 // companyId null = modelo GLOBAL (padrão Quantua, herdado por toda empresa nova).

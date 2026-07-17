@@ -1,6 +1,6 @@
 import { Router, Response } from "express";
 import { prisma } from "../db/client";
-import { requireAuth, AuthRequest } from "../middleware/auth";
+import { requireAuth, requireInternal, AuthRequest } from "../middleware/auth";
 import { bumpDictionaryVersion, getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { DEFAULT_BP_MODEL, IGNORAR_DESTINO } from "../services/account-mapper";
 import { avaliaBloqueioEstrutural } from "../services/conta-estrutural";
@@ -8,6 +8,8 @@ import { prioridadeEscopo, whereCascataDicionario } from "../services/dicionario
 
 const router = Router();
 router.use(requireAuth);
+// Dicionário é ativo interno da firma — cliente de portal não lê nem escreve.
+router.use(requireInternal);
 
 // classificacao (do template) → grupo de alto nível; e aliases de grupoConta → código.
 const CLASSIF_TO_GRUPO: Record<string, string> = { AC: "AC", AF: "AC", AO: "AC", ANC: "ANC", PC: "PC", PO: "PC", PF: "PC", PNC: "PNC", PL: "PL" };
