@@ -1,6 +1,6 @@
 import { Router, Response } from "express";
 import { prisma } from "../db/client";
-import { requireAuth, AuthRequest } from "../middleware/auth";
+import { requireAuth, requireQuantua, AuthRequest } from "../middleware/auth";
 import type { TermoFormula } from "../services/indicator-config";
 
 /**
@@ -11,6 +11,8 @@ import type { TermoFormula } from "../services/indicator-config";
  */
 const router = Router();
 router.use(requireAuth);
+// F2 SaaS: dado de FIRMA — usuário externo (empresa/parceiro) e portal nunca acessam.
+router.use(requireQuantua);
 
 const DIRECOES = new Set(["menor_ruim", "maior_ruim"]);
 const TIPOS_DADO = new Set(["R$", "%", "Índice", "Dias"]);

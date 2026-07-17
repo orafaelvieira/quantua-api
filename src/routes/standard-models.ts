@@ -1,6 +1,7 @@
 import { Router, Response } from "express";
 import { prisma } from "../db/client";
 import { requireAuth, requireInternal, AuthRequest } from "../middleware/auth";
+import { whereEmpresaVisivel } from "../services/escopo-empresa";
 
 const router = Router();
 router.use(requireAuth);
@@ -18,7 +19,7 @@ async function companyNoEscopo(req: AuthRequest): Promise<string | null | "negad
   const raw = req.query.companyId ?? req.body?.companyId;
   const companyId = typeof raw === "string" && raw ? raw : null;
   if (!companyId) return null;
-  const c = await prisma.company.findFirst({ where: { id: companyId, userId: { in: req.scopeUserIds! } }, select: { id: true } });
+  const c = await prisma.company.findFirst({ where: { id: companyId, ...whereEmpresaVisivel(req) }, select: { id: true } });
   return c ? c.id : "negada";
 }
 
@@ -61,8 +62,11 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
 // Operador/revisor/cliente só visualizam (afeta todas as análises futuras).
 async function podeEditar(userId?: string): Promise<boolean> {
   if (!userId) return false;
-  const u = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, tipoUsuario: true } });
   if (!u) return false;
+  // F2 SaaS: usuário EXTERNO nunca edita o modelo GLOBAL — role null era o
+  // período de graça dos fundadores e não pode valer para tipoUsuario externo.
+  if (u.tipoUsuario === "empresa" || u.tipoUsuario === "parceiro") return false;
   return u.role === "partner" || u.role === null;
 }
 

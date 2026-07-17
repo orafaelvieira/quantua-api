@@ -1,9 +1,11 @@
 import { Router, Response } from "express";
 import { prisma } from "../db/client";
-import { requireAuth, AuthRequest } from "../middleware/auth";
+import { requireAuth, requireQuantua, AuthRequest } from "../middleware/auth";
 
 const router = Router();
 router.use(requireAuth);
+// F2 SaaS: dado de FIRMA — usuário externo (empresa/parceiro) e portal nunca acessam.
+router.use(requireQuantua);
 
 type InboxItemType = "lead" | "engagement" | "analysis" | "due_review" | "notice";
 

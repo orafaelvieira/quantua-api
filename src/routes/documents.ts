@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { z } from "zod";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
+import { whereEmpresaVisivel, whereRecursoEmpresa } from "../services/escopo-empresa";
 import { uploadFile, deleteFile } from "../services/storage";
 import { registrarAuditoria } from "../services/audit-trail";
 
@@ -61,7 +62,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const companyId = req.query.companyId as string | undefined;
   const documents = await prisma.document.findMany({
     where: {
-      company: { userId: { in: req.scopeUserIds! } },
+      company: whereEmpresaVisivel(req),
       ...(analysisId ? { analysisId } : {}),
       ...(companyId ? { companyId } : {}),
     },
@@ -79,7 +80,7 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
   const { analysisId, companyId, tipo, competencia, moeda } = parsed.data;
 
   // Verifica que a análise pertence ao usuário
-  const analysis = await prisma.analysis.findFirst({ where: { id: analysisId, userId: { in: req.scopeUserIds! } } });
+  const analysis = await prisma.analysis.findFirst({ where: { id: analysisId, ...whereRecursoEmpresa(req) } });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
 
   const nome = fixFilename(req.file.originalname);
@@ -124,7 +125,7 @@ router.put("/:id/dados-extraidos", async (req: AuthRequest, res: Response): Prom
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
   const doc = await prisma.document.findFirst({
-    where: { id, company: { userId: { in: req.scopeUserIds! } } },
+    where: { id, company: whereEmpresaVisivel(req) },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
   if (await analiseCancelada(doc.analysisId)) { res.status(409).json({ error: ERRO_CANCELADA }); return; }
@@ -152,7 +153,7 @@ router.put("/:id/tipo", async (req: AuthRequest, res: Response): Promise<void> =
   }
 
   const doc = await prisma.document.findFirst({
-    where: { id, company: { userId: { in: req.scopeUserIds! } } },
+    where: { id, company: whereEmpresaVisivel(req) },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
   if (await analiseCancelada(doc.analysisId)) { res.status(409).json({ error: ERRO_CANCELADA }); return; }
@@ -179,7 +180,7 @@ router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, r
   if (!req.file) { res.status(400).json({ error: "Nenhum arquivo enviado" }); return; }
   const id = req.params.id as string;
   const doc = await prisma.document.findFirst({
-    where: { id, company: { userId: { in: req.scopeUserIds! } } },
+    where: { id, company: whereEmpresaVisivel(req) },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
   if (await analiseCancelada(doc.analysisId)) { res.status(409).json({ error: ERRO_CANCELADA }); return; }
@@ -235,7 +236,7 @@ router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, r
 router.get("/:id/versoes", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const doc = await prisma.document.findFirst({
-    where: { id, company: { userId: { in: req.scopeUserIds! } } },
+    where: { id, company: whereEmpresaVisivel(req) },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
 
@@ -264,7 +265,7 @@ router.get("/:id/versoes", async (req: AuthRequest, res: Response): Promise<void
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const doc = await prisma.document.findFirst({
-    where: { id, company: { userId: { in: req.scopeUserIds! } } },
+    where: { id, company: whereEmpresaVisivel(req) },
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
   if (await analiseCancelada(doc.analysisId)) { res.status(409).json({ error: ERRO_CANCELADA }); return; }

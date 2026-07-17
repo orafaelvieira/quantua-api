@@ -26,6 +26,7 @@ import { getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
 import { resolverCascataDicionario, whereCascataDicionario } from "../services/dicionario-escopo";
+import { whereEmpresaVisivel, whereRecursoEmpresa } from "../services/escopo-empresa";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
@@ -87,7 +88,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const companyId = req.query.companyId as string | undefined;
   const analyses = await prisma.analysis.findMany({
     where: {
-      userId: { in: req.scopeUserIds! },
+      ...whereRecursoEmpresa(req),
       ...(companyId ? { companyId } : {}),
     },
     orderBy: { createdAt: "desc" },
@@ -101,7 +102,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
   const company = await prisma.company.findFirst({
-    where: { id: parsed.data.companyId, userId: { in: req.scopeUserIds! } },
+    where: { id: parsed.data.companyId, ...whereEmpresaVisivel(req) },
   });
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
@@ -163,7 +164,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
 router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     include: {
       company: true,
       documents: { orderBy: { createdAt: "asc" } },
@@ -193,7 +194,7 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 router.get("/:id/versoes", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { id: true, dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -210,7 +211,7 @@ router.get("/:id/versoes", async (req: AuthRequest, res: Response): Promise<void
 
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
-  const existing = await prisma.analysis.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
+  const existing = await prisma.analysis.findFirst({ where: { id, ...whereRecursoEmpresa(req) } });
   if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   // POLÍTICA (2026-07-15): IBR concluído é produto emitido (pode ter valuation
   // vinculado e relatório entregue) — nunca some da base. Só CANCELAR, com motivo.
@@ -238,7 +239,7 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
 // é excluído — cancelar tira de circulação mantendo a evidência e a trilha).
 router.post("/:id/cancelar", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
-  const existing = await prisma.analysis.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
+  const existing = await prisma.analysis.findFirst({ where: { id, ...whereRecursoEmpresa(req) } });
   if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   if (existing.status !== "Concluída") {
     res.status(409).json({ error: `Cancelamento definitivo é para IBR concluído (status atual: "${existing.status}"). Enquanto não concluído, exclua normalmente.` });
@@ -261,7 +262,7 @@ router.post("/:id/cancelar", async (req: AuthRequest, res: Response): Promise<vo
 // um cancelamento durante a EXTRAÇÃO evita até a chamada de análise da IA (economiza crédito).
 router.post("/:id/cancel", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
-  const existing = await prisma.analysis.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
+  const existing = await prisma.analysis.findFirst({ where: { id, ...whereRecursoEmpresa(req) } });
   if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const r = await prisma.analysis.updateMany({
     where: { id, status: { in: ["Extraindo", "Gerando diagnóstico"] } },
@@ -284,7 +285,7 @@ const snoozeSchema = z.object({
 
 router.post("/:id/snooze-review", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
-  const existing = await prisma.analysis.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
+  const existing = await prisma.analysis.findFirst({ where: { id, ...whereRecursoEmpresa(req) } });
   if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   if (existing.mode !== "recurring") {
     res.status(400).json({ error: "Snooze só faz sentido em análises recorrentes" });
@@ -620,7 +621,7 @@ async function runAnalysisBackground(
 router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     include: { company: true, documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1144,7 +1145,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
 router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { id: true, dadosEstruturados: true, setorConfirmado: true, resultado: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1179,7 +1180,7 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
 router.get("/:id/dados-estruturados", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1208,7 +1209,7 @@ router.get("/:id/dados-estruturados", async (req: AuthRequest, res: Response): P
 router.put("/:id/dados-estruturados/bp", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1226,7 +1227,7 @@ router.put("/:id/dados-estruturados/bp", async (req: AuthRequest, res: Response)
 router.put("/:id/dados-estruturados/dre", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1250,7 +1251,7 @@ router.put("/:id/dados-estruturados/dre", async (req: AuthRequest, res: Response
 router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { id: true, mode: true, nome: true, companyId: true, tipo: true, sectorId: true, sectorCustom: true, ibrType: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1259,7 +1260,7 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
   if (typeof req.body?.tipo === "string" && req.body.tipo.trim()) data.tipo = String(req.body.tipo).trim().slice(0, 40);
   if (typeof req.body?.companyId === "string" && req.body.companyId) {
     const company = await prisma.company.findFirst({
-      where: { id: req.body.companyId, userId: { in: req.scopeUserIds! } },
+      where: { id: req.body.companyId, ...whereEmpresaVisivel(req) },
       select: { id: true },
     });
     if (!company) { res.status(400).json({ error: "Empresa não encontrada neste workspace" }); return; }
@@ -1331,7 +1332,7 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
 router.put("/:id/dores", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { id: true, dores: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1362,7 +1363,7 @@ router.put("/:id/dores", async (req: AuthRequest, res: Response): Promise<void> 
 router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { companyId: true, dadosEstruturados: true, indicadorConfig: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1457,7 +1458,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
 router.put("/:id/dados-estruturados/arvore", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { companyId: true, dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1482,7 +1483,7 @@ router.put("/:id/dados-estruturados/arvore", async (req: AuthRequest, res: Respo
 router.put("/:id/dados-estruturados/indicadores/override", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1526,7 +1527,7 @@ async function recalcularIndicadoresComConfig(id: string, dados: any, rows: Conf
 router.get("/:id/indicador-config", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { indicadorConfig: true, sectorId: true, dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1575,7 +1576,7 @@ router.get("/:id/indicador-config", async (req: AuthRequest, res: Response): Pro
 router.put("/:id/indicador-config", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { indicadorConfig: true, dadosEstruturados: true, nome: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1625,7 +1626,7 @@ router.put("/:id/indicador-config", async (req: AuthRequest, res: Response): Pro
 router.post("/:id/indicador-config/recalibrar", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { indicadorConfig: true, sectorId: true, dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1653,7 +1654,7 @@ router.post("/:id/indicador-config/recalibrar", async (req: AuthRequest, res: Re
 router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { dadosEstruturados: true, indicadorConfig: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1695,7 +1696,7 @@ router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Respons
 router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     include: { documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1758,7 +1759,7 @@ router.post("/:id/setor/confirmar", async (req: AuthRequest, res: Response): Pro
   const sectorId = typeof req.body?.sectorId === "string" ? req.body.sectorId.trim() : "";
   if (!sectorId) { res.status(400).json({ error: "Informe o setor (sectorId)" }); return; }
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { sectorId: true, setorConfirmado: true, dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1784,7 +1785,7 @@ router.post("/:id/setor/confirmar", async (req: AuthRequest, res: Response): Pro
 router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { dadosEstruturados: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -1844,7 +1845,7 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
 router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     include: { documents: { orderBy: { createdAt: "asc" } } },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -2002,7 +2003,7 @@ router.post(
     if (!req.file) { res.status(400).json({ error: "Arquivo ausente" }); return; }
 
     const analysis = await prisma.analysis.findFirst({
-      where: { id, userId: { in: req.scopeUserIds! } },
+      where: { id, ...whereRecursoEmpresa(req) },
       select: { id: true, companyId: true },
     });
     if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -2063,7 +2064,7 @@ router.delete("/:id/documents/:docId", async (req: AuthRequest, res: Response): 
     res.status(404).json({ error: "ID inválido" }); return;
   }
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { id: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -2113,7 +2114,7 @@ router.get("/:id/documents/:docId/download", async (req: AuthRequest, res: Respo
     res.status(404).json({ error: "ID inválido" }); return;
   }
   const doc = await prisma.document.findFirst({
-    where: { id: docId, analysis: { id, userId: { in: req.scopeUserIds! } } },
+    where: { id: docId, analysis: { id, ...whereRecursoEmpresa(req) } },
   });
   if (!doc || !doc.storagePath) { res.status(404).json({ error: "Documento não encontrado" }); return; }
 
@@ -2129,7 +2130,7 @@ router.get("/:id/data-room/manifest", async (req: AuthRequest, res: Response): P
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     select: { id: true, nome: true, documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }

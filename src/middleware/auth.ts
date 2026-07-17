@@ -57,6 +57,25 @@ export async function requireInternal(req: AuthRequest, res: Response, next: Nex
   next();
 }
 
+/**
+ * F2 SaaS: bloqueia TUDO que não é equipe Quantua — portal (role "client") E
+ * usuários externos do SaaS (tipoUsuario "empresa"/"parceiro"). Aplicar nos
+ * routers de FIRMA (inbox, billing, team, audit, operations, engagements,
+ * indicators): esses dados nunca pertencem a um cliente. Fail-closed por
+ * design — o gate independe dos filtros de query de cada rota.
+ */
+export async function requireQuantua(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+  const user = await prisma.user.findUnique({
+    where: { id: req.userId! },
+    select: { role: true, tipoUsuario: true },
+  });
+  if (!user || user.role === "client" || user.tipoUsuario === "empresa" || user.tipoUsuario === "parceiro") {
+    res.status(403).json({ error: "Acesso restrito à equipe Quantua" });
+    return;
+  }
+  next();
+}
+
 export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   const token = req.headers.authorization?.replace("Bearer ", "");
   if (!token) {

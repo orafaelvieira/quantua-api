@@ -7,6 +7,7 @@
 import { Router, Response } from "express";
 import { Prisma } from "@prisma/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
+import { whereEmpresaVisivel } from "../services/escopo-empresa";
 import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
 import { calcularModelo, validarFormula, backfillPremissasAoRecuar, BlocoModelo, ScenarioOverrides, RealizadoModelo, IndicesMacroSnapshot, SERIES_MACRO, MACRO_CAMBIO } from "../services/model-engine";
@@ -26,15 +27,16 @@ import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 const router = Router();
 router.use(requireAuth);
 
-/** Empresa dentro do escopo do caller (visibilidade de firma). */
-async function companyNoEscopo(companyId: string, scopeUserIds: string[]) {
-  return prisma.company.findFirst({ where: { id: companyId, userId: { in: scopeUserIds } } });
+/** Empresa visível para o caller — F2 SaaS: Quantua por posse do workspace;
+ *  externo pela ALLOWLIST fechada (whereEmpresaVisivel). */
+async function companyNoEscopo(companyId: string, req: AuthRequest) {
+  return prisma.company.findFirst({ where: { id: companyId, ...whereEmpresaVisivel(req) } });
 }
 
-async function modelNoEscopo(id: string, scopeUserIds: string[]) {
+async function modelNoEscopo(id: string, req: AuthRequest) {
   const model = await prisma.financialModel.findUnique({ where: { id } });
   if (!model) return null;
-  const company = await companyNoEscopo(model.companyId, scopeUserIds);
+  const company = await companyNoEscopo(model.companyId, req);
   return company ? model : null;
 }
 
@@ -116,7 +118,7 @@ router.get("/wacc-dados", async (req: AuthRequest, res: Response): Promise<void>
 router.get("/fontes-dfs", async (req: AuthRequest, res: Response): Promise<void> => {
   const companyId = req.query.companyId as string | undefined;
   if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
-  const company = await companyNoEscopo(companyId, req.scopeUserIds!);
+  const company = await companyNoEscopo(companyId, req);
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
   const analises = await prisma.analysis.findMany({
     where: { companyId, dadosEstruturados: { not: Prisma.DbNull } },
@@ -173,7 +175,7 @@ router.get("/seed-preview", async (req: AuthRequest, res: Response): Promise<voi
   const companyId = req.query.companyId as string | undefined;
   const analysisId = req.query.analysisId as string | undefined;
   if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
-  const company = await companyNoEscopo(companyId, req.scopeUserIds!);
+  const company = await companyNoEscopo(companyId, req);
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
   const analysis = analysisId
     ? await prisma.analysis.findFirst({
@@ -236,7 +238,7 @@ router.get("/contas-destino", async (req: AuthRequest, res: Response): Promise<v
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const companyId = req.query.companyId as string | undefined;
   const companies = await prisma.company.findMany({
-    where: { userId: { in: req.scopeUserIds! }, ...(companyId ? { id: companyId } : {}) },
+    where: { ...whereEmpresaVisivel(req), ...(companyId ? { id: companyId } : {}) },
     select: { id: true, razaoSocial: true, nomeFantasia: true },
   });
   const porId = new Map(companies.map((c) => [c.id, c]));
@@ -265,7 +267,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
 router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const { companyId, nome, objetivo, mesInicial, horizonteMeses, templateReceita, analysisSeedId } = req.body ?? {};
   if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
-  const company = await companyNoEscopo(companyId, req.scopeUserIds!);
+  const company = await companyNoEscopo(companyId, req);
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
   // REGRA (2026-07-15): todo VALUATION nasce vinculado a um IBR — o histórico da
@@ -734,7 +736,7 @@ const travaEdicao = (model: { status: string }): string | null =>
     : null;
 
 router.post("/:id/atualizar-indices", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const [y0, m0] = model.mesInicial.split("-").map(Number);
@@ -759,7 +761,7 @@ router.post("/:id/atualizar-indices", async (req: AuthRequest, res: Response): P
 
 // GET /models/:id — modelo completo (blocos + cenários + resultado em cache).
 router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   // Backfill preguiçoso: modelos criados antes dos grupos NÃO OPERACIONAIS
   // ganham os blocos vazios na primeira abertura.
@@ -957,7 +959,7 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 // (BP e DRE canônicos, 100% das contas, todos os períodos) da análise-fonte
 // que ancora o modelo. Nada é recalculado aqui — é o retrato fiel da origem.
 router.get("/:id/dfs-origem", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   if (!model.analysisSeedId) { res.json({ temOrigem: false }); return; }
   const analysis = await prisma.analysis.findUnique({
@@ -1004,7 +1006,7 @@ router.get("/:id/dfs-origem", async (req: AuthRequest, res: Response): Promise<v
 // empresa, que ficam na aba DFs de origem). Valores = CONTRIBUIÇÃO assinada
 // (gasto positivo, redutora negativa), até 3 últimos períodos.
 router.get("/:id/historico-custos", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   if (!model.analysisSeedId) { res.json({ periodos: [], linhas: [] }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
@@ -1023,7 +1025,7 @@ router.get("/:id/historico-custos", async (req: AuthRequest, res: Response): Pro
 // GET /models/:id/historico-imobilizado — ativos de longo prazo do BP extraído
 // (Imobilizado, Intangível, Biológicos): âncora dos "ativos existentes" do capex.
 router.get("/:id/historico-imobilizado", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   if (!model.analysisSeedId) { res.json({ periodo: null, itens: [] }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
@@ -1035,7 +1037,7 @@ router.get("/:id/historico-imobilizado", async (req: AuthRequest, res: Response)
 // conta do BP extraído (o histórico dos "outros itens do balanço" — inclusive
 // itens adicionados depois: o de-para é pelo nome canônico da conta).
 router.get("/:id/historico-giro", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   if (!model.analysisSeedId) { res.json({ periodo: null, pmr: null, pme: null, pmp: null, porPeriodo: [], periodos: [], saldosPorConta: {} }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
@@ -1072,7 +1074,7 @@ router.get("/:id/historico-giro", async (req: AuthRequest, res: Response): Promi
 // caixa/giro/imobilizado/dívida/PL): âncora do bloco "Outros itens do balanço"
 // (mútuos, antecipações, impostos/pessoal a pagar…), com classificação sugerida.
 router.get("/:id/historico-balanco", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   if (!model.analysisSeedId) { res.json({ periodo: null, itens: [] }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
@@ -1085,7 +1087,7 @@ router.get("/:id/historico-balanco", async (req: AuthRequest, res: Response): Pr
 // com N balanços saem N−1 colunas de fluxo). Nada é persistido: derivação
 // determinística da análise-fonte, travada para edição por construção.
 router.get("/:id/historico-dfs", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   const vazio = { temHistorico: false, periodosBP: [], periodosFC: [], bp: {}, fc: {}, avisoFC: null };
   if (!model.analysisSeedId) { res.json(vazio); return; }
@@ -1187,7 +1189,7 @@ router.get("/:id/historico-dfs", async (req: AuthRequest, res: Response): Promis
 // GET /models/:id/historico-divida — saldo de Empréstimos e Financiamentos
 // (CP+LP) do último balanço extraído: âncora do contrato "dívida existente".
 router.get("/:id/historico-divida", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   if (!model.analysisSeedId) { res.json({ periodo: null, itens: [], total: 0 }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
@@ -1196,7 +1198,7 @@ router.get("/:id/historico-divida", async (req: AuthRequest, res: Response): Pro
 
 // PUT /models/:id — cabeçalho (nome, visão, cenário ativo, status).
 router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const { nome, visao, cenarioAtivoId, status, horizonteMeses, mesInicial } = req.body ?? {};
@@ -1257,7 +1259,7 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 
 // PUT /models/:id/blocks/:blockId — salva a config do bloco (drivers/linhas).
 router.put("/:id/blocks/:blockId", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
@@ -1320,7 +1322,7 @@ router.put("/:id/blocks/:blockId", async (req: AuthRequest, res: Response): Prom
 // POST /models/:id/blocks/:blockId/linhas — adiciona LINHA DE RECEITA (produto)
 // a partir de um template; a empresa pode ter vários produtos somando a receita.
 router.post("/:id/blocks/:blockId/linhas", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
@@ -1343,7 +1345,7 @@ router.post("/:id/blocks/:blockId/linhas", async (req: AuthRequest, res: Respons
 // faturar da linha: reconstrói a árvore de drivers do template novo, mantendo o
 // nome do produto. Os números da linha voltam ao padrão (avisado na UI).
 router.put("/:id/blocks/:blockId/linhas/:linhaId/template", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
@@ -1370,7 +1372,7 @@ router.put("/:id/blocks/:blockId/linhas/:linhaId/template", async (req: AuthRequ
 // IA nunca grava nada: o texto vai para o EDITOR e o analista revisa/salva.
 // Custo registrado na trilha (regra da casa: toda IA tem custo gravado).
 router.post("/:id/blocks/:blockId/linhas/:linhaId/gerar-formula", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
@@ -1493,7 +1495,7 @@ SUA RESPOSTA ANTERIOR FOI REJEITADA: "${r.formula ?? ""}" — problema: ${r.prob
 
 // PUT /models/:id/scenarios/:sid — nome/overrides do cenário ("Salvar premissas").
 router.put("/:id/scenarios/:sid", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const cenario = await prisma.modelScenario.findFirst({ where: { id: req.params.sid as string, modelId: model.id } });
@@ -1520,7 +1522,7 @@ router.put("/:id/scenarios/:sid", async (req: AuthRequest, res: Response): Promi
 // meses realizados do ano de início (balancete parcial da análise-seed) para dentro
 // do horizonte, recuando o início para janeiro. O ano corrente fecha inteiro.
 router.post("/:id/incluir-realizado", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   if (!model.analysisSeedId) { res.status(400).json({ error: "Modelo sem análise-fonte para buscar o realizado" }); return; }
@@ -1552,7 +1554,7 @@ router.post("/:id/incluir-realizado", async (req: AuthRequest, res: Response): P
 
 // POST /models/:id/calcular — roda o motor com o cenário ativo (ou ?scenarioId=).
 router.post("/:id/calcular", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   const calc = await calcularEGravar(model.id);
   res.json({ ok: true, cenario: calc?.cenario, resultado: calc?.resultado });
@@ -1561,7 +1563,7 @@ router.post("/:id/calcular", async (req: AuthRequest, res: Response): Promise<vo
 // POST /models/:id/simular — calcula com overrides AD HOC (sliders da tela de
 // Cenários antes do "Salvar premissas"). Não persiste nada.
 router.post("/:id/simular", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   const completo = await prisma.financialModel.findUnique({
     where: { id: model.id },
@@ -1583,7 +1585,7 @@ router.post("/:id/simular", async (req: AuthRequest, res: Response): Promise<voi
 // INTEIRO por cenário, colhendo EV e Equity. Determinístico por seed
 // (mesmo seed = mesma simulação — auditável). Não persiste nada.
 router.post("/:id/monte-carlo", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   const completo = await prisma.financialModel.findUnique({
     where: { id: model.id },
@@ -1648,7 +1650,7 @@ router.post("/:id/monte-carlo", async (req: AuthRequest, res: Response): Promise
 // (LC 214/2025 · LC 227/2026 · Decreto 12.955/2026): roda o MODELO INTEIRO nos
 // dois mundos sobre o cenário ativo e devolve os dois resultados. Não persiste.
 router.post("/:id/reforma", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   const completo = await prisma.financialModel.findUnique({
     where: { id: model.id },
@@ -1680,7 +1682,7 @@ router.post("/:id/reforma", async (req: AuthRequest, res: Response): Promise<voi
 // Concluir congela o marco (o modelo passa a ser um produto emitido); depois
 // disso ele nunca é excluído — só cancelado, com motivo na trilha.
 router.put("/:id/status", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   const { status, motivo } = (req.body ?? {}) as { status?: string; motivo?: string };
   const atual = model.status === "Rascunho" ? "Em produção" : model.status; // legado
@@ -1705,7 +1707,7 @@ router.put("/:id/status", async (req: AuthRequest, res: Response): Promise<void>
 });
 
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
-  const model = await modelNoEscopo(req.params.id as string, req.scopeUserIds!);
+  const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   // POLÍTICA (2026-07-15): modelo Concluído/Cancelado é produto emitido — nunca
   // some da base. Excluir só enquanto "Em produção" (ou legado "Rascunho").

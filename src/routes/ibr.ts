@@ -3,6 +3,7 @@ import { z } from "zod";
 import crypto from "crypto";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
+import { whereRecursoEmpresa } from "../services/escopo-empresa";
 import { computeProjections } from "../services/projection-engine";
 import { resolveSectorPremises } from "../services/sector-benchmark";
 
@@ -29,7 +30,7 @@ async function loadAnalysis(req: AuthRequest) {
   const id = req.params.id;
   if (!id || typeof id !== "string") return null;
   return prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
   });
 }
 
@@ -184,7 +185,7 @@ router.get("/:id/projections", async (req: AuthRequest, res: Response): Promise<
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
   const analysis = await prisma.analysis.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereRecursoEmpresa(req) },
     include: { company: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }

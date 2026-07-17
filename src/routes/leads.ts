@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../db/client";
 import { env } from "../config/env";
-import { requireAuth, AuthRequest } from "../middleware/auth";
+import { requireAuth, requireQuantua, AuthRequest } from "../middleware/auth";
 import { sendLeadNotificationEmail, sendLeadConfirmationEmail } from "../services/email";
 
 const router = Router();
@@ -88,7 +88,7 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
 });
 
 // GET autenticado — lista interna.
-router.get("/", requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+router.get("/", requireAuth, requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
   const status = req.query.status as string | undefined;
   const leads = await prisma.lead.findMany({
     where: status ? { status } : {},
@@ -103,7 +103,7 @@ router.get("/", requireAuth, async (req: AuthRequest, res: Response): Promise<vo
  * para o dialog de triagem no Inbox consumir. Sem isolamento por userId
  * porque Leads são pool global (todos os RTs podem triar).
  */
-router.get("/:id", requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+router.get("/:id", requireAuth, requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
   const lead = await prisma.lead.findUnique({ where: { id } });
@@ -128,7 +128,7 @@ const updateSchema = z.object({
   status: z.enum(LEAD_STATUSES).optional(),
 });
 
-router.put("/:id", requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+router.put("/:id", requireAuth, requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
   const parsed = updateSchema.safeParse(req.body ?? {});

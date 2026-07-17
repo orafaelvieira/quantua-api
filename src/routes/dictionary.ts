@@ -1,6 +1,7 @@
 import { Router, Response } from "express";
 import { prisma } from "../db/client";
-import { requireAuth, requireInternal, AuthRequest } from "../middleware/auth";
+import { requireAuth, requireInternal, AuthRequest, requireQuantua } from "../middleware/auth";
+import { whereEmpresaVisivel, whereRecursoEmpresa } from "../services/escopo-empresa";
 import { bumpDictionaryVersion, getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { DEFAULT_BP_MODEL, IGNORAR_DESTINO } from "../services/account-mapper";
 import { avaliaBloqueioEstrutural } from "../services/conta-estrutural";
@@ -84,7 +85,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   let companyIdCtx: string | null = null;
   if (typeof req.query.companyId === "string" && req.query.companyId) {
     const c = await prisma.company.findFirst({
-      where: { id: req.query.companyId, userId: { in: req.scopeUserIds! } },
+      where: { id: req.query.companyId, ...whereEmpresaVisivel(req) },
       select: { id: true },
     });
     if (!c) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
@@ -132,14 +133,14 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
   let templateCompanyId: string | null = null;
   if (typeof req.query.analysisId === "string" && req.query.analysisId) {
     const a = await prisma.analysis.findFirst({
-      where: { id: req.query.analysisId, userId: { in: req.scopeUserIds! } },
+      where: { id: req.query.analysisId, ...whereRecursoEmpresa(req) },
       select: { companyId: true },
     });
     templateCompanyId = a?.companyId ?? null;
   } else if (typeof req.query.companyId === "string" && req.query.companyId) {
     // Aba Dicionário & Modelos (contexto direto de empresa, sem análise)
     const c = await prisma.company.findFirst({
-      where: { id: req.query.companyId, userId: { in: req.scopeUserIds! } },
+      where: { id: req.query.companyId, ...whereEmpresaVisivel(req) },
       select: { id: true },
     });
     templateCompanyId = c?.id ?? null;
@@ -218,7 +219,7 @@ function getParentGroup(item: { classificacao: string; conta: string; nivel: num
 }
 
 // POST /dictionary — add entry
-router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
+router.post("/", requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
   const { nomeOriginal, contaDestino, grupoConta, tipo } = req.body;
 
   if (!nomeOriginal || !contaDestino || !grupoConta) {
@@ -315,7 +316,7 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
   // herdar o global). Escopo validado pela POSSE da empresa, não pelo autor.
   if (existing.companyId !== null) {
     const dona = await prisma.company.findFirst({
-      where: { id: existing.companyId, userId: { in: req.scopeUserIds! } },
+      where: { id: existing.companyId, ...whereEmpresaVisivel(req) },
       select: { id: true },
     });
     if (!dona) { res.status(403).json({ error: "Sem permissão" }); return; }
@@ -346,7 +347,7 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
   let companyIdClassify: string | null = null;
   if (typeof analysisId === "string" && analysisId) {
     const a = await prisma.analysis.findFirst({
-      where: { id: analysisId, userId: { in: req.scopeUserIds! } },
+      where: { id: analysisId, ...whereRecursoEmpresa(req) },
       select: { companyId: true },
     });
     companyIdClassify = a?.companyId ?? null;
@@ -354,7 +355,7 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
     // Aba "Dicionário & Modelos" do IBR: edição direta do dicionário DA EMPRESA
     // (sem análise específica) — mesma gravação por empresa, escopo validado.
     const c = await prisma.company.findFirst({
-      where: { id: req.body.companyId, userId: { in: req.scopeUserIds! } },
+      where: { id: req.body.companyId, ...whereEmpresaVisivel(req) },
       select: { id: true },
     });
     if (!c) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
@@ -489,8 +490,11 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
 // (partner; role null = contas antigas de sócio).
 async function podeValidarGlobal(userId?: string): Promise<boolean> {
   if (!userId) return false;
-  const u = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
-  return !u?.role || u.role === "partner";
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, tipoUsuario: true } });
+  if (!u) return false;
+  // F2 SaaS: externo NUNCA aprova/reprova para o dicionário global.
+  if (u.tipoUsuario === "empresa" || u.tipoUsuario === "parceiro") return false;
+  return !u.role || u.role === "partner";
 }
 
 async function companiesDoEscopo(scopeUserIds: string[]): Promise<Map<string, string>> {

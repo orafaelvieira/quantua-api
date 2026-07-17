@@ -1,7 +1,8 @@
 import { Router, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../db/client";
-import { requireAuth, AuthRequest } from "../middleware/auth";
+import { requireAuth, requireQuantua, AuthRequest } from "../middleware/auth";
+import { whereEmpresaVisivel } from "../services/escopo-empresa";
 import { deleteFile } from "../services/storage";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
 import { sugerirSetores } from "../services/cnae-b3";
@@ -98,7 +99,7 @@ const companySchema = z.object({
 
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const companies = await prisma.company.findMany({
-    where: { userId: { in: req.scopeUserIds! } },
+    where: { ...whereEmpresaVisivel(req) },
     orderBy: { createdAt: "desc" },
     include: { _count: { select: { analyses: true } } },
   });
@@ -117,7 +118,7 @@ async function cnpjJaCadastrado(scopeUserIds: string[], cnpj: string | undefined
   return todas.find((c) => c.id !== ignoreId && (c.cnpj ?? "").replace(/\D/g, "") === digits) ?? null;
 }
 
-router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
+router.post("/", requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
   const parsed = companySchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
@@ -145,7 +146,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
 router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const company = await prisma.company.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereEmpresaVisivel(req) },
     include: { analyses: { orderBy: { createdAt: "desc" }, take: 10 } },
   });
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
@@ -157,7 +158,7 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 router.get("/:id/sugestao-setor", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const company = await prisma.company.findFirst({
-    where: { id, userId: { in: req.scopeUserIds! } },
+    where: { id, ...whereEmpresaVisivel(req) },
     select: { cnae: true, cnaeDescricao: true, cnpjData: true },
   });
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }

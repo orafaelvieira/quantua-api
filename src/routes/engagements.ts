@@ -4,7 +4,7 @@ import multer from "multer";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/client";
-import { requireAuth, AuthRequest } from "../middleware/auth";
+import { requireAuth, requireQuantua, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/permissions";
 import { inviteLimiter } from "../middleware/rate-limit";
 import { renderLetter, renderProposalHtml, type SignatureRenderInput } from "../services/letter-templates";
@@ -21,6 +21,8 @@ import { env } from "../config/env";
 
 const router = Router();
 router.use(requireAuth);
+// F2 SaaS: dado de FIRMA — usuário externo (empresa/parceiro) e portal nunca acessam.
+router.use(requireQuantua);
 
 const documentUpload = multer({
   storage: multer.memoryStorage(),

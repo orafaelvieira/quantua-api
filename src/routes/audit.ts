@@ -1,10 +1,12 @@
 import { Router, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../db/client";
-import { requireAuth, AuthRequest } from "../middleware/auth";
+import { requireAuth, requireQuantua, AuthRequest } from "../middleware/auth";
 
 const router = Router();
 router.use(requireAuth);
+// F2 SaaS: dado de FIRMA — usuário externo (empresa/parceiro) e portal nunca acessam.
+router.use(requireQuantua);
 
 const eventSchema = z.object({
   analysisId: z.string().uuid(),
