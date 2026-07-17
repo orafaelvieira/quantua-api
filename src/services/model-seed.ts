@@ -398,6 +398,21 @@ export function derivarDividaHistorico(dadosEstruturados: unknown): { periodo: s
   return { periodo: ultimo, itens, total: itens.reduce((s, x) => s + x.valor, 0) };
 }
 
+/** CAIXA do histórico: saldo de Caixa e Equivalentes no último período do
+ *  balanço com valor — âncora do caixa da data-base da ponte EV→Equity (e do
+ *  caixa inicial da projeção). Mesma régua da dívida: BP do fecho anterior. */
+export function derivarCaixaHistorico(dadosEstruturados: unknown): { periodo: string | null; valor: number } {
+  const de = (dadosEstruturados ?? {}) as { periodos?: string[]; bp?: LinhaDados[] };
+  const linha = (de.bp ?? []).find((l) => l.conta?.trim().toLowerCase() === "caixa e equivalentes de caixa");
+  if (!linha) return { periodo: null, valor: 0 };
+  const periodos = de.periodos ?? [];
+  for (let i = periodos.length - 1; i >= 0; i--) {
+    const v = Math.abs(valorEm(linha, periodos[i]));
+    if (v > 0) return { periodo: periodos[i], valor: v };
+  }
+  return { periodo: null, valor: 0 };
+}
+
 /** OUTRAS contas do BP histórico (fora de caixa/giro/imobilizado/dívida/PL):
  *  âncora do bloco "Outros itens do balanço" — mútuos, antecipações, impostos
  *  e pessoal a pagar etc. Classificação SUGERIDA pelo sufixo CP/LP (circulante)

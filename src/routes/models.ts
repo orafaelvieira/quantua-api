@@ -15,7 +15,7 @@ import { buscarDadosWacc } from "../services/wacc-dados";
 import { ERP_REFERENCIA, BETAS_EMERGING, BETAS_DATA, KROLL_DECIS, KROLL_FONTE, CSRP_FATORES } from "../services/wacc-referencias";
 import { perguntarJson } from "../services/ai-extraction";
 import { montarLinhaReceita, TEMPLATES_RECEITA } from "../services/model-templates";
-import { derivarSeed, derivarHistoricoAnual, derivarRealizadoParcial, derivarAberturaReceita, derivarAberturaCustos, derivarAberturaCustosCanonica, derivarImobilizadoHistorico, derivarGiroHistorico, derivarDividaHistorico, derivarOutrosBalanco } from "../services/model-seed";
+import { derivarSeed, derivarHistoricoAnual, derivarRealizadoParcial, derivarAberturaReceita, derivarAberturaCustos, derivarAberturaCustosCanonica, derivarImobilizadoHistorico, derivarGiroHistorico, derivarDividaHistorico, derivarCaixaHistorico, derivarOutrosBalanco } from "../services/model-seed";
 import { rodarMonteCarlo, McVariavelSpec } from "../services/monte-carlo";
 import { ConfigReforma } from "../services/reforma-tributaria";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
@@ -656,6 +656,12 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
                 const g = derivarGiroHistorico(analysis?.dadosEstruturados ?? null);
                 return { ...(g.pmr ? { pmr: g.pmr } : {}), ...(g.pme ? { pme: g.pme } : {}), ...(g.pmp ? { pmp: g.pmp } : {}) };
               })(),
+              // CAIXA da data-base (BP do fecho anterior ao início da projeção)
+              // — abre o balanço projetado e ancora a ponte EV→Equity.
+              ...(() => {
+                const cx = derivarCaixaHistorico(analysis?.dadosEstruturados ?? null);
+                return cx.valor > 0 ? { caixaInicial: cx.valor } : {};
+              })(),
               itensBalancoSeed: true,
               itensBalanco: derivarOutrosBalanco(analysis?.dadosEstruturados ?? null).itens.map((h, k) => ({
                 id: `bi${k}_${Date.now().toString(36)}`, nome: h.conta, classificacao: h.classificacao,
@@ -810,6 +816,23 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
         where: { id: blocoGiro.id },
         data: { config: { ...cfgG, itensBalanco: [...(cfgG.itensBalanco ?? []), ...novos], itensBalancoSeed: true } as object },
       });
+    }
+  }
+  // Backfill preguiçoso: modelos criados antes do caixa da data-base (o seed
+  // não gravava caixaInicial) — deriva do BP do IBR uma vez. Só preenche
+  // quando o campo NUNCA existiu; 0 digitado pelo analista é respeitado.
+  if (model.analysisSeedId) {
+    const blocoGiro = await prisma.modelBlock.findFirst({ where: { modelId: model.id, tipo: "giro" } });
+    const cfgG = (blocoGiro?.config ?? {}) as BlocoModelo["config"];
+    if (blocoGiro && cfgG.caixaInicial === undefined) {
+      const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
+      const cx = derivarCaixaHistorico(analysis?.dadosEstruturados ?? null);
+      if (cx.valor > 0) {
+        await prisma.modelBlock.update({
+          where: { id: blocoGiro.id },
+          data: { config: { ...cfgG, caixaInicial: cx.valor } as object },
+        });
+      }
     }
   }
 
