@@ -17,7 +17,7 @@ describe("whereEmpresaVisivel", () => {
     expect(whereEmpresaVisivel(externoSemVinculo)).toEqual({ AND: [{ id: { in: [] } }] });
   });
   it("À PROVA DE SPREAD: `{ id, ...frag }` preserva o id pedido (bug flagrado no E2E)", () => {
-    const where = { id: "empresa-pedida", ...whereEmpresaVisivel(externo) };
+    const where: Record<string, unknown> = { id: "empresa-pedida", ...whereEmpresaVisivel(externo) };
     // o id literal NÃO pode ser sobrescrito pelo filtro da allowlist
     expect(where.id).toBe("empresa-pedida");
     expect(where.AND).toEqual([{ id: { in: ["c1", "c2"] } }]);
@@ -34,7 +34,7 @@ describe("whereRecursoEmpresa", () => {
     expect(whereRecursoEmpresa(externo)).toEqual({ AND: [{ companyId: { in: ["c1", "c2"] } }] });
   });
   it("À PROVA DE SPREAD: `{ companyId, ...frag }` não é sobrescrito", () => {
-    const where = { companyId: "outra", ...whereRecursoEmpresa(externo) };
+    const where: Record<string, unknown> = { companyId: "outra", ...whereRecursoEmpresa(externo) };
     expect(where.companyId).toBe("outra"); // ambos valem (AND) — allowlist continua mandando
   });
 });

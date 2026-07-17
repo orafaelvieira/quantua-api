@@ -109,7 +109,7 @@ router.post("/login", loginLimiter, async (req: Request, res: Response): Promise
   }
 
   res.json({
-    user: { id: user.id, name: user.name, email: user.email, workspaceType: user.workspaceType, role: user.role },
+    user: { id: user.id, name: user.name, email: user.email, workspaceType: user.workspaceType, role: user.role, tipoUsuario: user.tipoUsuario },
     token: signToken(user.id),
   });
 });
@@ -124,6 +124,7 @@ router.get("/me", requireAuth, async (req: AuthRequest, res: Response): Promise<
       workspaceType: true,
       partnerProfile: true,
       role: true,
+      tipoUsuario: true,
       phone: true,
       cargo: true,
       timezone: true,

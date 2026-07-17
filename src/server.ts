@@ -24,6 +24,7 @@ import adminRouter from "./routes/admin";
 import peersRouter from "./routes/peers";
 import indicatorsRouter from "./routes/indicators";
 import modelsRouter from "./routes/models";
+import organizacoesRouter from "./routes/organizacoes";
 import { startJobs } from "./jobs";
 import { estadoHistorico, anotaSinal, autoRetomarSeInterrompido } from "./services/cvm-sync";
 import { runtimeState } from "./services/runtime-state";
@@ -61,7 +62,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-17.v111.f2-isolamento-por-empresa";
+const BUILD_VERSION = "2026-07-17.v112.f3-organizacoes-convites";
 
 // Sonda de diagnóstico dos restarts: health-check/deploy manda SIGTERM (dá tempo de
 // anotar no snapshot); OOM manda SIGKILL (não aparece). A anotação só ocorre com o
@@ -121,6 +122,7 @@ app.use("/admin", adminRouter);
 app.use("/peers", peersRouter);
 app.use("/indicators", indicatorsRouter);
 app.use("/models", modelsRouter);
+app.use("/orgs", organizacoesRouter); // /orgs (nao /organizacoes): a rota do FRONTEND usa /organizacoes e o proxy do Vite colidiria
 
 /**
  * Seeds rodam APÓS o `listen` (não no `start`, antes do server) — senão um seed

@@ -389,6 +389,7 @@ model Organizacao {
 
   membros  OrganizacaoMembro[]
   empresas OrganizacaoEmpresa[]
+  convites OrganizacaoConvite[]
 
   @@map("organizacoes")
 }
@@ -406,6 +407,27 @@ model OrganizacaoMembro {
   @@unique([organizacaoId, userId])
   @@index([userId])
   @@map("organizacao_membros")
+}
+
+// Convite de membro para uma organização (grupo/parceiro) — magic link de uso
+// único, mesmo padrão do TeamInvite. O aceite cria o User com tipoUsuario
+// derivado do tipo da organização e o vincula como membro.
+model OrganizacaoConvite {
+  id            String    @id @default(uuid())
+  organizacaoId String    @map("organizacao_id")
+  email         String
+  papel         String    @default("membro") // "gestor" | "membro"
+  tokenHash     String    @unique @map("token_hash")
+  expiresAt     DateTime  @map("expires_at")
+  acceptedAt    DateTime? @map("accepted_at")
+  invitedById   String    @map("invited_by_id")
+  status        String    @default("pending") // pending | accepted | expired | revoked
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  organizacao Organizacao @relation(fields: [organizacaoId], references: [id], onDelete: Cascade)
+
+  @@index([organizacaoId])
+  @@map("organizacao_convites")
 }
 
 model OrganizacaoEmpresa {

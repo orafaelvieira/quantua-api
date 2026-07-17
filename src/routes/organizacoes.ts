@@ -1,0 +1,302 @@
+import { Router, Response } from "express";
+import crypto from "crypto";
+import bcrypt from "bcryptjs";
+import { prisma } from "../db/client";
+import { requireAuth, requireQuantua, AuthRequest } from "../middleware/auth";
+import { whereEmpresaVisivel } from "../services/escopo-empresa";
+import { registrarAuditoria } from "../services/audit-trail";
+
+/**
+ * F3 DOS ACESSOS SAAS (2026-07-17) — gestão de ORGANIZAÇÕES e convites.
+ *
+ *  - Criar organização, vincular/desvincular EMPRESAS: só equipe Quantua
+ *    (é quem contrata e fatura — a fronteira de dados nasce aqui).
+ *  - Convidar/remover MEMBROS: Quantua OU um "gestor" da própria organização
+ *    (o gestor do grupo/escritório distribui acesso À EQUIPE DELE, nunca além
+ *    das empresas já vinculadas pela Quantua).
+ *  - Aceite do convite: público via magic link de uso único (padrão TeamInvite);
+ *    cria o User com tipoUsuario derivado do tipo da organização.
+ *
+ * Toda mutação emite trilha de auditoria (LGPD: concessão e revogação de
+ * acesso a dados de empresa ficam rastreáveis).
+ */
+
+const router = Router();
+
+const hashToken = (raw: string): string => crypto.createHash("sha256").update(raw).digest("hex");
+
+/** Caller é gestor da organização? (Quantua passa por requireQuantua nas rotas próprias.) */
+async function ehGestor(userId: string, organizacaoId: string): Promise<boolean> {
+  const m = await prisma.organizacaoMembro.findFirst({
+    where: { organizacaoId, userId, papel: "gestor" },
+    select: { id: true },
+  });
+  return !!m;
+}
+
+async function ehQuantua(userId: string): Promise<boolean> {
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, tipoUsuario: true } });
+  return !!u && u.role !== "client" && u.tipoUsuario !== "empresa" && u.tipoUsuario !== "parceiro";
+}
+
+/** Quantua OU gestor da organização — gate das rotas de membros/convites. */
+async function podeGerirMembros(userId: string, organizacaoId: string): Promise<boolean> {
+  return (await ehQuantua(userId)) || (await ehGestor(userId, organizacaoId));
+}
+
+// ── ACEITE PÚBLICO (antes do requireAuth) ────────────────────────────────────
+
+// GET /organizacoes/convites/:token — preview do convite (tela de aceite).
+router.get("/convites/:token", async (req, res): Promise<void> => {
+  const convite = await prisma.organizacaoConvite.findUnique({
+    where: { tokenHash: hashToken(String(req.params.token)) },
+    include: { organizacao: { select: { nome: true, tipo: true, subtipo: true } } },
+  });
+  if (!convite || convite.status !== "pending") { res.status(404).json({ error: "Convite não encontrado ou já utilizado" }); return; }
+  if (convite.expiresAt < new Date()) { res.status(410).json({ error: "Convite expirado — peça um novo" }); return; }
+  res.json({
+    email: convite.email,
+    papel: convite.papel,
+    organizacao: convite.organizacao.nome,
+    tipo: convite.organizacao.tipo,
+    subtipo: convite.organizacao.subtipo,
+  });
+});
+
+// POST /organizacoes/convites/:token/aceitar — cria o usuário externo e vincula.
+router.post("/convites/:token/aceitar", async (req, res): Promise<void> => {
+  const { nome, senha } = req.body ?? {};
+  if (typeof nome !== "string" || nome.trim().length < 2) { res.status(400).json({ error: "Informe seu nome" }); return; }
+  if (typeof senha !== "string" || senha.length < 8) { res.status(400).json({ error: "Senha precisa de ao menos 8 caracteres" }); return; }
+
+  const convite = await prisma.organizacaoConvite.findUnique({
+    where: { tokenHash: hashToken(String(req.params.token)) },
+    include: { organizacao: { select: { id: true, nome: true, tipo: true } } },
+  });
+  if (!convite || convite.status !== "pending") { res.status(404).json({ error: "Convite não encontrado ou já utilizado" }); return; }
+  if (convite.expiresAt < new Date()) { res.status(410).json({ error: "Convite expirado — peça um novo" }); return; }
+
+  const email = convite.email.toLowerCase();
+  const jaExiste = await prisma.user.findUnique({ where: { email }, select: { id: true, tipoUsuario: true } });
+  // tipoUsuario derivado do TIPO da organização — nunca escolhido pelo convidado.
+  const tipoUsuario = convite.organizacao.tipo === "grupo" ? "empresa" : "parceiro";
+
+  const user = jaExiste
+    ? jaExiste
+    : await prisma.user.create({
+        data: {
+          email,
+          name: nome.trim().slice(0, 120),
+          passwordHash: await bcrypt.hash(senha, 12),
+          tipoUsuario,
+          role: null,
+          emailConfirmedAt: new Date(), // o magic link chegou pelo e-mail convidado
+          invitedAt: new Date(),
+        },
+        select: { id: true, tipoUsuario: true },
+      });
+  // Usuário existente: só vincula se for do MESMO tipo externo (nunca rebaixa/
+  // eleva conta Quantua nem mistura portal) — segurança acima da conveniência.
+  if (jaExiste && jaExiste.tipoUsuario !== tipoUsuario) {
+    res.status(409).json({ error: "Este e-mail já tem uma conta de outro tipo — fale com a Quantua." });
+    return;
+  }
+
+  await prisma.organizacaoMembro.upsert({
+    where: { organizacaoId_userId: { organizacaoId: convite.organizacaoId, userId: user.id } },
+    update: { papel: convite.papel },
+    create: { organizacaoId: convite.organizacaoId, userId: user.id, papel: convite.papel },
+  });
+  await prisma.organizacaoConvite.update({
+    where: { id: convite.id },
+    data: { status: "accepted", acceptedAt: new Date() },
+  });
+  void registrarAuditoria({
+    userId: user.id, entity: "organizacao", entityId: convite.organizacaoId,
+    field: "convite aceito", after: { email, papel: convite.papel, tipoUsuario }, source: "organizacoes",
+  });
+  res.status(201).json({ ok: true, email });
+});
+
+// ── DALI EM DIANTE: autenticado ──────────────────────────────────────────────
+router.use(requireAuth);
+
+// GET /organizacoes — lista (Quantua: todas · gestor/membro externo: as dele).
+router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
+  const quantua = await ehQuantua(req.userId!);
+  const orgs = await prisma.organizacao.findMany({
+    where: quantua ? {} : { membros: { some: { userId: req.userId! } } },
+    include: { _count: { select: { membros: true, empresas: true } } },
+    orderBy: { createdAt: "desc" },
+  });
+  res.json(orgs.map((o) => ({
+    id: o.id, nome: o.nome, tipo: o.tipo, subtipo: o.subtipo, cnpj: o.cnpj,
+    criadaEm: o.createdAt, membros: o._count.membros, empresas: o._count.empresas,
+  })));
+});
+
+// POST /organizacoes — cria (só Quantua).
+router.post("/", requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
+  const { nome, tipo, subtipo, cnpj } = req.body ?? {};
+  if (typeof nome !== "string" || nome.trim().length < 2) { res.status(400).json({ error: "Informe o nome da organização" }); return; }
+  if (tipo !== "grupo" && tipo !== "parceiro") { res.status(400).json({ error: 'tipo deve ser "grupo" ou "parceiro"' }); return; }
+  const org = await prisma.organizacao.create({
+    data: {
+      nome: nome.trim().slice(0, 160),
+      tipo,
+      subtipo: typeof subtipo === "string" && subtipo.trim() ? subtipo.trim().slice(0, 60) : null,
+      cnpj: typeof cnpj === "string" && cnpj.trim() ? cnpj.trim().slice(0, 20) : null,
+    },
+  });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "organizacao", entityId: org.id, field: "criação",
+    after: { nome: org.nome, tipo: org.tipo, subtipo: org.subtipo }, source: "organizacoes",
+  });
+  res.status(201).json(org);
+});
+
+// GET /organizacoes/:id — detalhe (Quantua ou membro da organização).
+router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  const quantua = await ehQuantua(req.userId!);
+  const org = await prisma.organizacao.findFirst({
+    where: quantua ? { id } : { id, membros: { some: { userId: req.userId! } } },
+    include: {
+      membros: { include: { user: { select: { id: true, name: true, email: true } } }, orderBy: { createdAt: "asc" } },
+      empresas: { include: { company: { select: { id: true, razaoSocial: true, nomeFantasia: true, cnpj: true } } }, orderBy: { createdAt: "asc" } },
+      convites: { where: { status: "pending" }, orderBy: { createdAt: "desc" } },
+    },
+  });
+  if (!org) { res.status(404).json({ error: "Organização não encontrada" }); return; }
+  const souGestor = await ehGestor(req.userId!, id);
+  res.json({
+    id: org.id, nome: org.nome, tipo: org.tipo, subtipo: org.subtipo, cnpj: org.cnpj,
+    podeGerir: quantua || souGestor,
+    membros: org.membros.map((m) => ({ userId: m.userId, nome: m.user.name, email: m.user.email, papel: m.papel, desde: m.createdAt })),
+    empresas: org.empresas.map((e) => ({
+      companyId: e.companyId, vinculo: e.vinculo, papelGrupo: e.papelGrupo,
+      nome: e.company.nomeFantasia || e.company.razaoSocial, cnpj: e.company.cnpj,
+    })),
+    convitesPendentes: org.convites.map((c) => ({ id: c.id, email: c.email, papel: c.papel, expiraEm: c.expiresAt })),
+  });
+});
+
+// POST /organizacoes/:id/empresas — vincula empresa (só Quantua; empresa do escopo).
+router.post("/:id/empresas", requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  const { companyId, papelGrupo } = req.body ?? {};
+  const org = await prisma.organizacao.findUnique({ where: { id } });
+  if (!org) { res.status(404).json({ error: "Organização não encontrada" }); return; }
+  const company = await prisma.company.findFirst({ where: { id: String(companyId ?? ""), ...whereEmpresaVisivel(req) } });
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  const papel = ["holding", "investida", "filial"].includes(String(papelGrupo)) ? String(papelGrupo) : null;
+  const vinculo = await prisma.organizacaoEmpresa.upsert({
+    where: { organizacaoId_companyId: { organizacaoId: id, companyId: company.id } },
+    update: { papelGrupo: papel },
+    create: { organizacaoId: id, companyId: company.id, vinculo: org.tipo === "grupo" ? "dona" : "atendida", papelGrupo: papel },
+  });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "organizacao", entityId: id, field: "empresa vinculada",
+    after: { companyId: company.id, empresa: company.nomeFantasia || company.razaoSocial, papelGrupo: papel }, source: "organizacoes",
+  });
+  res.status(201).json(vinculo);
+});
+
+// DELETE /organizacoes/:id/empresas/:companyId — desvincula (só Quantua).
+router.delete("/:id/empresas/:companyId", requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  const companyId = String(req.params.companyId);
+  const del = await prisma.organizacaoEmpresa.deleteMany({ where: { organizacaoId: id, companyId } });
+  if (del.count === 0) { res.status(404).json({ error: "Vínculo não encontrado" }); return; }
+  void registrarAuditoria({
+    userId: req.userId!, entity: "organizacao", entityId: id, field: "empresa desvinculada",
+    after: { companyId }, source: "organizacoes",
+  });
+  res.status(204).send();
+});
+
+// POST /organizacoes/:id/convites — convida membro (Quantua OU gestor da org).
+router.post("/:id/convites", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  if (!(await podeGerirMembros(req.userId!, id))) { res.status(403).json({ error: "Só a Quantua ou um gestor da organização convida membros" }); return; }
+  const { email, papel } = req.body ?? {};
+  const emailNorm = typeof email === "string" ? email.trim().toLowerCase() : "";
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailNorm)) { res.status(400).json({ error: "E-mail inválido" }); return; }
+  const papelNorm = papel === "gestor" ? "gestor" : "membro";
+  const org = await prisma.organizacao.findUnique({ where: { id } });
+  if (!org) { res.status(404).json({ error: "Organização não encontrada" }); return; }
+
+  const pendente = await prisma.organizacaoConvite.findFirst({ where: { organizacaoId: id, email: emailNorm, status: "pending" } });
+  if (pendente) { res.status(409).json({ error: "Já existe convite pendente para este e-mail" }); return; }
+
+  const rawToken = crypto.randomBytes(32).toString("hex");
+  const convite = await prisma.organizacaoConvite.create({
+    data: {
+      organizacaoId: id, email: emailNorm, papel: papelNorm,
+      tokenHash: hashToken(rawToken),
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      invitedById: req.userId!,
+    },
+  });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "organizacao", entityId: id, field: "convite enviado",
+    after: { email: emailNorm, papel: papelNorm }, source: "organizacoes",
+  });
+  // Piloto: o link volta na resposta (uso único, 7 dias) — quem convidou repassa
+  // pelo canal que preferir. E-mail automático entra com o serviço de e-mail.
+  res.status(201).json({ id: convite.id, email: emailNorm, papel: papelNorm, expiraEm: convite.expiresAt, magicLink: `/convite/organizacao/${rawToken}` });
+});
+
+// DELETE /organizacoes/:id/convites/:conviteId — revoga convite pendente.
+router.delete("/:id/convites/:conviteId", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  if (!(await podeGerirMembros(req.userId!, id))) { res.status(403).json({ error: "Sem permissão" }); return; }
+  const upd = await prisma.organizacaoConvite.updateMany({
+    where: { id: String(req.params.conviteId), organizacaoId: id, status: "pending" },
+    data: { status: "revoked" },
+  });
+  if (upd.count === 0) { res.status(404).json({ error: "Convite não encontrado" }); return; }
+  void registrarAuditoria({
+    userId: req.userId!, entity: "organizacao", entityId: id, field: "convite revogado",
+    after: { conviteId: String(req.params.conviteId) }, source: "organizacoes",
+  });
+  res.status(204).send();
+});
+
+// PUT /organizacoes/:id/membros/:userId — muda papel (Quantua OU gestor).
+router.put("/:id/membros/:userId", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  if (!(await podeGerirMembros(req.userId!, id))) { res.status(403).json({ error: "Sem permissão" }); return; }
+  const papel = req.body?.papel === "gestor" ? "gestor" : "membro";
+  const upd = await prisma.organizacaoMembro.updateMany({
+    where: { organizacaoId: id, userId: String(req.params.userId) },
+    data: { papel },
+  });
+  if (upd.count === 0) { res.status(404).json({ error: "Membro não encontrado" }); return; }
+  void registrarAuditoria({
+    userId: req.userId!, entity: "organizacao", entityId: id, field: "papel do membro alterado",
+    after: { membro: String(req.params.userId), papel }, source: "organizacoes",
+  });
+  res.json({ ok: true });
+});
+
+// DELETE /organizacoes/:id/membros/:userId — remove membro (revoga o acesso).
+router.delete("/:id/membros/:userId", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  const alvo = String(req.params.userId);
+  if (!(await podeGerirMembros(req.userId!, id))) { res.status(403).json({ error: "Sem permissão" }); return; }
+  // Gestor não remove a si mesmo (evita organização órfã sem querer) — a Quantua pode.
+  if (alvo === req.userId && !(await ehQuantua(req.userId!))) {
+    res.status(409).json({ error: "Gestor não remove o próprio acesso — peça à Quantua." });
+    return;
+  }
+  const del = await prisma.organizacaoMembro.deleteMany({ where: { organizacaoId: id, userId: alvo } });
+  if (del.count === 0) { res.status(404).json({ error: "Membro não encontrado" }); return; }
+  void registrarAuditoria({
+    userId: req.userId!, entity: "organizacao", entityId: id, field: "membro removido (acesso revogado)",
+    after: { membro: alvo }, source: "organizacoes",
+  });
+  res.status(204).send();
+});
+
+export default router;
