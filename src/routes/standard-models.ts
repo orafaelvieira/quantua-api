@@ -77,6 +77,42 @@ interface LinhaInput {
   tipo?: string; nivel?: number; sinal?: number | null; descricao?: string | null;
 }
 
+// CONTAS-ÂNCORA DO MOTOR (2026-07-17): o valuation, os indicadores e o fluxo de
+// caixa indireto ancoram POR NOME nestas linhas de input (caixa da data-base,
+// dívida implícita, PMR/PME/PMP, capex/D&A, folha na linha canônica…). Remover
+// ou renomear uma âncora quebraria esses produtos EM SILÊNCIO — bloqueado em
+// QUALQUER escopo (global e empresa). Adicionar/renomear as demais linhas é livre.
+const CONTAS_ANCORA: Record<string, string[]> = {
+  BP: [
+    "Caixa e Equivalentes de Caixa",
+    "Contas a Receber - CP",
+    "Estoques - CP",
+    "Fornecedores - CP",
+    "Empréstimos e Financiamentos - CP",
+    "Empréstimos e Financiamentos - LP",
+    "Imobilizado",
+    "(-) Depreciação",
+    "Intangível",
+    "(-) Amortização",
+  ],
+  DRE: [
+    "Receita Bruta",
+    "Deduções da Receita Bruta",
+    "Impostos s/ Faturamento",
+    "Custo Operacional",
+    "Despesas com Pessoas",
+    "Outras Receitas Operacionais",
+    "Outras Despesas Operacionais",
+    "Depreciação e Amortização",
+    "Receitas Financeiras",
+    "Despesas Financeiras",
+    "Outras Receitas Não Operacionais",
+    "Outras Despesas Não Operacionais",
+    "IR e CSLL",
+  ],
+};
+const normAncora = (s: string): string => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+
 // POST /standard-models/:tipo/versions — publica uma NOVA versão (rascunho → publicar).
 // Com companyId (body): versão da EMPRESA (copy-on-write) — só os IBRs dela mudam.
 // A versão vigente anterior do MESMO escopo é preservada (ativo=false) para auditoria.
@@ -133,6 +169,16 @@ router.post("/:tipo/versions", async (req: AuthRequest, res: Response): Promise<
       res.status(400).json({ error: `Subtotais/totais não podem ser removidos: ${faltando.join(", ")}` });
       return;
     }
+  }
+
+  // PROTEÇÃO DAS ÂNCORAS: toda conta-âncora precisa continuar existindo POR NOME.
+  const nomesNovos = new Set(linhas.map((l) => normAncora(l.nome)));
+  const ancorasFaltando = (CONTAS_ANCORA[tipo] ?? []).filter((a) => !nomesNovos.has(normAncora(a)));
+  if (ancorasFaltando.length) {
+    res.status(400).json({
+      error: `Estas contas são âncoras do motor (valuation, indicadores, fluxo de caixa) e não podem ser removidas nem renomeadas: ${ancorasFaltando.join(" · ")}. Adicione novas linhas ou renomeie as demais à vontade.`,
+    });
+    return;
   }
 
   // Sequência de versão POR ESCOPO (global e cada empresa contam separado).
