@@ -184,6 +184,26 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   });
 });
 
+// DELETE /organizacoes/:id — exclui a organização (só Quantua). O cascade do
+// schema remove membros, vínculos de empresa e convites: TODOS os membros
+// perdem o acesso imediatamente (as CONTAS continuam existindo, mas sem
+// vínculo não enxergam empresa nenhuma — fail-closed). Fica na trilha.
+router.delete("/:id", requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  const org = await prisma.organizacao.findUnique({
+    where: { id },
+    include: { _count: { select: { membros: true, empresas: true } } },
+  });
+  if (!org) { res.status(404).json({ error: "Organização não encontrada" }); return; }
+  await prisma.organizacao.delete({ where: { id } });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "organizacao", entityId: id, field: "organização excluída (todos os acessos revogados)",
+    before: { nome: org.nome, tipo: org.tipo, membros: org._count.membros, empresas: org._count.empresas },
+    source: "organizacoes",
+  });
+  res.status(204).send();
+});
+
 // POST /organizacoes/:id/empresas — vincula empresa (só Quantua; empresa do escopo).
 router.post("/:id/empresas", requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
   const id = String(req.params.id);
