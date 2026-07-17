@@ -385,7 +385,17 @@ model Organizacao {
   tipo      String // "grupo" | "parceiro"
   subtipo   String? // parceiro: "contabilidade" | "advocacia" | "consultoria" | ...
   cnpj      String?
-  createdAt DateTime @default(now()) @map("created_at")
+  // CICLO DE VIDA (2026-07-17): o status é DERIVADO destes campos (nunca gravado).
+  //   dataFim no passado         → "cancelado"  (sem acesso)
+  //   dataInicio no futuro       → "agendado"   (sem acesso ainda)
+  //   suspenso = true            → "suspenso"   (SOMENTE CONSULTA — inadimplência)
+  //   caso contrário             → "ativo"      (acesso pleno)
+  // dataFim >= dataInicio é validado na rota. Substitui a exclusão: a organização
+  // nunca some (trilha/compliance), só muda de status.
+  dataInicio DateTime? @map("data_inicio")
+  dataFim    DateTime? @map("data_fim")
+  suspenso   Boolean   @default(false)
+  createdAt  DateTime  @default(now()) @map("created_at")
 
   membros  OrganizacaoMembro[]
   empresas OrganizacaoEmpresa[]
@@ -399,6 +409,10 @@ model OrganizacaoMembro {
   organizacaoId String   @map("organizacao_id")
   userId        String   @map("user_id")
   papel         String   @default("membro") // "gestor" (concede acessos) | "membro"
+  // Vigência do ACESSO do membro (saída da organização = preencher dataFim).
+  // Fora de [dataInicio, dataFim] o membro não recebe empresa nenhuma no escopo.
+  dataInicio    DateTime? @map("data_inicio")
+  dataFim       DateTime? @map("data_fim")
   createdAt     DateTime @default(now()) @map("created_at")
 
   organizacao Organizacao @relation(fields: [organizacaoId], references: [id], onDelete: Cascade)

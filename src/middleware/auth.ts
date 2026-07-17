@@ -13,12 +13,14 @@ export interface AuthRequest extends Request {
    */
   scopeUserIds?: string[];
   /**
-   * Fundação SaaS (2026-07-17): lista FECHADA de empresas visíveis para usuário
-   * externo (tipoUsuario "empresa"/"parceiro"); null = sem restrição (Quantua).
-   * Resolvido em requireAuth quando o usuário é externo; as rotas passam a
-   * consultá-lo na Fase 2 do rollout (queries por companyId).
+   * SaaS (2026-07-17): lista FECHADA de empresas visíveis para usuário externo
+   * (tipoUsuario "empresa"/"parceiro"); null = sem restrição (Quantua).
    */
   scopeCompanyIds?: string[] | null;
+  /** Subconjunto de scopeCompanyIds em SOMENTE CONSULTA (organização suspensa). */
+  scopeCompanyIdsSomenteLeitura?: string[];
+  /** true = toda a visibilidade do externo é somente-leitura (nenhuma org ativa). */
+  somenteLeitura?: boolean;
 }
 
 /**
@@ -98,6 +100,8 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     const { resolverEscopoAcesso } = await import("../services/escopo-acesso");
     const escopo = await resolverEscopoAcesso(userId);
     req.scopeCompanyIds = escopo.scopeCompanyIds;
+    req.scopeCompanyIdsSomenteLeitura = escopo.scopeCompanyIdsSomenteLeitura;
+    req.somenteLeitura = escopo.somenteLeitura;
     if (escopo.tipoUsuario !== "quantua") req.scopeUserIds = escopo.scopeUserIds;
   } catch {
     res.status(500).json({ error: "Erro ao resolver sessão" });

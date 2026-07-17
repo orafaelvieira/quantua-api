@@ -5,6 +5,16 @@ import { prisma } from "../db/client";
 import { requireAuth, requireQuantua, AuthRequest } from "../middleware/auth";
 import { whereEmpresaVisivel } from "../services/escopo-empresa";
 import { registrarAuditoria } from "../services/audit-trail";
+import { statusOrganizacao } from "../services/escopo-acesso";
+
+const PAPEIS_GRUPO = ["matriz", "holding", "investida", "filial", "outros"];
+/** Valida ISO date; devolve Date, null (limpar) ou undefined (não mexer). */
+function parseDataOpcional(v: unknown): Date | null | undefined {
+  if (v === undefined) return undefined;
+  if (v === null || v === "") return null;
+  const d = new Date(String(v));
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
 
 /**
  * F3 DOS ACESSOS SAAS (2026-07-17) — gestão de ORGANIZAÇÕES e convites.
@@ -132,8 +142,11 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     include: { _count: { select: { membros: true, empresas: true } } },
     orderBy: { createdAt: "desc" },
   });
+  const agora = new Date();
   res.json(orgs.map((o) => ({
     id: o.id, nome: o.nome, tipo: o.tipo, subtipo: o.subtipo, cnpj: o.cnpj,
+    status: statusOrganizacao(o, agora),
+    dataInicio: o.dataInicio, dataFim: o.dataFim, suspenso: o.suspenso,
     criadaEm: o.createdAt, membros: o._count.membros, empresas: o._count.empresas,
   })));
 });
@@ -174,14 +187,54 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const souGestor = await ehGestor(req.userId!, id);
   res.json({
     id: org.id, nome: org.nome, tipo: org.tipo, subtipo: org.subtipo, cnpj: org.cnpj,
+    status: statusOrganizacao(org, new Date()),
+    dataInicio: org.dataInicio, dataFim: org.dataFim, suspenso: org.suspenso,
+    // Só a Quantua edita nome/ciclo de vida da organização; gestor gere a equipe.
+    podeEditar: quantua,
     podeGerir: quantua || souGestor,
-    membros: org.membros.map((m) => ({ userId: m.userId, nome: m.user.name, email: m.user.email, papel: m.papel, desde: m.createdAt })),
+    membros: org.membros.map((m) => ({ userId: m.userId, nome: m.user.name, email: m.user.email, papel: m.papel, desde: m.createdAt, dataInicio: m.dataInicio, dataFim: m.dataFim })),
     empresas: org.empresas.map((e) => ({
       companyId: e.companyId, vinculo: e.vinculo, papelGrupo: e.papelGrupo,
       nome: e.company.nomeFantasia || e.company.razaoSocial, cnpj: e.company.cnpj,
     })),
     convitesPendentes: org.convites.map((c) => ({ id: c.id, email: c.email, papel: c.papel, expiraEm: c.expiresAt })),
   });
+});
+
+// PATCH /organizacoes/:id — edita nome e CICLO DE VIDA (só Quantua).
+// Status é derivado (dataInicio/dataFim/suspenso); dataFim >= dataInicio.
+router.patch("/:id", requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  const org = await prisma.organizacao.findUnique({ where: { id } });
+  if (!org) { res.status(404).json({ error: "Organização não encontrada" }); return; }
+  const { nome, subtipo } = req.body ?? {};
+  const dataInicio = parseDataOpcional(req.body?.dataInicio);
+  const dataFim = parseDataOpcional(req.body?.dataFim);
+  if (req.body?.dataInicio !== undefined && dataInicio === undefined) { res.status(400).json({ error: "Data de início inválida" }); return; }
+  if (req.body?.dataFim !== undefined && dataFim === undefined) { res.status(400).json({ error: "Data de fim inválida" }); return; }
+  // dataFim >= dataInicio (usando os valores EFETIVOS após a edição).
+  const iniEfetivo = dataInicio !== undefined ? dataInicio : org.dataInicio;
+  const fimEfetivo = dataFim !== undefined ? dataFim : org.dataFim;
+  if (iniEfetivo && fimEfetivo && fimEfetivo.getTime() < iniEfetivo.getTime()) {
+    res.status(400).json({ error: "A data de fim não pode ser anterior à data de início." }); return;
+  }
+  const data: Record<string, unknown> = {};
+  if (typeof nome === "string" && nome.trim().length >= 2) data.nome = nome.trim().slice(0, 160);
+  if (typeof subtipo === "string") data.subtipo = subtipo.trim() ? subtipo.trim().slice(0, 60) : null;
+  if (dataInicio !== undefined) data.dataInicio = dataInicio;
+  if (dataFim !== undefined) data.dataFim = dataFim;
+  if (typeof req.body?.suspenso === "boolean") data.suspenso = req.body.suspenso;
+  if (Object.keys(data).length === 0) { res.status(400).json({ error: "Nada para atualizar" }); return; }
+
+  const atualizado = await prisma.organizacao.update({ where: { id }, data });
+  const statusNovo = statusOrganizacao(atualizado, new Date());
+  void registrarAuditoria({
+    userId: req.userId!, entity: "organizacao", entityId: id, field: "ciclo de vida / cadastro",
+    before: { nome: org.nome, status: statusOrganizacao(org, new Date()), dataInicio: org.dataInicio, dataFim: org.dataFim, suspenso: org.suspenso },
+    after: { nome: atualizado.nome, status: statusNovo, dataInicio: atualizado.dataInicio, dataFim: atualizado.dataFim, suspenso: atualizado.suspenso },
+    source: "organizacoes",
+  });
+  res.json({ ok: true, status: statusNovo });
 });
 
 // DELETE /organizacoes/:id — exclui a organização (só Quantua). O cascade do
@@ -212,7 +265,7 @@ router.post("/:id/empresas", requireQuantua, async (req: AuthRequest, res: Respo
   if (!org) { res.status(404).json({ error: "Organização não encontrada" }); return; }
   const company = await prisma.company.findFirst({ where: { id: String(companyId ?? ""), ...whereEmpresaVisivel(req) } });
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
-  const papel = ["holding", "investida", "filial"].includes(String(papelGrupo)) ? String(papelGrupo) : null;
+  const papel = PAPEIS_GRUPO.includes(String(papelGrupo)) ? String(papelGrupo) : null;
   const vinculo = await prisma.organizacaoEmpresa.upsert({
     where: { organizacaoId_companyId: { organizacaoId: id, companyId: company.id } },
     update: { papelGrupo: papel },
@@ -286,19 +339,33 @@ router.delete("/:id/convites/:conviteId", async (req: AuthRequest, res: Response
   res.status(204).send();
 });
 
-// PUT /organizacoes/:id/membros/:userId — muda papel (Quantua OU gestor).
+// PUT /organizacoes/:id/membros/:userId — muda papel e VIGÊNCIA (Quantua OU gestor).
+// dataFim é como se CANCELA o acesso de quem saiu da organização (sem apagar a
+// conta nem o histórico). dataFim >= dataInicio.
 router.put("/:id/membros/:userId", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = String(req.params.id);
   if (!(await podeGerirMembros(req.userId!, id))) { res.status(403).json({ error: "Sem permissão" }); return; }
-  const papel = req.body?.papel === "gestor" ? "gestor" : "membro";
-  const upd = await prisma.organizacaoMembro.updateMany({
-    where: { organizacaoId: id, userId: String(req.params.userId) },
-    data: { papel },
-  });
-  if (upd.count === 0) { res.status(404).json({ error: "Membro não encontrado" }); return; }
+  const membro = await prisma.organizacaoMembro.findFirst({ where: { organizacaoId: id, userId: String(req.params.userId) } });
+  if (!membro) { res.status(404).json({ error: "Membro não encontrado" }); return; }
+
+  const dataInicio = parseDataOpcional(req.body?.dataInicio);
+  const dataFim = parseDataOpcional(req.body?.dataFim);
+  if (req.body?.dataInicio !== undefined && dataInicio === undefined) { res.status(400).json({ error: "Data de início inválida" }); return; }
+  if (req.body?.dataFim !== undefined && dataFim === undefined) { res.status(400).json({ error: "Data de fim inválida" }); return; }
+  const iniEfetivo = dataInicio !== undefined ? dataInicio : membro.dataInicio;
+  const fimEfetivo = dataFim !== undefined ? dataFim : membro.dataFim;
+  if (iniEfetivo && fimEfetivo && fimEfetivo.getTime() < iniEfetivo.getTime()) {
+    res.status(400).json({ error: "A data de fim não pode ser anterior à data de início." }); return;
+  }
+
+  const data: Record<string, unknown> = {};
+  if (req.body?.papel !== undefined) data.papel = req.body.papel === "gestor" ? "gestor" : "membro";
+  if (dataInicio !== undefined) data.dataInicio = dataInicio;
+  if (dataFim !== undefined) data.dataFim = dataFim;
+  await prisma.organizacaoMembro.update({ where: { id: membro.id }, data });
   void registrarAuditoria({
-    userId: req.userId!, entity: "organizacao", entityId: id, field: "papel do membro alterado",
-    after: { membro: String(req.params.userId), papel }, source: "organizacoes",
+    userId: req.userId!, entity: "organizacao", entityId: id, field: "membro atualizado (papel/vigência)",
+    after: { membro: String(req.params.userId), ...data }, source: "organizacoes",
   });
   res.json({ ok: true });
 });

@@ -172,7 +172,9 @@ router.get("/me", requireAuth, async (req: AuthRequest, res: Response): Promise<
     engagementId = engagement?.id;
   }
 
-  res.json({ ...user, engagementSigned, engagementId });
+  // Externo em organização SUSPENSA opera em somente-consulta — o front usa
+  // para exibir o aviso e desabilitar edições (a segurança é no servidor).
+  res.json({ ...user, engagementSigned, engagementId, somenteLeitura: req.somenteLeitura ?? false });
 });
 
 /**

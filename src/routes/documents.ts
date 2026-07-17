@@ -4,12 +4,14 @@ import crypto from "crypto";
 import { z } from "zod";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { whereEmpresaVisivel, whereRecursoEmpresa } from "../services/escopo-empresa";
+import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { uploadFile, deleteFile } from "../services/storage";
 import { registrarAuditoria } from "../services/audit-trail";
 
 const router = Router();
 router.use(requireAuth);
+// SOMENTE CONSULTA: org suspensa (inadimplência) lê mas não escreve.
+router.use(guardaEscritaSuspensao("document"));
 
 /**
  * Fix multer filename encoding: when the browser sends UTF-8 filenames,

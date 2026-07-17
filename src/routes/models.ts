@@ -7,7 +7,7 @@
 import { Router, Response } from "express";
 import { Prisma } from "@prisma/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { whereEmpresaVisivel } from "../services/escopo-empresa";
+import { whereEmpresaVisivel, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
 import { calcularModelo, validarFormula, backfillPremissasAoRecuar, BlocoModelo, ScenarioOverrides, RealizadoModelo, IndicesMacroSnapshot, SERIES_MACRO, MACRO_CAMBIO } from "../services/model-engine";
@@ -26,6 +26,8 @@ import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 
 const router = Router();
 router.use(requireAuth);
+// SOMENTE CONSULTA: org suspensa (inadimplência) lê mas não escreve.
+router.use(guardaEscritaSuspensao("model"));
 
 /** Empresa visível para o caller — F2 SaaS: Quantua por posse do workspace;
  *  externo pela ALLOWLIST fechada (whereEmpresaVisivel). */

@@ -26,12 +26,14 @@ import { getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
 import { resolverCascataDicionario, whereCascataDicionario } from "../services/dicionario-escopo";
-import { whereEmpresaVisivel, whereRecursoEmpresa } from "../services/escopo-empresa";
+import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
 const router = Router();
 router.use(requireAuth);
+// SOMENTE CONSULTA: org suspensa (inadimplência) lê mas não escreve.
+router.use(guardaEscritaSuspensao("analysis"));
 
 // IBR CANCELADO É SOMENTE CONSULTA (política 2026-07-16): consulta (GET) livre;
 // NENHUMA mutação passa — reprocessar, regerar análise, indicadores, War Room,

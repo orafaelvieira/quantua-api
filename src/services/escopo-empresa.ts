@@ -1,3 +1,4 @@
+import type { Response, NextFunction } from "express";
 import { prisma } from "../db/client";
 import type { AuthRequest } from "../middleware/auth";
 
@@ -53,4 +54,63 @@ export async function empresaVisivel(req: AuthRequest, companyId: string): Promi
     select: { id: true },
   });
   return !!c;
+}
+
+// ── SOMENTE CONSULTA (organização SUSPENSA) — enforcement de segurança ────────
+// Externo cuja organização está "suspenso" (inadimplência) LÊ mas não ESCREVE.
+// O guard roda nos routers de dado de empresa; Quantua e externos de org ATIVA
+// não são afetados. Fail-closed: usuário com empresa suspensa em rota de
+// mutação cujo alvo não é resolvível → bloqueia.
+
+const MSG_SOMENTE_CONSULTA =
+  "Acesso somente consulta: a organização está suspensa. Regularize com a Quantua para voltar a editar.";
+const METODO_SEGURO = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/** Resolve a empresa-alvo de uma requisição de mutação, por tipo de entidade da rota. */
+async function resolverEmpresaAlvo(req: AuthRequest, entidade: "analysis" | "model" | "document" | "company-body"): Promise<string | null> {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (typeof body.companyId === "string" && body.companyId) return body.companyId;
+  if (typeof req.query.companyId === "string" && req.query.companyId) return req.query.companyId;
+
+  const idParam = typeof req.params.id === "string" ? req.params.id : null;
+  const analysisIdBody = typeof body.analysisId === "string" ? body.analysisId : null;
+
+  if (entidade === "analysis" && idParam) {
+    const a = await prisma.analysis.findUnique({ where: { id: idParam }, select: { companyId: true } });
+    return a?.companyId ?? null;
+  }
+  if (entidade === "model" && idParam) {
+    const m = await prisma.financialModel.findUnique({ where: { id: idParam }, select: { companyId: true } });
+    return m?.companyId ?? null;
+  }
+  if (entidade === "document") {
+    if (idParam) {
+      const d = await prisma.document.findUnique({ where: { id: idParam }, select: { companyId: true } });
+      if (d?.companyId) return d.companyId;
+    }
+    if (analysisIdBody) {
+      const a = await prisma.analysis.findUnique({ where: { id: analysisIdBody }, select: { companyId: true } });
+      return a?.companyId ?? null;
+    }
+  }
+  if (analysisIdBody) {
+    const a = await prisma.analysis.findUnique({ where: { id: analysisIdBody }, select: { companyId: true } });
+    return a?.companyId ?? null;
+  }
+  return null;
+}
+
+/** Middleware: bloqueia MUTAÇÃO quando a empresa-alvo está somente-consulta. */
+export function guardaEscritaSuspensao(entidade: "analysis" | "model" | "document" | "company-body") {
+  return async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    if (METODO_SEGURO.has(req.method.toUpperCase())) { next(); return; }
+    if (!req.scopeCompanyIds) { next(); return; } // Quantua — sem restrição
+    if (req.somenteLeitura) { res.status(403).json({ error: MSG_SOMENTE_CONSULTA }); return; } // tudo read-only
+    const readOnly = req.scopeCompanyIdsSomenteLeitura ?? [];
+    if (readOnly.length === 0) { next(); return; } // nenhuma org suspensa
+    const alvo = await resolverEmpresaAlvo(req, entidade);
+    // fail-closed: alvo não resolvível ou explicitamente suspenso → bloqueia.
+    if (!alvo || readOnly.includes(alvo)) { res.status(403).json({ error: MSG_SOMENTE_CONSULTA }); return; }
+    next();
+  };
 }

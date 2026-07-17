@@ -1,7 +1,7 @@
 import { Router, Response } from "express";
 import { prisma } from "../db/client";
 import { requireAuth, requireInternal, AuthRequest, requireQuantua } from "../middleware/auth";
-import { whereEmpresaVisivel, whereRecursoEmpresa } from "../services/escopo-empresa";
+import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { bumpDictionaryVersion, getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { DEFAULT_BP_MODEL, IGNORAR_DESTINO } from "../services/account-mapper";
 import { avaliaBloqueioEstrutural } from "../services/conta-estrutural";
@@ -11,6 +11,8 @@ const router = Router();
 router.use(requireAuth);
 // Dicionário é ativo interno da firma — cliente de portal não lê nem escreve.
 router.use(requireInternal);
+// SOMENTE CONSULTA: org suspensa (inadimplência) lê mas não escreve.
+router.use(guardaEscritaSuspensao("company-body"));
 
 // classificacao (do template) → grupo de alto nível; e aliases de grupoConta → código.
 const CLASSIF_TO_GRUPO: Record<string, string> = { AC: "AC", AF: "AC", AO: "AC", ANC: "ANC", PC: "PC", PO: "PC", PF: "PC", PNC: "PNC", PL: "PL" };

@@ -1,12 +1,14 @@
 import { Router, Response } from "express";
 import { prisma } from "../db/client";
 import { requireAuth, requireInternal, AuthRequest } from "../middleware/auth";
-import { whereEmpresaVisivel } from "../services/escopo-empresa";
+import { whereEmpresaVisivel, guardaEscritaSuspensao } from "../services/escopo-empresa";
 
 const router = Router();
 router.use(requireAuth);
 // Modelos padrão são ativo interno da firma — cliente de portal não lê nem lista.
 router.use(requireInternal);
+// SOMENTE CONSULTA: org suspensa (inadimplência) lê mas não escreve.
+router.use(guardaEscritaSuspensao("company-body"));
 
 // ── ESCOPO POR EMPRESA (2026-07-17) ──────────────────────────────────────────
 // companyId null = modelo GLOBAL (padrão Quantua, herdado por toda empresa nova).

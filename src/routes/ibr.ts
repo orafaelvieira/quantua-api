@@ -3,12 +3,14 @@ import { z } from "zod";
 import crypto from "crypto";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { whereRecursoEmpresa } from "../services/escopo-empresa";
+import { whereRecursoEmpresa, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { computeProjections } from "../services/projection-engine";
 import { resolveSectorPremises } from "../services/sector-benchmark";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
+// SOMENTE CONSULTA: org suspensa (inadimplência) lê mas não escreve.
+router.use(guardaEscritaSuspensao("analysis"));
 
 // IBR CANCELADO É SOMENTE CONSULTA (política 2026-07-16): mesmo guarda do
 // router de análises — STCF, cenários, SWOT, recomendações, options (War
