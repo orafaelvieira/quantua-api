@@ -76,13 +76,24 @@ router.get("/versions", async (req: AuthRequest, res: Response): Promise<void> =
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const { search, tipo, grupo } = req.query;
 
+  // ?companyId= → CONTEXTO DE EMPRESA: além do global+workspace, inclui as
+  // entradas próprias daquela empresa (a cascata que os IBRs dela usam).
+  // Sem o parâmetro, entradas de empresa ficam fora (geridas na Validação).
+  let companyIdCtx: string | null = null;
+  if (typeof req.query.companyId === "string" && req.query.companyId) {
+    const c = await prisma.company.findFirst({
+      where: { id: req.query.companyId, userId: { in: req.scopeUserIds! } },
+      select: { id: true },
+    });
+    if (!c) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+    companyIdCtx = c.id;
+  }
+
   const where: any = {
-    // Entradas de EMPRESA ficam FORA desta lista (companyId null): elas são
-    // geridas na tela "Validação de contas" — aqui é o dicionário global+workspace.
-    companyId: null,
     OR: [
-      { userId: null },                        // global seed entries
-      { userId: { in: req.scopeUserIds! } },   // entries do workspace (firma)
+      { companyId: null, userId: null },                        // global seed entries
+      { companyId: null, userId: { in: req.scopeUserIds! } },   // entries do workspace (firma)
+      ...(companyIdCtx ? [{ companyId: companyIdCtx }] : []),   // entries da EMPRESA (contexto)
     ],
   };
 
