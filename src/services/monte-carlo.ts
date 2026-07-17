@@ -132,7 +132,10 @@ function gerarUniformes(k: number, nAnos: number, n: number, lhs: boolean, rng: 
   return U;
 }
 
-export function rodarMonteCarlo(input: McInput): McResultado {
+// Async: o loop de cenários CEDE o event loop a cada lote — uma simulação de
+// 2.000 cenários leva dezenas de segundos em produção e, síncrona, travava a
+// API inteira (inclusive os health checks do DO, que derrubariam a instância).
+export async function rodarMonteCarlo(input: McInput): Promise<McResultado> {
   const avisos: string[] = [];
   const lhs = input.lhs !== false;
   const vazio = { ev: 0, equity: 0, equityFinal: 0 };
@@ -260,6 +263,7 @@ export function rodarMonteCarlo(input: McInput): McResultado {
   let cenariosInvalidos = 0;
 
   for (let t = 0; t < n; t++) {
+    if (t % 25 === 24) await new Promise<void>((r) => setImmediate(r)); // respira: outras requisições atendem
     const overrides: ScenarioOverrides = { ...input.cenarioOverrides };
     let wacc = input.valuation.wacc;
     let g = input.valuation.g;

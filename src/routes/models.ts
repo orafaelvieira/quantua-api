@@ -1601,7 +1601,7 @@ router.post("/:id/monte-carlo", async (req: AuthRequest, res: Response): Promise
   const n = Math.min(2000, Math.max(100, Number(body.n) || 1000));
   const seed = Number.isFinite(Number(body.seed)) && Number(body.seed) > 0 ? Number(body.seed) : (Date.now() % 2147483647);
   const cenario = completo!.scenarios.find((s) => s.id === completo!.cenarioAtivoId) ?? completo!.scenarios.find((s) => s.isBase);
-  const resultado = rodarMonteCarlo({
+  const resultado = await rodarMonteCarlo({
     base: {
       mesInicial: completo!.mesInicial,
       horizonteMeses: completo!.horizonteMeses,
