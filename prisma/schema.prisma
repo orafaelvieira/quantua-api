@@ -33,6 +33,9 @@ model User {
   timezone                String?    @default("America/Sao_Paulo")
   language                String?    @default("pt-BR")
   onboardedAt             DateTime?  @map("onboarded_at")
+  // Offboarding da equipe interna: preenchido = acesso REVOGADO (não loga, sessão
+  // rejeitada). A conta e o histórico ficam; nada é apagado.
+  desativadoEm            DateTime?  @map("desativado_em")
   workspaceId             String?    @map("workspace_id")
   createdAt               DateTime   @default(now()) @map("created_at")
 

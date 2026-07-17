@@ -323,6 +323,51 @@ Equipe Quantua`;
   return sendSafe({ to: v.to, subject, html, text });
 }
 
+// Convite de ORGANIZAÇÃO (grupo econômico do cliente / parceiro contábil-jurídico).
+export interface OrgInviteVars {
+  to: string;
+  organizacaoNome: string;
+  organizacaoTipo: string; // "grupo" | "parceiro"
+  papel: string; // "gestor" | "membro"
+  magicLink: string;
+  expiresAt: Date;
+  /** Preenchido quando o acesso só começa numa data futura (org agendada). */
+  acessoAPartirDe?: Date | null;
+}
+
+export async function sendOrgInviteEmail(v: OrgInviteVars): Promise<{ ok: boolean; error?: string }> {
+  const expiresFmt = v.expiresAt.toLocaleDateString("pt-BR", { day: "2-digit", month: "long" });
+  const papelLabel = v.papel === "gestor" ? "gestor" : "membro";
+  const contexto = v.organizacaoTipo === "grupo"
+    ? `acessar os IBRs e valuations das empresas do grupo <strong>${v.organizacaoNome}</strong>`
+    : `acessar os IBRs e valuations das empresas atendidas por <strong>${v.organizacaoNome}</strong>`;
+  const inicioNota = v.acessoAPartirDe
+    ? ` O acesso começa em ${v.acessoAPartirDe.toLocaleDateString("pt-BR", { day: "2-digit", month: "long", year: "numeric" })}.`
+    : "";
+  const subject = `Convite Quantua · ${v.organizacaoNome}`;
+  const text = `Olá,
+
+Você foi convidado como ${papelLabel} para ${v.organizacaoNome} na plataforma Quantua.
+
+Clique no link abaixo para criar sua senha e acessar:
+
+${v.magicLink}
+
+Este convite expira em ${expiresFmt}. O link é de uso único.${inicioNota ? "\n" + inicioNota.trim() : ""}
+
+Equipe Quantua`;
+  const body =
+    renderHeading(`Você foi convidado para ${v.organizacaoNome} no Quantua.`) +
+    renderLede(`Como <strong>${papelLabel}</strong>, você poderá ${contexto}. Crie sua senha para começar.${inicioNota}`) +
+    renderButton(v.magicLink, "Aceitar convite →");
+  const html = renderShell({
+    eyebrow: "Convite Quantua",
+    body,
+    footer: `Convite expira em ${expiresFmt} · Uso único · ${DEFAULT_FOOTER}`,
+  });
+  return sendSafe({ to: v.to, subject, html, text });
+}
+
 export interface LeadConfirmationVars {
   to: string;
   contactName?: string;

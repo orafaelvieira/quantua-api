@@ -94,6 +94,9 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
   }
   req.userId = userId;
   try {
+    // Offboarding: acesso desativado → sessão rejeitada (mesmo com token válido).
+    const conta = await prisma.user.findUnique({ where: { id: userId }, select: { desativadoEm: true } });
+    if (conta?.desativadoEm) { res.status(403).json({ error: "Acesso desativado." }); return; }
     req.scopeUserIds = await resolveScopeUserIds(userId);
     // Fundação SaaS: escopo por EMPRESA para usuários externos (empresa/parceiro).
     // Import tardio para evitar ciclo (escopo-acesso importa resolveScopeUserIds).

@@ -62,7 +62,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-17.v115.ciclo-vida-organizacao";
+const BUILD_VERSION = "2026-07-17.v116.equipe-quantua-e-emails";
 
 // Sonda de diagnóstico dos restarts: health-check/deploy manda SIGTERM (dá tempo de
 // anotar no snapshot); OOM manda SIGKILL (não aparece). A anotação só ocorre com o
@@ -93,9 +93,9 @@ app.get("/version", async (_req, res) => {
       prisma.sector.count({ where: { active: true } }),
       prisma.cvmSyncState.count(),
     ]);
-    res.json({ ok: true, build: BUILD_VERSION, ...runtime, cvmSyncFiles, peers: { peerCompanies, pmPagamentoLines }, sectorsActive });
+    res.json({ ok: true, build: BUILD_VERSION, ...runtime, email: env.email.provider, cvmSyncFiles, peers: { peerCompanies, pmPagamentoLines }, sectorsActive });
   } catch {
-    res.json({ ok: true, build: BUILD_VERSION, ...runtime, peers: null });
+    res.json({ ok: true, build: BUILD_VERSION, ...runtime, email: env.email.provider, peers: null });
   }
 });
 

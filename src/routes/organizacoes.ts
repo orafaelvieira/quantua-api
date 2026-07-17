@@ -6,6 +6,22 @@ import { requireAuth, requireQuantua, AuthRequest } from "../middleware/auth";
 import { whereEmpresaVisivel } from "../services/escopo-empresa";
 import { registrarAuditoria } from "../services/audit-trail";
 import { statusOrganizacao } from "../services/escopo-acesso";
+import { sendOrgInviteEmail } from "../services/email";
+import { env } from "../config/env";
+
+/** Dispara o e-mail do convite de organização (não bloqueia a resposta se falhar). */
+async function enviarEmailConviteOrg(org: { nome: string; tipo: string; dataInicio: Date | null; suspenso: boolean; dataFim: Date | null }, email: string, papel: string, rawToken: string, expiresAt: Date): Promise<void> {
+  const status = statusOrganizacao(org, new Date());
+  await sendOrgInviteEmail({
+    to: email,
+    organizacaoNome: org.nome,
+    organizacaoTipo: org.tipo,
+    papel,
+    magicLink: `${env.frontendUrl}/convite/organizacao/${rawToken}`,
+    expiresAt,
+    acessoAPartirDe: status === "agendado" ? org.dataInicio : null,
+  }).catch((e) => console.error("[org-invite email]", (e as Error)?.message ?? e));
+}
 
 const PAPEIS_GRUPO = ["matriz", "holding", "investida", "filial", "outros"];
 /** Valida ISO date; devolve Date, null (limpar) ou undefined (não mexer). */
@@ -301,26 +317,48 @@ router.post("/:id/convites", async (req: AuthRequest, res: Response): Promise<vo
   const papelNorm = papel === "gestor" ? "gestor" : "membro";
   const org = await prisma.organizacao.findUnique({ where: { id } });
   if (!org) { res.status(404).json({ error: "Organização não encontrada" }); return; }
+  // Organização CANCELADA não dá acesso — convidar seria inútil/confuso.
+  if (statusOrganizacao(org, new Date()) === "cancelado") {
+    res.status(409).json({ error: "Organização cancelada (fim do acesso no passado) — reative a vigência antes de convidar." }); return;
+  }
 
   const pendente = await prisma.organizacaoConvite.findFirst({ where: { organizacaoId: id, email: emailNorm, status: "pending" } });
   if (pendente) { res.status(409).json({ error: "Já existe convite pendente para este e-mail" }); return; }
 
   const rawToken = crypto.randomBytes(32).toString("hex");
+  const expiraEm = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   const convite = await prisma.organizacaoConvite.create({
-    data: {
-      organizacaoId: id, email: emailNorm, papel: papelNorm,
-      tokenHash: hashToken(rawToken),
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      invitedById: req.userId!,
-    },
+    data: { organizacaoId: id, email: emailNorm, papel: papelNorm, tokenHash: hashToken(rawToken), expiresAt: expiraEm, invitedById: req.userId! },
   });
+  await enviarEmailConviteOrg(org, emailNorm, papelNorm, rawToken, expiraEm);
   void registrarAuditoria({
     userId: req.userId!, entity: "organizacao", entityId: id, field: "convite enviado",
     after: { email: emailNorm, papel: papelNorm }, source: "organizacoes",
   });
-  // Piloto: o link volta na resposta (uso único, 7 dias) — quem convidou repassa
-  // pelo canal que preferir. E-mail automático entra com o serviço de e-mail.
-  res.status(201).json({ id: convite.id, email: emailNorm, papel: papelNorm, expiraEm: convite.expiresAt, magicLink: `/convite/organizacao/${rawToken}` });
+  // O e-mail vai automático; o link também volta na resposta como FALLBACK
+  // (reenviar/copiar), útil se o provedor de e-mail não estiver configurado.
+  res.status(201).json({ id: convite.id, email: emailNorm, papel: papelNorm, expiraEm, magicLink: `/convite/organizacao/${rawToken}`, emailEnviado: env.email.provider === "resend" });
+});
+
+// POST /organizacoes/:id/convites/:conviteId/reenviar — gera NOVO link (o antigo
+// deixa de valer) e reenvia o e-mail. Uso único preservado.
+router.post("/:id/convites/:conviteId/reenviar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = String(req.params.id);
+  if (!(await podeGerirMembros(req.userId!, id))) { res.status(403).json({ error: "Sem permissão" }); return; }
+  const convite = await prisma.organizacaoConvite.findFirst({ where: { id: String(req.params.conviteId), organizacaoId: id, status: "pending" } });
+  if (!convite) { res.status(404).json({ error: "Convite pendente não encontrado" }); return; }
+  const org = await prisma.organizacao.findUnique({ where: { id } });
+  if (!org) { res.status(404).json({ error: "Organização não encontrada" }); return; }
+
+  const rawToken = crypto.randomBytes(32).toString("hex");
+  const expiraEm = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  await prisma.organizacaoConvite.update({ where: { id: convite.id }, data: { tokenHash: hashToken(rawToken), expiresAt: expiraEm } });
+  await enviarEmailConviteOrg(org, convite.email, convite.papel, rawToken, expiraEm);
+  void registrarAuditoria({
+    userId: req.userId!, entity: "organizacao", entityId: id, field: "convite reenviado",
+    after: { email: convite.email }, source: "organizacoes",
+  });
+  res.json({ ok: true, email: convite.email, expiraEm, magicLink: `/convite/organizacao/${rawToken}`, emailEnviado: env.email.provider === "resend" });
 });
 
 // DELETE /organizacoes/:id/convites/:conviteId — revoga convite pendente.

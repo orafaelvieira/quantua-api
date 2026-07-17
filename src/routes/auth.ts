@@ -107,6 +107,10 @@ router.post("/login", loginLimiter, async (req: Request, res: Response): Promise
     res.status(401).json({ error: "E-mail ou senha incorretos" });
     return;
   }
+  if (user.desativadoEm) {
+    res.status(403).json({ error: "Acesso desativado. Fale com o administrador da sua equipe." });
+    return;
+  }
 
   res.json({
     user: { id: user.id, name: user.name, email: user.email, workspaceType: user.workspaceType, role: user.role, tipoUsuario: user.tipoUsuario },
