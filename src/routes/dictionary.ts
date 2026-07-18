@@ -419,10 +419,17 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
         // CASE-INSENSITIVE: o documento traz "CLIENTES", o seed tem "Clientes" —
         // é a mesma conta (o fold já compara sem caixa; aqui precisa igualar,
         // senão a personalização entraria na fila como se fosse conta nova).
+        // DRE: a tela usa o DESTINO como `grupoConta`. Filtrar por ele aqui fazia
+        // com que TROCAR o destino não encontrasse a entrada existente e criasse
+        // uma SEGUNDA linha — e a antiga continuava vencendo no fold (a blindagem
+        // contextual prefere o destino cujo bloco casa com o caminho do documento).
+        // Resultado: "alterei a classificação e ele não respeitou". Para DRE a
+        // identidade é (nome, tipo, escopo); para BP o grupo é o grupo REAL do
+        // documento (a mesma conta em PC e PNC são distintas) e continua na chave.
         const existentes = await prisma.accountDictionary.findMany({
           where: {
             nomeOriginal: { equals: entry.nomeOriginal, mode: "insensitive" },
-            grupoConta: { equals: entry.grupoConta, mode: "insensitive" },
+            ...(tipoE === "DRE" ? {} : { grupoConta: { equals: entry.grupoConta, mode: "insensitive" as const } }),
             tipo: tipoE,
             ...whereCascataDicionario(req.scopeUserIds!, companyIdClassify),
           },
@@ -448,7 +455,23 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
         const globalEquivalente = existentes.find((e) => e.companyId === null && e.userId === null);
         const particular = avaliarContaParticular(entry.nomeOriginal, caminho ?? entry.grupoConta);
         const revisaoNova = globalEquivalente ? "local" : particular.particular ? "particular" : "pendente";
-        const daEmpresa = existentes.find((e) => e.companyId === companyIdClassify);
+        const daEmpresaTodas = existentes.filter((e) => e.companyId === companyIdClassify);
+        // Escolhe a linha a MANTER: preferir a que já tem a chave-alvo
+        // (nome+tipo+grupoConta) — senão o update mudaria o grupoConta para uma
+        // chave JÁ OCUPADA por outra linha e a unique estouraria (era o que fazia
+        // a alteração ser silenciosamente descartada).
+        const chaveIgual = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+        const daEmpresa = daEmpresaTodas.find((e) => chaveIgual(e.grupoConta, entry.grupoConta)) ?? daEmpresaTodas[0];
+        // Duplicatas herdadas do bug (DRE reclassificada antes desta correção):
+        // CANCELA as sobrando — saem da cascata do fold sem apagar o histórico
+        // (política: nunca deletar). A mantida é atualizada logo abaixo.
+        const duplicatas = daEmpresaTodas.filter((e) => e.id !== daEmpresa?.id);
+        if (duplicatas.length > 0) {
+          await prisma.accountDictionary.updateMany({
+            where: { id: { in: duplicatas.map((e) => e.id) } },
+            data: { revisao: "cancelada", revisaoMotivo: "Duplicata de reclassificação da DRE — substituída pela classificação atual." },
+          });
+        }
         let result;
         let mudou = false;
         if (daEmpresa) {
@@ -457,12 +480,19 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
           // grupo passam a funcionar para entradas antigas).
           mudou = daEmpresa.contaDestino !== entry.contaDestino ||
             daEmpresa.revisao === "cancelada" ||
+            duplicatas.length > 0 ||
             (caminho !== null && !daEmpresa.grupoCaminho);
           result = mudou
             ? await prisma.accountDictionary.update({
                 where: { id: daEmpresa.id },
-                // Reclassificar reabre a revisão (o destino proposto mudou).
-                data: { contaDestino: entry.contaDestino, userId: req.userId!, revisao: revisaoNova, revisadoPor: null, revisadoEm: null, revisaoMotivo: particular.motivo, ...(caminho ? { grupoCaminho: caminho } : {}) },
+                // Reclassificar reabre a revisão (o destino proposto mudou). Na DRE
+                // o grupoConta acompanha o destino (convenção da tela).
+                data: {
+                  contaDestino: entry.contaDestino, userId: req.userId!,
+                  ...(tipoE === "DRE" ? { grupoConta: entry.grupoConta } : {}),
+                  revisao: revisaoNova, revisadoPor: null, revisadoEm: null, revisaoMotivo: particular.motivo,
+                  ...(caminho ? { grupoCaminho: caminho } : {}),
+                },
               })
             : daEmpresa;
         } else {
