@@ -95,6 +95,8 @@ export async function buildIndicators(
   // Config DO IBR (Analysis.indicadorConfig.rows): quando presente, substitui o catálogo
   // global — semáforo calibrado pelos pares, exibição e personalizados daquele engajamento.
   ibrRows?: ConfigRow[] | null,
+  // Períodos de BALANCETE (DRE acumulada no ano): prazos médios usam dias YTD (mês × 30).
+  periodosYTD?: string[],
 ): Promise<Indicador[]> {
   let configs: ConfigRow[] = [];
   if (ibrRows && ibrRows.length > 0) {
@@ -113,7 +115,7 @@ export async function buildIndicators(
     const sem = semaforoDe(c);
     if (sem) overrides[c.nome] = sem;
   }
-  const canonicos = calculateIndicators(bp, dre, periodos, overrides).map((ind) => {
+  const canonicos = calculateIndicators(bp, dre, periodos, overrides, undefined, periodosYTD).map((ind) => {
     const c = byNome.get(ind.nome);
     return c && !c.ativo ? { ...ind, oculto: true } : ind;
   });

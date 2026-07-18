@@ -106,6 +106,31 @@ function limparInicioNome(s: string): string {
     .trim();
 }
 
+// ── identificação pelo CONTEÚDO ──────────────────────────────────────────────
+
+/**
+ * O documento É um balancete? Decide pela ASSINATURA ESTRUTURAL, não pelo nome
+ * do arquivo (o analista pode nomear errado): título "balancete" no cabeçalho,
+ * ou colunas Saldo anterior/Débito/Crédito/Saldo com ≥10 linhas de 4-5 valores
+ * monetários. Usado no /process para corrigir o roteamento automaticamente.
+ */
+export function pareceBalancete(texto: string): { balancete: boolean; evidencias: string[] } {
+  const evidencias: string[] = [];
+  const cab = texto.slice(0, 4000).toLowerCase().replace(/\s+/g, " ");
+  const temTitulo = /balancete/.test(cab);
+  if (temTitulo) evidencias.push("título 'balancete' no cabeçalho do documento");
+  const temColunas = /saldo\s*ant/.test(cab) && /d[ée]bito/.test(cab) && /cr[ée]dito/.test(cab);
+  if (temColunas) evidencias.push("colunas Saldo anterior · Débito · Crédito no cabeçalho");
+  let linhas4Col = 0;
+  for (const linha of texto.split("\n")) {
+    const n = [...linha.replace(/\|/g, " ").matchAll(RE_VALOR)].length;
+    if (n === 4 || n === 5) { linhas4Col++; if (linhas4Col >= 10) break; }
+  }
+  if (linhas4Col >= 10) evidencias.push("10+ linhas com 4-5 colunas monetárias (estrutura de balancete)");
+  const balancete = temTitulo || (temColunas && linhas4Col >= 10);
+  return { balancete, evidencias };
+}
+
 // ── parser principal ─────────────────────────────────────────────────────────
 
 interface Candidata {

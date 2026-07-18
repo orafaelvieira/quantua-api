@@ -68,6 +68,77 @@ function fmtBRL(val: number): string {
 }
 
 /**
+ * CRONOLOGIA dos períodos (2026-07-18): lacunas na série quebram silenciosamente
+ * variações YoY, fluxo de caixa (Δ entre períodos consecutivos) e a leitura das
+ * séries. Detecta: exercício anual faltando no meio da série; balancetes mensais
+ * sem o fechamento anual do ano anterior; meses pulados dentro do ano.
+ * Determinístico, só sobre os RÓTULOS dos períodos (dd/mm/aaaa · "aaaa" · LTM é
+ * ignorado — parcial corrente por definição). Sempre "aviso": alerta forte no
+ * relatório sem criar beco sem saída (o analista pode não ter o documento).
+ */
+export function alertasCronologia(periodos: string[]): ValidationAlert[] {
+  const alertas: ValidationAlert[] = [];
+  const anuais = new Set<number>();
+  const mensais = new Map<number, Set<number>>(); // ano → meses (1-11)
+  for (const p of periodos) {
+    if (/ltm/i.test(p)) continue;
+    const m = p.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (m) {
+      const mes = parseInt(m[2]), ano = parseInt(m[3]);
+      if (mes === 12) anuais.add(ano);
+      else (mensais.get(ano) ?? mensais.set(ano, new Set()).get(ano)!).add(mes);
+      continue;
+    }
+    const y = p.match(/^\s*(20\d{2})\s*$/);
+    if (y) anuais.add(parseInt(y[1]));
+  }
+
+  // 1. Exercício anual faltando no MEIO da série anual
+  if (anuais.size >= 2) {
+    const anos = [...anuais].sort((a, b) => a - b);
+    for (let a = anos[0] + 1; a < anos[anos.length - 1]; a++) {
+      if (!anuais.has(a)) {
+        alertas.push({
+          tipo: "aviso",
+          area: "Cronologia",
+          mensagem: `Exercício de ${a} ausente — a série anual salta de ${a - 1} para ${a + 1}.`,
+          detalhes: "Variações ano a ano e o fluxo de caixa desse intervalo serão calculados sobre 2 exercícios de uma vez. Envie a demonstração faltante ou considere isso na leitura.",
+        });
+      }
+    }
+  }
+
+  for (const [ano, mesesSet] of [...mensais.entries()].sort((a, b) => a[0] - b[0])) {
+    // 2. Mensal sem o fechamento anual do ano anterior (base do Δ do 1º mês)
+    if (!anuais.has(ano - 1) && !mensais.has(ano - 1)) {
+      alertas.push({
+        tipo: "aviso",
+        area: "Cronologia",
+        mensagem: `Períodos mensais de ${ano} sem o fechamento anual de ${ano - 1}.`,
+        detalhes: `O primeiro mês de ${ano} não tem base imediatamente anterior — o fluxo de caixa e as variações desse ponto comparam com o último período disponível, que pode estar a mais de um ano de distância.`,
+      });
+    }
+    // 3. Meses pulados dentro do ano (entre o primeiro e o último enviado)
+    const meses = [...mesesSet].sort((a, b) => a - b);
+    const faltando: number[] = [];
+    for (let m = meses[0] + 1; m < meses[meses.length - 1]; m++) {
+      if (!mesesSet.has(m)) faltando.push(m);
+    }
+    if (faltando.length > 0) {
+      const fmt = (m: number): string => `${String(m).padStart(2, "0")}/${ano}`;
+      alertas.push({
+        tipo: "aviso",
+        area: "Cronologia",
+        mensagem: `Balancetes de ${ano} com lacuna: falta ${faltando.map(fmt).join(", ")} — a série mensal salta de ${fmt(meses[0])} a ${fmt(meses[meses.length - 1])} com ${faltando.length} mês(es) ausente(s).`,
+        detalhes: "As variações mensais e o fluxo de caixa do intervalo com lacuna cobrem mais de um mês de uma vez. Envie o balancete faltante para a série ficar contínua.",
+      });
+    }
+  }
+
+  return alertas;
+}
+
+/**
  * Validate structured financial data (BP and DRE) for consistency.
  * Checks accounting equations, signs, completeness, and cross-document consistency.
  */
@@ -81,6 +152,9 @@ export function validateFinancialData(
   let equacaoPatrimonial = true;
   let composicaoAtivo = true;
   let composicaoPassivo = true;
+
+  // ===== 0. Cronologia: lacunas na série de períodos (sempre "aviso") =====
+  alertas.push(...alertasCronologia(periodos));
 
   for (const periodo of periodos) {
     // ===== 1. Equação Patrimonial: Ativo Total = Passivo Total =====

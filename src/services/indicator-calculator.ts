@@ -304,17 +304,29 @@ function computeIndicator(
   }
 }
 
+/** Dias-base de um período YTD (balancete: DRE ACUMULADA jan→mês): mês × 30; dezembro = ano cheio. */
+export function diasYTD(periodo: string): number {
+  const m = periodo.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  const mes = m ? parseInt(m[2]) : 12;
+  return mes === 12 ? 365 : mes * 30;
+}
+
 export function calculateIndicators(
   bp: BPLineItem[],
   dre: DRELineItem[],
   periodos: string[],
   semaforoOverrides?: Record<string, SemaforoDef>,
-  diasOverride?: number // força a base dos prazos (ex.: pares CVM — TRI=90, LTM=365)
+  diasOverride?: number, // força a base dos prazos (ex.: pares CVM — TRI=90, LTM=365)
+  periodosYTD?: string[] // períodos de BALANCETE (DRE acumulada no ano): dias = mês × 30
 ): Indicador[] {
   // Ordem cronológica p/ os indicadores MULTI-PERÍODO (YoY) e dias-base dos prazos.
   const periodosOrd = [...periodos].sort((a, b) => diasKey(a) - diasKey(b));
   const diasPorPeriodo: Record<string, number> = {};
-  for (const p of periodos) diasPorPeriodo[p] = diasOverride ?? diasDoPeriodo(p, periodos);
+  const ytd = new Set(periodosYTD ?? []);
+  // Períodos de balancete têm dias-base PRÓPRIOS (YTD): a mediana do espaçamento
+  // da série mista anual+mensal daria 365 para um mês de maio (prazos médios ~2,4×
+  // inflados). Cada período usa a base da SUA periodicidade.
+  for (const p of periodos) diasPorPeriodo[p] = diasOverride ?? (ytd.has(p) ? diasYTD(p) : diasDoPeriodo(p, periodos.filter((x) => !ytd.has(x) || x === p)));
   // Receita Líquida por período (base do Crescimento YoY)
   const rlPor: Record<string, number | null> = {};
   for (const p of periodos) {

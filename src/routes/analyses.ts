@@ -7,7 +7,7 @@ import { env } from "../config/env";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, extrairTextoLayoutPDF, type ExtractedRow, type ParsedDocument } from "../services/parser";
-import { parseBalanceteTexto } from "../services/balancete-parser";
+import { parseBalanceteTexto, pareceBalancete } from "../services/balancete-parser";
 import { converterBalancete } from "../services/balancete-conversao";
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
@@ -629,6 +629,13 @@ async function runAnalysisBackground(
 // (bug nº 4 do sweep do corpus).
 const ehBalancete = (tipo: string): boolean => /balancete/i.test(tipo);
 
+// Períodos vindos de BALANCETE no IBR (DRE acumulada YTD): base dos dias dos
+// prazos médios e da leitura mensal.
+const periodosBalanceteDe = (dados: unknown): string[] => {
+  const arr = Array.isArray((dados as any)?.arvoresBalancete) ? (dados as any).arvoresBalancete : [];
+  return arr.map((b: any) => b?.periodo).filter((p: unknown): p is string => typeof p === "string" && p.length > 0);
+};
+
 // Aplica as PROVAS DETERMINÍSTICAS dos balancetes à validação do modelo.
 // Balancete NÃO fecha AT=PT — o fechamento correto é Ativo − Passivo =
 // resultado acumulado do ano (lucro ainda não transferido ao PL), provado ao
@@ -698,10 +705,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
   // SUBSTITUÍDOS também não: a versão corrigida é quem representa o insumo (política
   // 2026-07-15 — a antiga fica só como evidência das versões anteriores do produto).
   const docsAtivos = analysis.documents.filter((d) => d.tipo !== MATERIAL_TIPO && d.status !== "Substituído");
-  // Balancetes SAEM do fluxo BP/DRE (linha de extração separada, adiante).
-  const balanceteDocs = docsAtivos.filter((d) => ehBalancete(d.tipo));
-  const financialDocs = docsAtivos.filter((d) => !ehBalancete(d.tipo));
-  if (financialDocs.length === 0 && balanceteDocs.length === 0) {
+  if (docsAtivos.length === 0) {
     res.status(400).json({ error: "Nenhuma demonstração contábil enviada para esta análise" });
     return;
   }
@@ -714,6 +718,55 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
   res.status(202).json({ id: analysis.id, status: "Extraindo" });
 
   try {
+
+    // ── IDENTIFICAÇÃO DO TIPO PELO CONTEÚDO (2026-07-18) ──
+    // O analista pode nomear o arquivo errado; o roteamento decide pelo DOCUMENTO:
+    // balancete tem assinatura estrutural (título "balancete" ou colunas Saldo
+    // anterior/Débito/Crédito com 10+ linhas de 4-5 valores). Rótulo divergente é
+    // CORRIGIDO (persistido + auditado) e o analista é avisado. BP×DRE já é
+    // decidido pelo conteúdo na cascata (detectDocType, "content first").
+    const bufferCache = new Map<string, Buffer>();
+    const baixarDoc = async (doc: { id: string; storagePath: string | null }): Promise<Buffer> => {
+      const cache = bufferCache.get(doc.id);
+      if (cache) return cache;
+      const buffer = await downloadFile(doc.storagePath!);
+      bufferCache.set(doc.id, buffer);
+      return buffer;
+    };
+    const alertasTipoDoc: Array<{ tipo: "erro" | "aviso" | "info"; area: string; mensagem: string; detalhes?: string }> = [];
+    for (const doc of docsAtivos) {
+      if (!doc.storagePath || !/\.pdf$/i.test(doc.nome) || doc.editadoManualmente) continue;
+      try {
+        const texto = await extrairTextoLayoutPDF(await baixarDoc(doc));
+        if (!texto || texto.length < 300) continue; // escaneado/sem texto — não dá para afirmar nada
+        const det = pareceBalancete(texto);
+        const rotulado = ehBalancete(doc.tipo);
+        let tipoNovo: string | null = null;
+        if (det.balancete && !rotulado) tipoNovo = "Balancete";
+        // rótulo diz balancete, mas o conteúdo NÃO tem a estrutura nem o título → cascata BP/DRE
+        else if (!det.balancete && rotulado) tipoNovo = "PDF";
+        if (tipoNovo) {
+          await prisma.document.update({ where: { id: doc.id }, data: { tipo: tipoNovo } });
+          void registrarAuditoria({
+            userId: req.userId!, analysisId: analysis.id, entity: "document", entityId: doc.id,
+            field: "tipo (identificado pelo conteúdo)", before: { tipo: doc.tipo }, after: { tipo: tipoNovo, evidencias: det.evidencias }, source: "process",
+          });
+          alertasTipoDoc.push({
+            tipo: "aviso", area: "Tipo de documento",
+            mensagem: `${doc.nome}: enviado como "${doc.tipo}", mas o conteúdo é ${tipoNovo === "Balancete" ? "um BALANCETE" : "uma demonstração BP/DRE (não tem estrutura de balancete)"} — o sistema corrigiu o tipo automaticamente.`,
+            detalhes: det.evidencias.length ? `Evidências: ${det.evidencias.join("; ")}.` : "Nenhuma assinatura de balancete encontrada no conteúdo.",
+          });
+          doc.tipo = tipoNovo; // partição abaixo usa o tipo corrigido
+          console.log(`[process] tipo corrigido pelo conteúdo: ${doc.nome} → ${tipoNovo}`);
+        }
+      } catch (e: any) {
+        console.warn(`[process] sniff de tipo falhou para ${doc.nome} (segue com o rótulo):`, e?.message ?? e);
+      }
+    }
+
+    // Balancetes SAEM do fluxo BP/DRE (linha de extração separada, adiante).
+    const balanceteDocs = docsAtivos.filter((d) => ehBalancete(d.tipo));
+    const financialDocs = docsAtivos.filter((d) => !ehBalancete(d.tipo));
 
     // 2. Baixa e parseia cada documento (ou usa dados editados manualmente)
     const parsedDocs: ParsedDocument[] = await Promise.all(
@@ -729,8 +782,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
             return { tipo: doc.tipo, linhas, periodos, raw };
           }
 
-          // Caso contrário, re-parsear o arquivo original
-          const buffer = await downloadFile(doc.storagePath!);
+          // Caso contrário, re-parsear o arquivo original (cache do sniff de tipo)
+          const buffer = await baixarDoc(doc);
           const parsed = await parseDocument(buffer, doc.nome, doc.tipo);
 
           // Calculate per-document confidence based on extraction quality
@@ -994,7 +1047,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } });
           continue;
         }
-        const buffer = await downloadFile(doc.storagePath);
+        const buffer = await baixarDoc(doc);
         const texto = await extrairTextoLayoutPDF(buffer);
         if (!texto || texto.length < 100) {
           balancetes.push({ docId: doc.id, nome: doc.nome, erro: "PDF sem texto extraível (escaneado?) — OCR de balancete ainda não suportado" });
@@ -1046,9 +1099,13 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       validacao = validateFinancialData(structuredBP, structuredDRE, allPeriodos, declaradosDRE);
       aplicarProvasBalancete(validacao, { balancetes });
     }
+    // Avisos de tipo corrigido pelo conteúdo entram na validação (e persistem adiante)
+    validacao.alertas.push(...alertasTipoDoc);
 
     // DRE já normalizada/recalculada e validada na cascata (avalia) → só os indicadores.
-    const indicadores = await buildIndicators(structuredBP, structuredDRE, allPeriodos, rowsIBRDe(analysis.indicadorConfig));
+    // Meses de balancete = DRE acumulada YTD → prazos médios com dias-base do mês.
+    const periodosYTDProc = arvoresBalancete.map((a) => a.periodo).filter(Boolean);
+    const indicadores = await buildIndicators(structuredBP, structuredDRE, allPeriodos, rowsIBRDe(analysis.indicadorConfig), periodosYTDProc);
     console.log(`[process] Validação: confiança=${validacao.confiancaGeral}%, equação=${validacao.equacaoPatrimonial}, alertas=${validacao.alertas.length}`);
     for (const alerta of validacao.alertas) {
       console.log(`[process]   [${alerta.tipo}] ${alerta.area}: ${alerta.mensagem}`);
@@ -1127,6 +1184,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       (dadosEstruturados as any).balancetes = balancetes;
       (dadosEstruturados as any).arvoresBalancete = arvoresBalancete;
     }
+    // Correções de tipo pelo conteúdo: persistidas para o GET /validacao e o /refold
+    // (que recalculam a validação do zero) continuarem mostrando o aviso ao analista.
+    if (alertasTipoDoc.length > 0) (dadosEstruturados as any).alertasTipoDocumento = alertasTipoDoc;
 
     // HASH DE VERSÃO da extração (política 2026-07-15): proveniência COMPLETA dos
     // insumos usados — documentos (sha256 + versão), dicionário e modelos padrão de
@@ -1541,6 +1601,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   if (dados.version === 2) {
     dados.validacao = validateFinancialData(dados.bp ?? [], dados.dre ?? [], periodos, (dados as any).declarados);
     aplicarProvasBalancete(dados.validacao, dados as any);
+    dados.validacao.alertas.push(...(((dados as any).alertasTipoDocumento ?? []) as typeof dados.validacao.alertas));
   }
   const prontidaoRefold = avaliarProntidaoGeracao(dados);
   (dados as any).prontidao = prontidaoRefold;
@@ -1549,7 +1610,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   // caiu a última pendência, este refold já os calcula; com pendências, ficam vazios
   // ("sem informação" em vez de número enganoso). Overrides manuais são preservados.
   if (prontidaoRefold.pronta) {
-    const novos = await buildIndicators(dados.bp ?? [], dados.dre ?? [], periodos, rowsIBRDe(analysis.indicadorConfig));
+    const novos = await buildIndicators(dados.bp ?? [], dados.dre ?? [], periodos, rowsIBRDe(analysis.indicadorConfig), periodosBalanceteDe(dados));
     for (const n of novos) {
       const antigo = (dados.indicadores as any[])?.find((i) => i?.nome === n.nome);
       if (antigo?.overrides) (n as any).overrides = antigo.overrides;
@@ -1647,7 +1708,7 @@ router.put("/:id/dados-estruturados/indicadores/override", async (req: AuthReque
 async function recalcularIndicadoresComConfig(id: string, dados: any, rows: ConfigRow[]): Promise<boolean> {
   const prontidao = avaliarProntidaoGeracao(dados);
   if (!prontidao.pronta) return false; // sem extração validada, indicadores seguem vazios (gate)
-  const novos = await buildIndicators(dados.bp ?? [], dados.dre ?? [], dados.periodos ?? [], rows);
+  const novos = await buildIndicators(dados.bp ?? [], dados.dre ?? [], dados.periodos ?? [], rows, periodosBalanceteDe(dados));
   for (const n of novos) {
     const antigo = (dados.indicadores as any[])?.find((i) => i?.nome === n.nome);
     if (antigo?.overrides) (n as any).overrides = antigo.overrides;
@@ -1804,7 +1865,7 @@ router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Respons
     });
     return;
   }
-  const newIndicadores = await buildIndicators(dados.bp, dados.dre, dados.periodos, rowsIBRDe(analysis.indicadorConfig));
+  const newIndicadores = await buildIndicators(dados.bp, dados.dre, dados.periodos, rowsIBRDe(analysis.indicadorConfig), periodosBalanceteDe(dados));
 
   // Preserve user overrides from old indicators
   for (const newInd of newIndicadores) {
@@ -1929,6 +1990,7 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
   const dados = analysis.dadosEstruturados as any as DadosEstruturados;
   const validacao = validateFinancialData(dados.bp, dados.dre, dados.periodos, (dados as any).declarados);
   aplicarProvasBalancete(validacao, dados as any);
+  validacao.alertas.push(...(((dados as any).alertasTipoDocumento ?? []) as typeof validacao.alertas));
 
   // Also run Benford's Law
   const allValues: number[] = [];
