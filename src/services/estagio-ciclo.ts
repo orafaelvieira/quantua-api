@@ -92,20 +92,32 @@ function pontosAltman(v: number): { pts: number; rotulo: string } {
   return { pts: 0, rotulo: "zona de perigo" };
 }
 
-/** Score de solidez em um período: soma dos componentes disponíveis (2 pts cada). */
+/** Score de solidez em um período: soma dos componentes disponíveis (2 pts cada).
+ *  LEITOR = DONO DA EMPRESA: cada componente é escrito com o SIGNIFICADO na frente
+ *  e o nome técnico entre parênteses no fim (o analista continua rastreando a
+ *  fonte, o dono entende sem dicionário). */
 function solidezEm(indicadores: IndicadorLite[], p: string): { score: number; max: number; componentes: string[] } | null {
   const fmtN = (v: number) => v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   let score = 0, max = 0;
   const componentes: string[] = [];
 
   const fle = pontosFleuriet(acha(indicadores, "Situação de Liquidez (Fleuriet)")?.valores[p]);
-  if (fle) { score += fle.pts; max += 2; componentes.push(`Estrutura de giro (Fleuriet): ${fle.rotulo}`); }
+  if (fle) {
+    score += fle.pts; max += 2;
+    componentes.push(`Como a operação se financia: ${fle.rotulo.toLowerCase()} — mede se as vendas do dia a dia se sustentam sozinhas ou dependem de dinheiro de curto prazo, como cheque especial e antecipação de recebíveis (estrutura de giro, método Fleuriet)`);
+  }
 
   const kan = numOf(acha(indicadores, "Termômetro de Kanitz")?.valores[p]);
-  if (kan != null) { const r = pontosKanitz(kan); score += r.pts; max += 2; componentes.push(`Termômetro de Kanitz: ${fmtN(kan)} (${r.rotulo})`); }
+  if (kan != null) {
+    const r = pontosKanitz(kan); score += r.pts; max += 2;
+    componentes.push(`Risco de não conseguir pagar as contas: ${r.rotulo} — nota que junta lucro, folga de caixa e endividamento para estimar esse risco; acima de zero é confortável (termômetro de Kanitz: ${fmtN(kan)})`);
+  }
 
   const alt = numOf(acha(indicadores, "Altman Z-Score (EM)")?.valores[p]);
-  if (alt != null) { const r = pontosAltman(alt); score += r.pts; max += 2; componentes.push(`Altman Z-Score: ${fmtN(alt)} (${r.rotulo})`); }
+  if (alt != null) {
+    const r = pontosAltman(alt); score += r.pts; max += 2;
+    componentes.push(`Nota de solidez usada por bancos e investidores: ${r.rotulo} — quanto maior, menor a chance de a empresa quebrar; acima de 2,6 é zona segura (Altman Z-Score: ${fmtN(alt)})`);
+  }
 
   return max > 0 ? { score, max, componentes } : null;
 }
@@ -193,13 +205,27 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
   // mínimo também é crise, mesmo com margem positiva — a estrutura já cedeu.
   const solvenciaColapsada = solidez != null && solidez.max >= 4 && solidez.score / solidez.max <= 0.25;
   if ((margemNeg && liqBaixa) || (margemNeg && caixaMinimo) || (solvenciaColapsada && caixaMinimo)) {
+    // LEITOR = DONO: cada indicador vira uma frase que se explica sozinha. Números
+    // em formato brasileiro (o toFixed antigo imprimia "0.01" com ponto).
+    const num = (v: number, casas: number) => v.toLocaleString("pt-BR", { minimumFractionDigits: casas, maximumFractionDigits: casas });
     const partes = [
-      margemOp != null ? `margem operacional ${pct(margemOp)}` : null,
-      liqCorr != null ? `liquidez corrente ${liqCorr.toFixed(2)}` : null,
-      liqImed != null ? `liquidez imediata ${liqImed.toFixed(3)}` : null,
-      solvenciaColapsada ? "trio de solvência no nível crítico" : null,
-    ].filter(Boolean).join(", ");
-    return com({ estagio: "Crise de caixa", justificativa: `Aperto agudo de liquidez (${partes}).` });
+      liqCorr != null
+        ? `para cada R$ 1,00 que vence no curto prazo a empresa tem apenas R$ ${num(liqCorr, 2)} em bens e direitos de curto prazo para cobrir (liquidez corrente de ${num(liqCorr, 2)})`
+        : null,
+      liqImed != null
+        ? `o dinheiro disponível hoje cobre só ${num(liqImed * 100, 1)}% dessas contas (liquidez imediata)`
+        : null,
+      margemOp != null && margemOp < 0
+        ? `a operação opera no vermelho, gastando mais do que fatura (margem operacional de ${pct(margemOp)})`
+        : margemOp != null
+        ? `a operação em si ainda dá resultado, com margem operacional de ${pct(margemOp)}`
+        : null,
+      solvenciaColapsada ? "e os três termômetros de solvência estão no nível crítico" : null,
+    ].filter(Boolean).join("; ");
+    return com({
+      estagio: "Crise de caixa",
+      justificativa: `A empresa está sem fôlego de caixa: ${partes}. Na prática, falta dinheiro disponível para honrar os compromissos que vencem nos próximos meses.`,
+    });
   }
 
   // 2) DICKINSON com MATERIALIDADE + PERSISTÊNCIA sobre as colunas PROVADAS.
@@ -265,9 +291,11 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
     const margemPos = margemOp != null && margemOp > 0;
     const crescUltAno = receita[n - 2] !== 0 ? (receita[n - 1] - receita[n - 2]) / Math.abs(receita[n - 2]) : 0;
 
-    if (quedaUlt || cresc < -0.1) return { estagio: "Declínio", justificativa: `A receita vem caindo ao longo do histórico (${pct(cresc)} acumulado), sem aperto agudo de caixa.` };
-    if (cresceUlt && crescUltAno > 0.15 && margemPos) return { estagio: "Crescimento", justificativa: `A receita segue em expansão (${pct(crescUltAno)} no último ano) com margem operacional positiva.` };
-    if (Math.abs(cresc) <= 0.1 && margemPos && (liqCorr == null || liqCorr >= 1)) return { estagio: "Maturidade", justificativa: `Receita estável (${pct(cresc)} no período), margem positiva e liquidez adequada.` };
-    return { estagio: "Platô", justificativa: `Receita praticamente estagnada (${pct(cresc)} no período), sem sinais claros de crescimento, declínio ou aperto de caixa.` };
+    // Frases que se explicam sozinhas: o que aconteceu com o faturamento e o que
+    // isso significa, sem exigir que o leitor saiba o que é "margem operacional".
+    if (quedaUlt || cresc < -0.1) return { estagio: "Declínio", justificativa: `O faturamento vem encolhendo ao longo do período analisado, ${pct(cresc)} no acumulado, mas sem aperto agudo de caixa por enquanto: a empresa ainda consegue pagar suas contas, e o problema está em vender menos a cada ano.` };
+    if (cresceUlt && crescUltAno > 0.15 && margemPos) return { estagio: "Crescimento", justificativa: `O faturamento está em expansão, com alta de ${pct(crescUltAno)} no último ano, e a operação fecha no azul: o que sobra das vendas depois de custos e despesas do dia a dia é positivo.` };
+    if (Math.abs(cresc) <= 0.1 && margemPos && (liqCorr == null || liqCorr >= 1)) return { estagio: "Maturidade", justificativa: `O faturamento se manteve estável no período, variação de ${pct(cresc)}, a operação fecha no azul e a empresa tem folga para pagar as contas de curto prazo.` };
+    return { estagio: "Platô", justificativa: `O faturamento está praticamente parado, variação de ${pct(cresc)} no período, sem sinal claro de crescimento nem de queda, e sem aperto de caixa: a empresa se mantém, mas não avança.` };
   }
 }
