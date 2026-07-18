@@ -149,6 +149,10 @@ model AccountDictionary {
   revisadoEm    DateTime? @map("revisado_em")
   // Motivo da reprovação/cancelamento (obrigatório na reprovação da fila).
   revisaoMotivo String?   @map("revisao_motivo")
+  // Caminho da conta no documento de origem ("Ativo Circulante > … > EMPRÉSTIMOS
+  // A PESSOAS LIGADAS") — alimenta o detector de conta PARTICULAR e a promoção
+  // "como regra de grupo" (promove o nome do grupo, nunca o nome do terceiro).
+  grupoCaminho  String?   @map("grupo_caminho")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 

@@ -6,6 +6,7 @@ import { bumpDictionaryVersion, getCurrentDictionaryVersion } from "../services/
 import { DEFAULT_BP_MODEL, IGNORAR_DESTINO } from "../services/account-mapper";
 import { avaliaBloqueioEstrutural } from "../services/conta-estrutural";
 import { prioridadeEscopo, whereCascataDicionario } from "../services/dicionario-escopo";
+import { avaliarContaParticular, grupoImediatoDoCaminho } from "../services/conta-particular";
 
 const router = Router();
 router.use(requireAuth);
@@ -347,12 +348,23 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
   // classificada aqui não "suja" os IBRs das outras empresas. A promoção ao
   // global é humana, na tela "Validação de contas".
   let companyIdClassify: string | null = null;
+  // Caminho do documento por conta (dos não-mapeados do IBR): alimenta o
+  // detector de conta PARTICULAR e a promoção "como regra de grupo" na fila.
+  const caminhoPorConta = new Map<string, string>();
   if (typeof analysisId === "string" && analysisId) {
     const a = await prisma.analysis.findFirst({
       where: { id: analysisId, ...whereRecursoEmpresa(req) },
-      select: { companyId: true },
+      select: { companyId: true, dadosEstruturados: true },
     });
     companyIdClassify = a?.companyId ?? null;
+    const nms = (a?.dadosEstruturados as any)?.naoMapeados;
+    if (Array.isArray(nms)) {
+      for (const nm of nms) {
+        if (nm?.nome && nm?.grupo && String(nm.grupo).includes(">")) {
+          caminhoPorConta.set(`${String(nm.nome).toLowerCase()}|${nm.tipo ?? "BP"}`, String(nm.grupo));
+        }
+      }
+    }
   } else if (typeof req.body?.companyId === "string" && req.body.companyId) {
     // Aba "Dicionário & Modelos" do IBR: edição direta do dicionário DA EMPRESA
     // (sem análise específica) — mesma gravação por empresa, escopo validado.
@@ -428,24 +440,35 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
         // GLOBAL) entra na validação da Quantua ("pendente"). Personalizar uma
         // conta que o global já mapeia é ajuste LOCAL da empresa ("local") —
         // vale só para ela, sem fila.
+        // PARTICULAR (LGPD, 2026-07-18): nome de terceiro (mútuo/cliente/
+        // fornecedor/razão social) NUNCA entra na fila — nasce e fica na
+        // empresa ("particular"). O conhecimento genérico é promovível como
+        // REGRA DE GRUPO pela fila das demais.
+        const caminho = caminhoPorConta.get(`${entry.nomeOriginal.toLowerCase()}|${tipoE}`) ?? null;
         const globalEquivalente = existentes.find((e) => e.companyId === null && e.userId === null);
-        const revisaoNova = globalEquivalente ? "local" : "pendente";
+        const particular = avaliarContaParticular(entry.nomeOriginal, caminho ?? entry.grupoConta);
+        const revisaoNova = globalEquivalente ? "local" : particular.particular ? "particular" : "pendente";
         const daEmpresa = existentes.find((e) => e.companyId === companyIdClassify);
         let result;
         let mudou = false;
         if (daEmpresa) {
-          mudou = daEmpresa.contaDestino !== entry.contaDestino;
+          // Muda quando: destino diferente; entrada CANCELADA sendo reclassificada
+          // (revive); ou o caminho do documento chegou agora (detector/regra de
+          // grupo passam a funcionar para entradas antigas).
+          mudou = daEmpresa.contaDestino !== entry.contaDestino ||
+            daEmpresa.revisao === "cancelada" ||
+            (caminho !== null && !daEmpresa.grupoCaminho);
           result = mudou
             ? await prisma.accountDictionary.update({
                 where: { id: daEmpresa.id },
                 // Reclassificar reabre a revisão (o destino proposto mudou).
-                data: { contaDestino: entry.contaDestino, userId: req.userId!, revisao: revisaoNova, revisadoPor: null, revisadoEm: null },
+                data: { contaDestino: entry.contaDestino, userId: req.userId!, revisao: revisaoNova, revisadoPor: null, revisadoEm: null, revisaoMotivo: particular.motivo, ...(caminho ? { grupoCaminho: caminho } : {}) },
               })
             : daEmpresa;
         } else {
           mudou = true;
           result = await prisma.accountDictionary.create({
-            data: { ...chaveBase, contaDestino: entry.contaDestino, userId: req.userId!, companyId: companyIdClassify, revisao: revisaoNova },
+            data: { ...chaveBase, contaDestino: entry.contaDestino, userId: req.userId!, companyId: companyIdClassify, revisao: revisaoNova, revisaoMotivo: particular.motivo, grupoCaminho: caminho },
           });
         }
         created.push(result);
@@ -544,6 +567,8 @@ router.get("/validacao", async (req: AuthRequest, res: Response): Promise<void> 
     itens: rows.map((r) => ({
       id: r.id, nomeOriginal: r.nomeOriginal, contaDestino: r.contaDestino, grupoConta: r.grupoConta,
       tipo: r.tipo, revisao: r.revisao, revisadoPor: r.revisadoPor, revisadoEm: r.revisadoEm, revisaoMotivo: r.revisaoMotivo,
+      grupoCaminho: r.grupoCaminho, grupoImediato: grupoImediatoDoCaminho(r.grupoCaminho),
+      particular: avaliarContaParticular(r.nomeOriginal, r.grupoCaminho ?? r.grupoConta),
       criadoEm: r.createdAt, atualizadoEm: r.updatedAt,
       empresa: nomes.get(r.companyId!) ?? r.companyId,
       globalAtual: globalDe.get(`${r.nomeOriginal.toLowerCase()}|${r.tipo}|${r.grupoConta.toLowerCase()}`) ?? null,
@@ -569,6 +594,21 @@ router.post("/validacao/:id/aprovar", async (req: AuthRequest, res: Response): P
   if (row.contaDestino !== IGNORAR_DESTINO) {
     const bloqueio = avaliaBloqueioEstrutural(row.nomeOriginal, row.contaDestino);
     if (bloqueio.bloqueado) { res.status(422).json({ error: bloqueio.motivo }); return; }
+  }
+
+  // TRAVA LGPD (2026-07-18): nome com cara de PARTICULAR (terceiro) não sobe ao
+  // global sem confirmação consciente; CNPJ/CPF no nome NUNCA sobe (sem override).
+  const particularAprovar = avaliarContaParticular(row.nomeOriginal, row.grupoCaminho ?? row.grupoConta);
+  if (particularAprovar.bloqueioDuro) {
+    res.status(422).json({ error: `Promoção bloqueada: ${particularAprovar.motivo}. Use "Aprovar como regra de grupo" ou reprove.` });
+    return;
+  }
+  if (particularAprovar.particular && req.body?.confirmarParticular !== true) {
+    res.status(422).json({
+      code: "PARTICULAR",
+      error: `Esta conta parece PARTICULAR da empresa (${particularAprovar.motivo}). Promover ao global exporia o nome a todos os clientes da plataforma. Prefira "Aprovar como regra de grupo" ou reprove; para promover mesmo assim, confirme.`,
+    });
+    return;
   }
 
   const validador = await nomeUsuario(req.userId);
@@ -604,6 +644,92 @@ router.post("/validacao/:id/aprovar", async (req: AuthRequest, res: Response): P
       : `Promovida ao global a partir da empresa ${nomes.get(row.companyId)}.`,
   });
   res.json({ ok: true, entrada: atualizado });
+});
+
+// POST /dictionary/validacao/:id/aprovar-grupo — promove ao global a REGRA DO
+// GRUPO ("EMPRÉSTIMOS A PESSOAS LIGADAS" → destino), NUNCA o nome do terceiro.
+// O fold classifica no nó mais alto que mapeia (a subárvore absorve), então a
+// regra beneficia TODAS as empresas sem expor nome de contraparte (LGPD).
+router.post("/validacao/:id/aprovar-grupo", async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!(await podeValidarGlobal(req.userId))) { res.status(403).json({ error: "Aprovar contas para o dicionário global é ação de sócio (partner)." }); return; }
+  const nomes = await companiesDoEscopo(req.scopeUserIds!);
+  const row = await prisma.accountDictionary.findFirst({
+    where: { id: req.params.id as string, companyId: { in: [...nomes.keys()] } },
+  });
+  if (!row || !row.companyId) { res.status(404).json({ error: "Entrada de empresa não encontrada" }); return; }
+  if (row.revisao !== "pendente" && row.revisao !== "particular") { res.status(409).json({ error: `Entrada não está na fila (${row.revisao ?? "sem revisão"}).` }); return; }
+
+  const nomeGrupo = grupoImediatoDoCaminho(row.grupoCaminho);
+  if (!nomeGrupo) { res.status(400).json({ error: "Sem caminho do documento nesta entrada — não dá para derivar a regra de grupo. Reclassifique a conta na auditoria do IBR (o caminho é capturado lá) ou aprove/reprove o nome literal." }); return; }
+  // O nome do grupo também passa pelas travas: estrutural canônica e particular.
+  const particularGrupo = avaliarContaParticular(nomeGrupo, row.grupoCaminho);
+  if (particularGrupo.particular) { res.status(422).json({ error: `O próprio grupo ("${nomeGrupo}") parece nome de terceiro (${particularGrupo.motivo}) — nada a promover.` }); return; }
+  const bloqueio = avaliaBloqueioEstrutural(nomeGrupo, row.contaDestino);
+  if (bloqueio.bloqueado) { res.status(422).json({ error: bloqueio.motivo }); return; }
+
+  const validador = await nomeUsuario(req.userId);
+  const globalGrupo = await prisma.accountDictionary.findFirst({
+    where: {
+      nomeOriginal: { equals: nomeGrupo, mode: "insensitive" },
+      tipo: row.tipo,
+      grupoConta: { equals: row.grupoConta, mode: "insensitive" },
+      userId: null, companyId: null,
+    },
+  });
+  if (globalGrupo && globalGrupo.contaDestino !== row.contaDestino) {
+    await prisma.accountDictionary.update({ where: { id: globalGrupo.id }, data: { contaDestino: row.contaDestino, revisao: "promovida" } });
+  } else if (!globalGrupo) {
+    await prisma.accountDictionary.create({
+      data: { nomeOriginal: nomeGrupo, contaDestino: row.contaDestino, grupoConta: row.grupoConta, tipo: row.tipo, userId: null, companyId: null, revisao: "promovida", grupoCaminho: row.grupoCaminho },
+    });
+  }
+  // A entrada da empresa (com o nome do terceiro) fica onde está: PARTICULAR dela.
+  const atualizado = await prisma.accountDictionary.update({
+    where: { id: row.id },
+    data: { revisao: "particular", revisadoPor: validador, revisadoEm: new Date(), revisaoMotivo: `Regra de grupo promovida ao global ("${nomeGrupo}" → ${row.contaDestino}); o nome permanece só nesta empresa.` },
+  });
+  await bumpDictionaryVersion({
+    acao: "promover", fonte: "validacao",
+    nomeOriginal: nomeGrupo, contaDestino: row.contaDestino, grupoConta: row.grupoConta, tipo: row.tipo,
+    criadoPor: validador, companyId: row.companyId,
+    nota: `REGRA DE GRUPO promovida a partir de "${row.nomeOriginal}" (${nomes.get(row.companyId)}) — o nome da contraparte NÃO foi ao global (LGPD).`,
+  });
+  res.json({ ok: true, entrada: atualizado, regraGrupo: { nomeOriginal: nomeGrupo, contaDestino: row.contaDestino } });
+});
+
+// POST /dictionary/:id/enviar-validacao — escape para falso positivo do detector:
+// a empresa/analista pede que uma conta marcada "particular" entre na fila global.
+router.post("/:id/enviar-validacao", async (req: AuthRequest, res: Response): Promise<void> => {
+  const nomes = await companiesDoEscopo(req.scopeUserIds!);
+  const row = await prisma.accountDictionary.findFirst({
+    where: { id: req.params.id as string, companyId: { in: [...nomes.keys()] } },
+  });
+  if (!row) { res.status(404).json({ error: "Entrada não encontrada" }); return; }
+  if (row.revisao !== "particular" && row.revisao !== "reprovada") { res.status(409).json({ error: `Só entradas particulares/reprovadas podem ser reenviadas (${row.revisao ?? "sem revisão"}).` }); return; }
+  const atualizado = await prisma.accountDictionary.update({
+    where: { id: row.id },
+    data: { revisao: "pendente", revisadoPor: null, revisadoEm: null, revisaoMotivo: null },
+  });
+  res.json({ ok: true, entrada: atualizado });
+});
+
+// GET /dictionary/global/particulares — VARREDURA LGPD retroativa do global:
+// entradas já promovidas/seedadas com cara de nome de terceiro, para o time
+// revisar e cancelar (o cancelamento v123 tira da cascata sem apagar histórico).
+router.get("/global/particulares", requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
+  const globais = await prisma.accountDictionary.findMany({
+    where: { userId: null, companyId: null },
+    orderBy: [{ grupoConta: "asc" }, { nomeOriginal: "asc" }],
+  });
+  const suspeitas = globais
+    .filter((g) => g.revisao !== "cancelada")
+    .map((g) => ({ g, av: avaliarContaParticular(g.nomeOriginal, g.grupoCaminho ?? g.grupoConta) }))
+    .filter(({ av }) => av.particular)
+    .map(({ g, av }) => ({
+      id: g.id, nomeOriginal: g.nomeOriginal, contaDestino: g.contaDestino,
+      grupoConta: g.grupoConta, tipo: g.tipo, motivo: av.motivo, bloqueioDuro: av.bloqueioDuro,
+    }));
+  res.json({ total: globais.length, suspeitas });
 });
 
 // POST /dictionary/validacao/:id/reprovar — mantém a entrada SÓ na empresa.
