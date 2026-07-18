@@ -629,6 +629,45 @@ async function runAnalysisBackground(
 // (bug nº 4 do sweep do corpus).
 const ehBalancete = (tipo: string): boolean => /balancete/i.test(tipo);
 
+// Aplica as PROVAS DETERMINÍSTICAS dos balancetes à validação do modelo.
+// Balancete NÃO fecha AT=PT — o fechamento correto é Ativo − Passivo =
+// resultado acumulado do ano (lucro ainda não transferido ao PL), provado ao
+// centavo na conversão. Prova ok em todos os balancetes ⇒ reconciliação da DRE
+// conta como VERIFICADA ("verde só com prova" — aqui a prova é matemática, não
+// declarativa); prova falhando ⇒ erro que derruba o verde. Chamado no /process,
+// no /refold e no GET /validacao (todos recalculam a validação do zero).
+function aplicarProvasBalancete(
+  validacao: ReturnType<typeof validateFinancialData>,
+  dados: { balancetes?: unknown },
+): void {
+  const bals = Array.isArray(dados?.balancetes) ? (dados.balancetes as Array<Record<string, any>>) : [];
+  if (bals.length === 0) return;
+  const fmtBR = (n: number): string => n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  let todasOk = true;
+  let temProva = false;
+  for (const b of bals) {
+    const f = b.provas?.fechamento;
+    if (b.erro || !f) { todasOk = false; continue; }
+    temProva = true;
+    if (f.ok) continue;
+    todasOk = false;
+    validacao.alertas.push({
+      tipo: "erro", area: "Balancete",
+      mensagem: `${b.nome}: fechamento não bate mesmo considerando o resultado acumulado (Ativo ${fmtBR(f.ativo)} − Passivo ${fmtBR(f.passivo)} − Resultado ${fmtBR(f.resultadoAcumulado)} = ${fmtBR(f.delta)}).`,
+      detalhes: "No balancete o fechamento é Ativo − Passivo = resultado acumulado do período. A divergência indica conta perdida ou natureza errada na extração — revise antes de finalizar.",
+    });
+  }
+  if (temProva && todasOk) {
+    validacao.reconciliacaoDRE = { verificada: true, ok: validacao.reconciliacaoDRE.ok };
+    validacao.alertas.push({
+      tipo: "info", area: "Balancete",
+      mensagem: "Fechamento do(s) balancete(s) provado ao centavo: Ativo − Passivo = resultado acumulado do período — a DRE reconcilia com o balanço por construção.",
+    });
+  } else {
+    validacao.reconciliacaoDRE = { verificada: true, ok: false };
+  }
+}
+
 // Merge por conta: copia valores de períodos ainda vazios (usado para juntar
 // documentos anuais entre si e para APPENDAR os meses dos balancetes).
 function mergeItensPorConta<T extends { conta: string; valores: Record<string, number> }>(existing: T[], newItems: T[]): void {
@@ -937,7 +976,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const arvoreOriginalDRE = escolhido.arvoreDRE;
     const hibridoNaoMapeados = escolhido.naoMapeados;
     const declaradosDRE = escolhido.declarados;
-    const validacao = escolhido.validacao;
+    let validacao = escolhido.validacao;
     const custoExtracaoUsd = custoTotalUsd;
 
     // ── LINHA SEPARADA: BALANCETES (F1 2026-07-18) — determinística, custo 0 ──
@@ -990,12 +1029,6 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
             confianca: conv.provas.fechamento.ok ? 95 : 40,
           },
         });
-        if (!conv.provas.fechamento.ok) {
-          validacao.alertas.push({
-            tipo: "erro", area: "Balancete",
-            mensagem: `${doc.nome}: fechamento não bate (Ativo − Passivo − Resultado = ${conv.provas.fechamento.delta.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}).`,
-          });
-        }
         console.log(`[process] balancete ${doc.nome}: período ${conv.periodoBP}, ${parseado.linhas.length} linhas, fechamento ${conv.provas.fechamento.ok ? "OK" : `Δ ${conv.provas.fechamento.delta}`}${conv.provas.exercicioEncerrado ? " (exercício encerrado)" : ""}`);
       } catch (err) {
         console.error(`[process] balancete ${doc.nome} falhou:`, err instanceof Error ? err.message : err);
@@ -1005,6 +1038,13 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     }
     if (balanceteDocs.length > 0) {
       allPeriodos = [...allPeriodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
+      // RE-VALIDA o modelo MESCLADO: a validação da cascata cobriu só os
+      // documentos anuais — os meses do balancete entram na régua aqui (a
+      // equação patrimonial fecha nos meses porque o PL leva o "Resultado do
+      // Período" apurado pela conversão). As provas determinísticas substituem
+      // a reconciliação por declarados nos meses (aplicarProvasBalancete).
+      validacao = validateFinancialData(structuredBP, structuredDRE, allPeriodos, declaradosDRE);
+      aplicarProvasBalancete(validacao, { balancetes });
     }
 
     // DRE já normalizada/recalculada e validada na cascata (avalia) → só os indicadores.
@@ -1482,6 +1522,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   // (nunca rebaixa "Concluída"/"Gerando diagnóstico").
   if (dados.version === 2) {
     dados.validacao = validateFinancialData(dados.bp ?? [], dados.dre ?? [], periodos, (dados as any).declarados);
+    aplicarProvasBalancete(dados.validacao, dados as any);
   }
   const prontidaoRefold = avaliarProntidaoGeracao(dados);
   (dados as any).prontidao = prontidaoRefold;
@@ -1869,6 +1910,7 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
 
   const dados = analysis.dadosEstruturados as any as DadosEstruturados;
   const validacao = validateFinancialData(dados.bp, dados.dre, dados.periodos, (dados as any).declarados);
+  aplicarProvasBalancete(validacao, dados as any);
 
   // Also run Benford's Law
   const allValues: number[] = [];
@@ -1950,6 +1992,58 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
   // Build per-document stats
   const documents = docsFinanceiros.map((doc) => {
     const dadosExtraidos = doc.dadosExtraidos as any;
+
+    // Linha de balancete: relatório pelas PROVAS da conversão determinística.
+    // Aqui o fechamento correto é Ativo − Passivo = resultado acumulado do
+    // período (não AT=PT) — o lucro do ano ainda não foi transferido ao PL.
+    if (dadosExtraidos?.balancete === true || ehBalancete(doc.tipo)) {
+      const provasBal = dadosExtraidos?.provas;
+      const fech = provasBal?.fechamento;
+      const totalLinhasBal: number = dadosExtraidos?.totalLinhas ?? 0;
+      const periodosBal: string[] = dadosExtraidos?.periodos ?? [];
+      // pendências deste doc = não-mapeados vivos nos MESES deste balancete
+      const pendBal = new Set(
+        naoMapList
+          .filter((n) => n.periodo && periodosBal.includes(n.periodo))
+          .map((n) => normRel(n.nome))
+      ).size;
+      let statusBal: "ok" | "warning" | "error" = "ok";
+      const issuesBal: string[] = [];
+      const erroBal = (dados as any)?.balancetes?.find?.((b: any) => b.docId === doc.id)?.erro;
+      if (doc.status === "Erro" || totalLinhasBal === 0) {
+        statusBal = "error";
+        issuesBal.push(erroBal ?? "Falha na extração do balancete");
+      }
+      if (fech && !fech.ok) {
+        statusBal = statusBal === "error" ? "error" : "warning";
+        issuesBal.push(`Fechamento não bate mesmo considerando o resultado acumulado (Δ ${Number(fech.delta).toLocaleString("pt-BR", { minimumFractionDigits: 2 })})`);
+      }
+      if (pendBal > 0) {
+        statusBal = statusBal === "error" ? "error" : "warning";
+        issuesBal.push(`${pendBal} conta(s) não classificada(s) — classifique ou ignore na auditoria (grátis)`);
+      }
+      return {
+        id: doc.id,
+        nome: doc.nome,
+        tipo: doc.tipo,
+        status: statusBal,
+        issues: issuesBal,
+        stats: {
+          linhasExtraidas: totalLinhasBal,
+          periodosDetectados: periodosBal,
+          contasMapeadas: Math.max(totalLinhasBal - pendBal, 0),
+          contasNaoClassificadas: pendBal,
+          totalAtivo: fech?.ativo ?? null,
+          totalPassivo: fech?.passivo ?? null,
+          balanceia: fech ? fech.ok === true : null,
+          balancete: true,
+          resultadoAcumulado: fech?.resultadoAcumulado ?? null,
+          exercicioEncerrado: provasBal?.exercicioEncerrado === true,
+        },
+        confianca: doc.confianca ?? null,
+      };
+    }
+
     const linhas: Array<{ conta: string; valores: Record<string, number> }> = dadosExtraidos?.linhas || [];
     const periodos: string[] = dadosExtraidos?.periodos || [];
 
