@@ -153,6 +153,10 @@ model AccountDictionary {
   // A PESSOAS LIGADAS") — alimenta o detector de conta PARTICULAR e a promoção
   // "como regra de grupo" (promove o nome do grupo, nunca o nome do terceiro).
   grupoCaminho  String?   @map("grupo_caminho")
+  // Varredura LGPD: entrada GLOBAL revisada por humano e mantida (falso positivo
+  // do detector — ex.: "Banco do Brasil S/A") sai das varreduras seguintes.
+  lgpdRevisadoEm  DateTime? @map("lgpd_revisado_em")
+  lgpdRevisadoPor String?   @map("lgpd_revisado_por")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 

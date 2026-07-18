@@ -722,7 +722,8 @@ router.get("/global/particulares", requireQuantua, async (req: AuthRequest, res:
     orderBy: [{ grupoConta: "asc" }, { nomeOriginal: "asc" }],
   });
   const suspeitas = globais
-    .filter((g) => g.revisao !== "cancelada")
+    // Fora da varredura: canceladas e as JÁ REVISADAS/mantidas por um humano.
+    .filter((g) => g.revisao !== "cancelada" && !g.lgpdRevisadoEm)
     .map((g) => ({ g, av: avaliarContaParticular(g.nomeOriginal, g.grupoCaminho ?? g.grupoConta) }))
     .filter(({ av }) => av.particular)
     .map(({ g, av }) => ({
@@ -730,6 +731,22 @@ router.get("/global/particulares", requireQuantua, async (req: AuthRequest, res:
       grupoConta: g.grupoConta, tipo: g.tipo, motivo: av.motivo, bloqueioDuro: av.bloqueioDuro,
     }));
   res.json({ total: globais.length, suspeitas });
+});
+
+// POST /dictionary/:id/lgpd-ok — marca uma entrada GLOBAL como revisada e
+// MANTIDA (falso positivo do detector — não é dado pessoal). Não altera o
+// mapeamento; só a tira das varreduras seguintes. Ação de sócio (atestação
+// sobre o dicionário global), com registro de quem revisou.
+router.post("/:id/lgpd-ok", async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!(await podeValidarGlobal(req.userId))) { res.status(403).json({ error: "Revisar o dicionário global é ação de sócio (partner)." }); return; }
+  const row = await prisma.accountDictionary.findUnique({ where: { id: req.params.id as string } });
+  if (!row || row.companyId !== null || row.userId !== null) { res.status(404).json({ error: "Entrada global não encontrada" }); return; }
+  const validador = await nomeUsuario(req.userId);
+  const atualizado = await prisma.accountDictionary.update({
+    where: { id: row.id },
+    data: { lgpdRevisadoEm: new Date(), lgpdRevisadoPor: validador },
+  });
+  res.json({ ok: true, entrada: atualizado });
 });
 
 // POST /dictionary/validacao/:id/reprovar — mantém a entrada SÓ na empresa.
