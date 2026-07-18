@@ -66,7 +66,7 @@ describe("resolverCascataDicionario", () => {
   // contextual do fold preferia a global por bloco e descartava a correção
   // explícita da empresa ("alterei a classificação e ele não respeitou").
   it("DRE: entrada da EMPRESA vence a global do mesmo nome, mesmo com grupoConta diferente", () => {
-    const dre = (e: ReturnType<typeof global_>) => ({ ...e, tipo: "DRE" });
+    const dre = <T extends { tipo: string }>(e: T): T => ({ ...e, tipo: "DRE" });
     const r = resolverCascataDicionario([
       dre(global_("Perdas Commodities", "Outras Despesas Operacionais", "Outras Despesas Operacionais")),
       dre(empresa("Perdas Commodities", "Outras Despesas Não Operacionais", "Outras Despesas Não Operacionais")),
