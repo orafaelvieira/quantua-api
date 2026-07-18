@@ -647,6 +647,10 @@ export const ACCOUNT_ALIASES: Record<string, string> = {
   "Dividendos a Pagar": "Dividendos e Juros sobre o Capital Próprio",
 
   // === PATRIMÔNIO LÍQUIDO ===
+  // Plug do BALANCETE: o resultado acumulado do período que a conversão injeta
+  // no PL para o balanço fechar (Ativo = Passivo). É um valor CALCULADO, não uma
+  // conta do documento — mapeia direto para a linha de resultado do PL.
+  "Resultado do Período (apuração do balancete)": "Resultado do Exercício",
   "Total do Patrimônio Líquido": "Patrimônio Líquido",
   "Patrimonio Liquido": "Patrimônio Líquido",
   "PATRIMONIO LIQUIDO": "Patrimônio Líquido",

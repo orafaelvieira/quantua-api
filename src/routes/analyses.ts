@@ -629,6 +629,13 @@ async function runAnalysisBackground(
 // (bug nº 4 do sweep do corpus).
 const ehBalancete = (tipo: string): boolean => /balancete/i.test(tipo);
 
+// Plug do PL no balancete (resultado acumulado que fecha o balanço): valor
+// CALCULADO, não conta do documento — nunca deve entrar na fila de classificação
+// (mapeia via alias p/ "Resultado do Exercício"; este filtro é cinto de segurança
+// caso o modelo da empresa não tenha essa linha). Ver balancete-conversao.ts.
+const ehPlugBalancete = (n: { nome?: string }): boolean => /apura[çc][ãa]o do balancete/i.test(n?.nome ?? "");
+const semPlugBalancete = <T extends { nome?: string }>(arr: T[]): T[] => arr.filter((n) => !ehPlugBalancete(n));
+
 // Períodos vindos de BALANCETE no IBR (DRE acumulada YTD): base dos dias dos
 // prazos médios e da leitura mensal.
 const periodosBalanceteDe = (dados: unknown): string[] => {
@@ -1067,7 +1074,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         if (structuredBP.length === 0) structuredBP = rB.bp; else mergeItensPorConta(structuredBP, rB.bp);
         if (structuredDRE.length === 0) structuredDRE = rD.dre; else mergeItensPorConta(structuredDRE, rD.dre);
         if (!allPeriodos.includes(conv.periodoBP)) allPeriodos.push(conv.periodoBP);
-        nmBalancete.push(...(rB.naoMapeados as NaoMapeado[]), ...(rD.naoMapeados as NaoMapeado[]));
+        nmBalancete.push(...semPlugBalancete(rB.naoMapeados as NaoMapeado[]), ...(rD.naoMapeados as NaoMapeado[]));
         arvoresBalancete.push({ docId: doc.id, nome: doc.nome, periodo: conv.periodoBP, arvoreBP: conv.arvoreBP, arvoreDRE: conv.arvoreDRE });
         balancetes.push({
           docId: doc.id, nome: doc.nome, periodo: conv.periodoBP, periodoInicio: parseado.periodoInicio,
@@ -1579,7 +1586,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   // mescla nos meses (as anuais acima zeram os meses; o merge só preenche vazios).
   for (const ab of arvoresBalanceteRefold) {
     if (!ab?.periodo) continue;
-    if (ab.arvoreBP) { const r = foldBP(ab.arvoreBP as any, [ab.periodo], dictRows, bpModelRefold); if (!dados.bp?.length) dados.bp = r.bp; else mergeItensPorConta(dados.bp, r.bp); alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
+    if (ab.arvoreBP) { const r = foldBP(ab.arvoreBP as any, [ab.periodo], dictRows, bpModelRefold); if (!dados.bp?.length) dados.bp = r.bp; else mergeItensPorConta(dados.bp, r.bp); alertasComp.push(...r.alertasComposicao); naoMapeados.push(...semPlugBalancete(r.naoMapeados)); }
     if (ab.arvoreDRE) { const r = foldDRE(ab.arvoreDRE as any, [ab.periodo], dictRows, dreModelRefold); if (!dados.dre?.length) dados.dre = r.dre; else mergeItensPorConta(dados.dre, r.dre); alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
   }
   dados.alertasComposicao = alertasComp;

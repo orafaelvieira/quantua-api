@@ -7,6 +7,7 @@
 import { describe, it, expect } from "vitest";
 import { parseBalanceteTexto } from "./balancete-parser";
 import { converterBalancete } from "./balancete-conversao";
+import { mapAccountToBPGroup } from "./account-mapper";
 
 // ── fixtures sintéticas ──────────────────────────────────────────────────────
 
@@ -277,5 +278,16 @@ describe("converterBalancete — provas de integridade", () => {
     const despesas = dre.find((i) => i.nome.toUpperCase().includes("DESPESA"));
     expect(receitas?.valor).toBe(1100);
     expect(despesas?.valor).toBe(-700);
+  });
+
+  it("plug do PL ('Resultado do Período') mapeia para 'Resultado do Exercício' — nunca fica pendente", () => {
+    // O valor calculado que fecha o balanço não é conta do documento e não pode
+    // virar pendência de classificação. Alias em financial-templates → o fold o
+    // resolve para a linha de resultado do PL (integração provada no E2E Belagro).
+    expect(mapAccountToBPGroup("Resultado do Período (apuração do balancete)", "PL")).toBe("Resultado do Exercício");
+    // A conversão injeta o plug com o nome-âncora do alias (exercício EM CURSO).
+    const conv = converterBalancete(parseBalanceteTexto(FIX_DOMINIO));
+    const pl = Object.values(conv.arvoreBP[conv.periodoBP].grupos).flat();
+    expect(pl.some((i) => /apura[çc][ãa]o do balancete/i.test(i.nome))).toBe(true);
   });
 });
