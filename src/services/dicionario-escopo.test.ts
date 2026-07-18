@@ -60,6 +60,32 @@ describe("resolverCascataDicionario", () => {
     expect(r).toHaveLength(1);
     expect(r[0].tipo).toBe("DRE");
   });
+
+  // Regressão (18/07/2026): na DRE o grupoConta ESPELHA o destino, então empresa
+  // e global viravam chaves diferentes e as DUAS sobreviviam — a blindagem
+  // contextual do fold preferia a global por bloco e descartava a correção
+  // explícita da empresa ("alterei a classificação e ele não respeitou").
+  it("DRE: entrada da EMPRESA vence a global do mesmo nome, mesmo com grupoConta diferente", () => {
+    const dre = (e: ReturnType<typeof global_>) => ({ ...e, tipo: "DRE" });
+    const r = resolverCascataDicionario([
+      dre(global_("Perdas Commodities", "Outras Despesas Operacionais", "Outras Despesas Operacionais")),
+      dre(empresa("Perdas Commodities", "Outras Despesas Não Operacionais", "Outras Despesas Não Operacionais")),
+    ], "DRE");
+    expect(r).toHaveLength(1);
+    expect(r[0].contaDestino).toBe("Outras Despesas Não Operacionais");
+    expect(r[0].companyId).toBe("c1");
+  });
+
+  it("BP: override da empresa em UM grupo não derruba a global de OUTRO grupo", () => {
+    const r = resolverCascataDicionario([
+      global_("Instituições Financeiras", "Empréstimos e Financiamentos - LP", "Passivo Não Circulante"),
+      global_("Instituições Financeiras", "Empréstimos e Financiamentos - CP", "Passivo Circulante"),
+      empresa("Instituições Financeiras", "Outros Passivos Circulantes", "Passivo Circulante"),
+    ], "BP");
+    expect(r).toHaveLength(2);
+    expect(r.find((e) => e.grupoConta === "Passivo Não Circulante")?.contaDestino).toBe("Empréstimos e Financiamentos - LP");
+    expect(r.find((e) => e.grupoConta === "Passivo Circulante")?.contaDestino).toBe("Outros Passivos Circulantes");
+  });
 });
 
 describe("whereCascataDicionario", () => {

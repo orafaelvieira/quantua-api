@@ -46,7 +46,28 @@ export function resolverCascataDicionario<T extends EntradaDicionarioEscopo>(
     const atual = vencedores.get(chave);
     if (!atual || prioridadeEscopo(e) >= prioridadeEscopo(atual)) vencedores.set(chave, e);
   }
-  return [...vencedores.values()];
+  const lista = [...vencedores.values()];
+
+  // DRE: o `grupoConta` ESPELHA o destino (convenção da tela de classificação),
+  // então NÃO é discriminador de contexto — a mesma conta na empresa e no global
+  // vira duas chaves e as duas sobreviviam. A blindagem contextual
+  // (mapAccountToDRE) então podia preferir a GLOBAL pelo bloco e DESCARTAR a
+  // correção explícita da empresa ("alterei e não respeitou"). Aqui a prioridade
+  // de escopo volta a valer: por NOME, só as entradas do MAIOR escopo seguem
+  // (variantes de contexto dentro do MESMO escopo continuam coexistindo).
+  // BP fica como está: lá o grupo é o grupo REAL do documento — a mesma conta em
+  // PC e PNC são contas distintas e um override da empresa no PC não pode
+  // derrubar a entrada global do PNC.
+  if (tipo === "DRE") {
+    const maiorEscopoPorNome = new Map<string, number>();
+    for (const e of lista) {
+      const n = e.nomeOriginal.toLowerCase();
+      const p = prioridadeEscopo(e);
+      if (p > (maiorEscopoPorNome.get(n) ?? -1)) maiorEscopoPorNome.set(n, p);
+    }
+    return lista.filter((e) => prioridadeEscopo(e) === maiorEscopoPorNome.get(e.nomeOriginal.toLowerCase()));
+  }
+  return lista;
 }
 
 /**
