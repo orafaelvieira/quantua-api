@@ -543,7 +543,7 @@ router.get("/validacao", async (req: AuthRequest, res: Response): Promise<void> 
   res.json({
     itens: rows.map((r) => ({
       id: r.id, nomeOriginal: r.nomeOriginal, contaDestino: r.contaDestino, grupoConta: r.grupoConta,
-      tipo: r.tipo, revisao: r.revisao, revisadoPor: r.revisadoPor, revisadoEm: r.revisadoEm,
+      tipo: r.tipo, revisao: r.revisao, revisadoPor: r.revisadoPor, revisadoEm: r.revisadoEm, revisaoMotivo: r.revisaoMotivo,
       criadoEm: r.createdAt, atualizadoEm: r.updatedAt,
       empresa: nomes.get(r.companyId!) ?? r.companyId,
       globalAtual: globalDe.get(`${r.nomeOriginal.toLowerCase()}|${r.tipo}|${r.grupoConta.toLowerCase()}`) ?? null,
@@ -593,7 +593,7 @@ router.post("/validacao/:id/aprovar", async (req: AuthRequest, res: Response): P
   }
   const atualizado = await prisma.accountDictionary.update({
     where: { id: row.id },
-    data: { revisao: "aprovada", revisadoPor: validador, revisadoEm: new Date() },
+    data: { revisao: "aprovada", revisadoPor: validador, revisadoEm: new Date(), revisaoMotivo: null },
   });
   await bumpDictionaryVersion({
     acao: "promover", fonte: "validacao",
@@ -617,16 +617,105 @@ router.post("/validacao/:id/reprovar", async (req: AuthRequest, res: Response): 
   if (row.revisao !== "pendente") { res.status(409).json({ error: `Entrada não está pendente (${row.revisao ?? "sem revisão"}).` }); return; }
 
   const validador = await nomeUsuario(req.userId);
-  const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.slice(0, 400) : null;
+  // MOTIVO OBRIGATÓRIO (decisão do usuário 2026-07-18): a reprovação fica
+  // registrada com autor, data e razão — auditável e visível na fila ("Todas").
+  const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.trim().slice(0, 400) : "";
+  if (!motivo) { res.status(400).json({ error: "Informe o motivo da reprovação." }); return; }
   const atualizado = await prisma.accountDictionary.update({
     where: { id: row.id },
-    data: { revisao: "reprovada", revisadoPor: validador, revisadoEm: new Date() },
+    data: { revisao: "reprovada", revisadoPor: validador, revisadoEm: new Date(), revisaoMotivo: motivo },
   });
   await bumpDictionaryVersion({
     acao: "reprovar", fonte: "validacao",
     nomeOriginal: row.nomeOriginal, contaDestino: row.contaDestino, grupoConta: row.grupoConta, tipo: row.tipo,
     criadoPor: validador, companyId: row.companyId,
-    nota: motivo ?? `Mantida somente na empresa ${nomes.get(row.companyId)} (não promovida ao global).`,
+    nota: `Reprovada: ${motivo}`,
+  });
+  res.json({ ok: true, entrada: atualizado });
+});
+
+// ── CANCELAMENTO (2026-07-18): inclusão errada sai da cascata dos folds sem
+// apagar o histórico (política: nunca deletar). GLOBAL cancelada deixa de ser
+// herdada por QUALQUER empresa (novas inclusive); entrada de EMPRESA cancelada
+// sai das próximas análises daquela empresa. Reversível (reativar) e, no
+// classify, re-classificar a mesma conta revive a entrada naturalmente. ──
+
+/** Carrega a entrada e valida a permissão: global/workspace = sócio; empresa = escopo. */
+async function entradaParaCancelamento(req: AuthRequest, res: Response): Promise<{ row: any; escopoGlobal: boolean; nomes: Map<string, string> } | null> {
+  const row = await prisma.accountDictionary.findUnique({ where: { id: req.params.id as string } });
+  if (!row) { res.status(404).json({ error: "Entrada não encontrada" }); return null; }
+  const nomes = await companiesDoEscopo(req.scopeUserIds!);
+  if (row.companyId) {
+    if (!nomes.has(row.companyId)) { res.status(404).json({ error: "Entrada não encontrada" }); return null; }
+    return { row, escopoGlobal: false, nomes };
+  }
+  // global (seed) ou workspace: mexer afeta todas as empresas → ação de sócio
+  if (!(await podeValidarGlobal(req.userId))) {
+    res.status(403).json({ error: "Cancelar/reativar contas do dicionário global é ação de sócio (partner)." });
+    return null;
+  }
+  return { row, escopoGlobal: true, nomes };
+}
+
+// POST /dictionary/:id/cancelar — tira a entrada da cascata (não apaga).
+router.post("/:id/cancelar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const ctx = await entradaParaCancelamento(req, res);
+  if (!ctx) return;
+  const { row, escopoGlobal, nomes } = ctx;
+  if (row.revisao === "cancelada") { res.status(409).json({ error: "Entrada já está cancelada." }); return; }
+  const validador = await nomeUsuario(req.userId);
+  const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.trim().slice(0, 400) : null;
+  const atualizado = await prisma.accountDictionary.update({
+    where: { id: row.id },
+    data: { revisao: "cancelada", revisadoPor: validador, revisadoEm: new Date(), revisaoMotivo: motivo },
+  });
+  await bumpDictionaryVersion({
+    acao: "cancelar", fonte: escopoGlobal ? "dicionario-global" : "dicionario-empresa",
+    nomeOriginal: row.nomeOriginal, contaDestino: row.contaDestino, grupoConta: row.grupoConta, tipo: row.tipo,
+    criadoPor: validador, companyId: row.companyId,
+    nota: escopoGlobal
+      ? `Cancelada no dicionário GLOBAL${motivo ? `: ${motivo}` : ""} — deixa de ser herdada por qualquer empresa.`
+      : `Cancelada na empresa ${nomes.get(row.companyId!) ?? row.companyId}${motivo ? `: ${motivo}` : ""} — sai das próximas análises.`,
+  });
+  res.json({ ok: true, entrada: atualizado });
+});
+
+// POST /dictionary/:id/reativar — volta a valer na cascata.
+router.post("/:id/reativar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const ctx = await entradaParaCancelamento(req, res);
+  if (!ctx) return;
+  const { row, escopoGlobal, nomes } = ctx;
+  if (row.revisao !== "cancelada") { res.status(409).json({ error: "Entrada não está cancelada." }); return; }
+  const validador = await nomeUsuario(req.userId);
+  // Estado de volta: global → "promovida" (decisão humana — o seed não reverte);
+  // workspace → sem revisão; empresa → recomputa a fila (equivalente global?
+  // "local" : "pendente"), a mesma regra do classify.
+  let revisaoNova: string | null = null;
+  if (escopoGlobal) {
+    revisaoNova = row.companyId === null && row.userId === null ? "promovida" : null;
+  } else {
+    const globalEq = await prisma.accountDictionary.findFirst({
+      where: {
+        nomeOriginal: { equals: row.nomeOriginal, mode: "insensitive" },
+        tipo: row.tipo,
+        grupoConta: { equals: row.grupoConta, mode: "insensitive" },
+        userId: null, companyId: null,
+      },
+      select: { id: true },
+    });
+    revisaoNova = globalEq ? "local" : "pendente";
+  }
+  const atualizado = await prisma.accountDictionary.update({
+    where: { id: row.id },
+    data: { revisao: revisaoNova, revisadoPor: validador, revisadoEm: new Date(), revisaoMotivo: null },
+  });
+  await bumpDictionaryVersion({
+    acao: "reativar", fonte: escopoGlobal ? "dicionario-global" : "dicionario-empresa",
+    nomeOriginal: row.nomeOriginal, contaDestino: row.contaDestino, grupoConta: row.grupoConta, tipo: row.tipo,
+    criadoPor: validador, companyId: row.companyId,
+    nota: escopoGlobal
+      ? "Reativada no dicionário global — volta a ser herdada."
+      : `Reativada na empresa ${nomes.get(row.companyId!) ?? row.companyId}.`,
   });
   res.json({ ok: true, entrada: atualizado });
 });

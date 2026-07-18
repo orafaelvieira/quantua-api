@@ -245,6 +245,12 @@ async function main() {
       });
 
       if (existing) {
+        // Decisão HUMANA vence o seed: entrada promovida pela validação ou
+        // cancelada pelo time nunca é revertida pelo arquivo oficial.
+        if (existing.revisao === "promovida" || existing.revisao === "cancelada") {
+          skipped++;
+          continue;
+        }
         // Update existing
         await prisma.accountDictionary.update({
           where: { id: existing.id },

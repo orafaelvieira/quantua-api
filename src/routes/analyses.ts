@@ -27,7 +27,7 @@ import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from ".
 import { getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
-import { resolverCascataDicionario, whereCascataDicionario } from "../services/dicionario-escopo";
+import { resolverCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
 import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
@@ -825,7 +825,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // Dicionário em CASCATA (global → workspace → EMPRESA): entradas da empresa
     // deste IBR vencem; entradas de OUTRAS empresas nunca entram (isolamento).
     const dictEntries = await prisma.accountDictionary.findMany({
-      where: whereCascataDicionario(req.scopeUserIds!, analysis.companyId),
+      where: whereCascataDicionarioAtiva(req.scopeUserIds!, analysis.companyId),
       select: { nomeOriginal: true, contaDestino: true, grupoConta: true, userId: true, companyId: true, tipo: true },
     });
     const dicionarioEntradasEmpresa = dictEntries.filter((e) => e.companyId !== null).length;
@@ -1560,7 +1560,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   // Cascata global → workspace → EMPRESA, resolvida POR TIPO (BP e DRE têm
   // dicionários próprios — dedup misturado poderia derrubar uma entrada homônima).
   const dictRowsBrutos = await prisma.accountDictionary.findMany({
-    where: whereCascataDicionario(req.scopeUserIds!, analysis.companyId),
+    where: whereCascataDicionarioAtiva(req.scopeUserIds!, analysis.companyId),
     select: { nomeOriginal: true, contaDestino: true, grupoConta: true, userId: true, companyId: true, tipo: true },
   });
   const dictRows = [...resolverCascataDicionario(dictRowsBrutos, "BP"), ...resolverCascataDicionario(dictRowsBrutos, "DRE")];
@@ -1914,7 +1914,7 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
 
     // Dicionário em cascata (global → workspace → EMPRESA) para o fold das árvores
     const dictBrutosIA = await prisma.accountDictionary.findMany({
-      where: whereCascataDicionario(req.scopeUserIds!, analysis.companyId),
+      where: whereCascataDicionarioAtiva(req.scopeUserIds!, analysis.companyId),
       select: { nomeOriginal: true, contaDestino: true, grupoConta: true, userId: true, companyId: true, tipo: true },
     });
     const dictRows = [...resolverCascataDicionario(dictBrutosIA, "BP"), ...resolverCascataDicionario(dictBrutosIA, "DRE")];

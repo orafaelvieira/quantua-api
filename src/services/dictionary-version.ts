@@ -14,8 +14,8 @@ export async function getCurrentDictionaryVersion(): Promise<number> {
 }
 
 export interface DictionaryChange {
-  acao: "add" | "edit" | "delete" | "classify" | "import" | "promover" | "reprovar";
-  fonte?: "manual" | "autofeed" | "validacao";
+  acao: "add" | "edit" | "delete" | "classify" | "import" | "promover" | "reprovar" | "cancelar" | "reativar";
+  fonte?: "manual" | "autofeed" | "validacao" | "dicionario-global" | "dicionario-empresa";
   nomeOriginal?: string | null;
   contaDestino?: string | null;
   grupoConta?: string | null;

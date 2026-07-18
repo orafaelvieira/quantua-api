@@ -64,3 +64,21 @@ export function whereCascataDicionario(scopeUserIds: string[], companyId?: strin
     ],
   };
 }
+
+/**
+ * Cascata ATIVA — a dos FOLDS: exclui entradas "cancelada" (inclusão errada,
+ * cancelada pelo time — global cancelada não é herdada por empresa nenhuma;
+ * entrada de empresa cancelada sai das próximas análises). O classify continua
+ * usando a cascata completa: re-classificar a mesma conta REVIVE a entrada.
+ * OR explícito com null: `not` do Prisma exclui NULL silenciosamente.
+ */
+export function whereCascataDicionarioAtiva(scopeUserIds: string[], companyId?: string | null): {
+  AND: Array<Record<string, unknown>>;
+} {
+  return {
+    AND: [
+      whereCascataDicionario(scopeUserIds, companyId),
+      { OR: [{ revisao: null }, { revisao: { not: "cancelada" } }] },
+    ],
+  };
+}

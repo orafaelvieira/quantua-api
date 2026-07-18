@@ -140,11 +140,15 @@ model AccountDictionary {
   // companyId null + userId = workspace (legado/manual); companyId = EMPRESA
   // (autofeed do IBR — vale só para os IBRs daquela empresa, com userId = autor).
   companyId     String?  @map("company_id")
-  // Só entradas de EMPRESA: "pendente" | "aprovada" | "reprovada" — fila da tela
-  // "Validação de contas" (aprovar promove ao dicionário global).
+  // Entradas de EMPRESA: "pendente" | "aprovada" | "reprovada" | "local" — fila da
+  // tela "Validação de contas" (aprovar promove ao dicionário global). Em QUALQUER
+  // escopo: "cancelada" = fora da cascata dos folds (inclusão errada; reversível) —
+  // globais canceladas não são herdadas por empresas novas.
   revisao       String?
   revisadoPor   String?   @map("revisado_por")
   revisadoEm    DateTime? @map("revisado_em")
+  // Motivo da reprovação/cancelamento (obrigatório na reprovação da fila).
+  revisaoMotivo String?   @map("revisao_motivo")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
