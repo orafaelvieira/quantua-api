@@ -94,12 +94,16 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
     ? `${(req.file.size / 1024 / 1024).toFixed(1)} MB`
     : `${Math.round(req.file.size / 1024)} KB`;
 
+  // Auto-detecção de BALANCETE pelo nome do arquivo (o wizard manda "Outro"
+  // por padrão; a linha de extração de balancete depende do tipo correto).
+  const tipoFinal = tipo === "Outro" && /balancete/i.test(nome) ? "Balancete" : tipo;
+
   const doc = await prisma.document.create({
     data: {
       analysisId,
       companyId,
       nome,
-      tipo,
+      tipo: tipoFinal,
       competencia,
       moeda,
       storagePath,

@@ -6,7 +6,9 @@ import { prisma } from "../db/client";
 import { env } from "../config/env";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
-import { parseDocument, dadosExtraidosToRaw, type ExtractedRow, type ParsedDocument } from "../services/parser";
+import { parseDocument, dadosExtraidosToRaw, extrairTextoLayoutPDF, type ExtractedRow, type ParsedDocument } from "../services/parser";
+import { parseBalanceteTexto } from "../services/balancete-parser";
+import { converterBalancete } from "../services/balancete-conversao";
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
@@ -620,6 +622,31 @@ async function runAnalysisBackground(
   }
 }
 
+// Balancete de verificação = LINHA DE EXTRAÇÃO SEPARADA (F1 2026-07-18): tem
+// estrutura própria (Ativo≠Passivo com resultado acumulado; DRE embutida no
+// mesmo documento) e NUNCA entra na cascata BP/DRE — antes desta partição, o
+// detectDocType mandava balancete para o fluxo de BP e poluía a extração
+// (bug nº 4 do sweep do corpus).
+const ehBalancete = (tipo: string): boolean => /balancete/i.test(tipo);
+
+// Merge por conta: copia valores de períodos ainda vazios (usado para juntar
+// documentos anuais entre si e para APPENDAR os meses dos balancetes).
+function mergeItensPorConta<T extends { conta: string; valores: Record<string, number> }>(existing: T[], newItems: T[]): void {
+  const map = new Map<string, T>();
+  for (const item of existing) map.set(item.conta, item);
+  for (const novo of newItems) {
+    const alvo = map.get(novo.conta);
+    if (alvo) {
+      for (const [periodo, valor] of Object.entries(novo.valores)) {
+        if (alvo.valores[periodo] === undefined || alvo.valores[periodo] === 0) alvo.valores[periodo] = valor;
+      }
+    } else {
+      existing.push(novo);
+      map.set(novo.conta, novo);
+    }
+  }
+}
+
 router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
@@ -631,8 +658,11 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
   // são resumidos depois, na geração da análise (buildMateriaisContext). Documentos
   // SUBSTITUÍDOS também não: a versão corrigida é quem representa o insumo (política
   // 2026-07-15 — a antiga fica só como evidência das versões anteriores do produto).
-  const financialDocs = analysis.documents.filter((d) => d.tipo !== MATERIAL_TIPO && d.status !== "Substituído");
-  if (financialDocs.length === 0) {
+  const docsAtivos = analysis.documents.filter((d) => d.tipo !== MATERIAL_TIPO && d.status !== "Substituído");
+  // Balancetes SAEM do fluxo BP/DRE (linha de extração separada, adiante).
+  const balanceteDocs = docsAtivos.filter((d) => ehBalancete(d.tipo));
+  const financialDocs = docsAtivos.filter((d) => !ehBalancete(d.tipo));
+  if (financialDocs.length === 0 && balanceteDocs.length === 0) {
     res.status(400).json({ error: "Nenhuma demonstração contábil enviada para esta análise" });
     return;
   }
@@ -746,48 +776,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       return "UNKNOWN";
     }
 
-    // Merge function: combine values from a second document into existing structured data.
-    // For each item in newItems, find the matching item in existing by `conta` name
-    // and copy over values for periods that don't exist yet.
-    function mergeBPItems(existing: BPLineItem[], newItems: BPLineItem[]): void {
-      const existingMap = new Map<string, BPLineItem>();
-      for (const item of existing) existingMap.set(item.conta, item);
-
-      for (const newItem of newItems) {
-        const target = existingMap.get(newItem.conta);
-        if (target) {
-          // Merge periods: copy new period values that don't exist in existing
-          for (const [periodo, valor] of Object.entries(newItem.valores)) {
-            if (target.valores[periodo] === undefined || target.valores[periodo] === 0) {
-              target.valores[periodo] = valor;
-            }
-          }
-        } else {
-          // New account not in existing — append it
-          existing.push(newItem);
-          existingMap.set(newItem.conta, newItem);
-        }
-      }
-    }
-
-    function mergeDREItems(existing: DRELineItem[], newItems: DRELineItem[]): void {
-      const existingMap = new Map<string, DRELineItem>();
-      for (const item of existing) existingMap.set(item.conta, item);
-
-      for (const newItem of newItems) {
-        const target = existingMap.get(newItem.conta);
-        if (target) {
-          for (const [periodo, valor] of Object.entries(newItem.valores)) {
-            if (target.valores[periodo] === undefined || target.valores[periodo] === 0) {
-              target.valores[periodo] = valor;
-            }
-          }
-        } else {
-          existing.push(newItem);
-          existingMap.set(newItem.conta, newItem);
-        }
-      }
-    }
+    // (merge por conta: mergeItensPorConta, escopo de módulo — reusado no refold)
 
     // ── CASCATA cheapest-first: parser (grátis) → híbrido (IA Haiku) → [visão: passo 2] ──
     // Pega o 1º nível que FECHA no gate de integridade (Ativo=Passivo + composição AC+ANC /
@@ -843,8 +832,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         const tipoNorm = doc.tipo.toLowerCase();
         const querBP = docType === "BP" || docType === "BOTH" || (docType === "UNKNOWN" && doc.linhas.length > 0 && (tipoNorm.includes("balan") || tipoNorm.includes("balancete")));
         const querDRE = docType === "DRE" || docType === "BOTH" || (docType === "UNKNOWN" && doc.linhas.length > 0 && (tipoNorm.includes("dre") || tipoNorm.includes("resultado")));
-        if (querBP) { const r = mapExtractedToBP(doc.linhas, dictForBP, bpModel); if (!bp.length) bp = r.items; else mergeBPItems(bp, r.items); unm.push(...r.unmatched); }
-        if (querDRE) { const r = mapExtractedToDRE(doc.linhas, dictForDRE); if (!dre.length) dre = r.items; else mergeDREItems(dre, r.items); unm.push(...r.unmatched); }
+        if (querBP) { const r = mapExtractedToBP(doc.linhas, dictForBP, bpModel); if (!bp.length) bp = r.items; else mergeItensPorConta(bp, r.items); unm.push(...r.unmatched); }
+        if (querDRE) { const r = mapExtractedToDRE(doc.linhas, dictForDRE); if (!dre.length) dre = r.items; else mergeItensPorConta(dre, r.items); unm.push(...r.unmatched); }
       }
       const periodos = detectPeriodos(parsedDocs);
       // declarados capturados ANTES do recompute (avalia() recompõe a cascata depois)
@@ -951,6 +940,73 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const validacao = escolhido.validacao;
     const custoExtracaoUsd = custoTotalUsd;
 
+    // ── LINHA SEPARADA: BALANCETES (F1 2026-07-18) — determinística, custo 0 ──
+    // parse layout → conversão com PROVAS (débitos=créditos; fechamento ao
+    // centavo: Ativo − Passivo = resultado acumulado; PL ajustado com "Resultado
+    // do Período") → MESMO fold/dicionário/modelos da cascata. O mês entra como
+    // período novo MESCLADO aos anuais (BP no fim do mês; DRE acumulada YTD).
+    const balancetes: Array<Record<string, unknown>> = [];
+    const arvoresBalancete: Array<{ docId: string; nome: string; periodo: string; arvoreBP: unknown; arvoreDRE: unknown }> = [];
+    const nmBalancete: NaoMapeado[] = [];
+    for (const doc of balanceteDocs) {
+      try {
+        if (!doc.storagePath || !/\.pdf$/i.test(doc.nome)) {
+          balancetes.push({ docId: doc.id, nome: doc.nome, erro: "Balancete é suportado apenas em PDF nesta fase" });
+          await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } });
+          continue;
+        }
+        const buffer = await downloadFile(doc.storagePath);
+        const texto = await extrairTextoLayoutPDF(buffer);
+        if (!texto || texto.length < 100) {
+          balancetes.push({ docId: doc.id, nome: doc.nome, erro: "PDF sem texto extraível (escaneado?) — OCR de balancete ainda não suportado" });
+          await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } });
+          continue;
+        }
+        const parseado = parseBalanceteTexto(texto);
+        const conv = converterBalancete(parseado);
+        if (!conv.periodoBP || parseado.linhas.length < 5) {
+          balancetes.push({ docId: doc.id, nome: doc.nome, erro: `Estrutura de balancete não reconhecida (${parseado.linhas.length} linhas; ${conv.avisos.join(" | ") || "sem avisos"})` });
+          await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } });
+          continue;
+        }
+        // fold com o MESMO dicionário em cascata e modelos padrão da empresa
+        const rB = foldBP(conv.arvoreBP as any, [conv.periodoBP], dictForBP, bpModel);
+        const rD = foldDRE(conv.arvoreDRE as any, [conv.periodoBP], dictForDRE, dreModel);
+        if (structuredBP.length === 0) structuredBP = rB.bp; else mergeItensPorConta(structuredBP, rB.bp);
+        if (structuredDRE.length === 0) structuredDRE = rD.dre; else mergeItensPorConta(structuredDRE, rD.dre);
+        if (!allPeriodos.includes(conv.periodoBP)) allPeriodos.push(conv.periodoBP);
+        nmBalancete.push(...(rB.naoMapeados as NaoMapeado[]), ...(rD.naoMapeados as NaoMapeado[]));
+        arvoresBalancete.push({ docId: doc.id, nome: doc.nome, periodo: conv.periodoBP, arvoreBP: conv.arvoreBP, arvoreDRE: conv.arvoreDRE });
+        balancetes.push({
+          docId: doc.id, nome: doc.nome, periodo: conv.periodoBP, periodoInicio: parseado.periodoInicio,
+          provas: conv.provas, avisos: conv.avisos, linhas: parseado.linhas.length,
+        });
+        await prisma.document.update({
+          where: { id: doc.id },
+          data: {
+            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], provas: conv.provas, avisos: conv.avisos, totalLinhas: parseado.linhas.length } as any,
+            status: "Processado",
+            // "verde só com prova": confiança alta SOMENTE com fechamento ao centavo
+            confianca: conv.provas.fechamento.ok ? 95 : 40,
+          },
+        });
+        if (!conv.provas.fechamento.ok) {
+          validacao.alertas.push({
+            tipo: "erro", area: "Balancete",
+            mensagem: `${doc.nome}: fechamento não bate (Ativo − Passivo − Resultado = ${conv.provas.fechamento.delta.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}).`,
+          });
+        }
+        console.log(`[process] balancete ${doc.nome}: período ${conv.periodoBP}, ${parseado.linhas.length} linhas, fechamento ${conv.provas.fechamento.ok ? "OK" : `Δ ${conv.provas.fechamento.delta}`}${conv.provas.exercicioEncerrado ? " (exercício encerrado)" : ""}`);
+      } catch (err) {
+        console.error(`[process] balancete ${doc.nome} falhou:`, err instanceof Error ? err.message : err);
+        balancetes.push({ docId: doc.id, nome: doc.nome, erro: err instanceof Error ? err.message : String(err) });
+        await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } }).catch(() => {});
+      }
+    }
+    if (balanceteDocs.length > 0) {
+      allPeriodos = [...allPeriodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
+    }
+
     // DRE já normalizada/recalculada e validada na cascata (avalia) → só os indicadores.
     const indicadores = await buildIndicators(structuredBP, structuredDRE, allPeriodos, rowsIBRDe(analysis.indicadorConfig));
     console.log(`[process] Validação: confiança=${validacao.confiancaGeral}%, equação=${validacao.equacaoPatrimonial}, alertas=${validacao.alertas.length}`);
@@ -981,7 +1037,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // e CACHEADA em dadosEstruturados — a tela nunca re-consulta IA. Best-effort.
     let sugestoesIA: Record<string, import("../services/classification-suggest").SugestaoIA> = {};
     let custoSugestoes: import("../services/ai-extraction").CustoIA | null = null;
-    const nmParaSugerir = (usouIA ? hibridoNaoMapeados : []) as import("../services/ai-extraction").NaoMapeado[];
+    const nmParaSugerir = [...((usouIA ? hibridoNaoMapeados : []) as import("../services/ai-extraction").NaoMapeado[]), ...nmBalancete];
     if (nmParaSugerir.length > 0) {
       try {
         const dreModelAtivo = await loadActiveDREModel(analysis.companyId);
@@ -1010,11 +1066,11 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       dre: structuredDRE,
       indicadores,
       periodos: allPeriodos,
-      unmatchedAccounts: escolhido.unmatched,
+      unmatchedAccounts: [...escolhido.unmatched, ...naoMapeadosParaTela(nmBalancete)],
       declarados: declaradosDRE,
       arvoreOriginalBP: arvoreOriginalBP,
       arvoreOriginalDRE: arvoreOriginalDRE,
-      naoMapeados: usouIA ? hibridoNaoMapeados : [],
+      naoMapeados: [...(usouIA ? (hibridoNaoMapeados as NaoMapeado[]) : []), ...nmBalancete],
       sugestoesIA,
       custoSugestoes,
       alertasComposicao: usouIA ? escolhido.alertasComposicao : [],
@@ -1025,6 +1081,12 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       version: 2,
       custoExtracao: { usd: custoExtracaoUsd, fonte: escolhido.fonte, fecha: escolhido.fecha, niveis: custos },
     } as DadosEstruturados;
+    // Linha de balancete: provas por documento + árvores mensais (o /refold as
+    // re-dobra quando o dicionário/modelo muda — mesma mecânica das anuais).
+    if (balanceteDocs.length > 0) {
+      (dadosEstruturados as any).balancetes = balancetes;
+      (dadosEstruturados as any).arvoresBalancete = arvoresBalancete;
+    }
 
     // HASH DE VERSÃO da extração (política 2026-07-15): proveniência COMPLETA dos
     // insumos usados — documentos (sha256 + versão), dicionário e modelos padrão de
@@ -1032,7 +1094,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // este hash no seed; divergência = histórico desatualizado.
     const extraidoEm = new Date().toISOString();
     const insumos = {
-      documentos: financialDocs.map((d) => ({ id: d.id, nome: d.nome, tipo: d.tipo, hash: d.hash, versao: d.versao, editadoManualmente: d.editadoManualmente })),
+      // Proveniência inclui os BALANCETES (política de versionamento: todo insumo carimba o hash)
+      documentos: [...financialDocs, ...balanceteDocs].map((d) => ({ id: d.id, nome: d.nome, tipo: d.tipo, hash: d.hash, versao: d.versao, editadoManualmente: d.editadoManualmente })),
       dicionarioVersao,
       // Cascata por empresa: quantas entradas PRÓPRIAS da empresa participaram
       // do fold (proveniência — o global sozinho não reproduz este resultado).
@@ -1372,7 +1435,9 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const dados = analysis.dadosEstruturados as any;
   const arvoreBP = dados?.arvoreOriginalBP;
   const arvoreDRE = dados?.arvoreOriginalDRE;
-  if (!arvoreBP && !arvoreDRE) { res.status(400).json({ error: "Sem árvore original — rode 'Conciliar com IA' primeiro" }); return; }
+  const arvoresBalanceteRefold: Array<{ periodo?: string; arvoreBP?: unknown; arvoreDRE?: unknown }> =
+    Array.isArray(dados?.arvoresBalancete) ? dados.arvoresBalancete : [];
+  if (!arvoreBP && !arvoreDRE && arvoresBalanceteRefold.length === 0) { res.status(400).json({ error: "Sem árvore original — rode 'Conciliar com IA' primeiro" }); return; }
 
   // Cascata global → workspace → EMPRESA, resolvida POR TIPO (BP e DRE têm
   // dicionários próprios — dedup misturado poderia derrubar uma entrada homônima).
@@ -1392,6 +1457,13 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const alertasComp: any[] = [];
   if (arvoreBP) { const r = foldBP(arvoreBP, periodos, dictRows, bpModelRefold); dados.bp = r.bp; dados.arvoreOriginalBP = arvoreBP; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
   if (arvoreDRE) { const r = foldDRE(arvoreDRE, periodos, dictRows, dreModelRefold); dados.dre = r.dre; dados.arvoreOriginalDRE = arvoreDRE; alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
+  // Linha de balancete: re-dobra as árvores MENSAIS com o dicionário atual e
+  // mescla nos meses (as anuais acima zeram os meses; o merge só preenche vazios).
+  for (const ab of arvoresBalanceteRefold) {
+    if (!ab?.periodo) continue;
+    if (ab.arvoreBP) { const r = foldBP(ab.arvoreBP as any, [ab.periodo], dictRows, bpModelRefold); if (!dados.bp?.length) dados.bp = r.bp; else mergeItensPorConta(dados.bp, r.bp); alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
+    if (ab.arvoreDRE) { const r = foldDRE(ab.arvoreDRE as any, [ab.periodo], dictRows, dreModelRefold); if (!dados.dre?.length) dados.dre = r.dre; else mergeItensPorConta(dados.dre, r.dre); alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
+  }
   dados.alertasComposicao = alertasComp;
   // Carry-over das sugestões IA (cacheadas na extração) para os que continuam não-mapeados.
   const sugAntigas = (dados as any).sugestoesIA ?? {};
@@ -1703,9 +1775,11 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
 
-  // Apenas DEMONSTRAÇÕES (BP/DRE/Balancete) — ignora data-room/contratos/etc.
+  // Apenas DEMONSTRAÇÕES ANUAIS (BP/DRE) — ignora data-room/contratos/etc.
+  // Balancete NÃO entra aqui: tem linha de extração própria e determinística
+  // (o /process re-parseia e re-dobra de graça; a visão poluiria a estrutura).
   const docs = analysis.documents.filter(
-    (d) => d.storagePath && /dre|resultado|demonstra|balan|patrimonial|\bbp\b/i.test(`${d.tipo} ${d.nome}`)
+    (d) => d.storagePath && !ehBalancete(d.tipo) && /dre|resultado|demonstra|balan|patrimonial|\bbp\b/i.test(`${d.tipo} ${d.nome}`)
   );
   if (docs.length === 0) { res.status(400).json({ error: "Nenhuma demonstração (BP/DRE) disponível para reconciliar" }); return; }
 
@@ -2155,6 +2229,8 @@ router.get("/:id/data-room/manifest", async (req: AuthRequest, res: Response): P
 });
 
 function detectDocType(filename: string, mimeType: string): string {
+  // Balancete pelo nome do arquivo → roteia para a linha de extração própria
+  if (/balancete/i.test(filename)) return "Balancete";
   const ext = filename.split(".").pop()?.toUpperCase();
   if (ext === "PDF" || mimeType === "application/pdf") return "PDF";
   if (ext === "XLSX" || ext === "XLS") return "XLSX";

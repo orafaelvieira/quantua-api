@@ -502,16 +502,14 @@ REGRAS CRÍTICAS:
   return message.content[0].type === "text" ? message.content[0].text : "";
 }
 
-export async function parsePDF(buffer: Buffer, tipo: string, filename?: string): Promise<ParsedDocument> {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const pdfParse = require("pdf-parse");
-
-  // Custom page renderer that preserves real x-coordinates as indentation.
-  // pdf-parse's default renderer strips all whitespace/positioning,
-  // making it impossible to detect account hierarchy from indentation.
-  // By using pdfjs-dist's getTextContent() API, we extract each text item's
-  // x-coordinate (transform[4]) and convert it to leading spaces.
-  const renderPage = async (pageData: any) => {
+// Custom page renderer that preserves real x-coordinates as indentation.
+// pdf-parse's default renderer strips all whitespace/positioning,
+// making it impossible to detect account hierarchy from indentation.
+// By using pdfjs-dist's getTextContent() API, we extract each text item's
+// x-coordinate (transform[4]) and convert it to leading spaces.
+// (Içado para escopo de módulo em 2026-07-18 para reuso pela linha de
+// extração de BALANCETE — comportamento idêntico ao renderer original.)
+const renderPageLayout = async (pageData: any) => {
     const content = await pageData.getTextContent({
       normalizeWhitespace: false,
       disableCombineTextItems: false,
@@ -595,13 +593,35 @@ export async function parsePDF(buffer: Buffer, tipo: string, filename?: string):
     }
 
     return textLines.join("\n");
-  };
+};
+
+/**
+ * Extrai o texto COMPLETO de um PDF preservando layout (indentação por
+ * x-coord, linhas por proximidade de y) — sem teto de caracteres e sem o
+ * pipeline de extração de linhas do BP/DRE. Usado pela linha de extração de
+ * BALANCETE (balancete-parser.ts). Não usa OCR: PDF vetorial/escaneado
+ * retorna string vazia e o chamador decide o fallback.
+ */
+export async function extrairTextoLayoutPDF(buffer: Buffer): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const pdfParse = require("pdf-parse");
+  const customData = await pdfParse(buffer, { pagerender: renderPageLayout });
+  const customText = (customData.text as string) ?? "";
+  const brNumberCount = (customText.match(/\d[\d.]*,\d{2}/g) || []).length;
+  if (brNumberCount >= 3) return customText;
+  const defaultData = await pdfParse(buffer);
+  return ((defaultData.text as string) ?? "").trim();
+}
+
+export async function parsePDF(buffer: Buffer, tipo: string, filename?: string): Promise<ParsedDocument> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const pdfParse = require("pdf-parse");
 
   // --- Triple rendering strategy ---
   // 1. Try custom renderer (preserves indentation for depth filtering)
   // 2. If custom fails, try default pdf-parse renderer
   // 3. If both return empty text (vector-path PDFs), use Claude OCR
-  const customData = await pdfParse(buffer, { pagerender: renderPage });
+  const customData = await pdfParse(buffer, { pagerender: renderPageLayout });
   const customText = customData.text as string;
 
   // Validate: count BR numbers (e.g. "316.245.714,23") in custom text
