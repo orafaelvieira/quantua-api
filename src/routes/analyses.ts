@@ -573,6 +573,7 @@ async function runAnalysisBackground(
       dados?.dre ?? null,
       dados?.fluxoCaixa ?? null, // estágio Dickinson pelos sinais de FCO/FCI/FCF (quando a prova fecha)
       Array.isArray(analysis.dores) ? (analysis.dores as never[]) : null, // fonte [5]: confronto declarado×observado
+      dados?.bp ?? null, // caixa do BP → conta regressiva determinística (dias de caixa)
     );
     const resultado = {
       ...analise.result,

@@ -4,6 +4,7 @@ import { calcCusto, modeloAnaliseId, createWithRetry, type CustoIA } from "./ai-
 import type { PeerComparisonRow } from "./peer-benchmark";
 import { INDICADORES_TEMPLATE } from "./financial-templates";
 import { calcularValorCanonico, type AlavancaValor, type ValorCanonico } from "./valor-na-mesa";
+import { calcularContaRegressiva } from "./conta-regressiva";
 
 // tipoDado por nome de indicador (template) — formata os números do prompt na unidade
 // final ("39,0%", "45 dias") para a IA nunca confundir fração com percentual.
@@ -63,7 +64,9 @@ export interface AnalysisResult {
    *  solidez = eixo 2 do motor (trio Fleuriet/Kanitz/Altman) — presente quando calculável. */
   estagioCicloVida?: { estagio: string; justificativa: string; solidez?: import("./estagio-ciclo").SolidezResult };
   situacao?: { classificacao: string; racional: string };
-  saudeFinanceira?: { status: string; mesesDeCaixa: number | null; leitura: string };
+  saudeFinanceira?: { status: string; mesesDeCaixa: number | null; leitura: string; diasDeCaixa?: number | null };
+  /** Conta regressiva de caixa — quanto tempo o dinheiro dura (motor, determinística). */
+  contaRegressiva?: import("./conta-regressiva").ContaRegressiva;
   fatoresChave?: Array<{
     fator: string;
     hipotese: string;
@@ -345,6 +348,7 @@ export async function generateAnalysis(
   dre?: Array<{ conta: string; valores: Record<string, number>; subtotal?: boolean }> | null,
   fluxoCaixa?: FluxoCaixaLite | null,
   dores?: DorDeclarada[] | null,
+  bp?: Array<{ conta: string; valores: Record<string, number> }> | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
   // Ordem CRONOLÓGICA uma vez, para TODO o prompt (séries de indicadores, bloco da DRE,
   // KPIs, estágio) — dados.periodos pode vir na ordem dos documentos (ex.: 2022, 2020, 2021).
@@ -372,6 +376,18 @@ export async function generateAnalysis(
     ? `\nVALOR NA MESA — ALAVANCAS CANÔNICAS JÁ CALCULADAS PELO MOTOR (fatos; NÃO re-some, NÃO altere, NÃO repita nas adicionais):\n${canonico.alavancas.map((a) => `- [${a.tipo}] ${a.titulo}: R$ ${a.valor.toLocaleString("pt-BR")} — ${a.memoria}`).join("\n")}\nSubtotal canônico: caixa liberável R$ ${canonico.caixaLiberavel.toLocaleString("pt-BR")} · margem recuperável/ano R$ ${canonico.margemRecuperavelAno.toLocaleString("pt-BR")}.`
     : "";
 
+  // CONTA REGRESSIVA de caixa (determinística): traduz o caixa em TEMPO — a
+  // unidade que o dono entende. A IA recebe como FATO e não recalcula.
+  const ultimoPeriodo = periodos[periodos.length - 1];
+  const contaRegressiva = bp && dre && ultimoPeriodo
+    ? calcularContaRegressiva(
+        bp, dre as Array<{ conta: string; valores: Record<string, number> }>, ultimoPeriodo,
+        fluxoCaixa?.totais?.fco?.[ultimoPeriodo] ?? null,
+      )
+    : null;
+  const regressivaBlock = contaRegressiva
+    ? `\nCONTA REGRESSIVA DE CAIXA (calculada pelo MOTOR — use como VERDADE, NÃO recalcule): ${contaRegressiva.leitura}`
+    : "";
   const estagioBlock = estagioDet
     ? `\nESTÁGIO DO CICLO (determinado pelo MOTOR a partir do histórico — use como VERDADE, NÃO reclassifique): ${estagioDet.estagio}. ${estagioDet.justificativa}`
     : periodoInsuficiente
@@ -388,7 +404,7 @@ Você recebe VÁRIAS fontes. USE TODAS e CRUZE-AS — o valor está em conectar 
 
 [1] INDICADORES JÁ CALCULADOS E AUDITADOS (determinísticos — NÃO recalcule, apenas INTERPRETE):
 ${det.tabela || "(indicadores indisponíveis)"}
-${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${doresBlock}${estagioBlock}${canonicoBlock}
+${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${doresBlock}${estagioBlock}${regressivaBlock}${canonicoBlock}
 
 IMPORTANTE — olhe o HISTÓRICO: leia SEMPRE a evolução multi-ano (tendência entre os períodos), nunca um ano isolado. A força de um IBR está na trajetória.
 
@@ -465,6 +481,11 @@ PRINCÍPIOS (inegociáveis):
 - confianca: maior com 2+ períodos e indicadores/DRE completos.
 - ESTILO (todo campo de texto): prosa profissional em português; NUNCA use travessão (— ou –) nem marcação markdown (**, *, #, listas com hífen) — o texto vai direto para o relatório do cliente. Separe ideias com vírgula, dois-pontos ou ponto.
 - EXPLIQUE O INDICADOR NA HORA DE CITÁ-LO (inegociável): NUNCA cite um indicador como se o leitor soubesse o que ele mede. Todo indicador citado vem com o SIGNIFICADO na mesma frase, em linguagem de dono de empresa, e de preferência traduzido para dinheiro ou consequência prática. NÃO escreva "liquidez corrente de 0,01"; escreva "para cada R$ 1,00 que vence nos próximos meses a empresa tem apenas R$ 0,01 para pagar (é o que chamamos de liquidez corrente)". NÃO escreva "capital de giro negativo em R$ 3,07 milhões"; escreva "faltam R$ 3,07 milhões de recursos próprios para bancar o dia a dia da operação, ou seja, o funcionamento da empresa está sendo financiado por dívida de curto prazo (capital de giro negativo)". NÃO escreva "endividamento geral de 58,3%"; escreva "de cada R$ 1,00 que a empresa tem, R$ 0,58 pertencem a terceiros, bancos e fornecedores (endividamento geral de 58,3%)". Mesma regra para margem, prazos médios, ROE, EBITDA, cobertura de juros, Kanitz, Altman e Fleuriet. O nome técnico pode aparecer, mas SEMPRE depois da explicação, entre parênteses, como referência para o contador.
+- O RELÓGIO (quando houver o bloco CONTA REGRESSIVA DE CAIXA): comece a saudeFinanceira.leitura pelo TEMPO, não pelo índice. "O caixa de hoje paga X dias de operação" diz mais ao dono do que qualquer índice de liquidez. Use os números do bloco como estão, sem recalcular.
+- O CUSTO DE NÃO FAZER NADA: em recomendacoes.descricao das ações de prioridade Alta, feche com a consequência de adiar, em dinheiro ou em tempo, ancorada em número já existente ("cada mês sem renegociar esse prazo mantém cerca de R$ X parados no estoque"; "adiar um trimestre consome metade do fôlego de caixa restante"). Sem número disponível, descreva a consequência concreta, nunca uma frase genérica de urgência.
+- ESTA SEMANA, NESTA ORDEM: as recomendacoes de horizonte "0–30d" começam por uma ação que cabe nos PRÓXIMOS SETE DIAS e que dependa só da empresa (ligar para o banco, listar os dez maiores clientes em atraso, suspender uma retirada, renegociar um contrato). Escreva o primeiro passo como se fosse item de agenda de segunda-feira, com quem faz e o que traz de volta.
+- COMPARAÇÃO QUE O DONO ENTENDE: ao usar os pares, traduza percentil em gente, não em estatística. Em vez de "percentil 22 em prazo médio de recebimento", escreva "sete de cada dez empresas parecidas recebem dos clientes em cerca de 45 dias, esta recebe em 155". Diga também o que a diferença vale em dinheiro quando for calculável.
+- O QUE ESTÁ FUNCIONANDO: relatório só de problema paralisa. Garanta que protecoes nomeie de 2 a 3 forças REAIS e concretas que sustentam o resultado (margem, cliente-âncora, produto, equipe, canal), com o número que as comprova, e que ao menos um dos destaques seja um ponto positivo quando existir. Em empresa sob pressão isso é ainda mais importante: é o ativo com que ela vai virar o jogo.
 - CONTE A HISTÓRIA, NÃO SÓ A FOTO (inegociável em estagioCicloVida.justificativa, situacao.racional e saudeFinanceira.leitura): o dono quer entender COMO chegou até aqui. Amarre a trajetória do período (o que aconteceu do primeiro ao último ano com faturamento, margem e caixa), o ponto de virada quando existir ("o resultado financeiro saltou de R$ 265 mil para R$ 1,43 milhão em três anos") e o que isso significa daqui para frente, incluindo a consequência prática de não fazer nada. Escreva como quem explica a situação a um sócio na mesa, com frases completas encadeadas.
 - LEITOR LEIGO (inegociável): quem lê o relatório é o DONO DA EMPRESA, sem formação em finanças. Em todo campo de texto: frases COMPLETAS, nunca telegrama de fórmula. NENHUMA sigla sem tradução: escreva "necessidade de capital de giro, o dinheiro que fica preso entre pagar fornecedores e receber dos clientes" (não NCG), "prazo médio de recebimento dos clientes" (não PMR), "prazo médio de pagamento aos fornecedores" (não PMP), "caixa gerado pela operação" (não FCO), "patrimônio dos sócios" (não PL), "dívida de curto prazo" (não CP). "percentil 78" vira "melhor que 78% das empresas comparáveis"; "YoY" vira "em relação ao ano anterior"; "p.p." vira "pontos percentuais". NADA de termos em inglês: em vez de due diligence escreva auditoria prévia, em vez de SLA escreva prazo de entrega acordado, em vez de pipeline escreva carteira de negociações, em vez de valuation escreva valor da empresa na negociação. NADA de setas, sinais de vezes ou til no texto (em vez de "43->69d = 26d × R$51,7k ~ R$1,35M", escreva "alongar o prazo de pagamento aos fornecedores de 43 para 69 dias, que é a prática dos concorrentes, mantém no caixa cerca de R$ 1,35 milhão"). Valores por extenso na escala: "R$ 1,3 milhão", "R$ 692 mil".
 - PROFUNDIDADE das recomendações: recomendacoes.descricao e opcoesEstrategicas.description têm 3 a 5 frases completas cada, nesta lógica: o que fazer na prática, por que (o problema explicado em linguagem simples, com o número), o que a empresa ganha se fizer, e o primeiro passo concreto. impactoRacional e comoChegou: a conta explicada em PROSA, passo a passo, sem símbolos. destaques continuam curtos, mas sem sigla.
@@ -560,6 +581,13 @@ PRINCÍPIOS (inegociáveis):
     perfilEmpresa: typeof ai.perfilEmpresa === "string" && ai.perfilEmpresa.trim().length > 0 ? ai.perfilEmpresa.trim() : undefined,
   };
 
+  // Conta regressiva: número do MOTOR, nunca estimativa da IA (mesma régua do estágio).
+  if (contaRegressiva) {
+    result.contaRegressiva = contaRegressiva;
+    if (result.saudeFinanceira && contaRegressiva.diasDeCaixa != null) {
+      result.saudeFinanceira.diasDeCaixa = Math.round(contaRegressiva.diasDeCaixa);
+    }
+  }
   // Estágio: o MOTOR manda. Sobrescreve o que a IA disser (rótulo estável, "verde só com prova").
   if (estagioDet) result.estagioCicloVida = estagioDet;
   else if (periodoInsuficiente && !result.estagioCicloVida) {
