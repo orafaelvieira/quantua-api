@@ -646,6 +646,30 @@ router.post("/validacao/:id/aprovar", async (req: AuthRequest, res: Response): P
   res.json({ ok: true, entrada: atualizado });
 });
 
+// POST /dictionary/validacao/reavaliar — reroda o detector de conta PARTICULAR
+// nas entradas PENDENTES do escopo e move as detectadas para "particular" (saem
+// da fila). Usado após ajustes no detector para limpar a fila de nomes de
+// terceiros que subiram antes da regra (ex.: "Belagro Transportes").
+router.post("/validacao/reavaliar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const nomes = await companiesDoEscopo(req.scopeUserIds!);
+  const companyIds = [...nomes.keys()];
+  if (!companyIds.length) { res.json({ movidas: 0 }); return; }
+  const pendentes = await prisma.accountDictionary.findMany({
+    where: { companyId: { in: companyIds }, revisao: "pendente" },
+  });
+  let movidas = 0;
+  for (const row of pendentes) {
+    const av = avaliarContaParticular(row.nomeOriginal, row.grupoCaminho ?? row.grupoConta);
+    if (!av.particular) continue;
+    await prisma.accountDictionary.update({
+      where: { id: row.id },
+      data: { revisao: "particular", revisaoMotivo: av.motivo },
+    });
+    movidas++;
+  }
+  res.json({ movidas, avaliadas: pendentes.length });
+});
+
 // POST /dictionary/validacao/:id/aprovar-grupo — promove ao global a REGRA DO
 // GRUPO ("EMPRÉSTIMOS A PESSOAS LIGADAS" → destino), NUNCA o nome do terceiro.
 // O fold classifica no nó mais alto que mapeia (a subárvore absorve), então a

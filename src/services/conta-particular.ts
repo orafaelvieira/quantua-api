@@ -24,9 +24,20 @@ const RE_CPF = /\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/;
 /** Sufixos societários — fortes indícios de razão social de terceiro. */
 const RE_RAZAO_SOCIAL = /\b(ltda|eireli|epp|s\/a|s\.a\.?|cia\.?|companhia)\b|\bme\b(?![a-z])/i;
 
-/** Grupos de CONTRAPARTE — onde folha costuma ser nome de terceiro. */
+/**
+ * Grupos NOMINAIS — a folha é SEMPRE uma entidade nomeada (empresa/pessoa), então
+ * o nome do terceiro é particular MESMO contendo palavra de setor ("Belagro
+ * Transportes", "Paragominas Revendedora de Combustível"). Sem escape de
+ * vocabulário. (Só não flagra quando a folha DESCREVE o grupo — ver abaixo.)
+ */
+const RE_GRUPO_NOMINAL =
+  /pessoas? ligadas|partes? (ligadas|relacionadas)|coligad|controlad|interligad|m[uú]tuo|s[óo]cios?|acionistas?|cr[ée]dito de (s[óo]cio|acionista)|d[ée]bito de (s[óo]cio|acionista)/;
+
+/** Grupos de CONTRAPARTE (clientes/fornecedores/…) — folha PODE ser sub-conta
+ *  genérica ("Duplicatas a receber", "Clientes no exterior"). Aí vale o escape
+ *  de vocabulário: só é particular quando o nome não tem termo contábil. */
 const RE_GRUPO_CONTRAPARTE =
-  /mutuo|m[uú]tuo|pessoas? ligadas|partes? (ligadas|relacionadas)|coligad|controlad|interligad|clientes|fornecedor|adiantament|duplicatas|contas a (receber|pagar)|emprestimos a|credito de (socio|acionista)|debito de (socio|acionista)|socios|acionistas/;
+  /clientes|fornecedor|adiantament|duplicatas|contas a (receber|pagar)/;
 
 /** Vocabulário contábil genérico — se o nome contém ALGUM destes, não é nome próprio. */
 const VOCABULARIO_CONTABIL = [
@@ -77,13 +88,30 @@ export function avaliarContaParticular(nome: string, contexto?: string | null): 
     return { particular: true, bloqueioDuro: false, motivo: "sufixo de razão social (LTDA/S.A./EIRELI/ME…) — nome de terceiro" };
   }
   const ctx = normalizar(contexto ?? "");
+
+  // Grupo NOMINAL (partes ligadas/sócios/mútuo/coligadas): a folha é uma
+  // entidade nomeada — particular, salvo quando o próprio nome DESCREVE o grupo
+  // ("Adiantamento a coligadas") ou é um balde genérico ("Outros", "Diversos").
+  if (RE_GRUPO_NOMINAL.test(ctx)) {
+    const nomeDescreveGrupo = RE_GRUPO_NOMINAL.test(n) || /^(outr[oa]s|diversos|geral|total|conta transit)/.test(n);
+    if (!nomeDescreveGrupo) {
+      return {
+        particular: true,
+        bloqueioDuro: false,
+        motivo: "nome de entidade em grupo de partes ligadas/sócios/mútuo — específico desta empresa",
+      };
+    }
+  }
+
+  // Grupo de CONTRAPARTE (clientes/fornecedores): particular só se o nome não
+  // tiver termo contábil genérico (aí é nome próprio, não sub-conta).
   if (RE_GRUPO_CONTRAPARTE.test(ctx)) {
     const temVocabulario = VOCABULARIO_CONTABIL.some((t) => n.includes(t));
     if (!temVocabulario) {
       return {
         particular: true,
         bloqueioDuro: false,
-        motivo: "nome próprio em grupo de contraparte (mútuo/partes ligadas/clientes/fornecedores) — específico desta empresa",
+        motivo: "nome próprio em grupo de clientes/fornecedores — específico desta empresa",
       };
     }
   }

@@ -4,10 +4,23 @@ import { avaliarContaParticular, grupoImediatoDoCaminho } from "./conta-particul
 const CAMINHO_MUTUO = "Ativo Circulante > ATIVO CIRCULANTE > DIREITOS REALIZAVEIS A CURTO PRAZO > EMPRÉSTIMOS A PESSOAS LIGADAS";
 
 describe("avaliarContaParticular", () => {
-  it("nome próprio em grupo de contraparte é particular (caso União Agro)", () => {
+  it("nome próprio em grupo de partes ligadas é particular (caso União Agro)", () => {
     const r = avaliarContaParticular("União Agro", CAMINHO_MUTUO);
     expect(r.particular).toBe(true);
     expect(r.bloqueioDuro).toBe(false);
+  });
+
+  it("nome de EMPRESA com palavra de setor em grupo nominal é particular (Belagro Transportes, Paragominas Revendedora de Combustível)", () => {
+    // O vocabulário de setor ("transporte", "combustível", "revenda") NÃO pode
+    // livrar um nome de coligada/parte ligada — o grupo é inerentemente nominal.
+    expect(avaliarContaParticular("Belagro Transportes", CAMINHO_MUTUO).particular).toBe(true);
+    expect(avaliarContaParticular("Paragominas Revendedora de Combustivel", CAMINHO_MUTUO).particular).toBe(true);
+  });
+
+  it("folha que DESCREVE o grupo nominal não é particular (Adiantamento a coligadas)", () => {
+    expect(avaliarContaParticular("Adiantamento a coligadas", "Ativo Circulante > COLIGADAS E CONTROLADAS").particular).toBe(false);
+    expect(avaliarContaParticular("Outros mútuos", CAMINHO_MUTUO).particular).toBe(false);
+    expect(avaliarContaParticular("Conta transitória", "Ativo > CRÉDITOS COM PESSOAS LIGADAS").particular).toBe(false);
   });
 
   it("razão social é particular em qualquer grupo", () => {
