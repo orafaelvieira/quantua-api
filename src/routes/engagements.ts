@@ -57,7 +57,7 @@ function parseContractUrls(raw: unknown): EngagementDocumentEntry[] {
 const engagementCreateSchema = z.object({
   companyName: z.string().min(2),
   requestedBy: z.string().min(2),
-  requestedByType: z.enum(["lender", "investor", "advisor", "other"]).default("lender"),
+  requestedByType: z.enum(["lender", "investor", "advisor", "empresa", "parceiro", "other"]).default("lender"),
   scope: z.string().default(""),
   state: z.enum(["lead", "proposal_sent", "won", "kicked_off", "completed", "lost"]).default("lead"),
   deadline: z.string().optional(),

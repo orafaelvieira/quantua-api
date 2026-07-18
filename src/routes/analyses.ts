@@ -78,7 +78,7 @@ const analysisSchema = z.object({
   })).optional(),
   engagement: z.object({
     requestedBy: z.string().min(2),
-    requestedByType: z.enum(["lender", "investor", "advisor", "other"]).default("lender"),
+    requestedByType: z.enum(["lender", "investor", "advisor", "empresa", "parceiro", "other"]).default("lender"),
     scope: z.string().default(""),
     deadline: z.string().optional(),
     feeAmount: z.number().optional(),
@@ -1307,7 +1307,7 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
     const existing = await prisma.engagement.findFirst({ where: { analysisId: id }, select: { id: true } });
     const engData = {
       requestedBy: String(eng.requestedBy).slice(0, 200),
-      requestedByType: ["lender", "investor", "advisor", "other"].includes(String(eng.requestedByType)) ? String(eng.requestedByType) : "other",
+      requestedByType: ["lender", "investor", "advisor", "empresa", "parceiro", "other"].includes(String(eng.requestedByType)) ? String(eng.requestedByType) : "other",
       scope: typeof eng.scope === "string" ? eng.scope.slice(0, 4000) : "",
       deadline: eng.deadline ? new Date(String(eng.deadline)) : null,
       feeAmount: typeof eng.feeAmount === "number" && Number.isFinite(eng.feeAmount) ? eng.feeAmount : null,
