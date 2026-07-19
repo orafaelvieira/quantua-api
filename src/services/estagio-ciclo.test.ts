@@ -7,7 +7,7 @@ const ind = (nome: string, valores: Record<string, number | string>): Lite => ({
 /* ─────────── Fixture MOVE FARMA (números reais que motivaram a mudança) ───────────
  * 2024: FCO −2,19M · FCI +56,6 mil · FCF +1,18M (receita 18,8M → FCI é RUÍDO)
  * 2025: FCO +4,0M  · FCI +24,8 mil · FCF −3,41M (receita 26,3M → FCI é RUÍDO)
- * Antes: 2024 = "Declínio" e 2025 = "Platô (shake-out)" numa empresa crescendo 39%. */
+ * Antes: 2024 = "Retração" e 2025 = "Platô (shake-out)" numa empresa crescendo 39%. */
 const MOVE = [
   ind("Receita Líquida", { "31/12/2023": 775891, "31/12/2024": 18847262, "31/12/2025": 26252581 }),
   ind("Margem EBITDA", { "31/12/2023": 0.10, "31/12/2024": 0.11, "31/12/2025": 0.131 }),
@@ -93,7 +93,7 @@ describe("estagio-ciclo — materialidade + persistência + solidez (2 eixos)", 
     expect(r?.justificativa.toLowerCase()).toContain("crescimento"); // narra os dois padrões
   });
 
-  it("solvência COLAPSADA + caixa mínimo = Crise de caixa mesmo com margem positiva", () => {
+  it("solvência COLAPSADA + caixa mínimo = Dificuldade de caixa mesmo com margem positiva", () => {
     const inds = [
       ind("Receita Líquida", { "2023": 1000, "2024": 1020 }),
       ind("Margem EBITDA", { "2024": 0.05 }), // positiva — a regra antiga NÃO dispararia
@@ -104,7 +104,7 @@ describe("estagio-ciclo — materialidade + persistência + solidez (2 eixos)", 
       ind("Altman Z-Score (EM)", { "2024": 0.6 }),
     ] as never[];
     const r = classifyEstagio(inds, ["2023", "2024"], null);
-    expect(r?.estagio).toBe("Crise de caixa");
+    expect(r?.estagio).toBe("Dificuldade de caixa");
     expect(r?.justificativa).toContain("solvência");
   });
 

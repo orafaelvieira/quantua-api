@@ -17,7 +17,7 @@
  *   com tendência vs o período anterior. Análogo determinístico da separação
  *   business profile × financial profile das agências de rating: o estágio diz a
  *   DIREÇÃO, a solidez diz com que FÔLEGO — eixos ortogonais (existe "Crescimento
- *   frágil" e "Declínio sólido").
+ *   frágil" e "Retração sólida").
  *
  * "Verde só com prova": Dickinson só usa coluna cuja prova de fechamento FECHA.
  * Rótulo estável entre regerações; a IA recebe os dois eixos como FATO e só narra.
@@ -83,13 +83,13 @@ function pontosFleuriet(v: unknown): { pts: number; rotulo: string } | null {
 }
 function pontosKanitz(v: number): { pts: number; rotulo: string } {
   if (v > 0) return { pts: 2, rotulo: "solvente" };
-  if (v >= -3) return { pts: 1, rotulo: "zona de penumbra" };
-  return { pts: 0, rotulo: "risco de insolvência" };
+  if (v >= -3) return { pts: 1, rotulo: "zona de alerta" };
+  return { pts: 0, rotulo: "risco elevado" };
 }
 function pontosAltman(v: number): { pts: number; rotulo: string } {
   if (v > 2.6) return { pts: 2, rotulo: "zona segura" };
   if (v >= 1.1) return { pts: 1, rotulo: "zona cinzenta" };
-  return { pts: 0, rotulo: "zona de perigo" };
+  return { pts: 0, rotulo: "zona de atenção elevada" };
 }
 
 /** Score de solidez em um período: soma dos componentes disponíveis (2 pts cada).
@@ -116,7 +116,7 @@ function solidezEm(indicadores: IndicadorLite[], p: string): { score: number; ma
   const alt = numOf(acha(indicadores, "Altman Z-Score (EM)")?.valores[p]);
   if (alt != null) {
     const r = pontosAltman(alt); score += r.pts; max += 2;
-    componentes.push(`Nota de solidez usada por bancos e investidores: ${r.rotulo} — quanto maior, menor a chance de a empresa quebrar; acima de 2,6 é zona segura (Altman Z-Score: ${fmtN(alt)})`);
+    componentes.push(`Nota de solidez usada por bancos e investidores: ${r.rotulo} — quanto maior, mais folga a empresa tem para atravessar um período ruim; acima de 2,6 é zona segura (Altman Z-Score: ${fmtN(alt)})`);
   }
 
   return max > 0 ? { score, max, componentes } : null;
@@ -161,8 +161,8 @@ export function estagioDickinsonDe(fco: Sig, fci: Sig, fcf: Sig): string | null 
   if (fco > 0 && fci < 0 && fcf <= 0) return "Maturidade";
   if (fco > 0 && fci === 0 && fcf <= 0) return "Maturidade"; // gera caixa, não investe, devolve capital
   if (fco > 0 && fci > 0) return "Platô";                    // desinveste DE VERDADE (fci material)
-  if (fco < 0 && fci > 0) return "Declínio";                 // vende ativo p/ cobrir queima
-  if (fco < 0 && fci <= 0 && fcf < 0) return "Declínio";     // consome caixa em todas as frentes
+  if (fco < 0 && fci > 0) return "Retração";                 // vende ativo p/ cobrir queima
+  if (fco < 0 && fci <= 0 && fcf < 0) return "Retração";     // consome caixa em todas as frentes
   return null; // fco≈0 ou padrões sem leitura segura
 }
 
@@ -179,8 +179,8 @@ function narrarFluxos(fco: number, fci: number, fcf: number, eps: number, col: s
 
 /**
  * Classifica o estágio (eixo 1) e anexa a solidez (eixo 2). Regra em ordem — o
- * primeiro que casa vence; rótulo entre: Crise de caixa | Crescimento | Maturidade |
- * Platô | Declínio. Retorna null com < 2 períodos (sem base para tendência).
+ * primeiro que casa vence; rótulo entre: Dificuldade de caixa | Crescimento | Maturidade |
+ * Platô | Retração. Retorna null com < 2 períodos (sem base para tendência).
  */
 export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[], fluxoCaixa?: FluxoCaixaLite | null): EstagioResult | null {
   const ord = [...periodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
@@ -223,7 +223,7 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
       solvenciaColapsada ? "e os três termômetros de solvência estão no nível crítico" : null,
     ].filter(Boolean).join("; ");
     return com({
-      estagio: "Crise de caixa",
+      estagio: "Dificuldade de caixa",
       justificativa: `A empresa está sem fôlego de caixa: ${partes}. Na prática, falta dinheiro disponível para honrar os compromissos que vencem nos próximos meses.`,
     });
   }
@@ -255,7 +255,7 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
       "Crescimento": "padrão de crescimento: o negócio expande e atrai recursos para acelerar",
       "Maturidade": "padrão maduro: a própria operação sustenta a empresa e ainda remunera sócios e credores",
       "Platô": "padrão de acomodação: gera caixa mas desfaz posições, sem novas frentes de crescimento",
-      "Declínio": "padrão de declínio: a operação não se sustenta sozinha",
+      "Retração": "padrão de retração: a operação ainda não se sustenta sozinha",
     };
     if (rec.estagio && (!ant || !ant.estagio || ant.estagio === rec.estagio)) {
       // Sem coluna anterior provada, ou padrão CONSISTENTE nos dois anos → Dickinson decide.
@@ -293,7 +293,7 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
 
     // Frases que se explicam sozinhas: o que aconteceu com o faturamento e o que
     // isso significa, sem exigir que o leitor saiba o que é "margem operacional".
-    if (quedaUlt || cresc < -0.1) return { estagio: "Declínio", justificativa: `O faturamento vem encolhendo ao longo do período analisado, ${pct(cresc)} no acumulado, mas sem aperto agudo de caixa por enquanto: a empresa ainda consegue pagar suas contas, e o problema está em vender menos a cada ano.` };
+    if (quedaUlt || cresc < -0.1) return { estagio: "Retração", justificativa: `O faturamento vem encolhendo ao longo do período analisado, ${pct(cresc)} no acumulado, mas sem aperto agudo de caixa por enquanto: a empresa ainda consegue pagar suas contas, e o problema está em vender menos a cada ano.` };
     if (cresceUlt && crescUltAno > 0.15 && margemPos) return { estagio: "Crescimento", justificativa: `O faturamento está em expansão, com alta de ${pct(crescUltAno)} no último ano, e a operação fecha no azul: o que sobra das vendas depois de custos e despesas do dia a dia é positivo.` };
     if (Math.abs(cresc) <= 0.1 && margemPos && (liqCorr == null || liqCorr >= 1)) return { estagio: "Maturidade", justificativa: `O faturamento se manteve estável no período, variação de ${pct(cresc)}, a operação fecha no azul e a empresa tem folga para pagar as contas de curto prazo.` };
     return { estagio: "Platô", justificativa: `O faturamento está praticamente parado, variação de ${pct(cresc)} no período, sem sinal claro de crescimento nem de queda, e sem aperto de caixa: a empresa se mantém, mas não avança.` };

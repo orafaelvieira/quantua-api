@@ -33,8 +33,8 @@ describe("classifyEstagio — Dickinson pelos sinais do FC", () => {
     expect(classifyEstagio(INDS, ["2022", "2023"], fc(300, -500, 400))?.estagio).toBe("Crescimento");
   });
 
-  it("FCO− FCI+ → Declínio (venda de ativos cobrindo queima operacional)", () => {
-    expect(classifyEstagio(INDS, ["2022", "2023"], fc(-300, 250, 100))?.estagio).toBe("Declínio");
+  it("FCO− FCI+ → Retração (venda de ativos cobrindo queima operacional)", () => {
+    expect(classifyEstagio(INDS, ["2022", "2023"], fc(-300, 250, 100))?.estagio).toBe("Retração");
   });
 
   it("FCO+ FCI+ FCF− → Platô (shake-out)", () => {
@@ -43,18 +43,18 @@ describe("classifyEstagio — Dickinson pelos sinais do FC", () => {
 
   it("prova NÃO fecha → ignora o FC e cai na heurística de receita (verde só com prova)", () => {
     const r = classifyEstagio(INDS, ["2022", "2023"], fc(-300, 250, 100, false));
-    expect(r?.estagio).not.toBe("Declínio"); // receita cresce 10% c/ margem ok → não é declínio
+    expect(r?.estagio).not.toBe("Retração"); // receita cresce 10% c/ margem ok → não é declínio
     expect(r?.justificativa).not.toContain("Dickinson");
   });
 
-  it("CRISE DE CAIXA tem prioridade sobre Dickinson (aperto agudo manda)", () => {
+  it("DIFICULDADE DE CAIXA tem prioridade sobre Dickinson (aperto agudo manda)", () => {
     const emCrise = [
       ind("Receita Líquida", { "2022": 1000, "2023": 900 }),
       ind("Margem EBITDA", { "2022": -0.05, "2023": -0.1 }),
       ind("Liquidez Corrente", { "2022": 0.9, "2023": 0.8 }),
       ind("Liquidez Imediata", { "2022": 0.03, "2023": 0.02 }),
     ] as never[];
-    expect(classifyEstagio(emCrise, ["2022", "2023"], fc(500, -200, -150))?.estagio).toBe("Crise de caixa");
+    expect(classifyEstagio(emCrise, ["2022", "2023"], fc(500, -200, -150))?.estagio).toBe("Dificuldade de caixa");
   });
 
   it("sem FC → heurística de receita/margem continua funcionando (fallback)", () => {
