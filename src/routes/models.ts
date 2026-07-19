@@ -12,6 +12,7 @@ import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
 import { calcularModelo, validarFormula, backfillPremissasAoRecuar, BlocoModelo, ScenarioOverrides, RealizadoModelo, IndicesMacroSnapshot, SERIES_MACRO, MACRO_CAMBIO } from "../services/model-engine";
 import { buscarIndicesEconomicos } from "../services/indices-economicos";
+import { mesclarArvoresBalancete } from "../services/balancete-conversao";
 import { buscarDadosWacc } from "../services/wacc-dados";
 import { ERP_REFERENCIA, BETAS_EMERGING, BETAS_DATA, KROLL_DECIS, KROLL_FONTE, CSRP_FATORES } from "../services/wacc-referencias";
 import { perguntarJson } from "../services/ai-extraction";
@@ -976,7 +977,12 @@ router.get("/:id/dfs-origem", async (req: AuthRequest, res: Response): Promise<v
     versaoExtracao?: string;
     arvoreOriginalDRE?: Record<string, unknown[]>;
     arvoreOriginalBP?: Record<string, unknown>;
+    arvoresBalancete?: unknown;
   } | null;
+  // IBR alimentado por BALANCETE guarda as árvores em `arvoresBalancete`; sem
+  // esta mescla a aba "Documento original da empresa" ficava VAZIA no Valuation
+  // (mesma leitura que a auditoria do IBR já fazia — helper único).
+  if (de) { try { mesclarArvoresBalancete(de); } catch { /* best-effort */ } }
   if (!de || (!de.bp?.length && !de.dre?.length)) { res.json({ temOrigem: false }); return; }
   res.json({
     temOrigem: true,

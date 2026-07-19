@@ -225,6 +225,32 @@ function diaAnterior(ddmmaaaa: string): string | null {
   return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
 }
 
+/**
+ * MESCLA NA LEITURA (2026-07-18): as árvores dos balancetes ficam em
+ * `arvoresBalancete` (lista própria, para o /refold re-dobrar cada mês). Quem
+ * CONSOME a árvore original — auditoria do IBR e "Documento original da empresa"
+ * do Valuation — lê `arvoreOriginalBP/DRE`. Este helper une as duas visões SEM
+ * persistir (persistir faria o refold dobrar os meses duas vezes).
+ *
+ * Helper ÚNICO porque a mescla já precisou existir em dois endpoints e divergiu:
+ * o Valuation lia direto do banco e mostrava a aba vazia para IBR de balancete.
+ */
+export function mesclarArvoresBalancete<
+  T extends { arvoreOriginalBP?: unknown; arvoreOriginalDRE?: unknown; arvoresBalancete?: unknown },
+>(dados: T): T {
+  const arv = Array.isArray(dados?.arvoresBalancete) ? (dados.arvoresBalancete as Array<Record<string, any>>) : [];
+  if (arv.length === 0) return dados;
+  const bp: Record<string, unknown> = { ...((dados.arvoreOriginalBP as Record<string, unknown>) ?? {}) };
+  const dre: Record<string, unknown> = { ...((dados.arvoreOriginalDRE as Record<string, unknown>) ?? {}) };
+  for (const ab of arv) {
+    for (const [p, v] of Object.entries(ab?.arvoreBP ?? {})) if (!bp[p]) bp[p] = v;
+    for (const [p, v] of Object.entries(ab?.arvoreDRE ?? {})) if (!dre[p]) dre[p] = v;
+  }
+  if (Object.keys(bp).length) (dados as { arvoreOriginalBP?: unknown }).arvoreOriginalBP = bp;
+  if (Object.keys(dre).length) (dados as { arvoreOriginalDRE?: unknown }).arvoreOriginalDRE = dre;
+  return dados;
+}
+
 // ── conversão principal ──────────────────────────────────────────────────────
 
 export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {

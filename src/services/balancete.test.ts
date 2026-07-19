@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { parseBalanceteTexto } from "./balancete-parser";
-import { converterBalancete } from "./balancete-conversao";
+import { converterBalancete, mesclarArvoresBalancete } from "./balancete-conversao";
 import { mapAccountToBPGroup } from "./account-mapper";
 
 // ── fixtures sintéticas ──────────────────────────────────────────────────────
@@ -289,5 +289,39 @@ describe("converterBalancete — provas de integridade", () => {
     const conv = converterBalancete(parseBalanceteTexto(FIX_DOMINIO));
     const pl = Object.values(conv.arvoreBP[conv.periodoBP].grupos).flat();
     expect(pl.some((i) => /apura[çc][ãa]o do balancete/i.test(i.nome))).toBe(true);
+  });
+});
+
+describe("mesclarArvoresBalancete (leitura: auditoria do IBR e Valuation)", () => {
+  const dadosBalanceteOnly = () => ({
+    arvoreOriginalBP: undefined as unknown,
+    arvoreOriginalDRE: undefined as unknown,
+    arvoresBalancete: [
+      { periodo: "31/05/2026", arvoreBP: { "31/05/2026": { grupos: {} } }, arvoreDRE: { "31/05/2026": [] } },
+    ],
+  });
+
+  it("IBR só de balancete: as árvores mensais passam a aparecer em arvoreOriginalBP/DRE", () => {
+    const d = mesclarArvoresBalancete(dadosBalanceteOnly());
+    expect(Object.keys(d.arvoreOriginalBP as object)).toEqual(["31/05/2026"]);
+    expect(Object.keys(d.arvoreOriginalDRE as object)).toEqual(["31/05/2026"]);
+  });
+
+  it("não sobrescreve período ANUAL já existente (o balancete só preenche vazio)", () => {
+    const anual = { "31/12/2025": { grupos: { ANUAL: [] } } };
+    const d = mesclarArvoresBalancete({
+      arvoreOriginalBP: { ...anual } as unknown,
+      arvoreOriginalDRE: undefined as unknown,
+      arvoresBalancete: [
+        { periodo: "31/12/2025", arvoreBP: { "31/12/2025": { grupos: { MENSAL: [] } } }, arvoreDRE: {} },
+      ],
+    });
+    const bp = d.arvoreOriginalBP as Record<string, { grupos: Record<string, unknown> }>;
+    expect(Object.keys(bp["31/12/2025"].grupos)).toEqual(["ANUAL"]);
+  });
+
+  it("sem balancetes, devolve os dados intactos", () => {
+    const orig = { arvoreOriginalBP: { a: 1 } as unknown, arvoreOriginalDRE: undefined as unknown, arvoresBalancete: [] };
+    expect(mesclarArvoresBalancete(orig).arvoreOriginalBP).toEqual({ a: 1 });
   });
 });

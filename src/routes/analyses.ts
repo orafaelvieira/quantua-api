@@ -8,7 +8,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, extrairTextoLayoutPDF, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { parseBalanceteTexto, pareceBalancete } from "../services/balancete-parser";
-import { converterBalancete } from "../services/balancete-conversao";
+import { converterBalancete, mesclarArvoresBalancete } from "../services/balancete-conversao";
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
@@ -1381,19 +1381,7 @@ router.get("/:id/dados-estruturados", async (req: AuthRequest, res: Response): P
   // (Original ↔ padrão) lê essas chaves e passa a exibir os meses do balancete.
   // Mescla SÓ NA LEITURA: persistir junto faria o /refold dobrar os meses em
   // dobro (as balancete são re-dobradas pela própria lista arvoresBalancete).
-  try {
-    const arvBal = Array.isArray(dadosOut?.arvoresBalancete) ? dadosOut.arvoresBalancete : [];
-    if (arvBal.length > 0) {
-      const mergeBP = { ...(dadosOut.arvoreOriginalBP ?? {}) };
-      const mergeDRE = { ...(dadosOut.arvoreOriginalDRE ?? {}) };
-      for (const ab of arvBal) {
-        for (const [p, v] of Object.entries(ab?.arvoreBP ?? {})) if (!mergeBP[p]) mergeBP[p] = v;
-        for (const [p, v] of Object.entries(ab?.arvoreDRE ?? {})) if (!mergeDRE[p]) mergeDRE[p] = v;
-      }
-      if (Object.keys(mergeBP).length) dadosOut.arvoreOriginalBP = mergeBP;
-      if (Object.keys(mergeDRE).length) dadosOut.arvoreOriginalDRE = mergeDRE;
-    }
-  } catch { /* mescla é best-effort — nunca bloqueia os dados */ }
+  try { mesclarArvoresBalancete(dadosOut); } catch { /* best-effort — nunca bloqueia os dados */ }
   res.json(dadosOut);
 });
 
