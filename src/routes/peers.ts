@@ -35,6 +35,25 @@ router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void
   });
 });
 
+// POST /peers/cvm/verificar — roda AGORA a mesma checagem do job semanal
+// (compara ETag/Last-Modified da CVM com o último processado) e devolve o que
+// achou. Existe porque depender só do cron de segunda deixa o time sem saber se
+// a vigilância está viva — aqui a resposta é imediata e auditável.
+router.post("/cvm/verificar", async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const resultados = await checarAtualizacoesCvm();
+    const novos = resultados.filter((r) => r.novo).map((r) => r.arquivo);
+    const avisos = await prisma.systemNotice.findMany({
+      where: { tipo: "cvm_update", lida: false },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json({ ok: true, verificados: resultados.length, novos, avisos });
+  } catch (e) {
+    console.error("[peers/cvm/verificar] falhou:", e);
+    res.status(502).json({ error: e instanceof Error ? e.message : "Falha ao consultar a CVM" });
+  }
+});
+
 // POST /peers/cvm/sync-historico — seed completo (DFP 2010 + ITR 2011 → hoje),
 // intercalado por ano, em background NO SERVIDOR. Retomável (pula o que já foi
 // processado). O painel acompanha o progresso pelo GET /status.

@@ -62,7 +62,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-18.v134.texto-conclusao-primeiro";
+const BUILD_VERSION = "2026-07-19.v135.cvm-vigilancia-diagnostico";
 
 // Sonda de diagnóstico dos restarts: health-check/deploy manda SIGTERM (dá tempo de
 // anotar no snapshot); OOM manda SIGKILL (não aparece). A anotação só ocorre com o
@@ -87,13 +87,29 @@ app.get("/version", async (_req, res) => {
     },
   };
   try {
-    const [peerCompanies, pmPagamentoLines, sectorsActive, cvmSyncFiles] = await Promise.all([
+    const [peerCompanies, pmPagamentoLines, sectorsActive, cvmSyncFiles, ultimasJobs] = await Promise.all([
       prisma.peerCompany.count(),
       prisma.peerLine.count({ where: { documento: "INDICADOR", conta: "PM - PAGAMENTO" } }),
       prisma.sector.count({ where: { active: true } }),
       prisma.cvmSyncState.count(),
+      // Diagnóstico dos CRONS sem painel DO: `enabled=false` explica silêncio de
+      // job (ex.: aviso semanal da CVM que nunca chega); a última execução por
+      // job mostra se o schedule está de fato disparando.
+      prisma.jobRun.findMany({
+        distinct: ["jobName"], orderBy: { startedAt: "desc" }, take: 20,
+        select: { jobName: true, status: true, startedAt: true, finishedAt: true },
+      }).catch(() => []),
     ]);
-    res.json({ ok: true, build: BUILD_VERSION, ...runtime, email: env.email.provider, cvmSyncFiles, peers: { peerCompanies, pmPagamentoLines }, sectorsActive });
+    const jobs = {
+      enabled: env.jobs.enabled,
+      tz: env.jobs.timezone,
+      ultimas: ultimasJobs.map((j) => ({
+        job: j.jobName, status: j.status,
+        inicio: j.startedAt?.toISOString() ?? null,
+        fim: j.finishedAt?.toISOString() ?? null,
+      })),
+    };
+    res.json({ ok: true, build: BUILD_VERSION, ...runtime, email: env.email.provider, jobs, cvmSyncFiles, peers: { peerCompanies, pmPagamentoLines }, sectorsActive });
   } catch {
     res.json({ ok: true, build: BUILD_VERSION, ...runtime, email: env.email.provider, peers: null });
   }
