@@ -5,12 +5,16 @@
  * Toda mutação emite trilha via registrarAuditoria (regra da casa).
  */
 import { Router, Response } from "express";
+import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { whereEmpresaVisivel, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
-import { calcularModelo, validarFormula, backfillPremissasAoRecuar, BlocoModelo, ScenarioOverrides, RealizadoModelo, IndicesMacroSnapshot, SERIES_MACRO, MACRO_CAMBIO } from "../services/model-engine";
+import { calcularModelo, validarFormula, backfillPremissasAoRecuar, BlocoModelo, ScenarioOverrides, RealizadoModelo, IndicesMacroSnapshot, SERIES_MACRO, MACRO_CAMBIO, ResultadoModelo, LinhaDre } from "../services/model-engine";
+import { calcularOrcadoRealizado, congelarOrcamento } from "../services/model-orcamento";
+import { agregarPorPeriodo, recorteJanelaMovel } from "../services/model-safra";
+import { DIVERGENCIAS_BELAGRO, resumoDivergencias } from "../services/model-reconciliacao-belagro";
 import { buscarIndicesEconomicos } from "../services/indices-economicos";
 import { mesclarArvoresBalancete } from "../services/balancete-conversao";
 import { buscarDadosWacc } from "../services/wacc-dados";
@@ -200,6 +204,20 @@ router.get("/seed-preview", async (req: AuthRequest, res: Response): Promise<voi
 // GET /models/templates — catálogo de templates de receita (cards do wizard).
 router.get("/templates", async (_req: AuthRequest, res: Response): Promise<void> => {
   res.json({ templates: TEMPLATES_RECEITA });
+});
+
+// GET /models/reconciliacao-planilha — catálogo das divergências conhecidas
+// entre o motor do Quantua e a planilha de referência (Business Plan Belagro).
+// É a PROVA da decisão de corrigir os defeitos em vez de replicá-los: cada item
+// diz onde a planilha erra, o que ela devolve e o que o motor devolve.
+// Estático (sem escopo de empresa) — fica junto das demais rotas sem :id, antes
+// de "/:id", que senão captura este caminho.
+router.get("/reconciliacao-planilha", async (_req: AuthRequest, res: Response): Promise<void> => {
+  res.json({
+    divergencias: DIVERGENCIAS_BELAGRO,
+    resumo: resumoDivergencias(),
+    fonte: "PLANO_BUSINESS_PLAN_BELAGRO.md — engenharia reversa de Business Plan - Belagro_mai.26.xlsm",
+  });
 });
 
 // GET /models/contas-destino — contas dos MODELOS PADRÃO ATIVOS de DRE e BP
@@ -740,6 +758,176 @@ const travaEdicao = (model: { status: string }): string | null =>
   model.status === "Concluído" || model.status === "Cancelado"
     ? `Modelo "${model.status}" está travado para edição — reabra o modelo (com motivo) ou crie uma nova versão a partir do IBR.`
     : null;
+
+// ── ORÇAMENTO CONGELADO e ORÇADO × REALIZADO (B12) ─────────────────────────
+
+/** Resultado vivo do modelo: usa o cache quando existe, senão recalcula. */
+async function resultadoVivo(modelId: string) {
+  const model = await prisma.financialModel.findUnique({ where: { id: modelId }, select: { resultadoCache: true } });
+  const cache = model?.resultadoCache as (ResultadoModelo & { cenario?: string; calculadoEm?: string }) | null;
+  if (cache?.dre) return { resultado: cache as ResultadoModelo, cenario: cache.cenario ?? "Base" };
+  const calc = await calcularEGravar(modelId);
+  return calc ? { resultado: calc.resultado, cenario: calc.cenario } : null;
+}
+
+// POST /models/:id/orcamento/congelar — fotografa a projeção como ORÇAMENTO.
+// Versionado e monotônico: congelar de novo NÃO apaga o anterior (política de
+// versionamento de insumos — nunca deletar, substituir).
+router.post("/:id/orcamento/congelar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
+
+  const calc = await resultadoVivo(model.id);
+  if (!calc) { res.status(409).json({ error: "Não foi possível calcular o modelo para congelar o orçamento." }); return; }
+  if (!calc.resultado.dre?.length) {
+    res.status(409).json({ error: "O modelo ainda não tem DRE calculada — configure os blocos antes de congelar o orçamento." });
+    return;
+  }
+
+  const { nome, observacao } = (req.body ?? {}) as { nome?: string; observacao?: string };
+  const ultima = await prisma.modelSnapshot.findFirst({ where: { modelId: model.id }, orderBy: { versao: "desc" }, select: { versao: true } });
+  const versao = (ultima?.versao ?? 0) + 1;
+
+  const snap = congelarOrcamento({
+    id: "", // o id real é o do registro; o conteúdo guarda só a fotografia
+    nome: nome?.trim() || `Orçamento v${versao}`,
+    cenario: calc.cenario,
+    mesInicial: model.mesInicial,
+    horizonteMeses: model.horizonteMeses,
+    dre: calc.resultado.dre,
+    bp: calc.resultado.bp,
+    fc: calc.resultado.fc,
+  });
+  const conteudo = { dre: snap.dre, bp: snap.bp, fc: snap.fc };
+  const contentHash = crypto.createHash("sha256").update(JSON.stringify(conteudo)).digest("hex");
+
+  // Só um snapshot vigente por modelo — os anteriores continuam existindo.
+  const criado = await prisma.$transaction(async (tx) => {
+    await tx.modelSnapshot.updateMany({ where: { modelId: model.id, ativo: true }, data: { ativo: false } });
+    return tx.modelSnapshot.create({
+      data: {
+        modelId: model.id, versao, nome: snap.nome, cenario: snap.cenario,
+        mesInicial: snap.mesInicial, horizonteMeses: snap.horizonteMeses,
+        conteudo: conteudo as object, contentHash, ativo: true,
+        userId: req.userId!, observacao: observacao?.trim().slice(0, 300) || null,
+      },
+    });
+  });
+
+  await registrarAuditoria({
+    userId: req.userId!, analysisId: model.analysisSeedId ?? null,
+    entity: "model_snapshot", entityId: criado.id, field: "congelamento do orçamento",
+    after: { versao, nome: criado.nome, cenario: criado.cenario, linhas: snap.dre.length, contentHash },
+    source: "models", reason: observacao?.trim().slice(0, 300) || undefined,
+  });
+
+  res.json({ ok: true, snapshot: { ...criado, conteudo: undefined } });
+});
+
+// GET /models/:id/orcamento/snapshots — histórico de congelamentos (sem o
+// conteúdo, que é grande; use o endpoint do :sid para abrir um).
+router.get("/:id/orcamento/snapshots", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const snapshots = await prisma.modelSnapshot.findMany({
+    where: { modelId: model.id },
+    orderBy: { versao: "desc" },
+    select: { id: true, versao: true, nome: true, cenario: true, mesInicial: true, horizonteMeses: true, contentHash: true, ativo: true, observacao: true, createdAt: true, userId: true },
+  });
+  res.json({ snapshots });
+});
+
+// GET /models/:id/orcamento/snapshots/:sid — um congelamento inteiro.
+router.get("/:id/orcamento/snapshots/:sid", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const snap = await prisma.modelSnapshot.findFirst({ where: { id: req.params.sid as string, modelId: model.id } });
+  if (!snap) { res.status(404).json({ error: "Orçamento congelado não encontrado" }); return; }
+  res.json({ snapshot: snap });
+});
+
+// GET /models/:id/orcado-realizado?de=YYYY-MM&ate=YYYY-MM[&snapshotId=]
+// Compara o orçamento congelado com o realizado/projetado vivo nas quatro
+// faixas da planilha de referência (período, mesmo período 12 meses atrás, e as
+// duas comparações temporais).
+router.get("/:id/orcado-realizado", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+
+  const snapRow = req.query.snapshotId
+    ? await prisma.modelSnapshot.findFirst({ where: { id: String(req.query.snapshotId), modelId: model.id } })
+    : await prisma.modelSnapshot.findFirst({ where: { modelId: model.id, ativo: true }, orderBy: { versao: "desc" } });
+  if (!snapRow) {
+    res.status(409).json({ error: "Este modelo ainda não tem orçamento congelado — congele o orçamento para comparar com o realizado." });
+    return;
+  }
+
+  const calc = await resultadoVivo(model.id);
+  if (!calc) { res.status(409).json({ error: "Não foi possível calcular o modelo." }); return; }
+
+  const meses = calc.resultado.meses ?? [];
+  const de = /^\d{4}-\d{2}$/.test(String(req.query.de ?? "")) ? String(req.query.de) : meses[0];
+  const ate = /^\d{4}-\d{2}$/.test(String(req.query.ate ?? "")) ? String(req.query.ate) : meses[meses.length - 1];
+  if (!de || !ate) { res.status(400).json({ error: "Informe o período (de/ate no formato YYYY-MM)." }); return; }
+
+  const conteudo = (snapRow.conteudo ?? {}) as unknown as { dre?: LinhaDre[]; bp?: LinhaDre[]; fc?: LinhaDre[] };
+  const resultado = calcularOrcadoRealizado({
+    snapshot: {
+      id: snapRow.id, nome: snapRow.nome, criadoEm: snapRow.createdAt.toISOString(), cenario: snapRow.cenario,
+      mesInicial: snapRow.mesInicial, horizonteMeses: snapRow.horizonteMeses, dre: conteudo.dre ?? [],
+      bp: conteudo.bp, fc: conteudo.fc,
+    },
+    dreRealizada: calc.resultado.dre ?? [],
+    statusMes: calc.resultado.statusMes ?? {},
+    // O lado "realizado" vem do balancete gravado no modelo — o motor projeta
+    // em todos os meses e guarda o realizado como referência.
+    realizado: (model.realizado as RealizadoModelo | null) ?? null,
+    janela: { de, ate },
+  });
+
+  res.json({
+    ...resultado,
+    // Proveniência (regra da casa: data + fonte em todo output).
+    orcamento: { id: snapRow.id, versao: snapRow.versao, nome: snapRow.nome, cenario: snapRow.cenario, congeladoEm: snapRow.createdAt, contentHash: snapRow.contentHash },
+    cenarioAtual: calc.cenario,
+    geradoEm: new Date().toISOString(),
+  });
+});
+
+// GET /models/:id/recorte?tipo=contabil|safra&mesInicioSafra=7[&janelaDe=YYYY-MM]
+// Recorte de período: ano contábil, ano safra, ou janela móvel de 12 meses.
+router.get("/:id/recorte", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const calc = await resultadoVivo(model.id);
+  if (!calc) { res.status(409).json({ error: "Não foi possível calcular o modelo." }); return; }
+
+  const meses = calc.resultado.meses ?? [];
+  const janelaDe = String(req.query.janelaDe ?? "");
+
+  if (/^\d{4}-\d{2}$/.test(janelaDe)) {
+    const tamanho = Number(req.query.tamanho) || 12;
+    res.json({
+      modo: "janela",
+      dre: recorteJanelaMovel(calc.resultado.dre ?? [], janelaDe, { tamanhoMeses: tamanho, origem: "dre", mesesDisponiveis: meses }),
+      bp: recorteJanelaMovel(calc.resultado.bp ?? [], janelaDe, { tamanhoMeses: tamanho, origem: "bp", mesesDisponiveis: meses }),
+      fc: recorteJanelaMovel(calc.resultado.fc ?? [], janelaDe, { tamanhoMeses: tamanho, origem: "fc", mesesDisponiveis: meses }),
+      cenario: calc.cenario, geradoEm: new Date().toISOString(),
+    });
+    return;
+  }
+
+  const mesInicioSafra = req.query.tipo === "safra" ? Math.min(12, Math.max(1, Number(req.query.mesInicioSafra) || 7)) : 1;
+  res.json({
+    modo: req.query.tipo === "safra" ? "safra" : "contabil",
+    mesInicioSafra,
+    dre: agregarPorPeriodo(calc.resultado.dre ?? [], meses, { mesInicioSafra, origem: "dre" }),
+    bp: agregarPorPeriodo(calc.resultado.bp ?? [], meses, { mesInicioSafra, origem: "bp" }),
+    fc: agregarPorPeriodo(calc.resultado.fc ?? [], meses, { mesInicioSafra, origem: "fc" }),
+    cenario: calc.cenario, geradoEm: new Date().toISOString(),
+  });
+});
 
 router.post("/:id/atualizar-indices", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);

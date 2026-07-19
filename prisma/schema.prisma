@@ -1042,6 +1042,7 @@ model FinancialModel {
   blocks    ModelBlock[]
   scenarios ModelScenario[]
   produto   ProdutoEmpresa? @relation(fields: [produtoId], references: [id], onDelete: SetNull)
+  snapshots ModelSnapshot[]
 
   @@index([companyId])
   @@index([userId])
@@ -1152,4 +1153,41 @@ model ModelScenario {
 
   @@index([modelId])
   @@map("model_scenarios")
+}
+
+/// ORÇAMENTO CONGELADO (B12): fotografia versionada da projeção num instante,
+/// para servir de base do Orçado × Realizado.
+///
+/// POLÍTICA DE VERSIONAMENTO DE INSUMOS (regra da casa): nunca deletar,
+/// SUBSTITUIR. Cada congelamento é uma versão nova, monotônica por modelo;
+/// o snapshot vigente é o de maior `versao` com `ativo = true`. Congelar de
+/// novo NÃO apaga o anterior — só deixa de ser o vigente, e o Orçado ×
+/// Realizado de meses já publicados continua reproduzível.
+model ModelSnapshot {
+  id             String   @id @default(uuid())
+  modelId        String   @map("model_id")
+  /// Versão monotônica dentro do modelo (1, 2, 3…).
+  versao         Int
+  nome           String
+  /// Cenário ativo no instante do congelamento (selo do CFI).
+  cenario        String
+  mesInicial     String   @map("mes_inicial")
+  horizonteMeses Int      @map("horizonte_meses")
+  /// { dre: LinhaDre[], bp?: LinhaDre[], fc?: LinhaDre[] } — ver model-orcamento.ts
+  conteudo       Json
+  /// Hash do conteúdo: prova de que o snapshot não foi adulterado depois.
+  contentHash    String?  @map("content_hash")
+  /// Snapshot vigente do modelo. Congelar de novo desliga os anteriores.
+  ativo          Boolean  @default(true)
+  /// Quem congelou.
+  userId         String   @map("user_id")
+  /// Motivo/observação do congelamento (entra na trilha).
+  observacao     String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  model FinancialModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@unique([modelId, versao])
+  @@index([modelId])
+  @@map("model_snapshots")
 }
