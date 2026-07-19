@@ -51,7 +51,9 @@ describe("estagio-ciclo — materialidade + persistência + solidez (2 eixos)", 
     expect(r?.solidez?.nivel).toBe("intermediária"); // Fleuriet Insuficiente(1) + Kanitz solvente(2) + Altman cinzenta(1) = 4/6
     expect(r?.solidez?.score).toBe(4);
     expect(r?.solidez?.tendencia).toBe("deteriorando"); // 2024 era 6/6
-    expect(r?.solidez?.componentes.join(" ")).toContain("Fleuriet");
+    // Texto do CLIENTE: sem nome de método, mas os 3 termômetros continuam descritos.
+    expect(r?.solidez?.componentes).toHaveLength(3);
+    expect(r?.solidez?.componentes.join(" ")).toContain("A operação se financia sozinha?");
   });
 
   it("persistência: mesmo padrão nas 2 colunas provadas → 'leitura consistente'", () => {
@@ -105,7 +107,7 @@ describe("estagio-ciclo — materialidade + persistência + solidez (2 eixos)", 
     ] as never[];
     const r = classifyEstagio(inds, ["2023", "2024"], null);
     expect(r?.estagio).toBe("Dificuldade de caixa");
-    expect(r?.justificativa).toContain("solvência");
+    expect(r?.justificativa).toContain("solidez financeira"); // o sinal que disparou aparece no texto
   });
 
   it("avaliarSolidez: componentes faltando → pontua só o disponível; sem nenhum → null", () => {

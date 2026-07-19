@@ -101,22 +101,39 @@ function solidezEm(indicadores: IndicadorLite[], p: string): { score: number; ma
   let score = 0, max = 0;
   const componentes: string[] = [];
 
+  // Cada componente = UMA frase curta: o que o teste responde, seguido da
+  // resposta. O texto longo anterior virava um parágrafo denso no cartão.
   const fle = pontosFleuriet(acha(indicadores, "Situação de Liquidez (Fleuriet)")?.valores[p]);
   if (fle) {
     score += fle.pts; max += 2;
-    componentes.push(`Como a operação se financia: ${fle.rotulo.toLowerCase()} — mede se as vendas do dia a dia se sustentam sozinhas ou dependem de dinheiro de curto prazo, como cheque especial e antecipação de recebíveis (estrutura de giro, método Fleuriet)`);
+    const leitura = fle.pts === 2
+      ? "as vendas do dia a dia se financiam sozinhas"
+      : fle.pts === 1
+      ? "as vendas do dia a dia dependem em parte de dinheiro de curto prazo"
+      : "as vendas do dia a dia dependem de dinheiro de curto prazo, como cheque especial e antecipação de recebíveis";
+    componentes.push(`A operação se financia sozinha? ${fle.pts === 2 ? "Sim" : "Não"} — ${leitura}.`);
   }
 
   const kan = numOf(acha(indicadores, "Termômetro de Kanitz")?.valores[p]);
   if (kan != null) {
     const r = pontosKanitz(kan); score += r.pts; max += 2;
-    componentes.push(`Risco de não conseguir pagar as contas: ${r.rotulo} — nota que junta lucro, folga de caixa e endividamento para estimar esse risco; acima de zero é confortável (termômetro de Kanitz: ${fmtN(kan)})`);
+    const leitura = r.pts === 2
+      ? "está em terreno confortável"
+      : r.pts === 1
+      ? "está no limite, sem margem para um mês ruim"
+      : "está no nível que exige atenção imediata";
+    componentes.push(`Consegue honrar os compromissos? A nota que combina lucro, folga de caixa e endividamento ${leitura}.`);
   }
 
   const alt = numOf(acha(indicadores, "Altman Z-Score (EM)")?.valores[p]);
   if (alt != null) {
     const r = pontosAltman(alt); score += r.pts; max += 2;
-    componentes.push(`Nota de solidez usada por bancos e investidores: ${r.rotulo} — quanto maior, mais folga a empresa tem para atravessar um período ruim; acima de 2,6 é zona segura (Altman Z-Score: ${fmtN(alt)})`);
+    const leitura = r.pts === 2
+      ? "tem folga para atravessar um período ruim"
+      : r.pts === 1
+      ? "tem pouca folga para atravessar um período ruim"
+      : "tem pouca margem para absorver um período ruim";
+    componentes.push(`Como um banco enxergaria a empresa? Pela nota que eles usam, ela ${leitura} (${fmtN(alt)} numa escala em que acima de 2,6 é confortável).`);
   }
 
   return max > 0 ? { score, max, componentes } : null;
@@ -205,26 +222,32 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
   // mínimo também é crise, mesmo com margem positiva — a estrutura já cedeu.
   const solvenciaColapsada = solidez != null && solidez.max >= 4 && solidez.score / solidez.max <= 0.25;
   if ((margemNeg && liqBaixa) || (margemNeg && caixaMinimo) || (solvenciaColapsada && caixaMinimo)) {
-    // LEITOR = DONO: cada indicador vira uma frase que se explica sozinha. Números
-    // em formato brasileiro (o toFixed antigo imprimia "0.01" com ponto).
+    // LEITOR = DONO. A frase começa pela CONCLUSÃO (o que está acontecendo com o
+    // negócio) e só depois cita o número que a sustenta — o inverso do texto
+    // antigo, que abria com três índices seguidos e enterrava o significado.
     const num = (v: number, casas: number) => v.toLocaleString("pt-BR", { minimumFractionDigits: casas, maximumFractionDigits: casas });
-    const partes = [
-      liqCorr != null
-        ? `para cada R$ 1,00 que vence no curto prazo a empresa tem apenas R$ ${num(liqCorr, 2)} em bens e direitos de curto prazo para cobrir (liquidez corrente de ${num(liqCorr, 2)})`
-        : null,
-      liqImed != null
-        ? `o dinheiro disponível hoje cobre só ${num(liqImed * 100, 1)}% dessas contas (liquidez imediata)`
-        : null,
-      margemOp != null && margemOp < 0
-        ? `a operação opera no vermelho, gastando mais do que fatura (margem operacional de ${pct(margemOp)})`
-        : margemOp != null
-        ? `a operação em si ainda dá resultado, com margem operacional de ${pct(margemOp)}`
-        : null,
-      solvenciaColapsada ? "e os três termômetros de solvência estão no nível crítico" : null,
-    ].filter(Boolean).join("; ");
+    const operacaoVai = margemOp != null && margemOp > 0;
+    const abertura = operacaoVai
+      ? `O negócio em si está saudável: de cada R$ 100 que a empresa fatura, sobram cerca de R$ ${num(margemOp * 100, 0)} depois de pagar os custos e as despesas do dia a dia. O problema não está em vender nem em produzir, está no dinheiro em conta.`
+      : margemOp != null
+      ? `A operação está gastando mais do que fatura: cada R$ 100 vendidos deixam um prejuízo de cerca de R$ ${num(Math.abs(margemOp) * 100, 0)} depois dos custos e despesas do dia a dia.`
+      : "A empresa está sem fôlego de caixa.";
+    const evidencia = liqCorr != null
+      ? ` Hoje, para cada R$ 1,00 de conta que vence nos próximos meses, a empresa tem R$ ${num(liqCorr, 2)} para cobrir${liqImed != null ? `, e do que está disponível na conta bancária sai apenas ${num(liqImed * 100, 1)}% desse valor` : ""}.`
+      : liqImed != null
+      ? ` O dinheiro disponível em conta cobre apenas ${num(liqImed * 100, 1)}% das contas que vencem nos próximos meses.`
+      : "";
+    // Quando foi o TRIO que disparou a classificação, o texto precisa dizer —
+    // senão o dono lê "o negócio vai bem" sem saber qual sinal acendeu.
+    const sinalEstrutural = solvenciaColapsada
+      ? " Os indicadores de solidez financeira, que olham a estrutura e não só o mês, também estão no nível que pede atenção imediata."
+      : "";
+    const consequencia = operacaoVai
+      ? " Uma empresa pode dar lucro e ainda assim não ter dinheiro para pagar o que vence, e é exatamente isso que acontece aqui: o resultado existe, mas está preso em prazos, estoques ou já saiu em retiradas e dívidas. Enquanto o caixa não for recomposto, qualquer atraso de cliente vira problema de pagamento no mesmo mês."
+      : " Enquanto a operação não voltar a cobrir os próprios custos, o caixa continuará encolhendo mês a mês.";
     return com({
       estagio: "Dificuldade de caixa",
-      justificativa: `A empresa está sem fôlego de caixa: ${partes}. Na prática, falta dinheiro disponível para honrar os compromissos que vencem nos próximos meses.`,
+      justificativa: `${abertura}${evidencia}${sinalEstrutural}${consequencia}`,
     });
   }
 
