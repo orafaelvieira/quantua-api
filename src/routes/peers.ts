@@ -4,7 +4,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/permissions";
 import { getPeerDistribution } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
-import { sincronizarCvm, sincronizarHistoricoCvm, recalcularIndicadoresTudo, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados } from "../services/cvm-sync";
+import { sincronizarArquivoCvm, sincronizarHistoricoCvm, recalcularIndicadoresTudo, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados } from "../services/cvm-sync";
 import { INDICADORES_TEMPLATE } from "../services/financial-templates";
 import { runtimeState } from "../services/runtime-state";
 
@@ -29,7 +29,16 @@ router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void
     vigiados: arquivosVigiados().map(({ tipo, ano }) => `${tipo}_${ano}`),
     estados,
     totais: { empresas, periodos, indicadores },
-    avisos,
+    // O aviso carrega o ARQUIVO (extraído da chave "cvm:dfp_2024:<versao>") para a
+    // tela oferecer "Ressincronizar" ali mesmo: a checagem vigia os 32 arquivos do
+    // histórico, mas a tabela lista só os 3 recentes — antes disso, avisar de um
+    // DFP 2022 deixava o usuário sem nenhum botão para agir.
+    avisos: avisos.map((a) => {
+      const arquivo = (a.chave ?? "").split(":")[1] ?? "";
+      const [tipo, ano] = arquivo.split("_");
+      const valido = (tipo === "itr" || tipo === "dfp") && /^\d{4}$/.test(ano ?? "");
+      return { id: a.id, titulo: a.titulo, corpo: a.corpo, arquivo: valido ? arquivo : null, tipo: valido ? tipo : null, ano: valido ? Number(ano) : null };
+    }),
     historico: { ...historico, planoTotal: planoHistorico().length },
     seedsRodando: runtimeState.seedsRodando,
   });
@@ -74,18 +83,11 @@ router.post("/cvm/sync", async (req: AuthRequest, res: Response): Promise<void> 
   if (!Number.isFinite(ano) || ano < 2010 || ano > 2100) { res.status(400).json({ error: "ano inválido" }); return; }
   if (getProgressoHistorico().emAndamento) { res.status(409).json({ error: "Aguarde a sincronização do histórico terminar" }); return; }
   if (runtimeState.seedsRodando) { res.status(409).json({ error: "O servidor acabou de reiniciar e está carregando os dados de boot (~2 min). Tente de novo em instantes." }); return; }
-  try {
-    const resultado = await sincronizarCvm(tipo, ano);
-    // Sincronizou → avisos desta fonte deixam de ser pendência.
-    await prisma.systemNotice.updateMany({
-      where: { tipo: "cvm_update", chave: { startsWith: `cvm:${tipo}_${ano}:` }, lida: false },
-      data: { lida: true },
-    });
-    res.json({ ok: true, ...resultado });
-  } catch (e) {
-    console.error("[peers/cvm/sync] falhou:", e);
-    res.status(502).json({ error: e instanceof Error ? e.message : "Falha ao sincronizar com a CVM" });
-  }
+  // 202 + background: o await direto estourava o timeout do balanceador em
+  // arquivo grande (DFP ~640 empresas) e o usuário via "A requisição expirou"
+  // com o processamento seguindo no servidor. A tela acompanha pelo progresso.
+  sincronizarArquivoCvm(tipo, ano).catch((e) => console.error("[peers/cvm/sync] falhou:", e));
+  res.status(202).json({ ok: true, arquivo: `${tipo}_${ano}`, emBackground: true });
 });
 
 // POST /peers/cvm/recalcular — recálculo geral de indicadores a partir dos períodos

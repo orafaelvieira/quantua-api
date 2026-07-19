@@ -392,6 +392,45 @@ export async function sincronizarHistoricoCvm(reprocessar = false, autoRetomadas
 }
 
 /**
+ * Sincroniza UM arquivo em SEGUNDO PLANO, reusando o progresso/lock do histórico.
+ *
+ * Antes o endpoint fazia `await sincronizarCvm(...)` dentro do request: um DFP com
+ * ~640 empresas passa do limite do balanceador e o usuário via "A requisição
+ * expirou" mesmo com o download seguindo no servidor. Aqui a rota responde 202 na
+ * hora e a tela acompanha pelo mesmo progresso do histórico.
+ */
+export async function sincronizarArquivoCvm(tipo: "itr" | "dfp", ano: number): Promise<void> {
+  if (progHist.emAndamento) throw new Error("Já há um processamento em andamento");
+  const arquivo = arquivoId(tipo, ano);
+  Object.assign(progHist, {
+    emAndamento: true, total: 1, feitos: 0, atual: arquivo,
+    ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null, autoRetomadas: 0,
+  });
+  await salvaSnapshotHistorico();
+  console.log(`[cvm-sync] ressincronização de ${arquivo} iniciada em background`);
+  try {
+    await sincronizarCvm(tipo, ano);
+    progHist.ok.push(arquivo);
+    // Sincronizou → o aviso daquela versão deixa de ser pendência.
+    await prisma.systemNotice.updateMany({
+      where: { tipo: "cvm_update", chave: { startsWith: `cvm:${arquivo}:` }, lida: false },
+      data: { lida: true },
+    });
+  } catch (e) {
+    const erro = e instanceof Error ? e.message : String(e);
+    progHist.erros.push({ arquivo, erro });
+    console.error(`[cvm-sync] ressincronização de ${arquivo} falhou:`, erro);
+  } finally {
+    progHist.feitos = 1;
+    progHist.emAndamento = false;
+    progHist.atual = null;
+    progHist.terminadoEm = new Date().toISOString();
+    coletaLixo();
+    await salvaSnapshotHistorico();
+  }
+}
+
+/**
  * RECÁLCULO GERAL de indicadores — para erro de FÓRMULA (não de mapeamento):
  * lê os períodos já persistidos e regrava CvmIndicator, ano a ano, sem download
  * nem parse (~20-30 min). Usa o mesmo progresso/heartbeat do seed histórico.
