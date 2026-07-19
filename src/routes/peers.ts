@@ -4,7 +4,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/permissions";
 import { getPeerDistribution } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
-import { sincronizarArquivoCvm, sincronizarHistoricoCvm, recalcularIndicadoresTudo, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados } from "../services/cvm-sync";
+import { sincronizarArquivoCvm, sincronizarHistoricoCvm, recalcularIndicadoresTudo, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados, modoDoSnapshot } from "../services/cvm-sync";
 import { INDICADORES_TEMPLATE } from "../services/financial-templates";
 import { runtimeState } from "../services/runtime-state";
 
@@ -27,6 +27,12 @@ router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void
   ]);
   res.json({
     vigiados: arquivosVigiados().map(({ tipo, ano }) => `${tipo}_${ano}`),
+    // Plano INTEIRO (32 arquivos, do mais recente para o mais antigo): a tabela lista
+    // todos os anos — antes mostrava só os 3 vigiados e não havia como ressincronizar
+    // um DFP 2019 sem esperar um aviso da CVM aparecer.
+    plano: planoHistorico()
+      .map(({ tipo, ano }) => ({ arquivo: `${tipo}_${ano}`, tipo, ano }))
+      .sort((a, b) => b.ano - a.ano || a.tipo.localeCompare(b.tipo)),
     estados,
     totais: { empresas, periodos, indicadores },
     // O aviso carrega o ARQUIVO (extraído da chave "cvm:dfp_2024:<versao>") para a
@@ -39,7 +45,10 @@ router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void
       const valido = (tipo === "itr" || tipo === "dfp") && /^\d{4}$/.test(ano ?? "");
       return { id: a.id, titulo: a.titulo, corpo: a.corpo, arquivo: valido ? arquivo : null, tipo: valido ? tipo : null, ano: valido ? Number(ano) : null };
     }),
-    historico: { ...historico, planoTotal: planoHistorico().length },
+    // `modo`/`alvo` normalizados (inclusive p/ snapshot legado sem o campo): a tela
+    // precisa saber SE o que morreu foi o histórico ou um arquivo isolado — retomar
+    // arquivo isolado pelo caminho do histórico não refaz nada.
+    historico: { ...historico, planoTotal: planoHistorico().length, ...modoDoSnapshot(historico) },
     seedsRodando: runtimeState.seedsRodando,
   });
 });

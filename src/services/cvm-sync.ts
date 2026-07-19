@@ -264,6 +264,18 @@ export interface ProgressoHistorico {
   fase?: string | null;
   /** quantas vezes o BOOT retomou esta execução automaticamente (trava anti-loop). */
   autoRetomadas?: number;
+  /**
+   * QUAL operação estava rodando. A auto-retomada precisa repetir a MESMA: retomar
+   * um arquivo isolado como se fosse o histórico não faz nada, porque o histórico
+   * PULA arquivo que já tem CvmSyncState — foi assim que uma ressincronização de
+   * DFP 2025 morta no meio ficou eternamente "interrompida" sem nunca refazer.
+   * Ausente = snapshot antigo, anterior a este campo → trata como histórico.
+   */
+  modo?: "historico" | "arquivo" | "recalc";
+  /** Alvo do modo "arquivo" — o único que não é reconstruível a partir do plano. */
+  alvo?: { tipo: "itr" | "dfp"; ano: number } | null;
+  /** Modo "historico" disparado como reprocessamento (recalibração). */
+  reprocessar?: boolean;
 }
 
 // Estado em memória do seed (1 por processo — a rota bloqueia disparo duplo).
@@ -353,7 +365,7 @@ export async function sincronizarHistoricoCvm(reprocessar = false, autoRetomadas
   Object.assign(progHist, {
     emAndamento: true, total: plano.length, feitos: 0, atual: null,
     ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null,
-    autoRetomadas,
+    autoRetomadas, modo: "historico", alvo: null, reprocessar,
   });
   console.log(`[cvm-sync] seed histórico iniciado — ${plano.length} arquivos (${plano[0].tipo}_${plano[0].ano} → ${plano[plano.length - 1].tipo}_${plano[plano.length - 1].ano})`);
   await salvaSnapshotHistorico();
@@ -399,12 +411,13 @@ export async function sincronizarHistoricoCvm(reprocessar = false, autoRetomadas
  * expirou" mesmo com o download seguindo no servidor. Aqui a rota responde 202 na
  * hora e a tela acompanha pelo mesmo progresso do histórico.
  */
-export async function sincronizarArquivoCvm(tipo: "itr" | "dfp", ano: number): Promise<void> {
+export async function sincronizarArquivoCvm(tipo: "itr" | "dfp", ano: number, autoRetomadas = 0): Promise<void> {
   if (progHist.emAndamento) throw new Error("Já há um processamento em andamento");
   const arquivo = arquivoId(tipo, ano);
   Object.assign(progHist, {
     emAndamento: true, total: 1, feitos: 0, atual: arquivo,
-    ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null, autoRetomadas: 0,
+    ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null,
+    autoRetomadas, modo: "arquivo", alvo: { tipo, ano }, reprocessar: false,
   });
   await salvaSnapshotHistorico();
   console.log(`[cvm-sync] ressincronização de ${arquivo} iniciada em background`);
@@ -435,7 +448,7 @@ export async function sincronizarArquivoCvm(tipo: "itr" | "dfp", ano: number): P
  * lê os períodos já persistidos e regrava CvmIndicator, ano a ano, sem download
  * nem parse (~20-30 min). Usa o mesmo progresso/heartbeat do seed histórico.
  */
-export async function recalcularIndicadoresTudo(): Promise<void> {
+export async function recalcularIndicadoresTudo(autoRetomadas = 0): Promise<void> {
   if (progHist.emAndamento) throw new Error("Já há um processamento em andamento");
   const periodos = await prisma.cvmPeriod.findMany({ distinct: ["dtFim"], select: { dtFim: true }, orderBy: { dtFim: "asc" } });
   const porAno = new Map<number, string[]>();
@@ -448,6 +461,7 @@ export async function recalcularIndicadoresTudo(): Promise<void> {
   Object.assign(progHist, {
     emAndamento: true, total: anos.length, feitos: 0, atual: null,
     ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null, fase: null,
+    autoRetomadas, modo: "recalc", alvo: null, reprocessar: false,
   });
   console.log(`[cvm-sync] recálculo geral iniciado — ${anos.length} anos (${anos[0]}–${anos[anos.length - 1]})`);
   await salvaSnapshotHistorico();
@@ -482,22 +496,59 @@ export async function recalcularIndicadoresTudo(): Promise<void> {
 /**
  * AUTO-RETOMADA NO BOOT: os restarts da plataforma DO matam execuções longas no
  * meio; o snapshot no banco sabe (interrompido=true). Ao subir — depois dos seeds —
- * o servidor retoma sozinho, sem depender de clique. Trava anti-loop: máximo de 20
- * retomadas automáticas por execução (cada tentativa historicamente avança ≥1
- * arquivo, então converge muito antes); manual zera o contador.
+ * o servidor retoma sozinho, sem depender de clique.
+ *
+ * Retoma a MESMA operação que morreu (`modo` do snapshot). Antes disparava sempre o
+ * histórico: para um arquivo isolado isso era um no-op silencioso, porque o histórico
+ * pula quem já tem CvmSyncState — a ressincronização "interrompida" nunca refazia
+ * nada e a tela ficava travada pedindo Retomar.
+ *
+ * Trava anti-loop por modo: o histórico avança ≥1 arquivo por tentativa (converge),
+ * mas um arquivo único que morre sempre na mesma fase só repetiria o mesmo download —
+ * poucas tentativas e o caso vai para revisão humana. Disparo manual zera o contador.
  */
-const MAX_AUTO_RETOMADAS = 20;
+const MAX_AUTO_RETOMADAS: Record<"historico" | "arquivo" | "recalc", number> = {
+  historico: 20, arquivo: 4, recalc: 6,
+};
+
+/**
+ * Descobre o modo de um snapshot. Snapshots gravados ANTES do campo `modo` existir
+ * (inclusive o que estiver travado no banco no momento do deploy) são inferidos pela
+ * forma: só a ressincronização de arquivo único usa total=1 com um id de arquivo em
+ * `atual`; o recálculo geral rotula os passos como "recalc_<ano>". Sem esta inferência
+ * o snapshot legado cairia em "histórico" e a retomada continuaria sendo um no-op.
+ */
+export function modoDoSnapshot(estado: ProgressoHistorico): {
+  modo: "historico" | "arquivo" | "recalc";
+  alvo: { tipo: "itr" | "dfp"; ano: number } | null;
+} {
+  if (estado.modo) return { modo: estado.modo, alvo: estado.alvo ?? null };
+  const atual = estado.atual ?? "";
+  const m = /^(itr|dfp)_(\d{4})$/.exec(atual);
+  if (m && estado.total === 1) return { modo: "arquivo", alvo: { tipo: m[1] as "itr" | "dfp", ano: Number(m[2]) } };
+  if (/^recalc_\d{4}$/.test(atual)) return { modo: "recalc", alvo: null };
+  return { modo: "historico", alvo: null };
+}
 export async function autoRetomarSeInterrompido(): Promise<void> {
   try {
     const estado = await estadoHistorico();
     if (!estado.interrompido || progHist.emAndamento) return;
+    const { modo, alvo } = modoDoSnapshot(estado);
     const tentativas = estado.autoRetomadas ?? 0;
-    if (tentativas >= MAX_AUTO_RETOMADAS) {
-      console.warn(`[cvm-sync] auto-retomada SUSPENSA (${tentativas} tentativas) — retomar manualmente pela tela de pares`);
+    const limite = MAX_AUTO_RETOMADAS[modo];
+    if (tentativas >= limite) {
+      console.warn(`[cvm-sync] auto-retomada SUSPENSA (modo ${modo}, ${tentativas}/${limite} tentativas) — retomar manualmente pela tela de pares`);
       return;
     }
-    console.log(`[cvm-sync] execução interrompida detectada (${estado.feitos}/${estado.total}, ${estado.atual ?? "?"}) — auto-retomando (tentativa ${tentativas + 1}/${MAX_AUTO_RETOMADAS})`);
-    await sincronizarHistoricoCvm(false, tentativas + 1);
+    const proxima = tentativas + 1;
+    console.log(`[cvm-sync] execução interrompida detectada (modo ${modo}, ${estado.feitos}/${estado.total}, ${estado.atual ?? "?"}) — auto-retomando (tentativa ${proxima}/${limite})`);
+    if (modo === "arquivo" && alvo) {
+      await sincronizarArquivoCvm(alvo.tipo, alvo.ano, proxima);
+    } else if (modo === "recalc") {
+      await recalcularIndicadoresTudo(proxima);
+    } else {
+      await sincronizarHistoricoCvm(estado.reprocessar ?? false, proxima);
+    }
   } catch (e) {
     console.error("[cvm-sync] auto-retomada falhou:", e instanceof Error ? e.message : e);
   }
