@@ -48,12 +48,26 @@ export const env = {
     enabled: !!process.env.SPACES_KEY,
   },
   /**
-   * Jobs schedulado (node-cron in-process). Default desabilitado em dev pra
-   * não disparar emails reais durante desenvolvimento. Em prod, setar
-   * JOBS_ENABLED=true via .do/app.yaml.
+   * Jobs schedulados (node-cron in-process).
+   *
+   * `JOBS_ENABLED` explícito continua mandando ("true"/"false"). Quando AUSENTE,
+   * detectamos produção — porque depender só da env var deixou TODOS os crons
+   * desligados em produção sem ninguém perceber (aviso semanal da CVM, varredura
+   * de revisões, refresh de benchmarks): `JOBS_ENABLED=true` está no
+   * `.do/app.yaml`, mas a spec do DigitalOcean só é aplicada por
+   * `doctl apps update` — push no repositório NÃO a aplica, e não há acesso ao
+   * painel para reaplicar. Diagnosticado em 19/07/2026 via /version
+   * (jobs.enabled=false, nenhuma execução registrada em JobRun).
+   *
+   * Sinais de produção (ambos FALSOS na máquina de desenvolvimento, então o dev
+   * continua sem disparar e-mail real): NODE_ENV=production ou o provedor de
+   * e-mail real configurado. Para desligar em prod: JOBS_ENABLED=false.
    */
   jobs: {
-    enabled: process.env.JOBS_ENABLED === "true",
+    enabled:
+      process.env.JOBS_ENABLED === "true" ? true
+      : process.env.JOBS_ENABLED === "false" ? false
+      : process.env.NODE_ENV === "production" || emailProvider === "resend",
     /** Timezone usado em todos os cron schedules. */
     timezone: process.env.JOBS_TZ ?? "America/Sao_Paulo",
   },

@@ -62,7 +62,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-19.v135.cvm-vigilancia-diagnostico";
+const BUILD_VERSION = "2026-07-19.v136.liga-crons-producao";
 
 // Sonda de diagnóstico dos restarts: health-check/deploy manda SIGTERM (dá tempo de
 // anotar no snapshot); OOM manda SIGKILL (não aparece). A anotação só ocorre com o
@@ -102,6 +102,11 @@ app.get("/version", async (_req, res) => {
     ]);
     const jobs = {
       enabled: env.jobs.enabled,
+      // Como o `enabled` foi decidido — sem isto, "false" em prod é um mistério
+      // (foi env var explícita? falha de detecção?). Ver comentário em env.ts.
+      origem: process.env.JOBS_ENABLED === "true" || process.env.JOBS_ENABLED === "false"
+        ? `JOBS_ENABLED=${process.env.JOBS_ENABLED}`
+        : `detectado (NODE_ENV=${process.env.NODE_ENV ?? "vazio"}, email=${env.email.provider})`,
       tz: env.jobs.timezone,
       ultimas: ultimasJobs.map((j) => ({
         job: j.jobName, status: j.status,
