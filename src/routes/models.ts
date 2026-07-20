@@ -259,6 +259,9 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
         companyId: m.companyId, empresa: porId.get(m.companyId)?.nomeFantasia || porId.get(m.companyId)?.razaoSocial || "—",
         cenarioAtivo: m.scenarios.find((s) => s.id === m.cenarioAtivoId)?.nome ?? "Base",
         checksOk: cache?.checks ? cache.checks.every((c) => c.ok) : null,
+        // Vínculo com o IBR que serve de histórico. Já existia no banco; passa a
+        // sair na lista para o hub da empresa exibir a relação entre produtos.
+        analysisSeedId: m.analysisSeedId,
         updatedAt: m.updatedAt,
       };
     }),
