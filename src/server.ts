@@ -25,6 +25,7 @@ import peersRouter from "./routes/peers";
 import indicatorsRouter from "./routes/indicators";
 import modelsRouter from "./routes/models";
 import produtosRouter from "./routes/produtos";
+import fechamentoRouter from "./routes/fechamento";
 import organizacoesRouter from "./routes/organizacoes";
 import { startJobs } from "./jobs";
 import { estadoHistorico, anotaSinal, autoRetomarSeInterrompido, getPicoRssMB } from "./services/cvm-sync";
@@ -150,6 +151,8 @@ app.use("/indicators", indicatorsRouter);
 app.use("/models", modelsRouter);
 // Workspace FP&A (W1): envelopes de produto/versões da empresa.
 app.use("/produtos", produtosRouter);
+// Workspace FP&A (W2): fechamento de período, regime e documentos lógicos.
+app.use("/fechamento", fechamentoRouter);
 app.use("/orgs", organizacoesRouter); // /orgs (nao /organizacoes): a rota do FRONTEND usa /organizacoes e o proxy do Vite colidiria
 
 /**

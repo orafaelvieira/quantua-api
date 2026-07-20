@@ -378,10 +378,18 @@ model Company {
   createdAt    DateTime @default(now()) @map("created_at")
 
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // ── WORKSPACE FP&A (W2, 2026-07-20) ──
+  /// REGIME DE FECHAMENTO da empresa (decisão de 20/07/2026): "contabil" = o
+  /// balancete manda no número oficial (gerencial é prévia); "gerencial" = as
+  /// planilhas mapeadas mandam e o balancete concilia retroativamente. Define
+  /// QUANDO o mês fecha — o gate da Apresentação de resultados.
+  regimeFechamento String @default("contabil") @map("regime_fechamento")
+
   analyses  Analysis[]
   documents Document[]
   organizacoes OrganizacaoEmpresa[]
   produtos  ProdutoEmpresa[]
+  periodos  PeriodoEmpresa[]
 
   @@map("companies")
 }
@@ -1054,6 +1062,37 @@ model ProdutoEmpresa {
   @@unique([companyId, rotuloNorm])
   @@index([companyId])
   @@map("produtos_empresa")
+}
+
+/// ── WORKSPACE FP&A (W2) ──────────────────────────────────────────────────────
+/// FECHAMENTO DE PERÍODO da empresa: "fechado" é ATO (com autor e hora), nunca
+/// acidente. Reabrir exige motivo e fica na trilha — prática contábil.
+///
+/// Os demais estados do período (aberto/recebido) são DERIVADOS dos documentos
+/// (tipo+competência+cadeia de substituição que o Document JÁ tem) — este model
+/// só registra o que não dá para derivar: o ato de fechar e o de reabrir.
+/// Retificação pós-fechamento também é derivada: versão de documento criada
+/// DEPOIS de fechadoEm ⇒ selo vermelho no workspace.
+model PeriodoEmpresa {
+  id        String    @id @default(uuid())
+  companyId String    @map("company_id")
+  /// "YYYY-MM".
+  periodo   String
+  /// null = nunca fechado (estado derivado); preenchido = fechado.
+  fechadoEm     DateTime? @map("fechado_em")
+  fechadoPorId  String?   @map("fechado_por_id")
+  /// Última reabertura (o fechamento atual pode ser posterior a ela).
+  reabertoEm     DateTime? @map("reaberto_em")
+  reabertoPorId  String?   @map("reaberto_por_id")
+  reabertoMotivo String?   @map("reaberto_motivo")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, periodo])
+  @@index([companyId])
+  @@map("periodos_empresa")
 }
 
 /// Bloco do modelo (schedule do CFI). Os NÓS DE DRIVER vivem em `config`
