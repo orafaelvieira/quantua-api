@@ -381,6 +381,7 @@ model Company {
   analyses  Analysis[]
   documents Document[]
   organizacoes OrganizacaoEmpresa[]
+  produtos  ProdutoEmpresa[]
 
   @@map("companies")
 }
@@ -540,8 +541,17 @@ model Analysis {
   /// Cadência em dias entre revisões recorrentes. Default 30 (mensal).
   reviewCadenceDays     Int       @default(30) @map("review_cadence_days")
 
+  // ── WORKSPACE FP&A (W1, 2026-07-20) — campos ADITIVOS e anuláveis ──
+  /// Envelope de produto ao qual este IBR pertence como VERSÃO (declarado
+  /// pelo analista no workspace; null = registro solto, comportamento de sempre).
+  produtoId     String? @map("produto_id")
+  /// Nº da versão dentro do envelope (monotônico; atribuído ao declarar).
+  produtoVersao Int?    @map("produto_versao")
+
   company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user        User         @relation(fields: [userId], references: [id])
+  /// SetNull: sumir o envelope jamais pode derrubar o IBR (zero retrocesso).
+  produto     ProdutoEmpresa? @relation(fields: [produtoId], references: [id], onDelete: SetNull)
   documents   Document[]
   engagement  Engagement?
   auditEvents AuditEvent[]
@@ -551,6 +561,7 @@ model Analysis {
   covenants   Covenant[]
 
   @@index([mode, nextReviewAt])
+  @@index([produtoId])
   @@map("analyses")
 }
 
@@ -995,12 +1006,54 @@ model FinancialModel {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
+  // ── WORKSPACE FP&A (W1, 2026-07-20) — campos ADITIVOS e anuláveis ──
+  /// Envelope de produto ao qual este modelo pertence como VERSÃO (declarado;
+  /// null = solto). Ver ProdutoEmpresa.
+  produtoId     String? @map("produto_id")
+  produtoVersao Int?    @map("produto_versao")
+
   blocks    ModelBlock[]
   scenarios ModelScenario[]
+  produto   ProdutoEmpresa? @relation(fields: [produtoId], references: [id], onDelete: SetNull)
 
   @@index([companyId])
   @@index([userId])
+  @@index([produtoId])
   @@map("financial_models")
+}
+
+/// ── WORKSPACE FP&A (W1) ──────────────────────────────────────────────────────
+/// PRODUTO da empresa: o ENVELOPE que acumula versões de um mesmo entregável
+/// ("Orçamento 2026", "Business Plan — Sementes"). Versão é DECLARADA pelo
+/// analista, nunca inferida por tipo+data (decisão de 20/07/2026 — dois
+/// "Valuation 2026" podem ser trabalhos distintos, não versões).
+model ProdutoEmpresa {
+  id        String @id @default(uuid())
+  companyId String @map("company_id")
+  /// "ibr" | "valuation" | "orcamento" | "business-plan"
+  tipo      String
+  /// Rótulo HÍBRIDO: prefixo do sistema + complemento livre ("Orçamento 2027",
+  /// "Business Plan — Sementes"; complemento obrigatório no BP).
+  rotulo    String
+  /// Rótulo normalizado (sem acentos/caixa/espaços duplos) — trava anti-duplicata:
+  /// colisão vira a pergunta "isto é uma nova versão de X?", nunca dois envelopes.
+  rotuloNorm String @map("rotulo_norm")
+  /// VIGÊNCIA (decisão de 20/07/2026): para tipo "ibr" este campo fica NULL e a
+  /// vigente é DERIVADA (maior produtoVersao com status Concluída) — automática ao
+  /// concluir, sem hook no fluxo do IBR. Para os demais, ponteiro MANUAL para o id
+  /// do registro vigente ("vigente" é decisão de negócio).
+  versaoVigenteId String?  @map("versao_vigente_id")
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  analyses Analysis[]
+  models   FinancialModel[]
+
+  @@unique([companyId, rotuloNorm])
+  @@index([companyId])
+  @@map("produtos_empresa")
 }
 
 /// Bloco do modelo (schedule do CFI). Os NÓS DE DRIVER vivem em `config`

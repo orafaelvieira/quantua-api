@@ -24,6 +24,7 @@ import adminRouter from "./routes/admin";
 import peersRouter from "./routes/peers";
 import indicatorsRouter from "./routes/indicators";
 import modelsRouter from "./routes/models";
+import produtosRouter from "./routes/produtos";
 import organizacoesRouter from "./routes/organizacoes";
 import { startJobs } from "./jobs";
 import { estadoHistorico, anotaSinal, autoRetomarSeInterrompido, getPicoRssMB } from "./services/cvm-sync";
@@ -62,7 +63,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-19.v141.lock-atomico";
+const BUILD_VERSION = "2026-07-20.v142.workspace-produtos-w1";
 
 // Sonda de diagnóstico dos restarts: health-check/deploy manda SIGTERM (dá tempo de
 // anotar no snapshot); OOM manda SIGKILL (não aparece). A anotação só ocorre com o
@@ -147,6 +148,8 @@ app.use("/admin", adminRouter);
 app.use("/peers", peersRouter);
 app.use("/indicators", indicatorsRouter);
 app.use("/models", modelsRouter);
+// Workspace FP&A (W1): envelopes de produto/versões da empresa.
+app.use("/produtos", produtosRouter);
 app.use("/orgs", organizacoesRouter); // /orgs (nao /organizacoes): a rota do FRONTEND usa /organizacoes e o proxy do Vite colidiria
 
 /**
