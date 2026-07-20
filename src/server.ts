@@ -26,7 +26,7 @@ import indicatorsRouter from "./routes/indicators";
 import modelsRouter from "./routes/models";
 import organizacoesRouter from "./routes/organizacoes";
 import { startJobs } from "./jobs";
-import { estadoHistorico, anotaSinal, autoRetomarSeInterrompido } from "./services/cvm-sync";
+import { estadoHistorico, anotaSinal, autoRetomarSeInterrompido, getPicoRssMB } from "./services/cvm-sync";
 import { runtimeState } from "./services/runtime-state";
 import { prisma } from "./db/client";
 import { Prisma } from "@prisma/client";
@@ -62,7 +62,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-19.v139.retomada-com-checkpoint";
+const BUILD_VERSION = "2026-07-19.v140.fila-pendentes";
 
 // Sonda de diagnóstico dos restarts: health-check/deploy manda SIGTERM (dá tempo de
 // anotar no snapshot); OOM manda SIGKILL (não aparece). A anotação só ocorre com o
@@ -80,6 +80,10 @@ app.get("/version", async (_req, res) => {
   const runtime = {
     uptimeSec: Math.round(process.uptime()),
     rssMB: Math.round(process.memoryUsage().rss / 1e6),
+    // Pico de RSS nas operações longas contra o teto do container (basic-xs = 1024MB).
+    // Se as mortes fossem OOM, este número apareceria perto do teto; se ficar na casa
+    // dos 400MB, a causa é o health check (event loop travado), não memória.
+    picoRssMB: getPicoRssMB(),
     seedsRodando: runtimeState.seedsRodando,
     cvmHistorico: h && {
       emAndamento: h.emAndamento, interrompido: h.interrompido ?? false, feitos: h.feitos, total: h.total,

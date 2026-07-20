@@ -4,7 +4,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/permissions";
 import { getPeerDistribution } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
-import { sincronizarArquivoCvm, sincronizarHistoricoCvm, recalcularIndicadoresTudo, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados, modoDoSnapshot } from "../services/cvm-sync";
+import { sincronizarArquivoCvm, sincronizarHistoricoCvm, sincronizarPendentesCvm, pendentesCvm, recalcularIndicadoresTudo, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados, modoDoSnapshot } from "../services/cvm-sync";
 import { INDICADORES_TEMPLATE } from "../services/financial-templates";
 import { runtimeState } from "../services/runtime-state";
 
@@ -49,6 +49,9 @@ router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void
     // precisa saber SE o que morreu foi o histórico ou um arquivo isolado — retomar
     // arquivo isolado pelo caminho do histórico não refaz nada.
     historico: { ...historico, planoTotal: planoHistorico().length, ...modoDoSnapshot(historico) },
+    // Fila = avisos não lidos, na ordem do plano. Alimenta o botão único
+    // "Sincronizar pendentes (N)", em vez de um clique por arquivo.
+    pendentes: (await pendentesCvm()).map((f) => f.arquivo),
     seedsRodando: runtimeState.seedsRodando,
   });
 });
@@ -97,6 +100,19 @@ router.post("/cvm/sync", async (req: AuthRequest, res: Response): Promise<void> 
   // com o processamento seguindo no servidor. A tela acompanha pelo progresso.
   sincronizarArquivoCvm(tipo, ano).catch((e) => console.error("[peers/cvm/sync] falhou:", e));
   res.status(202).json({ ok: true, arquivo: `${tipo}_${ano}`, emBackground: true });
+});
+
+// POST /peers/cvm/sync-pendentes — roda TODOS os arquivos com aviso não lido, em
+// sequência e em background. Um clique resolve a fila inteira; se o container cair
+// no meio, a auto-retomada no boot continua de onde parou (inclusive dentro do
+// arquivo, pelo checkpoint do recálculo).
+router.post("/cvm/sync-pendentes", async (_req: AuthRequest, res: Response): Promise<void> => {
+  if (getProgressoHistorico().emAndamento) { res.status(409).json({ error: "Já há um processamento em andamento" }); return; }
+  if (runtimeState.seedsRodando) { res.status(409).json({ error: "O servidor acabou de reiniciar e está carregando os dados de boot (~2 min). Tente de novo em instantes." }); return; }
+  const fila = await pendentesCvm();
+  if (fila.length === 0) { res.status(400).json({ error: "Nenhum arquivo pendente" }); return; }
+  sincronizarPendentesCvm().catch((e) => console.error("[peers/cvm/sync-pendentes] falhou:", e));
+  res.status(202).json({ ok: true, total: fila.length, arquivos: fila.map((f) => f.arquivo) });
 });
 
 // POST /peers/cvm/recalcular — recálculo geral de indicadores a partir dos períodos

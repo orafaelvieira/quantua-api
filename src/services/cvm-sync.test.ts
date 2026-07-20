@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { modoDoSnapshot, type ProgressoHistorico } from "./cvm-sync";
+import { modoDoSnapshot, filaDeAvisos, type ProgressoHistorico } from "./cvm-sync";
 
 /**
  * A auto-retomada precisa repetir a MESMA operação que morreu. Retomar uma
@@ -45,5 +45,42 @@ describe("modoDoSnapshot", () => {
   it("sem pista nenhuma, cai no histórico (comportamento anterior)", () => {
     expect(modoDoSnapshot(snap({ total: 32, atual: null }))).toEqual({ modo: "historico", alvo: null });
     expect(modoDoSnapshot(snap({ total: 1, atual: "coisa_estranha" }))).toEqual({ modo: "historico", alvo: null });
+  });
+});
+
+/**
+ * A fila de pendentes roda os arquivos SEM clique por arquivo — e a ordem não é
+ * cosmética: o 4T e o LTM de um ano são derivados com o DFP do ano anterior já na
+ * base. Processar na ordem em que os avisos chegaram produziria LTM nulo que
+ * ninguém recalcularia depois.
+ */
+const HOJE = new Date("2026-07-19T00:00:00Z");
+const chave = (arq: string, v = "v1") => `cvm:${arq}:${v}`;
+
+describe("filaDeAvisos", () => {
+  it("ordena pelo plano, não pela chegada do aviso", () => {
+    // caso real do usuário, avisos fora de ordem
+    const chaves = [chave("itr_2024"), chave("dfp_2023"), chave("itr_2023"), chave("dfp_2022"), chave("itr_2022")];
+    expect(filaDeAvisos(chaves, HOJE).map((f) => f.arquivo))
+      .toEqual(["itr_2022", "dfp_2022", "itr_2023", "dfp_2023", "itr_2024"]);
+  });
+
+  it("dedup: várias versões do mesmo arquivo viram um trabalho só", () => {
+    const chaves = [chave("dfp_2023", "etag-a"), chave("dfp_2023", "etag-b"), chave("itr_2023")];
+    expect(filaDeAvisos(chaves, HOJE).map((f) => f.arquivo)).toEqual(["itr_2023", "dfp_2023"]);
+  });
+
+  it("devolve tipo e ano prontos para o pipeline", () => {
+    expect(filaDeAvisos([chave("dfp_2022")], HOJE)).toEqual([{ tipo: "dfp", ano: 2022, arquivo: "dfp_2022" }]);
+  });
+
+  it("ignora chave malformada em vez de quebrar a fila inteira", () => {
+    const chaves = [null, "", "cvm:", "cvm:lixo:v1", "cvm:dfp_abcd:v1", chave("itr_2023")];
+    expect(filaDeAvisos(chaves, HOJE).map((f) => f.arquivo)).toEqual(["itr_2023"]);
+  });
+
+  it("arquivo fora do plano vai para o fim, sem desordenar os demais", () => {
+    const chaves = [chave("dfp_2099"), chave("dfp_2023"), chave("itr_2022")];
+    expect(filaDeAvisos(chaves, HOJE).map((f) => f.arquivo)).toEqual(["itr_2022", "dfp_2023", "dfp_2099"]);
   });
 });

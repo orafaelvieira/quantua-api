@@ -10,6 +10,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { prisma } from "../db/client";
 import { env } from "../config/env";
 import type { Indicador } from "../types/financial";
@@ -96,8 +97,6 @@ async function recalculaIndicadores(
   } else {
     await prisma.cvmIndicator.deleteMany({ where: { cnpj: { in: cnpjs }, dtFim: { in: dts } } });
   }
-  const empresas = await carregaEmpresasDoBanco(alvo, dtFimMin, dtFimMax);
-
   type Registro = { cnpj: string; dtFim: Date; visao: string; nome: string; valor: number | null; texto: string | null };
   let lote: Registro[] = [];
   let gravados = 0;
@@ -108,46 +107,64 @@ async function recalculaIndicadores(
     lote = [];
   };
 
+  /**
+   * EM BLOCOS — antes, TODAS as empresas do arquivo (~683) e seus períodos de 16 meses
+   * eram carregadas de uma vez antes do laço: um grafo vivo de centenas de MB que ficava
+   * retido do começo ao fim do recálculo. Isso pressiona as duas causas de morte ao mesmo
+   * tempo: aproxima o teto de 1GB e, pior, alonga as pausas de GC major — que BLOQUEIAM
+   * o event loop e derrubam o /health (timeout de 1s). Com blocos de 40, o conjunto vivo
+   * fica ~17× menor e cada pausa de GC é proporcionalmente mais curta.
+   */
+  const TAMANHO_BLOCO = 40;
   let feitas = 0;
-  for (const emp of empresas.values()) {
-    // calculateIndicators é CPU-síncrono. Pausa REAL (não só yield) a cada empresa:
-    // a vCPU compartilhada do plano básico estrangula sob carga contínua e o health
-    // check atrasa → DO reinicia o container (mortes com memória limpa em recalc;
-    // perfil local: 0,3ms/empresa — em prod chega a 0,5s = throttling de ~1000×).
-    // Ciclo de trabalho ~25%: 75ms/empresa + 1s a cada 25 — janelas generosas p/ o
-    // scheduler e o /health, ao custo de ~1 min a mais por arquivo de fechamento.
-    await new Promise<void>((r) => setTimeout(r, 75));
-    feitas++;
-    if (feitas % 25 === 0) {
-      await new Promise<void>((r) => setTimeout(r, 1000));
-      await onProgresso?.(feitas, empresas.size);
-    }
-    for (const dtFim of dtFims) {
-      if (!emp.periodos[dtFim]) continue;
-      // A UI replica indicadores de propósito (ex.: Margem Líquida repetida na cascata
-      // DuPont) — na persistência a chave cnpj+dtFim+visão+nome é única, então dedupe.
-      const vistos = new Set<string>();
-      for (const visao of indicadoresDaEmpresa(emp, dtFim)) {
-        const label = Object.keys(visao.indicadores[0]?.valores ?? {})[0];
-        for (const ind of visao.indicadores as Indicador[]) {
-          const chave = `${visao.visao}|${ind.nome}`;
-          if (vistos.has(chave)) continue;
-          vistos.add(chave);
-          const v = ind.valores[label];
-          lote.push({
-            cnpj: emp.cnpj,
-            dtFim: new Date(`${dtFim}T00:00:00Z`),
-            visao: visao.visao,
-            nome: ind.nome,
-            valor: numOuNull(v),
-            texto: typeof v === "string" ? v : null,
-          });
+  for (let inicio = 0; inicio < alvo.length; inicio += TAMANHO_BLOCO) {
+    const bloco = alvo.slice(inicio, inicio + TAMANHO_BLOCO);
+    const empresas = await carregaEmpresasDoBanco(bloco, dtFimMin, dtFimMax);
+    for (const emp of empresas.values()) {
+      // calculateIndicators é CPU-síncrono. Pausa REAL (não só yield) a cada empresa:
+      // a vCPU compartilhada do plano básico estrangula sob carga contínua e o health
+      // check atrasa → DO reinicia o container (mortes com memória limpa em recalc;
+      // perfil local: 0,3ms/empresa — em prod chega a 0,5s = throttling de ~1000×).
+      // Ciclo de trabalho ~25%: 75ms/empresa + 1s a cada 25 — janelas generosas p/ o
+      // scheduler e o /health, ao custo de ~1 min a mais por arquivo de fechamento.
+      await new Promise<void>((r) => setTimeout(r, 75));
+      feitas++;
+      if (feitas % 25 === 0) {
+        await new Promise<void>((r) => setTimeout(r, 1000));
+        await onProgresso?.(feitas, alvo.length);
+      }
+      for (const dtFim of dtFims) {
+        if (!emp.periodos[dtFim]) continue;
+        // A UI replica indicadores de propósito (ex.: Margem Líquida repetida na cascata
+        // DuPont) — na persistência a chave cnpj+dtFim+visão+nome é única, então dedupe.
+        const vistos = new Set<string>();
+        for (const visao of indicadoresDaEmpresa(emp, dtFim)) {
+          const label = Object.keys(visao.indicadores[0]?.valores ?? {})[0];
+          for (const ind of visao.indicadores as Indicador[]) {
+            const chave = `${visao.visao}|${ind.nome}`;
+            if (vistos.has(chave)) continue;
+            vistos.add(chave);
+            const v = ind.valores[label];
+            lote.push({
+              cnpj: emp.cnpj,
+              dtFim: new Date(`${dtFim}T00:00:00Z`),
+              visao: visao.visao,
+              nome: ind.nome,
+              valor: numOuNull(v),
+              texto: typeof v === "string" ? v : null,
+            });
+          }
         }
       }
+      if (lote.length >= 5000) await grava();
     }
-    if (lote.length >= 5000) await grava();
+    // Fecha o bloco antes de soltá-lo: além de liberar memória, garante que nenhuma
+    // empresa fique só no lote em memória — a retomada depende de "tem linha = pronta".
+    await grava();
+    empresas.clear();
+    coletaLixo();
+    await new Promise<void>((r) => setTimeout(r, 150));
   }
-  await grava();
   return gravados;
 }
 
@@ -304,7 +321,7 @@ export interface ProgressoHistorico {
    * DFP 2025 morta no meio ficou eternamente "interrompida" sem nunca refazer.
    * Ausente = snapshot antigo, anterior a este campo → trata como histórico.
    */
-  modo?: "historico" | "arquivo" | "recalc";
+  modo?: "historico" | "arquivo" | "recalc" | "pendentes";
   /** Alvo do modo "arquivo" — o único que não é reconstruível a partir do plano. */
   alvo?: { tipo: "itr" | "dfp"; ano: number } | null;
   /** Modo "historico" disparado como reprocessamento (recalibração). */
@@ -335,16 +352,50 @@ const progHist: ProgressoHistorico = {
   ok: [], pulados: [], erros: [], iniciadoEm: null, terminadoEm: null, fase: null,
 };
 
+/**
+ * DIAGNÓSTICO DA MORTE (as execuções longas morrem e nunca soubemos por quê).
+ *
+ * Duas causas concorrentes explicam igualmente bem o que se via — e a instrumentação
+ * antiga não distinguia entre elas:
+ *   (a) memória: o container é de 1GB e o OOM killer manda SIGKILL, sem aviso;
+ *   (b) health check: o /health do DigitalOcean tem timeout de 1s (default) e 9
+ *       falhas seguidas reiniciam o container. Recálculo é CPU síncrona no MESMO
+ *       processo — se o event loop trava >1s, o /health não responde.
+ *
+ * A ausência de "⚡SIGTERM recebido" NÃO decidia: com o loop travado, o próprio
+ * handler do sinal não roda, então (a) e (b) deixam o mesmo rastro.
+ *
+ * Agora cada amostra grava o PICO de RSS (contra o teto de 1GB) e o ATRASO MÁXIMO
+ * do event loop na janela. Na próxima queda o snapshot responde sozinho: pico perto
+ * de 1000MB ⇒ (a); loop acima de 1000ms ⇒ (b).
+ */
+const atrasoLoop = monitorEventLoopDelay({ resolution: 20 });
+atrasoLoop.enable();
+let picoRss = 0;
+
+/** Pico de RSS observado nas operações longas — exposto no /version. */
+export function getPicoRssMB(): number {
+  return Math.round(picoRss / 1e6);
+}
+
 // Heartbeat de fase: grava no snapshot no MÁXIMO a cada 3s (barato, mas suficiente
 // p/ apontar onde uma morte abrupta aconteceu). Só atua durante o seed histórico.
 let ultimaFaseGravada = 0;
 async function marcaFase(fase: string): Promise<void> {
   if (!progHist.emAndamento) return;
   const m = process.memoryUsage();
-  progHist.fase = `${fase} · heap ${Math.round(m.heapUsed / 1e6)}MB · ext ${Math.round(m.external / 1e6)}MB · rss ${Math.round(m.rss / 1e6)}MB`;
+  if (m.rss > picoRss) picoRss = m.rss;
+  // atrasoLoop.max é o pior atraso desde o último reset — e o reset só acontece
+  // quando a amostra é PERSISTIDA, então o número medido é sempre "pior caso na
+  // janela de ~3s que antecedeu esta gravação".
+  const loopMs = Math.round(atrasoLoop.max / 1e6);
+  progHist.fase =
+    `${fase} · heap ${Math.round(m.heapUsed / 1e6)}MB · ext ${Math.round(m.external / 1e6)}MB` +
+    ` · rss ${Math.round(m.rss / 1e6)}MB · pico ${Math.round(picoRss / 1e6)}MB/1024 · loop ${loopMs}ms`;
   const agora = Date.now();
   if (agora - ultimaFaseGravada < 3000) return;
   ultimaFaseGravada = agora;
+  atrasoLoop.reset();
   await salvaSnapshotHistorico();
 }
 
@@ -510,6 +561,108 @@ async function checkpointPendente(): Promise<CheckpointRecalculo | null> {
 }
 
 /**
+ * FILA DE TRABALHO = os avisos não lidos. Não existe estado paralelo a manter: o
+ * aviso é marcado como lido quando o arquivo fecha, então um arquivo já sincronizado
+ * some da fila sozinho. É isso que torna a fila retomável de graça — depois de um
+ * restart, basta reler os avisos para saber o que ainda falta.
+ *
+ * A ordem é a do PLANO (DFP 2010, ITR 2011, DFP 2011, …), não a de chegada do aviso:
+ * o 4T e o LTM de um ano dependem do DFP do ano anterior já estar na base, então
+ * processar fora de ordem produziria LTM nulo que ninguém recalcularia depois.
+ */
+export interface ItemFila { tipo: "itr" | "dfp"; ano: number; arquivo: string }
+
+/** Parte pura: chaves de aviso ("cvm:dfp_2023:<versao>") → fila deduplicada e ordenada. */
+export function filaDeAvisos(chaves: Array<string | null>, hoje = new Date()): ItemFila[] {
+  const ordem = new Map(planoHistorico(hoje).map((p, i) => [arquivoId(p.tipo, p.ano), i]));
+  const vistos = new Set<string>();
+  const fila: ItemFila[] = [];
+  for (const chave of chaves) {
+    const arquivo = (chave ?? "").split(":")[1] ?? "";
+    const [tipo, ano] = arquivo.split("_");
+    if ((tipo !== "itr" && tipo !== "dfp") || !/^\d{4}$/.test(ano ?? "")) continue;
+    if (vistos.has(arquivo)) continue; // várias versões do mesmo arquivo = um trabalho só
+    vistos.add(arquivo);
+    fila.push({ tipo, ano: Number(ano), arquivo });
+  }
+  // Fora do plano (ano exótico) vai para o fim, sem quebrar a ordem dos demais.
+  fila.sort((a, b) => (ordem.get(a.arquivo) ?? 1e6) - (ordem.get(b.arquivo) ?? 1e6));
+  return fila;
+}
+
+export async function pendentesCvm(): Promise<ItemFila[]> {
+  const avisos = await prisma.systemNotice.findMany({
+    where: { tipo: "cvm_update", lida: false },
+    orderBy: { createdAt: "asc" },
+    select: { chave: true },
+  });
+  return filaDeAvisos(avisos.map((a) => a.chave));
+}
+
+/**
+ * Roda TODOS os arquivos pendentes em sequência, sem clique por arquivo.
+ *
+ * Retomável sem bookkeeping extra: cada arquivo que fecha marca seu aviso como lido,
+ * então a auto-retomada no boot simplesmente relê a fila e continua do que sobrou —
+ * e se a morte pegou o meio de um arquivo, o checkpoint fecha aquele primeiro.
+ */
+export async function sincronizarPendentesCvm(autoRetomadas = 0): Promise<void> {
+  if (progHist.emAndamento) throw new Error("Já há um processamento em andamento");
+  const pendenteCp = await checkpointPendente();
+  const fila = await pendentesCvm();
+  if (fila.length === 0 && !pendenteCp) {
+    console.log("[cvm-sync] fila de pendentes vazia — nada a fazer");
+    return;
+  }
+  Object.assign(progHist, {
+    emAndamento: true, total: fila.length, feitos: 0, atual: null,
+    ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null,
+    autoRetomadas, modo: "pendentes", alvo: null, reprocessar: false, checkpoint: pendenteCp,
+  });
+  await salvaSnapshotHistorico();
+  console.log(`[cvm-sync] fila de pendentes iniciada — ${fila.length} arquivo(s): ${fila.map((f) => f.arquivo).join(", ")}`);
+  try {
+    // Arquivo morto no recálculo entra primeiro: ele NÃO tem CvmSyncState, então
+    // seria refeito do zero se entrasse pelo caminho normal da fila.
+    if (pendenteCp) {
+      progHist.atual = pendenteCp.arquivo;
+      try {
+        await concluiCheckpoint(pendenteCp);
+        progHist.ok.push(pendenteCp.arquivo);
+      } catch (e) {
+        progHist.erros.push({ arquivo: pendenteCp.arquivo, erro: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    for (const { tipo, ano, arquivo } of fila) {
+      if (pendenteCp?.arquivo === arquivo) { progHist.feitos++; continue; } // já fechado acima
+      progHist.atual = arquivo;
+      await salvaSnapshotHistorico();
+      try {
+        await sincronizarCvm(tipo, ano);
+        progHist.ok.push(arquivo);
+        await prisma.systemNotice.updateMany({
+          where: { tipo: "cvm_update", chave: { startsWith: `cvm:${arquivo}:` }, lida: false },
+          data: { lida: true },
+        });
+      } catch (e) {
+        const erro = e instanceof Error ? e.message : String(e);
+        progHist.erros.push({ arquivo, erro });
+        console.warn(`[cvm-sync] fila: ${arquivo} falhou (${erro}) — seguindo para o próximo`);
+      }
+      progHist.feitos++;
+      coletaLixo();
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  } finally {
+    progHist.emAndamento = false;
+    progHist.atual = null;
+    progHist.terminadoEm = new Date().toISOString();
+    await salvaSnapshotHistorico();
+    console.log(`[cvm-sync] fila terminou: ${progHist.ok.length} sincronizados · ${progHist.erros.length} erros`);
+  }
+}
+
+/**
  * Sincroniza UM arquivo em SEGUNDO PLANO, reusando o progresso/lock do histórico.
  *
  * Antes o endpoint fazia `await sincronizarCvm(...)` dentro do request: um DFP com
@@ -619,8 +772,8 @@ export async function recalcularIndicadoresTudo(autoRetomadas = 0): Promise<void
  * o limite é backstop contra o caso patológico — uma empresa que derrube o processo
  * sempre no mesmo ponto —, não orçamento de repetição. Disparo manual zera o contador.
  */
-const MAX_AUTO_RETOMADAS: Record<"historico" | "arquivo" | "recalc", number> = {
-  historico: 20, arquivo: 8, recalc: 6,
+const MAX_AUTO_RETOMADAS: Record<"historico" | "arquivo" | "recalc" | "pendentes", number> = {
+  historico: 20, arquivo: 8, recalc: 6, pendentes: 20,
 };
 
 /**
@@ -631,7 +784,7 @@ const MAX_AUTO_RETOMADAS: Record<"historico" | "arquivo" | "recalc", number> = {
  * o snapshot legado cairia em "histórico" e a retomada continuaria sendo um no-op.
  */
 export function modoDoSnapshot(estado: ProgressoHistorico): {
-  modo: "historico" | "arquivo" | "recalc";
+  modo: "historico" | "arquivo" | "recalc" | "pendentes";
   alvo: { tipo: "itr" | "dfp"; ano: number } | null;
 } {
   if (estado.modo) return { modo: estado.modo, alvo: estado.alvo ?? null };
@@ -654,7 +807,9 @@ export async function autoRetomarSeInterrompido(): Promise<void> {
     }
     const proxima = tentativas + 1;
     console.log(`[cvm-sync] execução interrompida detectada (modo ${modo}, ${estado.feitos}/${estado.total}, ${estado.atual ?? "?"}) — auto-retomando (tentativa ${proxima}/${limite})`);
-    if (modo === "arquivo" && alvo) {
+    if (modo === "pendentes") {
+      await sincronizarPendentesCvm(proxima);
+    } else if (modo === "arquivo" && alvo) {
       await sincronizarArquivoCvm(alvo.tipo, alvo.ano, proxima);
     } else if (modo === "recalc") {
       await recalcularIndicadoresTudo(proxima);
