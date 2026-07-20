@@ -8,7 +8,7 @@ import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from
 import { uploadFile, deleteFile } from "../services/storage";
 import { registrarAuditoria } from "../services/audit-trail";
 import { derivarDocumentosLogicos, periodosFaltantes } from "../services/fechamento-periodo";
-import { propagarMetadadosDoPool } from "../services/fixacao-pool";
+import { montarLinhaFixada, propagarMetadadosDoPool } from "../services/fixacao-pool";
 
 const router = Router();
 router.use(requireAuth);
@@ -236,6 +236,11 @@ router.put("/:id/tipo", async (req: AuthRequest, res: Response): Promise<void> =
 // evidência do que fundamentou versões anteriores dos produtos — e aponta para a
 // sucessora. A nova entra "Pendente" com versão incrementada; o reprocessamento
 // da análise passa a enxergar SÓ ela (o process filtra "Substituído").
+//
+// FASE B (fonte única): substituir uma linha FIXADA substitui NA DATA ROOM da
+// empresa (a versão nova nasce no pool) e refixa a nova neste IBR — o pool nunca
+// fica para trás; os OUTROS IBRs que fixaram a versão antiga acendem "insumo
+// desatualizado" sozinhos (fixadoDe.substituidoPorId).
 router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, res: Response): Promise<void> => {
   if (!req.file) { res.status(400).json({ error: "Nenhum arquivo enviado" }); return; }
   const id = req.params.id as string;
@@ -251,12 +256,62 @@ router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, r
 
   const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.trim().slice(0, 300) || null : null;
   const nome = fixFilename(req.file.originalname);
-  const key = `uploads/${req.userId}/${doc.analysisId}/${Date.now()}-${nome}`;
-  const storagePath = await uploadFile(req.file.buffer, key, req.file.mimetype);
   const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
   const tamanho = req.file.size > 1024 * 1024
     ? `${(req.file.size / 1024 / 1024).toFixed(1)} MB`
     : `${Math.round(req.file.size / 1024)} KB`;
+
+  // Linha FIXADA: quem é substituído de verdade é o documento do POOL.
+  if (doc.fixadoDeId) {
+    // Anda até a versão VIGENTE do pool (outro fluxo pode já ter criado v3).
+    let vigente = await prisma.document.findUnique({ where: { id: doc.fixadoDeId } });
+    for (let i = 0; vigente?.substituidoPorId && i < 50; i++) {
+      const prox = await prisma.document.findUnique({ where: { id: vigente.substituidoPorId } });
+      if (!prox) break;
+      vigente = prox;
+    }
+    if (!vigente) { res.status(409).json({ error: "Documento de origem não existe mais na Data room — selecione de novo pelo wizard." }); return; }
+
+    const key = `uploads/${req.userId}/pool-${doc.companyId}/${Date.now()}-${nome}`;
+    const storagePath = await uploadFile(req.file.buffer, key, req.file.mimetype);
+
+    // v nova NASCE NO POOL (fonte única) herdando os metadados do insumo lógico.
+    const novoPool = await prisma.document.create({
+      data: {
+        analysisId: null,
+        companyId: doc.companyId,
+        nome,
+        tipo: vigente.tipo,
+        competencia: vigente.competencia,
+        moeda: vigente.moeda,
+        storagePath, hash, tamanho,
+        status: "Pendente",
+        versao: vigente.versao + 1,
+      },
+    });
+    await prisma.document.update({
+      where: { id: vigente.id },
+      data: { status: "Substituído", substituidoPorId: novoPool.id, motivoSubstituicao: motivo },
+    });
+    // Refixa a versão nova neste IBR; a fixação antiga vira evidência.
+    const novoFixado = await prisma.document.create({ data: montarLinhaFixada(novoPool, { id: doc.analysisId!, companyId: doc.companyId }) });
+    await prisma.document.update({
+      where: { id: doc.id },
+      data: { status: "Substituído", substituidoPorId: novoFixado.id, motivoSubstituicao: motivo },
+    });
+    void registrarAuditoria({
+      userId: req.userId!, analysisId: doc.analysisId, entity: "document", entityId: vigente.id,
+      field: "substituição de documento na Data room (via IBR) + refixação",
+      before: { nome: vigente.nome, hash: vigente.hash, versao: vigente.versao },
+      after: { nome: novoPool.nome, hash: novoPool.hash, versao: novoPool.versao, documentoPoolId: novoPool.id, documentoFixadoId: novoFixado.id },
+      reason: motivo ?? undefined, source: "data-room",
+    });
+    res.status(201).json(novoFixado);
+    return;
+  }
+
+  const key = `uploads/${req.userId}/${doc.analysisId ?? `pool-${doc.companyId}`}/${Date.now()}-${nome}`;
+  const storagePath = await uploadFile(req.file.buffer, key, req.file.mimetype);
 
   // Metadados herdam da versão anterior (tipo/competência/moeda) — o documento é o
   // MESMO insumo lógico, em versão nova. Dados extraídos/edições NÃO herdam: o
