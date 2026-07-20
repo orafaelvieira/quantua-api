@@ -31,8 +31,11 @@ function fixFilename(raw: string): string {
 }
 
 /** IBR cancelado é SOMENTE CONSULTA (2026-07-16): documento de análise
- *  cancelada não pode ser editado/substituído/excluído — evidência congelada. */
-async function analiseCancelada(analysisId: string): Promise<boolean> {
+ *  cancelada não pode ser editado/substituído/excluído — evidência congelada.
+ *  Documento de POOL (analysisId null, Data room da empresa) não tem IBR que o
+ *  congele — a guarda não se aplica. */
+async function analiseCancelada(analysisId: string | null): Promise<boolean> {
+  if (!analysisId) return false;
   const a = await prisma.analysis.findUnique({ where: { id: analysisId }, select: { status: true } }).catch(() => null);
   return a?.status === "Cancelada";
 }
@@ -52,7 +55,9 @@ const upload = multer({
 });
 
 const uploadSchema = z.object({
-  analysisId: z.string().uuid(),
+  /// DATA ROOM ÚNICA (fase A): ausente = documento do POOL da empresa, enviado
+  /// pelo workspace antes de (ou sem) qualquer IBR. Presente = fluxo de sempre.
+  analysisId: z.string().uuid().optional(),
   companyId: z.string().uuid(),
   tipo: z.enum(["DRE", "Balanço Patrimonial", "Balancete", "Outro", "Material complementar"]),
   competencia: z.string().optional(),
@@ -81,12 +86,18 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
 
   const { analysisId, companyId, tipo, competencia, moeda } = parsed.data;
 
-  // Verifica que a análise pertence ao usuário
-  const analysis = await prisma.analysis.findFirst({ where: { id: analysisId, ...whereRecursoEmpresa(req) } });
-  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  if (analysisId) {
+    // Fluxo de sempre: a análise pertence ao usuário (e ancora o documento).
+    const analysis = await prisma.analysis.findFirst({ where: { id: analysisId, ...whereRecursoEmpresa(req) } });
+    if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  } else {
+    // POOL (fase A): sem análise, a validação de escopo é pela EMPRESA.
+    const company = await prisma.company.findFirst({ where: { id: companyId, ...whereEmpresaVisivel(req) } });
+    if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  }
 
   const nome = fixFilename(req.file.originalname);
-  const key = `uploads/${req.userId}/${analysisId}/${Date.now()}-${nome}`;
+  const key = `uploads/${req.userId}/${analysisId ?? `pool-${companyId}`}/${Date.now()}-${nome}`;
   const storagePath = await uploadFile(req.file.buffer, key, req.file.mimetype);
   const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
 
@@ -100,7 +111,7 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
 
   const doc = await prisma.document.create({
     data: {
-      analysisId,
+      analysisId: analysisId ?? null,
       companyId,
       nome,
       tipo: tipoFinal,
@@ -112,6 +123,17 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
       status: "Pendente",
     },
   });
+
+  // Upload de POOL é mutação da Data room da empresa — trilha (regra da casa).
+  // O fluxo com análise mantém o comportamento de sempre.
+  if (!analysisId) {
+    await registrarAuditoria({
+      userId: req.userId!, entity: "document", entityId: doc.id,
+      field: "upload na Data room da empresa",
+      after: { nome, tipo: tipoFinal, competencia: competencia ?? null, companyId, hash: hash.slice(0, 12) },
+      source: "data-room",
+    });
+  }
 
   res.status(201).json(doc);
 });

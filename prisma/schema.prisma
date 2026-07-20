@@ -575,7 +575,12 @@ model Analysis {
 
 model Document {
   id             String   @id @default(uuid())
-  analysisId     String   @map("analysis_id")
+  /// DATA ROOM ÚNICA (Parte 12 do plano, 2026-07-20): anulável — documento SEM
+  /// análise é documento do POOL da empresa (entrada pelo workspace, antes de
+  /// qualquer IBR existir). Os fluxos do IBR seguem preenchendo sempre; docs de
+  /// pool são invisíveis às telas do IBR por construção (todo filtro é por
+  /// analysisId). Fase B: o IBR FIXA documentos do pool em linha própria.
+  analysisId     String?  @map("analysis_id")
   companyId      String   @map("company_id")
   nome           String
   tipo           String
@@ -596,7 +601,10 @@ model Document {
   motivoSubstituicao  String?  @map("motivo_substituicao")
   createdAt      DateTime @default(now()) @map("created_at")
 
-  analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  /// Opcional (pool). Quando presente, o cascade continua: apagar a análise
+  /// apaga OS DOCUMENTOS DELA — docs de pool sobrevivem (são fato da empresa)
+  /// e caem só com a empresa (cascade abaixo).
+  analysis Analysis? @relation(fields: [analysisId], references: [id], onDelete: Cascade)
   // Cascade TAMBÉM por empresa: sem ele o RESTRICT dispara IMEDIATO no
   // Postgres e excluir empresa com documentos falha — mesmo que a cascata
   // das análises fosse apagar esses documentos logo em seguida.
