@@ -65,7 +65,7 @@ async function recalculaIndicadores(
   cnpjs: string[],
   dtFims: string[],
   onProgresso?: (feitas: number, total: number) => void | Promise<void>,
-  opts?: { retomando?: boolean },
+  opts?: { retomando?: boolean; aoLimparRange?: () => Promise<void> },
 ): Promise<number> {
   if (dtFims.length === 0 || cnpjs.length === 0) return 0;
   // janela: do dtFim mais antigo recalculado, 16 meses p/ trás (LTM = 4 tri + BP médio
@@ -76,15 +76,16 @@ async function recalculaIndicadores(
   const dtFimMax = new Date(`${ordenados[ordenados.length - 1]}T00:00:00Z`);
   const dts = dtFims.map((d) => new Date(`${d}T00:00:00Z`));
 
-  // O apagão do range é a PRIMEIRA coisa da execução limpa (antes de carregar as
-  // empresas, que é lento) — é o que dá sentido ao filtro da retomada abaixo.
-  // Regrava em lotes conforme acumula (memória bounded).
+  // O apagão do range vem antes de carregar as empresas (passo lento) e, crucialmente,
+  // ANTES de o checkpoint passar a existir: `aoLimparRange` só é chamado depois que o
+  // DELETE commitou. É essa ordem — não a posição no arquivo — que dá sentido ao filtro
+  // da retomada abaixo. Regrava em lotes conforme acumula (memória bounded).
   let alvo = cnpjs;
   if (opts?.retomando) {
-    // Como a execução original apagou o range inteiro logo de saída, quem TEM
-    // indicador aqui só pode ter sido regravado por ela — é seguro pular. E um lote
-    // do createMany é atômico e sempre fecha em fronteira de empresa, então ninguém
-    // fica gravado pela metade.
+    // O checkpoint só existe se o DELETE do range commitou (rangeLimpo), então quem
+    // TEM indicador aqui só pode ter sido regravado pela execução que morreu — é
+    // seguro pular. E um lote do createMany é atômico e sempre fecha em fronteira de
+    // empresa, então ninguém fica gravado pela metade.
     const feitas = await prisma.cvmIndicator.findMany({
       where: { cnpj: { in: cnpjs }, dtFim: { in: dts } },
       distinct: ["cnpj"],
@@ -96,6 +97,11 @@ async function recalculaIndicadores(
     if (alvo.length === 0) return 0;
   } else {
     await prisma.cvmIndicator.deleteMany({ where: { cnpj: { in: cnpjs }, dtFim: { in: dts } } });
+    // Só agora o checkpoint pode nascer: ele AFIRMA que o range está limpo. Morte
+    // durante o DELETE (query longa, no pico de memória) faz rollback dele — e sem
+    // checkpoint gravado a retomada refaz o arquivo inteiro, em vez de pular todo
+    // mundo por causa de indicadores velhos que sobreviveram ao rollback.
+    await opts?.aoLimparRange?.();
   }
   type Registro = { cnpj: string; dtFim: Date; visao: string; nome: string; valor: number | null; texto: string | null };
   let lote: Registro[] = [];
@@ -256,11 +262,19 @@ export async function sincronizarCvm(
   // períodos persistidos); só falta indicador. Se o container morrer no recálculo —
   // a fase longa, onde ele de fato morre —, a retomada parte deste ponto em vez de
   // rebaixar ~100MB e parsear tudo de novo só para morrer na mesma altura.
-  if (progHist.emAndamento) {
-    progHist.checkpoint = { arquivo, dtFims, etag, lastModified, empresas, periodos };
-    await salvaSnapshotHistorico();
-  }
-  const indicadores = await recalculaIndicadores(cnpjs, dtFims, (i, n) => marcaFase(`${arquivo}: recalculando ${i}/${n} empresas`));
+  const indicadores = await recalculaIndicadores(
+    cnpjs,
+    dtFims,
+    (i, n) => marcaFase(`${arquivo}: recalculando ${i}/${n} empresas`),
+    {
+      // Gravado DENTRO do recálculo, logo após o DELETE do range commitar — nunca antes.
+      aoLimparRange: async () => {
+        if (!progHist.emAndamento) return;
+        progHist.checkpoint = { arquivo, dtFims, etag, lastModified, empresas, periodos, rangeLimpo: true };
+        await salvaSnapshotHistorico();
+      },
+    },
+  );
   await marcaFase(`${arquivo}: gravando estado`);
 
   await prisma.cvmSyncState.upsert({
@@ -344,6 +358,17 @@ export interface CheckpointRecalculo {
   lastModified: string | null;
   empresas: number;
   periodos: number;
+  /**
+   * PROVA de que o DELETE do range commitou antes deste checkpoint existir.
+   *
+   * É o que autoriza a retomada a pular empresa que já tem indicador. Sem a prova,
+   * "tem indicador" pode significar "indicador VELHO que nunca foi apagado" — e aí
+   * a retomada pularia todo mundo e carimbaria o arquivo como sincronizado por cima
+   * de dados da versão anterior, sem erro e sem chance de nova detecção (o etag
+   * gravado passaria a bater com o publicado). Checkpoint sem a marca (gravado pelo
+   * v139) é descartado: o arquivo é refeito inteiro, que é o lado seguro de errar.
+   */
+  rangeLimpo?: true;
 }
 
 // Estado em memória do seed (1 por processo — a rota bloqueia disparo duplo).
@@ -554,10 +579,26 @@ async function concluiCheckpoint(cp: CheckpointRecalculo): Promise<void> {
   console.log(`[cvm-sync] ${cp.arquivo}: recálculo retomado e concluído (+${n} indicadores nesta rodada)`);
 }
 
-/** Checkpoint pendente de uma execução que morreu, se houver. */
+/**
+ * Checkpoint pendente de uma execução que morreu — só se ele PROVAR que o range foi
+ * apagado. O v139 gravava o checkpoint antes do DELETE: um desses, aplicado, pularia
+ * todas as empresas (os indicadores velhos nunca foram apagados) e carimbaria o
+ * arquivo como sincronizado por cima da versão anterior. Sem a prova, devolve null —
+ * o arquivo é refeito inteiro, mais lento e correto.
+ */
+export function checkpointAplicavel(cp: CheckpointRecalculo | null | undefined): boolean {
+  return !!cp && cp.rangeLimpo === true;
+}
+
 async function checkpointPendente(): Promise<CheckpointRecalculo | null> {
   const estado = await estadoHistorico();
-  return estado.interrompido ? estado.checkpoint ?? null : null;
+  if (!estado.interrompido) return null;
+  const cp = estado.checkpoint ?? null;
+  if (cp && !checkpointAplicavel(cp)) {
+    console.warn(`[cvm-sync] checkpoint de ${cp.arquivo} sem prova de range limpo — descartado, arquivo será refeito por inteiro`);
+    return null;
+  }
+  return cp;
 }
 
 /**

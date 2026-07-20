@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { modoDoSnapshot, filaDeAvisos, type ProgressoHistorico } from "./cvm-sync";
+import { modoDoSnapshot, filaDeAvisos, checkpointAplicavel, type ProgressoHistorico, type CheckpointRecalculo } from "./cvm-sync";
 
 /**
  * A auto-retomada precisa repetir a MESMA operação que morreu. Retomar uma
@@ -82,5 +82,36 @@ describe("filaDeAvisos", () => {
   it("arquivo fora do plano vai para o fim, sem desordenar os demais", () => {
     const chaves = [chave("dfp_2099"), chave("dfp_2023"), chave("itr_2022")];
     expect(filaDeAvisos(chaves, HOJE).map((f) => f.arquivo)).toEqual(["itr_2022", "dfp_2023", "dfp_2099"]);
+  });
+});
+
+/**
+ * REGRESSÃO DE UM BUG CRÍTICO (v139): o checkpoint era gravado ANTES do DELETE do
+ * range de indicadores. Morte durante o DELETE fazia rollback dele e deixava o
+ * checkpoint de pé; a retomada via os indicadores VELHOS, concluía "está tudo
+ * pronto" e carimbava o arquivo como sincronizado com o etag NOVO — dados da versão
+ * anterior marcados como atuais, sem erro e sem nova detecção possível (o etag
+ * gravado passava a bater com o publicado pela CVM).
+ *
+ * A marca `rangeLimpo` é a prova de que o DELETE commitou. Sem ela, o checkpoint NÃO
+ * pode ser aplicado — refazer o arquivo inteiro é o lado seguro de errar.
+ */
+const cp = (extra: Partial<CheckpointRecalculo> = {}): CheckpointRecalculo => ({
+  arquivo: "dfp_2024", dtFims: ["2024-12-31"], etag: "novo", lastModified: null,
+  empresas: 683, periodos: 683, ...extra,
+});
+
+describe("checkpointAplicavel", () => {
+  it("aceita só com a prova de que o range foi apagado", () => {
+    expect(checkpointAplicavel(cp({ rangeLimpo: true }))).toBe(true);
+  });
+
+  it("recusa checkpoint do v139 (sem a marca) — evitaria dado velho carimbado como novo", () => {
+    expect(checkpointAplicavel(cp())).toBe(false);
+  });
+
+  it("recusa ausência de checkpoint", () => {
+    expect(checkpointAplicavel(null)).toBe(false);
+    expect(checkpointAplicavel(undefined)).toBe(false);
   });
 });
