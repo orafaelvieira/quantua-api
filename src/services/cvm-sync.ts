@@ -481,16 +481,28 @@ export async function estadoHistorico(): Promise<ProgressoHistorico> {
  * no meio (deploy/restart), basta disparar de novo que continua de onde parou.
  */
 export async function sincronizarHistoricoCvm(reprocessar = false, autoRetomadas = 0): Promise<void> {
-  if (progHist.emAndamento) throw new Error("Sincronização do histórico já em andamento");
-  // Num reprocesso TUDO é refeito, então um checkpoint pendente perde o sentido.
-  const pendente = reprocessar ? null : await checkpointPendente();
-  if (reprocessar) {
-    // Recalibração (ex.: mapa de contas novo): apaga só os MARCOS de sincronização —
-    // os dados ficam; cada arquivo re-roda e sobrescreve via upsert. Retomável igual.
-    await prisma.cvmSyncState.deleteMany({ where: { arquivo: { not: SNAPSHOT_ARQUIVO } } });
-    console.log("[cvm-sync] reprocesso: marcos de sincronização limpos — histórico completo será re-executado");
-  }
+  if (!tomaLock()) throw new Error("Sincronização do histórico já em andamento");
+  let pendente: CheckpointRecalculo | null = null;
   const plano = planoHistorico();
+  try {
+    // Num reprocesso TUDO é refeito, então um checkpoint pendente perde o sentido.
+    pendente = reprocessar ? null : await checkpointPendente();
+    // Os marcos só são apagados no disparo MANUAL (autoRetomadas === 0). Numa
+    // auto-retomada eles são justamente o registro do que já foi refeito nesta
+    // recalibração — apagá-los de novo fazia cada boot recomeçar do dfp_2010, e o
+    // reprocesso nunca convergia (20 rodadas repetindo o mesmo começo).
+    if (reprocessar && autoRetomadas === 0) {
+      // Recalibração (ex.: mapa de contas novo): apaga só os MARCOS de sincronização —
+      // os dados ficam; cada arquivo re-roda e sobrescreve via upsert. Retomável igual.
+      await prisma.cvmSyncState.deleteMany({ where: { arquivo: { not: SNAPSHOT_ARQUIVO } } });
+      console.log("[cvm-sync] reprocesso: marcos de sincronização limpos — histórico completo será re-executado");
+    } else if (reprocessar) {
+      console.log(`[cvm-sync] reprocesso retomado (tentativa ${autoRetomadas}) — marcos preservados, continua de onde parou`);
+    }
+  } catch (e) {
+    progHist.emAndamento = false; // solta o lock: nem chegamos a começar
+    throw e;
+  }
   Object.assign(progHist, {
     emAndamento: true, total: plano.length, feitos: 0, atual: null,
     ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null,
@@ -590,6 +602,25 @@ export function checkpointAplicavel(cp: CheckpointRecalculo | null | undefined):
   return !!cp && cp.rangeLimpo === true;
 }
 
+/**
+ * LOCK ATÔMICO dos 4 pontos de entrada.
+ *
+ * Antes, cada um fazia `if (emAndamento) throw` e só marcava `emAndamento = true`
+ * DEPOIS de um await (ler o checkpoint, montar o plano). Nessa janela uma segunda
+ * chamada passava pelo teste — e duas execuções sobre o mesmo range se destroem: o
+ * deleteMany de uma apaga o que a outra acabou de gravar, e o arquivo termina
+ * marcado como sincronizado com indicadores faltando. Ficou mais fácil de acontecer
+ * agora que o cron dispara a fila sozinho e o boot retoma sozinho.
+ *
+ * Aqui teste e marca são SÍNCRONOS — sem await no meio, o event loop não intercala.
+ * Quem toma o lock é obrigado a soltá-lo em `finally`.
+ */
+function tomaLock(): boolean {
+  if (progHist.emAndamento) return false;
+  progHist.emAndamento = true;
+  return true;
+}
+
 async function checkpointPendente(): Promise<CheckpointRecalculo | null> {
   const estado = await estadoHistorico();
   if (!estado.interrompido) return null;
@@ -648,10 +679,18 @@ export async function pendentesCvm(): Promise<ItemFila[]> {
  * e se a morte pegou o meio de um arquivo, o checkpoint fecha aquele primeiro.
  */
 export async function sincronizarPendentesCvm(autoRetomadas = 0): Promise<void> {
-  if (progHist.emAndamento) throw new Error("Já há um processamento em andamento");
-  const pendenteCp = await checkpointPendente();
-  const fila = await pendentesCvm();
+  if (!tomaLock()) throw new Error("Já há um processamento em andamento");
+  let pendenteCp: CheckpointRecalculo | null = null;
+  let fila: ItemFila[] = [];
+  try {
+    pendenteCp = await checkpointPendente();
+    fila = await pendentesCvm();
+  } catch (e) {
+    progHist.emAndamento = false; // solta o lock: nem chegamos a começar
+    throw e;
+  }
   if (fila.length === 0 && !pendenteCp) {
+    progHist.emAndamento = false;
     console.log("[cvm-sync] fila de pendentes vazia — nada a fazer");
     return;
   }
@@ -712,12 +751,18 @@ export async function sincronizarPendentesCvm(autoRetomadas = 0): Promise<void> 
  * hora e a tela acompanha pelo mesmo progresso do histórico.
  */
 export async function sincronizarArquivoCvm(tipo: "itr" | "dfp", ano: number, autoRetomadas = 0): Promise<void> {
-  if (progHist.emAndamento) throw new Error("Já há um processamento em andamento");
+  if (!tomaLock()) throw new Error("Já há um processamento em andamento");
   const arquivo = arquivoId(tipo, ano);
   // Se a morte anterior foi no recálculo DESTE arquivo, continua de onde parou em vez
   // de rebaixar tudo. Vale tanto para a auto-retomada quanto para o clique no botão.
-  const pendente = await checkpointPendente();
-  const cp = pendente?.arquivo === arquivo ? pendente : null;
+  let cp: CheckpointRecalculo | null = null;
+  try {
+    const pendente = await checkpointPendente();
+    cp = pendente?.arquivo === arquivo ? pendente : null;
+  } catch (e) {
+    progHist.emAndamento = false; // solta o lock: nem chegamos a começar
+    throw e;
+  }
   Object.assign(progHist, {
     emAndamento: true, total: 1, feitos: 0, atual: arquivo,
     ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null,
@@ -754,19 +799,27 @@ export async function sincronizarArquivoCvm(tipo: "itr" | "dfp", ano: number, au
  * nem parse (~20-30 min). Usa o mesmo progresso/heartbeat do seed histórico.
  */
 export async function recalcularIndicadoresTudo(autoRetomadas = 0): Promise<void> {
-  if (progHist.emAndamento) throw new Error("Já há um processamento em andamento");
-  const periodos = await prisma.cvmPeriod.findMany({ distinct: ["dtFim"], select: { dtFim: true }, orderBy: { dtFim: "asc" } });
-  const porAno = new Map<number, string[]>();
-  for (const p of periodos) {
-    const dt = p.dtFim.toISOString().slice(0, 10);
-    const ano = Number(dt.slice(0, 4));
-    porAno.set(ano, [...(porAno.get(ano) ?? []), dt]);
+  if (!tomaLock()) throw new Error("Já há um processamento em andamento");
+  let porAno: Map<number, string[]>;
+  try {
+    const periodos = await prisma.cvmPeriod.findMany({ distinct: ["dtFim"], select: { dtFim: true }, orderBy: { dtFim: "asc" } });
+    porAno = new Map<number, string[]>();
+    for (const p of periodos) {
+      const dt = p.dtFim.toISOString().slice(0, 10);
+      const ano = Number(dt.slice(0, 4));
+      porAno.set(ano, [...(porAno.get(ano) ?? []), dt]);
+    }
+  } catch (e) {
+    progHist.emAndamento = false; // solta o lock: nem chegamos a começar
+    throw e;
   }
   const anos = [...porAno.keys()].sort();
   Object.assign(progHist, {
     emAndamento: true, total: anos.length, feitos: 0, atual: null,
     ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null, fase: null,
-    autoRetomadas, modo: "recalc", alvo: null, reprocessar: false,
+    // checkpoint: null é ESSENCIAL aqui — sem zerar, esta operação carregaria adiante
+    // o checkpoint de um arquivo alheio e a retomada o aplicaria no contexto errado.
+    autoRetomadas, modo: "recalc", alvo: null, reprocessar: false, checkpoint: null,
   });
   console.log(`[cvm-sync] recálculo geral iniciado — ${anos.length} anos (${anos[0]}–${anos[anos.length - 1]})`);
   await salvaSnapshotHistorico();
