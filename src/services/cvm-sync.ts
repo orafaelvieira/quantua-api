@@ -64,6 +64,7 @@ async function recalculaIndicadores(
   cnpjs: string[],
   dtFims: string[],
   onProgresso?: (feitas: number, total: number) => void | Promise<void>,
+  opts?: { retomando?: boolean },
 ): Promise<number> {
   if (dtFims.length === 0 || cnpjs.length === 0) return 0;
   // janela: do dtFim mais antigo recalculado, 16 meses p/ trás (LTM = 4 tri + BP médio
@@ -72,11 +73,30 @@ async function recalculaIndicadores(
   const minDt = new Date(`${ordenados[0]}T00:00:00Z`);
   const dtFimMin = new Date(Date.UTC(minDt.getUTCFullYear(), minDt.getUTCMonth() - 16, 1));
   const dtFimMax = new Date(`${ordenados[ordenados.length - 1]}T00:00:00Z`);
-  const empresas = await carregaEmpresasDoBanco(cnpjs, dtFimMin, dtFimMax);
-
-  // apaga o range recalculado antes; regrava em lotes conforme acumula (memória bounded)
   const dts = dtFims.map((d) => new Date(`${d}T00:00:00Z`));
-  await prisma.cvmIndicator.deleteMany({ where: { cnpj: { in: cnpjs }, dtFim: { in: dts } } });
+
+  // O apagão do range é a PRIMEIRA coisa da execução limpa (antes de carregar as
+  // empresas, que é lento) — é o que dá sentido ao filtro da retomada abaixo.
+  // Regrava em lotes conforme acumula (memória bounded).
+  let alvo = cnpjs;
+  if (opts?.retomando) {
+    // Como a execução original apagou o range inteiro logo de saída, quem TEM
+    // indicador aqui só pode ter sido regravado por ela — é seguro pular. E um lote
+    // do createMany é atômico e sempre fecha em fronteira de empresa, então ninguém
+    // fica gravado pela metade.
+    const feitas = await prisma.cvmIndicator.findMany({
+      where: { cnpj: { in: cnpjs }, dtFim: { in: dts } },
+      distinct: ["cnpj"],
+      select: { cnpj: true },
+    });
+    const prontas = new Set(feitas.map((f) => f.cnpj));
+    alvo = cnpjs.filter((c) => !prontas.has(c));
+    console.log(`[cvm-sync] retomada do recálculo: ${prontas.size} empresas já prontas · ${alvo.length} restantes`);
+    if (alvo.length === 0) return 0;
+  } else {
+    await prisma.cvmIndicator.deleteMany({ where: { cnpj: { in: cnpjs }, dtFim: { in: dts } } });
+  }
+  const empresas = await carregaEmpresasDoBanco(alvo, dtFimMin, dtFimMax);
 
   type Registro = { cnpj: string; dtFim: Date; visao: string; nome: string; valor: number | null; texto: string | null };
   let lote: Registro[] = [];
@@ -214,6 +234,15 @@ export async function sincronizarCvm(
   const cnpjs = [...parsed.keys()];
   parsed = new Map(); // solta o parse antes do recálculo (container de 1GB)
   coletaLixo();
+
+  // CHECKPOINT — daqui pra frente o arquivo já está inteiro no banco (empresas e
+  // períodos persistidos); só falta indicador. Se o container morrer no recálculo —
+  // a fase longa, onde ele de fato morre —, a retomada parte deste ponto em vez de
+  // rebaixar ~100MB e parsear tudo de novo só para morrer na mesma altura.
+  if (progHist.emAndamento) {
+    progHist.checkpoint = { arquivo, dtFims, etag, lastModified, empresas, periodos };
+    await salvaSnapshotHistorico();
+  }
   const indicadores = await recalculaIndicadores(cnpjs, dtFims, (i, n) => marcaFase(`${arquivo}: recalculando ${i}/${n} empresas`));
   await marcaFase(`${arquivo}: gravando estado`);
 
@@ -222,6 +251,10 @@ export async function sincronizarCvm(
     update: { etag, lastModified, processadoEm: new Date(), empresas, periodos },
     create: { arquivo, etag, lastModified, processadoEm: new Date(), empresas, periodos },
   });
+  if (progHist.emAndamento) {
+    progHist.checkpoint = null; // arquivo fechado: nada pendente para retomar
+    await salvaSnapshotHistorico();
+  }
   console.log(`[cvm-sync] ${arquivo}: ${empresas} empresas · ${periodos} períodos · ${indicadores} indicadores`);
   return { arquivo, empresas, periodos, indicadores, etag, lastModified };
 }
@@ -276,6 +309,24 @@ export interface ProgressoHistorico {
   alvo?: { tipo: "itr" | "dfp"; ano: number } | null;
   /** Modo "historico" disparado como reprocessamento (recalibração). */
   reprocessar?: boolean;
+  /**
+   * Presente quando a morte pegou o arquivo JÁ persistido, faltando só indicadores.
+   * A retomada então pula download+parse+persistência e continua empresa a empresa —
+   * sem isto, cada restart recomeçava o arquivo do zero e morria sempre na mesma
+   * altura do recálculo (caso real: DFP 2024 travado em ~375/683 a cada tentativa).
+   */
+  checkpoint?: CheckpointRecalculo | null;
+}
+
+/** Retrato do que falta para dar um arquivo por sincronizado: os períodos já estão
+ *  no banco; guardamos o de-para do CvmSyncState p/ gravá-lo quando o recálculo terminar. */
+export interface CheckpointRecalculo {
+  arquivo: string;
+  dtFims: string[];
+  etag: string | null;
+  lastModified: string | null;
+  empresas: number;
+  periodos: number;
 }
 
 // Estado em memória do seed (1 por processo — a rota bloqueia disparo duplo).
@@ -355,6 +406,8 @@ export async function estadoHistorico(): Promise<ProgressoHistorico> {
  */
 export async function sincronizarHistoricoCvm(reprocessar = false, autoRetomadas = 0): Promise<void> {
   if (progHist.emAndamento) throw new Error("Sincronização do histórico já em andamento");
+  // Num reprocesso TUDO é refeito, então um checkpoint pendente perde o sentido.
+  const pendente = reprocessar ? null : await checkpointPendente();
   if (reprocessar) {
     // Recalibração (ex.: mapa de contas novo): apaga só os MARCOS de sincronização —
     // os dados ficam; cada arquivo re-roda e sobrescreve via upsert. Retomável igual.
@@ -365,11 +418,22 @@ export async function sincronizarHistoricoCvm(reprocessar = false, autoRetomadas
   Object.assign(progHist, {
     emAndamento: true, total: plano.length, feitos: 0, atual: null,
     ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null,
-    autoRetomadas, modo: "historico", alvo: null, reprocessar,
+    autoRetomadas, modo: "historico", alvo: null, reprocessar, checkpoint: pendente,
   });
   console.log(`[cvm-sync] seed histórico iniciado — ${plano.length} arquivos (${plano[0].tipo}_${plano[0].ano} → ${plano[plano.length - 1].tipo}_${plano[plano.length - 1].ano})`);
   await salvaSnapshotHistorico();
   try {
+    // Arquivo morto na fase de recálculo entra ANTES do plano: como ele não chegou a
+    // gravar CvmSyncState, o laço abaixo o refaria do zero — download, parse e tudo.
+    if (pendente) {
+      progHist.atual = pendente.arquivo;
+      try {
+        await concluiCheckpoint(pendente);
+        progHist.ok.push(pendente.arquivo);
+      } catch (e) {
+        progHist.erros.push({ arquivo: pendente.arquivo, erro: e instanceof Error ? e.message : String(e) });
+      }
+    }
     for (const { tipo, ano } of plano) {
       const arquivo = arquivoId(tipo, ano);
       progHist.atual = arquivo;
@@ -404,6 +468,48 @@ export async function sincronizarHistoricoCvm(reprocessar = false, autoRetomadas
 }
 
 /**
+ * Fecha um arquivo que morreu NA FASE DE RECÁLCULO. Os períodos já estão no banco,
+ * então aqui não há download nem parse: recalcula só as empresas que faltaram e grava
+ * o CvmSyncState. É isto que faz cada retomada ANDAR — antes, toda tentativa repetia o
+ * arquivo inteiro e morria na mesma altura (DFP 2024 preso em ~375/683 indefinidamente).
+ */
+async function concluiCheckpoint(cp: CheckpointRecalculo): Promise<void> {
+  await marcaFase(`${cp.arquivo}: retomando recálculo`);
+  const dts = cp.dtFims.map((d) => new Date(`${d}T00:00:00Z`));
+  // A população vem do BANCO (o parse não existe mais): todo mundo com período nas
+  // datas do arquivo. Superconjunto é inofensivo — quem já tem indicador é pulado.
+  const linhas = await prisma.cvmPeriod.findMany({
+    where: { dtFim: { in: dts } },
+    distinct: ["cnpj"],
+    select: { cnpj: true },
+  });
+  const n = await recalculaIndicadores(
+    linhas.map((l) => l.cnpj),
+    cp.dtFims,
+    (i, t) => marcaFase(`${cp.arquivo}: retomando recálculo ${i}/${t} empresas`),
+    { retomando: true },
+  );
+  await prisma.cvmSyncState.upsert({
+    where: { arquivo: cp.arquivo },
+    update: { etag: cp.etag, lastModified: cp.lastModified, processadoEm: new Date(), empresas: cp.empresas, periodos: cp.periodos },
+    create: { arquivo: cp.arquivo, etag: cp.etag, lastModified: cp.lastModified, processadoEm: new Date(), empresas: cp.empresas, periodos: cp.periodos },
+  });
+  progHist.checkpoint = null;
+  await salvaSnapshotHistorico();
+  await prisma.systemNotice.updateMany({
+    where: { tipo: "cvm_update", chave: { startsWith: `cvm:${cp.arquivo}:` }, lida: false },
+    data: { lida: true },
+  });
+  console.log(`[cvm-sync] ${cp.arquivo}: recálculo retomado e concluído (+${n} indicadores nesta rodada)`);
+}
+
+/** Checkpoint pendente de uma execução que morreu, se houver. */
+async function checkpointPendente(): Promise<CheckpointRecalculo | null> {
+  const estado = await estadoHistorico();
+  return estado.interrompido ? estado.checkpoint ?? null : null;
+}
+
+/**
  * Sincroniza UM arquivo em SEGUNDO PLANO, reusando o progresso/lock do histórico.
  *
  * Antes o endpoint fazia `await sincronizarCvm(...)` dentro do request: um DFP com
@@ -414,15 +520,20 @@ export async function sincronizarHistoricoCvm(reprocessar = false, autoRetomadas
 export async function sincronizarArquivoCvm(tipo: "itr" | "dfp", ano: number, autoRetomadas = 0): Promise<void> {
   if (progHist.emAndamento) throw new Error("Já há um processamento em andamento");
   const arquivo = arquivoId(tipo, ano);
+  // Se a morte anterior foi no recálculo DESTE arquivo, continua de onde parou em vez
+  // de rebaixar tudo. Vale tanto para a auto-retomada quanto para o clique no botão.
+  const pendente = await checkpointPendente();
+  const cp = pendente?.arquivo === arquivo ? pendente : null;
   Object.assign(progHist, {
     emAndamento: true, total: 1, feitos: 0, atual: arquivo,
     ok: [], pulados: [], erros: [], iniciadoEm: new Date().toISOString(), terminadoEm: null,
-    autoRetomadas, modo: "arquivo", alvo: { tipo, ano }, reprocessar: false,
+    autoRetomadas, modo: "arquivo", alvo: { tipo, ano }, reprocessar: false, checkpoint: cp,
   });
   await salvaSnapshotHistorico();
-  console.log(`[cvm-sync] ressincronização de ${arquivo} iniciada em background`);
+  console.log(`[cvm-sync] ${cp ? `retomada do recálculo de ${arquivo}` : `ressincronização de ${arquivo}`} iniciada em background`);
   try {
-    await sincronizarCvm(tipo, ano);
+    if (cp) await concluiCheckpoint(cp);
+    else await sincronizarCvm(tipo, ano);
     progHist.ok.push(arquivo);
     // Sincronizou → o aviso daquela versão deixa de ser pendência.
     await prisma.systemNotice.updateMany({
@@ -503,12 +614,13 @@ export async function recalcularIndicadoresTudo(autoRetomadas = 0): Promise<void
  * pula quem já tem CvmSyncState — a ressincronização "interrompida" nunca refazia
  * nada e a tela ficava travada pedindo Retomar.
  *
- * Trava anti-loop por modo: o histórico avança ≥1 arquivo por tentativa (converge),
- * mas um arquivo único que morre sempre na mesma fase só repetiria o mesmo download —
- * poucas tentativas e o caso vai para revisão humana. Disparo manual zera o contador.
+ * Trava anti-loop por modo. Todas as tentativas AVANÇAM: o histórico fecha ≥1 arquivo
+ * por rodada e o arquivo único retoma do checkpoint (só as empresas que faltaram), então
+ * o limite é backstop contra o caso patológico — uma empresa que derrube o processo
+ * sempre no mesmo ponto —, não orçamento de repetição. Disparo manual zera o contador.
  */
 const MAX_AUTO_RETOMADAS: Record<"historico" | "arquivo" | "recalc", number> = {
-  historico: 20, arquivo: 4, recalc: 6,
+  historico: 20, arquivo: 8, recalc: 6,
 };
 
 /**
