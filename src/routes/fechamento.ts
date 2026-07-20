@@ -52,10 +52,14 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const company = await companyNoEscopo(companyId, req);
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
-  const [docs, registros] = await Promise.all([
+  const [docs, registros, poolDocs] = await Promise.all([
     docsDaEmpresa(companyId),
     prisma.periodoEmpresa.findMany({ where: { companyId } }),
+    // Documentos de POOL (sem análise): os únicos cuja competência pode ser
+    // corrigida por aqui — os de IBR são geridos no fluxo do IBR.
+    prisma.document.findMany({ where: { companyId, analysisId: null }, select: { id: true } }),
   ]);
+  const poolIds = new Set(poolDocs.map((d) => d.id));
   const logicos = derivarDocumentosLogicos(docs);
   const porPeriodo = new Map<string, typeof logicos>();
   for (const l of logicos) {
@@ -94,9 +98,21 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   res.json({
     regime: (company as { regimeFechamento?: string }).regimeFechamento ?? "contabil",
     periodos,
+    // Documentos sem período: LISTADOS por inteiro, não só contados — um pool
+    // que recebe e não mostra não é Data room (furo apontado pelo usuário).
     semPeriodo: logicos
       .filter((l) => !l.competencia)
-      .map((l) => ({ tipo: l.tipo, nome: l.vigente.nome, totalVersoes: l.versoes.length })),
+      .map((l) => ({
+        id: l.vigente.id,
+        nome: l.vigente.nome,
+        tipo: l.tipo,
+        status: l.vigente.status,
+        criadoEm: l.vigente.createdAt,
+        totalVersoes: l.versoes.length,
+        // Só documento de POOL pode ter a competência corrigida por aqui —
+        // documento de IBR é gerido no fluxo do IBR (zero retrocesso).
+        editavel: poolIds.has(l.vigente.id),
+      })),
     avisos: {
       faltantes,
       retificados,
@@ -123,6 +139,41 @@ router.put("/regime", async (req: AuthRequest, res: Response): Promise<void> => 
     before: { regime: antes }, after: { regime }, source: "fechamento",
   });
   res.json({ ok: true, regime });
+});
+
+// PUT /fechamento/documentos/:docId/competencia — corrige a competência de um
+// documento DE POOL (esquecida no upload é o caso comum — sem isso o documento
+// fica invisível na cadência sem conserto). Documento de IBR é recusado: a
+// competência dele é gerida no fluxo do IBR (zero retrocesso).
+// body: { companyId, competencia: "YYYY-MM" | "" (limpa) }
+router.put("/documentos/:docId/competencia", async (req: AuthRequest, res: Response): Promise<void> => {
+  const { companyId, competencia } = (req.body ?? {}) as Record<string, string | undefined>;
+  if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
+  const limpa = competencia === "" || competencia === null || competencia === undefined;
+  if (!limpa && !RE_PERIODO.test(competencia!)) {
+    res.status(400).json({ error: "competencia deve ser YYYY-MM (ou vazia, para limpar)" });
+    return;
+  }
+  const company = await companyNoEscopo(companyId, req);
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+
+  const doc = await prisma.document.findFirst({ where: { id: req.params.docId as string, companyId } });
+  if (!doc) { res.status(404).json({ error: "Documento não encontrado nesta empresa" }); return; }
+  if (doc.analysisId) {
+    res.status(409).json({ error: "Este documento pertence a um IBR — a competência dele é gerida lá (Documentos do IBR)." });
+    return;
+  }
+
+  const antes = doc.competencia;
+  await prisma.document.update({
+    where: { id: doc.id },
+    data: { competencia: limpa ? null : competencia },
+  });
+  await registrarAuditoria({
+    userId: req.userId!, entity: "document", entityId: doc.id, field: "competência do documento (pool)",
+    before: { competencia: antes }, after: { competencia: limpa ? null : competencia }, source: "data-room",
+  });
+  res.json({ ok: true, competencia: limpa ? null : competencia });
 });
 
 // POST /fechamento/fechar — o ATO de fechar o período (autor + hora na trilha).
