@@ -11,6 +11,7 @@
  * vinculado ao IBR em resultado.custoMateriais.
  */
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db/client";
 import { downloadFile } from "./storage";
 import { modeloAnaliseId, calcCusto, createWithRetry, type CustoIA } from "./ai-extraction";
@@ -125,6 +126,15 @@ export async function buildMateriaisContext(
         where: { id: doc.id },
         data: { status: "Processado", dadosExtraidos: { resumo, custo: c } as object },
       });
+      // FIXAÇÃO (fase B): resumo é pago 1× por VERSÃO de arquivo — o cache
+      // escorre de volta para a linha do POOL (se ainda não tiver), para o
+      // próximo IBR que fixar este material herdar sem repagar a IA.
+      if (doc.fixadoDeId) {
+        await prisma.document.updateMany({
+          where: { id: doc.fixadoDeId, dadosExtraidos: { equals: Prisma.DbNull } },
+          data: { status: "Processado", dadosExtraidos: { resumo, custo: c } as object },
+        }).catch(() => { /* best-effort: cache do pool nunca derruba a análise */ });
+      }
       blocos.push({ docId: doc.id, nome: doc.nome, resumo });
     } catch (e: any) {
       console.warn(`[materiais] resumo falhou (${doc.nome}): ${e?.message ?? e}`);

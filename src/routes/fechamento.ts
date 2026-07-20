@@ -14,6 +14,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { whereEmpresaVisivel, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
+import { propagarMetadadosDoPool } from "../services/fixacao-pool";
 import {
   REGIMES,
   RegimeFechamento,
@@ -36,7 +37,9 @@ async function companyNoEscopo(companyId: string, req: AuthRequest) {
 
 async function docsDaEmpresa(companyId: string): Promise<DocFechamento[]> {
   const docs = await prisma.document.findMany({
-    where: { companyId },
+    // Fixações (fase B) ficam de fora: são a LENTE do IBR sobre um documento
+    // que já está aqui — contá-las empilharia versões-fantasma no painel.
+    where: { companyId, fixadoDeId: null },
     select: { id: true, nome: true, tipo: true, competencia: true, versao: true, status: true, substituidoPorId: true, createdAt: true },
   });
   return docs;
@@ -169,6 +172,8 @@ router.put("/documentos/:docId/competencia", async (req: AuthRequest, res: Respo
     where: { id: doc.id },
     data: { competencia: limpa ? null : competencia },
   });
+  // Fase B: a correção escorre para fixações ainda Pendentes deste documento.
+  await propagarMetadadosDoPool(doc.id, { competencia: limpa ? null : competencia! });
   await registrarAuditoria({
     userId: req.userId!, entity: "document", entityId: doc.id, field: "competência do documento (pool)",
     before: { competencia: antes }, after: { competencia: limpa ? null : competencia }, source: "data-room",

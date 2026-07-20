@@ -15,6 +15,7 @@ import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
 import { comparePeersCvm, CVM_COMPARAVEIS } from "../services/peer-benchmark-cvm";
 import { researchCompanyWeb, researchSectorBenchmarksWeb } from "../services/web-research";
 import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-context";
+import { fixarDocumentosDoPool } from "../services/fixacao-pool";
 import { sugerirClassificacoesIA, chaveNM } from "../services/classification-suggest";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta, ordPeriodo } from "../services/account-mapper";
 import { DRE_TEMPLATE } from "../services/financial-templates";
@@ -171,7 +172,12 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     where: { id, ...whereRecursoEmpresa(req) },
     include: {
       company: true,
-      documents: { orderBy: { createdAt: "asc" } },
+      documents: {
+        orderBy: { createdAt: "asc" },
+        // FIXAÇÃO (fase B): a linha do pool de origem — versão congelada é o selo
+        // "usa vN"; substituidoPorId preenchido lá = insumo desatualizado aqui.
+        include: { fixadoDe: { select: { versao: true, substituidoPorId: true } } },
+      },
     },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
@@ -2303,6 +2309,37 @@ router.post(
   },
 );
 
+// FIXAÇÃO (Data room única, fase B): o wizard SELECIONA documentos do pool da
+// empresa e os fixa neste IBR — linha própria com proveniência congelada
+// ("usa Balancete jun/26 v3") e herança do resumo de IA nos materiais.
+// Idempotente: refixar o mesmo documento reusa a fixação viva.
+// body: { documentIds: string[] }
+router.post("/:id/documents/fixar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id;
+  if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
+  const parsed = z.object({ documentIds: z.array(z.string().uuid()).min(1).max(100) }).safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+
+  // Cancelada já morre no guarda único do router (mutação em /:id → 409).
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, ...whereRecursoEmpresa(req) },
+    select: { id: true, companyId: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  const resultado = await fixarDocumentosDoPool(analysis, parsed.data.documentIds);
+  for (const f of resultado.fixados) {
+    if (f.jaExistia) continue;
+    void registrarAuditoria({
+      userId: req.userId!, analysisId: analysis.id, entity: "document", entityId: f.id,
+      field: "fixação de documento da Data room",
+      after: { nome: f.nome, tipo: f.tipo, competencia: f.competencia, versaoFixada: f.versao, documentoPoolId: f.fixadoDeId },
+      source: "data-room",
+    });
+  }
+  res.json(resultado);
+});
+
 router.delete("/:id/documents/:docId", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id;
   const docId = req.params.docId;
@@ -2323,7 +2360,11 @@ router.delete("/:id/documents/:docId", async (req: AuthRequest, res: Response): 
   // POLÍTICA (2026-07-15): documento que já participou de qualquer produto NUNCA é
   // deletado — é evidência; corrija com "Substituir" (POST /documents/:id/substituir).
   // Exclusão real só para upload errado que nunca foi processado nem substituído.
-  const jaUsado = doc.status !== "Pendente" || !!doc.dadosExtraidos || !!doc.substituidoPorId || doc.versao > 1;
+  // FIXAÇÃO (fase B) é exceção deliberada: desfixar remove só a SELEÇÃO — arquivo
+  // e dados permanecem no pool; bloqueia-se apenas cadeia própria do IBR (v nova).
+  const jaUsado = doc.fixadoDeId
+    ? !!doc.substituidoPorId
+    : doc.status !== "Pendente" || !!doc.dadosExtraidos || !!doc.substituidoPorId || doc.versao > 1;
   if (jaUsado) {
     res.status(409).json({
       error: "Documento já processado não pode ser excluído — use \"Substituir\" para enviar a versão corrigida (a antiga fica preservada como evidência).",
@@ -2331,7 +2372,8 @@ router.delete("/:id/documents/:docId", async (req: AuthRequest, res: Response): 
     return;
   }
 
-  if (doc.storagePath) {
+  // Linha fixada compartilha o arquivo com o pool — NUNCA apagar do storage.
+  if (doc.storagePath && !doc.fixadoDeId) {
     try { await deleteFile(doc.storagePath); } catch (e) { console.warn("deleteFile failed:", e); }
   }
   await prisma.document.delete({ where: { id: doc.id } });

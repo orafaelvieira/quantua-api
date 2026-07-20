@@ -599,6 +599,12 @@ model Document {
   versao              Int      @default(1)
   substituidoPorId    String?  @map("substituido_por_id")
   motivoSubstituicao  String?  @map("motivo_substituicao")
+  /// FIXAÇÃO (Fase B da Data room única): esta linha é a evidência de um IBR
+  /// criada a partir de um documento do POOL — aponta para a linha de origem.
+  /// A linha do pool é imutável (substituir cria linha NOVA), então a versao
+  /// dela É a proveniência congelada ("usa Balancete jun/26 v3"); pool com
+  /// substituidoPorId preenchido = "insumo desatualizado" nos IBRs que a fixaram.
+  fixadoDeId          String?  @map("fixado_de_id")
   createdAt      DateTime @default(now()) @map("created_at")
 
   /// Opcional (pool). Quando presente, o cascade continua: apagar a análise
@@ -609,6 +615,11 @@ model Document {
   // Postgres e excluir empresa com documentos falha — mesmo que a cascata
   // das análises fosse apagar esses documentos logo em seguida.
   company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  // SetNull (não Restrict): no cascade da empresa a ordem de exclusão entre
+  // pool e fixações não é garantida — Restrict faria a exclusão da empresa
+  // falhar. A guarda de negócio (não remover pool fixado) fica na rota.
+  fixadoDe Document?  @relation("FixacaoPool", fields: [fixadoDeId], references: [id], onDelete: SetNull)
+  fixacoes Document[] @relation("FixacaoPool")
 
   @@map("documents")
 }

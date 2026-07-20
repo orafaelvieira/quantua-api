@@ -7,6 +7,8 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { uploadFile, deleteFile } from "../services/storage";
 import { registrarAuditoria } from "../services/audit-trail";
+import { derivarDocumentosLogicos, periodosFaltantes } from "../services/fechamento-periodo";
+import { propagarMetadadosDoPool } from "../services/fixacao-pool";
 
 const router = Router();
 router.use(requireAuth);
@@ -76,6 +78,35 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     orderBy: { createdAt: "desc" },
   });
   res.json(documents);
+});
+
+// GET /documents/pool?companyId= — a Data room da empresa na forma que o
+// SELETOR do wizard consome (fase B): documentos LÓGICOS (cadeias de
+// substituição fundidas — só a versão vigente é fixável) + os avisos do W2
+// como gates ("falta mai/26"). Materiais indicam se o resumo de IA já existe
+// (fixar herda o resumo — paga-se 1× por versão de arquivo).
+router.get("/pool", async (req: AuthRequest, res: Response): Promise<void> => {
+  const companyId = String(req.query.companyId ?? "");
+  if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
+  const company = await prisma.company.findFirst({ where: { id: companyId, ...whereEmpresaVisivel(req) } });
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+
+  const docs = await prisma.document.findMany({
+    where: { companyId, analysisId: null },
+    orderBy: { createdAt: "asc" },
+  });
+  const porId = new Map(docs.map((d) => [d.id, d]));
+  const logicos = derivarDocumentosLogicos(docs);
+  const documentos = logicos.map((l) => {
+    const v = porId.get(l.vigente.id)!;
+    const cache = v.dadosExtraidos as { resumo?: string } | null;
+    return {
+      id: v.id, nome: v.nome, tipo: v.tipo, competencia: v.competencia, moeda: v.moeda,
+      versao: v.versao, status: v.status, tamanho: v.tamanho, criadoEm: v.createdAt,
+      totalVersoes: l.versoes.length, temResumo: !!cache?.resumo,
+    };
+  });
+  res.json({ documentos, faltantes: periodosFaltantes(logicos, new Date()) });
 });
 
 router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Response): Promise<void> => {
@@ -186,16 +217,17 @@ router.put("/:id/tipo", async (req: AuthRequest, res: Response): Promise<void> =
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
   if (await analiseCancelada(doc.analysisId)) { res.status(409).json({ error: ERRO_CANCELADA }); return; }
 
-  const updated = await prisma.document.update({
-    where: { id },
-    data: {
-      tipo,
-      // opcionais: só atualiza quando enviados (chamadas antigas com { tipo } seguem iguais).
-      // moeda carrega unidade junto ("BRL (milhões)") — teto folgado, sem truncar.
-      ...(typeof competencia === "string" ? { competencia: competencia.trim().slice(0, 40) || null } : {}),
-      ...(typeof moeda === "string" && moeda.trim() ? { moeda: moeda.trim().slice(0, 24) } : {}),
-    },
-  });
+  const data = {
+    tipo,
+    // opcionais: só atualiza quando enviados (chamadas antigas com { tipo } seguem iguais).
+    // moeda carrega unidade junto ("BRL (milhões)") — teto folgado, sem truncar.
+    ...(typeof competencia === "string" ? { competencia: competencia.trim().slice(0, 40) || null } : {}),
+    ...(typeof moeda === "string" && moeda.trim() ? { moeda: moeda.trim().slice(0, 24) } : {}),
+  };
+  const updated = await prisma.document.update({ where: { id }, data });
+  // Fase B: correção na linha do POOL escorre para as fixações ainda Pendentes
+  // (o pipeline lê a linha fixada; metadado pré-extração é fato do documento).
+  if (!doc.analysisId) await propagarMetadadosDoPool(doc.id, data);
   res.json(updated);
 });
 
@@ -298,10 +330,26 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
   if (await analiseCancelada(doc.analysisId)) { res.status(409).json({ error: ERRO_CANCELADA }); return; }
 
+  // Fase B: documento do POOL com fixação viva em algum IBR não sai — os IBRs
+  // dependem dele (arquivo compartilhado + proveniência).
+  if (!doc.analysisId) {
+    const fixacoes = await prisma.document.count({ where: { fixadoDeId: id } });
+    if (fixacoes > 0) {
+      res.status(409).json({
+        error: "Este documento está fixado em IBR — remova a fixação lá (ou substitua o documento) antes de excluí-lo da Data room.",
+      });
+      return;
+    }
+  }
+
   // POLÍTICA (2026-07-15): documento que já participou de qualquer produto NUNCA é
   // deletado — é evidência; corrija com "Substituir". Exclusão real só para upload
   // errado que nunca foi processado nem substituído.
-  const jaUsado = doc.status !== "Pendente" || !!doc.dadosExtraidos || !!doc.substituidoPorId || doc.versao > 1;
+  // FIXAÇÃO (fase B) é exceção deliberada: desfixar remove só a SELEÇÃO — arquivo
+  // e dados permanecem no pool; bloqueia-se apenas cadeia própria do IBR (v nova).
+  const jaUsado = doc.fixadoDeId
+    ? !!doc.substituidoPorId
+    : doc.status !== "Pendente" || !!doc.dadosExtraidos || !!doc.substituidoPorId || doc.versao > 1;
   if (jaUsado) {
     res.status(409).json({
       error: "Documento já processado não pode ser excluído — use \"Substituir\" para enviar a versão corrigida (a antiga fica preservada como evidência).",
@@ -309,12 +357,16 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
     return;
   }
 
-  if (doc.storagePath) await deleteFile(doc.storagePath);
+  // Linha fixada compartilha o arquivo com o pool — NUNCA apagar do storage.
+  if (doc.storagePath && !doc.fixadoDeId) await deleteFile(doc.storagePath);
   await prisma.document.delete({ where: { id } });
   void registrarAuditoria({
     userId: req.userId!, analysisId: doc.analysisId, entity: "document", entityId: id,
-    field: "exclusão de documento nunca processado",
+    field: doc.fixadoDeId
+      ? "desfixação de documento da Data room (arquivo e dados permanecem no pool)"
+      : "exclusão de documento nunca processado",
     before: { nome: doc.nome, tipo: doc.tipo, hash: doc.hash },
+    ...(doc.fixadoDeId ? { source: "data-room" } : {}),
   });
   res.status(204).send();
 });
