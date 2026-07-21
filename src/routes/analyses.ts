@@ -48,7 +48,14 @@ router.use("/:id", async (req: AuthRequest, res: Response, next: () => void): Pr
   // do IBR cancelado passa — cancelado é lixo de teste/descartado, não entra em
   // relatório nenhum. Só o DELETE da própria análise; qualquer mutação de
   // subrecurso segue bloqueada (somente consulta).
-  if (req.method === "DELETE" && /^\/analyses\/[0-9a-f-]{36}\/?$/i.test((req.originalUrl ?? "").split("?")[0]!)) {
+  // Duas checagens equivalentes (originalUrl E url residual pós-mount) — se o
+  // ingress/proxy de produção reescrever o caminho, uma das duas ainda casa.
+  const urlResidual = (req.url ?? "").split("?")[0];
+  if (
+    req.method === "DELETE" &&
+    (/^\/analyses\/[0-9a-f-]{36}\/?$/i.test((req.originalUrl ?? "").split("?")[0]!) ||
+      urlResidual === "/" || urlResidual === "")
+  ) {
     next(); return;
   }
   const id = String(req.params.id ?? ""); // em router.use o param é string|string[]
