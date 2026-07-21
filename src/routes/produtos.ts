@@ -14,6 +14,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { whereEmpresaVisivel, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
+import { cicloVidaAnalysis, cicloVidaModel, etapaAnalysis } from "../services/ciclo-vida";
 import {
   TIPOS_PRODUTO,
   TipoProduto,
@@ -46,16 +47,18 @@ async function versoesDoProduto(produtoId: string) {
   const [analyses, models] = await Promise.all([
     prisma.analysis.findMany({
       where: { produtoId },
-      select: { id: true, nome: true, status: true, periodo: true, createdAt: true, produtoVersao: true },
+      select: { id: true, nome: true, status: true, periodo: true, createdAt: true, produtoVersao: true, motivoVersao: true },
     }),
     prisma.financialModel.findMany({
       where: { produtoId },
-      select: { id: true, nome: true, status: true, objetivo: true, mesInicial: true, horizonteMeses: true, updatedAt: true, createdAt: true, produtoVersao: true },
+      select: { id: true, nome: true, status: true, objetivo: true, mesInicial: true, horizonteMeses: true, updatedAt: true, createdAt: true, produtoVersao: true, motivoVersao: true },
     }),
   ]);
+  // CICLO DE VIDA UNIFICADO (21/07/2026): `status` segue cru (compat); as telas
+  // novas usam cicloVida+etapa; motivoVersao explica por que a versão existe.
   const versoes = [
-    ...analyses.map((a) => ({ origem: "analysis" as const, id: a.id, nome: a.nome, status: a.status, detalhe: a.periodo ?? "", criadoEm: a.createdAt, produtoVersao: a.produtoVersao ?? 0 })),
-    ...models.map((m) => ({ origem: "model" as const, id: m.id, nome: m.nome, status: m.status, detalhe: `${m.mesInicial} · ${m.horizonteMeses}m`, criadoEm: m.createdAt, produtoVersao: m.produtoVersao ?? 0 })),
+    ...analyses.map((a) => ({ origem: "analysis" as const, id: a.id, nome: a.nome, status: a.status, cicloVida: cicloVidaAnalysis(a.status), etapa: etapaAnalysis(a.status), motivoVersao: a.motivoVersao, detalhe: a.periodo ?? "", criadoEm: a.createdAt, produtoVersao: a.produtoVersao ?? 0 })),
+    ...models.map((m) => ({ origem: "model" as const, id: m.id, nome: m.nome, status: m.status, cicloVida: cicloVidaModel(m.status), etapa: null as string | null, motivoVersao: m.motivoVersao, detalhe: `${m.mesInicial} · ${m.horizonteMeses}m`, criadoEm: m.createdAt, produtoVersao: m.produtoVersao ?? 0 })),
   ].sort((a, b) => b.produtoVersao - a.produtoVersao);
   return versoes;
 }
@@ -91,7 +94,8 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
 
   const [analisesSoltas, modelosSoltos] = await Promise.all([
     prisma.analysis.findMany({
-      where: { companyId, produtoId: null },
+      // ehTeste fora de TODA listagem (higienização 21/07) — o workspace incluso.
+      where: { companyId, produtoId: null, ehTeste: false },
       orderBy: { createdAt: "desc" },
       select: { id: true, nome: true, status: true, periodo: true, createdAt: true },
     }),
@@ -105,8 +109,8 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   res.json({
     produtos: compostos,
     soltos: {
-      analyses: analisesSoltas,
-      models: modelosSoltos,
+      analyses: analisesSoltas.map((a) => ({ ...a, cicloVida: cicloVidaAnalysis(a.status), etapa: etapaAnalysis(a.status) })),
+      models: modelosSoltos.map((m) => ({ ...m, cicloVida: cicloVidaModel(m.status), etapa: null as string | null })),
     },
   });
 });

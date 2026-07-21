@@ -394,6 +394,18 @@ router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, r
 
   // Linha FIXADA: quem é substituído de verdade é o documento do POOL.
   if (doc.fixadoDeId) {
+    // Concluído é IMUTÁVEL (21/07/2026): substituir evidência de IBR emitido =
+    // NOVA VERSÃO do produto (a substituição direta NO POOL continua livre — os
+    // IBRs concluídos seguem mostrando a versão que fundamentou seus números).
+    if (doc.analysisId) {
+      const a = await prisma.analysis.findUnique({ where: { id: doc.analysisId }, select: { status: true } });
+      if (a?.status === "Concluída") {
+        res.status(409).json({
+          error: "IBR concluído é imutável — substitua o documento na Data room da empresa e crie uma NOVA VERSÃO do IBR (workspace → Nova versão…) para usar a versão nova.",
+        });
+        return;
+      }
+    }
     // Anda até a versão VIGENTE do pool (outro fluxo pode já ter criado v3).
     let vigente = await prisma.document.findUnique({ where: { id: doc.fixadoDeId } });
     for (let i = 0; vigente?.substituidoPorId && i < 50; i++) {
