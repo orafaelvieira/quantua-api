@@ -15,7 +15,7 @@ import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
 import { comparePeersCvm, CVM_COMPARAVEIS } from "../services/peer-benchmark-cvm";
 import { researchCompanyWeb, researchSectorBenchmarksWeb } from "../services/web-research";
 import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-context";
-import { fixarDocumentosDoPool } from "../services/fixacao-pool";
+import { fixarDocumentosDoPool, montarLinhaFixada } from "../services/fixacao-pool";
 import { cicloVidaAnalysis, etapaAnalysis } from "../services/ciclo-vida";
 import { sugerirClassificacoesIA, chaveNM } from "../services/classification-suggest";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta, ordPeriodo } from "../services/account-mapper";
@@ -122,11 +122,15 @@ router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise
     },
   });
 
-  // Refixa as VIGENTES do pool dos mesmos documentos lógicos. Fixações da
-  // origem seguem a cadeia até a vigente; legados sem fixação não têm origem
-  // no pool — entram no aviso (adote-os na Data room e fixe pelo wizard).
+  // Refixa os documentos lógicos da origem — com HERANÇA DE EXTRAÇÃO
+  // (pedido do usuário, 21/07/2026): se a versão VIGENTE do pool é a MESMA que
+  // a v1 fixou (arquivo idêntico, provado pela proveniência), re-extrair seria
+  // pagar duas vezes pelo mesmo número — a fixação nova COPIA dadosExtraidos,
+  // correções manuais e confiança da v1. Só o que tem versão nova re-extrai.
+  // Legados sem fixação não têm origem no pool — entram no aviso.
   const avisos: string[] = [];
-  const idsVigentes: string[] = [];
+  const idsParaReextrair: string[] = [];
+  let herdados = 0;
   for (const doc of origem.documents) {
     if (!doc.fixadoDeId) {
       if (doc.tipo !== "Material complementar") avisos.push(`"${doc.nome}" não veio da Data room (legado) — traga-o pela adoção e fixe na nova versão.`);
@@ -138,23 +142,63 @@ router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise
       if (!prox) break;
       vigente = prox;
     }
-    if (vigente) idsVigentes.push(vigente.id);
-    else avisos.push(`Origem de "${doc.nome}" não existe mais na Data room — fixe manualmente.`);
+    if (!vigente) { avisos.push(`Origem de "${doc.nome}" não existe mais na Data room — fixe manualmente.`); continue; }
+
+    if (vigente.id === doc.fixadoDeId) {
+      // Insumo INALTERADO: herda a fotografia da v1 (extração + curadoria do IBR).
+      await prisma.document.create({
+        data: {
+          ...montarLinhaFixada(vigente, { id: nova.id, companyId: nova.companyId }),
+          tipo: doc.tipo,
+          competencia: doc.competencia,
+          moeda: doc.moeda,
+          ...(doc.dadosExtraidos !== null ? { dadosExtraidos: doc.dadosExtraidos as object, status: "Processado" } : {}),
+          editadoManualmente: doc.editadoManualmente,
+          confianca: doc.confianca,
+        },
+      });
+      herdados++;
+    } else {
+      idsParaReextrair.push(vigente.id); // versão nova no pool → extração obrigatória
+    }
   }
-  const fixacao = idsVigentes.length
-    ? await fixarDocumentosDoPool({ id: nova.id, companyId: nova.companyId }, idsVigentes)
+  const fixacao = idsParaReextrair.length
+    ? await fixarDocumentosDoPool({ id: nova.id, companyId: nova.companyId }, idsParaReextrair)
     : { fixados: [], erros: [] };
   for (const e of fixacao.erros) avisos.push(e.erro);
 
+  // TODOS os insumos idênticos → herda também a extração CONSOLIDADA: a nova
+  // versão nasce "Pronta para gerar", sem reprocessar e sem custo. Qualquer
+  // documento novo/trocado depois disso acende "extração desatualizada".
+  const herancaTotal = herdados > 0 && idsParaReextrair.length === 0 && origem.dadosEstruturados !== null;
+  if (herancaTotal) {
+    await prisma.analysis.update({
+      where: { id: nova.id },
+      data: {
+        dadosEstruturados: origem.dadosEstruturados as object,
+        confianca: origem.confianca,
+        periodo: origem.periodo,
+        status: "Pronta para gerar",
+      },
+    });
+  }
+
   void registrarAuditoria({
     userId: req.userId!, analysisId: nova.id, entity: "analysis", entityId: nova.id,
-    field: "nova versão do IBR (criada a partir de versão anterior)",
+    field: herancaTotal
+      ? "nova versão do IBR — extração HERDADA da anterior (insumos idênticos, provado pela proveniência das fixações)"
+      : "nova versão do IBR (criada a partir de versão anterior)",
     before: { origemId: origem.id, origemNome: origem.nome, origemStatus: origem.status },
-    after: { nome: nova.nome, produtoVersao, documentosFixados: fixacao.fixados.length },
+    after: { nome: nova.nome, produtoVersao, documentosHerdados: herdados, documentosParaReextrair: fixacao.fixados.length },
     reason: motivo,
   });
 
-  res.status(201).json({ id: nova.id, nome: nova.nome, produtoVersao, documentosFixados: fixacao.fixados.length, avisos });
+  res.status(201).json({
+    id: nova.id, nome: nova.nome, produtoVersao,
+    documentosHerdados: herdados, documentosParaReextrair: fixacao.fixados.length,
+    extracaoHerdada: herancaTotal,
+    avisos,
+  });
 });
 
 // MARCAR COMO TESTE: tira o IBR de toda listagem e relatório futuro (a listagem
