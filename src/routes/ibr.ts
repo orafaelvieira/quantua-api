@@ -18,6 +18,18 @@ router.use(guardaEscritaSuspensao("analysis"));
 // bloqueados; consulta (GET) segue livre.
 router.use("/:id", async (req: AuthRequest, res: Response, next: () => void): Promise<void> => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") { next(); return; }
+  // EXCEÇÕES DE HIGIENIZAÇÃO (21/07/2026): exclusão do IBR cancelado e marcação
+  // de TESTE vivem no router de análises — que é montado DEPOIS deste no mesmo
+  // prefixo (/analyses). Este guarda roda primeiro para TODA mutação; sem o
+  // deixa-passar aqui, a higienização morre antes de chegar à rota (foi
+  // exatamente o bug de produção). Qualquer outra mutação segue bloqueada.
+  const caminho = (req.originalUrl ?? "").split("?")[0]!;
+  if (
+    (req.method === "DELETE" && /^\/analyses\/[^/]+\/?$/.test(caminho)) ||
+    (req.method === "POST" && /\/marcar-teste\/?$/.test(caminho))
+  ) {
+    next(); return;
+  }
   const id = String(req.params.id ?? ""); // em router.use o param é string|string[]
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id)) { next(); return; }
   const a = await prisma.analysis.findUnique({ where: { id }, select: { status: true } }).catch(() => null);

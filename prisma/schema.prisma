@@ -496,6 +496,11 @@ model Analysis {
   /// kind (legado, até v2.1): "diagnostico" | "ibr" — granularidade só de tipo de produto.
   /// Mantido para retrocompat com análises pré-pivot B2B-3.
   kind              String   @default("diagnostico")
+  /// TESTE (higienização, 21/07/2026): IBR de teste/descartado fica FORA de
+  /// qualquer listagem e relatório futuro (a listagem padrão exclui; produtos e
+  /// portal nunca o veem). Marcação explícita, com trilha — os dados ficam na
+  /// base como evidência, mas invisíveis no dia a dia.
+  ehTeste           Boolean  @default(false) @map("eh_teste")
   /// mode (pivot B2B-3, v3): "recurring" | "ibr" — modalidade de operação.
   /// "recurring": diagnóstico mensal/trimestral do BPO sobre cliente da carteira (default).
   /// "ibr": modalidade premium contratada à parte para momentos críticos (valuation,
