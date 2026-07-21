@@ -1777,9 +1777,13 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, ...whereRecursoEmpresa(req) },
-    select: { id: true, mode: true, nome: true, companyId: true, tipo: true, sectorId: true, sectorCustom: true, ibrType: true },
+    select: { id: true, mode: true, nome: true, companyId: true, tipo: true, sectorId: true, sectorCustom: true, ibrType: true, status: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  // ABA ESCOPO (21/07/2026): esta rota também serve a edição PÓS-análise (a aba
+  // vira a casa do cadastro). Concluído é imutável — solicitante/prazo/escopo
+  // saem no PDF emitido; Cancelada já morre no guarda único do router.
+  if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
   const data: Record<string, unknown> = {};
   if (typeof req.body?.nome === "string" && req.body.nome.trim()) data.nome = String(req.body.nome).trim().slice(0, 120);
   if (typeof req.body?.tipo === "string" && req.body.tipo.trim()) data.tipo = String(req.body.tipo).trim().slice(0, 40);
@@ -1789,6 +1793,15 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
       select: { id: true },
     });
     if (!company) { res.status(400).json({ error: "Empresa não encontrada neste workspace" }); return; }
+    // Empresa é IDENTIDADE do IBR: só muda enquanto nenhum documento foi
+    // processado (regra do wizard "até rodar a extração, tudo pode ser alterado").
+    if (company.id !== analysis.companyId) {
+      const processados = await prisma.document.count({ where: { analysisId: id, status: { in: ["Processado", "Substituído"] } } });
+      if (processados > 0) {
+        res.status(409).json({ error: "A empresa não pode ser trocada depois da extração — os documentos processados pertencem a ela. Para outra empresa, crie um novo IBR." });
+        return;
+      }
+    }
     data.companyId = company.id;
   }
   if (typeof req.body?.sectorId === "string" && req.body.sectorId) {
@@ -1827,7 +1840,10 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
   // Engagement (registro próprio): atualiza o existente ou cria se ainda não houver.
   const eng = req.body?.engagement;
   if (eng && typeof eng === "object" && typeof eng.requestedBy === "string") {
-    const existing = await prisma.engagement.findFirst({ where: { analysisId: id }, select: { id: true } });
+    const existing = await prisma.engagement.findFirst({
+      where: { analysisId: id },
+      select: { id: true, requestedBy: true, requestedByType: true, scope: true, deadline: true, feeAmount: true },
+    });
     const engData = {
       requestedBy: String(eng.requestedBy).slice(0, 200),
       requestedByType: ["lender", "investor", "advisor", "empresa", "parceiro", "other"].includes(String(eng.requestedByType)) ? String(eng.requestedByType) : "other",
@@ -1837,9 +1853,19 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
     };
     if (existing) {
       await prisma.engagement.update({ where: { id: existing.id }, data: engData });
+      // TRILHA (regra da casa — o upsert era mudo): solicitante/prazo/fee/escopo
+      // contratado saem no PDF; mudança sem registro seria invisível para sempre.
+      const d = diffCampos(existing as unknown as Record<string, unknown>, engData as unknown as Record<string, unknown>,
+        ["requestedBy", "requestedByType", "scope", "deadline", "feeAmount"]);
+      if (d.mudou) {
+        void registrarAuditoria({
+          userId: req.userId!, analysisId: id, entity: "engagement", entityId: existing.id,
+          field: "dados do engagement (aba Escopo)", before: d.before, after: d.after,
+        });
+      }
     } else if (eng.requestedBy.trim()) {
       const comp = await prisma.analysis.findUnique({ where: { id }, select: { company: { select: { nomeFantasia: true, razaoSocial: true } } } });
-      await prisma.engagement.create({
+      const criado = await prisma.engagement.create({
         data: {
           analysisId: id,
           userId: req.userId!,
@@ -1848,6 +1874,11 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
           feeCurrency: "BRL",
           state: "kicked_off",
         },
+      });
+      void registrarAuditoria({
+        userId: req.userId!, analysisId: id, entity: "engagement", entityId: criado.id,
+        field: "engagement criado (aba Escopo)",
+        after: { requestedBy: engData.requestedBy, requestedByType: engData.requestedByType, deadline: engData.deadline, feeAmount: engData.feeAmount },
       });
     }
   }
@@ -1858,9 +1889,11 @@ router.put("/:id/dores", async (req: AuthRequest, res: Response): Promise<void> 
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, ...whereRecursoEmpresa(req) },
-    select: { id: true, dores: true },
+    select: { id: true, dores: true, status: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  // Concluído imutável — as dores declaradas alimentaram o confronto do produto emitido.
+  if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
   const raw = req.body?.dores;
   if (!Array.isArray(raw)) { res.status(400).json({ error: "dores deve ser um array" }); return; }
   const SEVERIDADES = new Set(["alta", "media", "leve"]);
@@ -2298,9 +2331,12 @@ router.post("/:id/setor/confirmar", async (req: AuthRequest, res: Response): Pro
   if (!sectorId) { res.status(400).json({ error: "Informe o setor (sectorId)" }); return; }
   const analysis = await prisma.analysis.findFirst({
     where: { id, ...whereRecursoEmpresa(req) },
-    select: { sectorId: true, setorConfirmado: true, dadosEstruturados: true },
+    select: { sectorId: true, setorConfirmado: true, dadosEstruturados: true, status: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  // Concluído é imutável: trocar o setor recalibraria pares/semáforo de um
+  // produto emitido (aba Escopo é editável, mas nunca sobre evidência).
+  if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
   const sector = await prisma.sector.findUnique({ where: { code: sectorId }, include: { parent: true } });
   if (!sector) { res.status(400).json({ error: "Setor inválido" }); return; }
 
