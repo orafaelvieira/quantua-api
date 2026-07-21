@@ -9,6 +9,7 @@ import { uploadFile, deleteFile } from "../services/storage";
 import { registrarAuditoria } from "../services/audit-trail";
 import { derivarDocumentosLogicos, periodosFaltantes } from "../services/fechamento-periodo";
 import { montarLinhaFixada, propagarMetadadosDoPool } from "../services/fixacao-pool";
+import { curarUpload } from "../services/curadoria-pool";
 
 const router = Router();
 router.use(requireAuth);
@@ -138,7 +139,37 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
 
   // Auto-detecção de BALANCETE pelo nome do arquivo (o wizard manda "Outro"
   // por padrão; a linha de extração de balancete depende do tipo correto).
-  const tipoFinal = tipo === "Outro" && /balancete/i.test(nome) ? "Balancete" : tipo;
+  let tipoFinal = tipo === "Outro" && /balancete/i.test(nome) ? "Balancete" : tipo;
+  let competenciaFinal: string | null = competencia ?? null;
+
+  // CURADORIA ASSISTIDA (pedido do usuário, 20/07/2026): na porta do POOL —
+  // a Data room é fonte única — tipo e competência não ficam só a cargo do
+  // analista: o CONTEÚDO decide. Tipo divergente é CORRIGIDO (auditado, como
+  // no /process); competência vazia é preenchida; declarada ≠ detectada vira
+  // aviso (o humano declarou — o sistema aponta, não sobrescreve).
+  let curadoria: { tipoDetectado: string | null; competenciaDetectada: string | null; evidencias: string[]; avisos: string[] } | null = null;
+  if (!analysisId && tipoFinal !== "Material complementar") {
+    try {
+      const det = await curarUpload(req.file.buffer, nome);
+      const avisos: string[] = [];
+      const tipoDeclarado = tipoFinal;
+      if (det.tipo && det.tipo !== tipoFinal) {
+        tipoFinal = det.tipo;
+        avisos.push(`Enviado como "${tipoDeclarado}", mas o conteúdo é ${det.tipo} — o tipo foi corrigido automaticamente.`);
+      }
+      if (det.competencia) {
+        if (!competenciaFinal) {
+          competenciaFinal = det.competencia;
+          avisos.push(`Competência identificada pelo conteúdo: ${det.competencia}.`);
+        } else if (competenciaFinal !== det.competencia) {
+          avisos.push(`Competência declarada (${competenciaFinal}) difere da identificada no conteúdo (${det.competencia}) — confira.`);
+        }
+      }
+      curadoria = { tipoDetectado: det.tipo, competenciaDetectada: det.competencia, evidencias: det.evidencias, avisos };
+    } catch (e: any) {
+      console.warn(`[upload] curadoria falhou para ${nome} (segue com o declarado):`, e?.message ?? e);
+    }
+  }
 
   const doc = await prisma.document.create({
     data: {
@@ -146,7 +177,7 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
       companyId,
       nome,
       tipo: tipoFinal,
-      competencia,
+      competencia: competenciaFinal,
       moeda,
       storagePath,
       hash,
@@ -161,12 +192,17 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
     await registrarAuditoria({
       userId: req.userId!, entity: "document", entityId: doc.id,
       field: "upload na Data room da empresa",
-      after: { nome, tipo: tipoFinal, competencia: competencia ?? null, companyId, hash: hash.slice(0, 12) },
+      after: {
+        nome, tipo: tipoFinal, competencia: competenciaFinal, companyId, hash: hash.slice(0, 12),
+        ...(curadoria && curadoria.avisos.length
+          ? { curadoria: { tipoDetectado: curadoria.tipoDetectado, competenciaDetectada: curadoria.competenciaDetectada, evidencias: curadoria.evidencias } }
+          : {}),
+      },
       source: "data-room",
     });
   }
 
-  res.status(201).json(doc);
+  res.status(201).json({ ...doc, curadoria });
 });
 
 // Salvar dados brutos editados manualmente

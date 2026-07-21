@@ -203,3 +203,35 @@ describe("periodosFaltantes", () => {
     expect(periodosFaltantes(docs, hoje)).toEqual([]);
   });
 });
+
+// ── Ano fechado / exercício ("YYYY") — pedido do usuário, 20/07/2026 ───────
+
+describe("competência de ANO FECHADO (YYYY)", () => {
+  it("DF anual com competência '2025' agrupa por (tipo, ano) — não cai no 'sem competência'", () => {
+    const a = doc({ tipo: "DRE", competencia: "2025" });
+    const b = doc({ tipo: "DRE", competencia: "2025", createdAt: new Date(2026, 5, 99) });
+    const logicos = derivarDocumentosLogicos([a, b]);
+    expect(logicos).toHaveLength(1);
+    expect(logicos[0].competencia).toBe("2025");
+    expect(logicos[0].versoes).toHaveLength(2);
+  });
+
+  it("anos diferentes NÃO se fundem ('DRE 2024' ≠ 'DRE 2025')", () => {
+    const logicos = derivarDocumentosLogicos([
+      doc({ tipo: "DRE", competencia: "2024" }),
+      doc({ tipo: "DRE", competencia: "2025" }),
+    ]);
+    expect(logicos).toHaveLength(2);
+  });
+
+  it("balancete ANUAL ('2025') não dispara cadência mensal — mês continua sendo o gatilho", () => {
+    const hoje = new Date(2026, 6, 20); // jul/2026
+    expect(periodosFaltantes(derivarDocumentosLogicos([doc({ tipo: "Balancete", competencia: "2025" })]), hoje)).toEqual([]);
+    // com um balancete MENSAL a cadência volta a valer
+    const faltantes = periodosFaltantes(
+      derivarDocumentosLogicos([doc({ tipo: "Balancete", competencia: "2026-04" })]),
+      hoje
+    );
+    expect(faltantes).toEqual(["2026-05", "2026-06"]);
+  });
+});

@@ -32,6 +32,8 @@ export interface DocFechamento {
   status: string;
   substituidoPorId: string | null;
   createdAt: Date;
+  /** Moeda/unidade ("BRL (mil)") — só transporte p/ a cura na Data room. */
+  moeda?: string | null;
 }
 
 /** Registro de fechamento (espelho do PeriodoEmpresa). */
@@ -52,7 +54,11 @@ export interface DocumentoLogico {
   vigente: DocFechamento;
 }
 
-const RE_COMPETENCIA = /^\d{4}-\d{2}$/;
+/** Competência mensal ("2026-05"). */
+const RE_MES = /^\d{4}-\d{2}$/;
+/** Competência válida: mês OU exercício/ano fechado ("2025") — DF anual é
+ *  documento de período tanto quanto o balancete mensal (pedido do usuário). */
+const RE_COMPETENCIA = /^\d{4}(-\d{2})?$/;
 
 /**
  * Deriva os DOCUMENTOS LÓGICOS de uma lista de documentos:
@@ -170,7 +176,8 @@ export function retificacoesAposFechamento(
  * vira afirmação (regra da casa).
  */
 export function periodosFaltantes(documentos: DocumentoLogico[], hoje: Date): string[] {
-  const comPeriodo = documentos.filter((d) => d.competencia && /balancete/i.test(d.tipo));
+  // Só competência MENSAL entra na cadência (ano fechado "2025" não implica meses).
+  const comPeriodo = documentos.filter((d) => d.competencia && RE_MES.test(d.competencia) && /balancete/i.test(d.tipo));
   if (comPeriodo.length === 0) return [];
 
   const presentes = new Set(comPeriodo.map((d) => d.competencia!));

@@ -40,12 +40,14 @@ async function docsDaEmpresa(companyId: string): Promise<DocFechamento[]> {
     // Fixações (fase B) ficam de fora: são a LENTE do IBR sobre um documento
     // que já está aqui — contá-las empilharia versões-fantasma no painel.
     where: { companyId, fixadoDeId: null },
-    select: { id: true, nome: true, tipo: true, competencia: true, versao: true, status: true, substituidoPorId: true, createdAt: true },
+    select: { id: true, nome: true, tipo: true, competencia: true, versao: true, status: true, substituidoPorId: true, createdAt: true, moeda: true },
   });
   return docs;
 }
 
-const RE_PERIODO = /^\d{4}-\d{2}$/;
+// Período fechável: mês ("2026-05") OU exercício/ano fechado ("2025") —
+// "Exercício como período" (Parte 11 do plano), primeira fatia.
+const RE_PERIODO = /^\d{4}(-\d{2})?$/;
 
 // GET /fechamento?companyId= — o painel inteiro: regime, períodos (estado,
 // documentos com pilha, retificações), documentos sem período e avisos.
@@ -88,9 +90,11 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
       retificacoes: retificacoes.map((r) => ({ id: r.id, nome: r.nome, criadoEm: r.createdAt })),
       documentos: documentos.map((d) => ({
         tipo: d.tipo,
-        vigente: { id: d.vigente.id, nome: d.vigente.nome, status: d.vigente.status },
+        vigente: { id: d.vigente.id, nome: d.vigente.nome, status: d.vigente.status, moeda: d.vigente.moeda ?? "BRL" },
         totalVersoes: d.versoes.length,
         versoes: d.versoes.map((v, i) => ({ id: v.id, nome: v.nome, status: v.status, criadoEm: v.createdAt, exibicao: i + 1 })),
+        // CURA pela Data room: só documento de POOL é editável por aqui.
+        editavel: poolIds.has(d.vigente.id),
       })),
     };
   });
@@ -148,13 +152,13 @@ router.put("/regime", async (req: AuthRequest, res: Response): Promise<void> => 
 // documento DE POOL (esquecida no upload é o caso comum — sem isso o documento
 // fica invisível na cadência sem conserto). Documento de IBR é recusado: a
 // competência dele é gerida no fluxo do IBR (zero retrocesso).
-// body: { companyId, competencia: "YYYY-MM" | "" (limpa) }
+// body: { companyId, competencia: "YYYY-MM" (mês) | "YYYY" (ano fechado) | "" (limpa) }
 router.put("/documentos/:docId/competencia", async (req: AuthRequest, res: Response): Promise<void> => {
   const { companyId, competencia } = (req.body ?? {}) as Record<string, string | undefined>;
   if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
   const limpa = competencia === "" || competencia === null || competencia === undefined;
-  if (!limpa && !RE_PERIODO.test(competencia!)) {
-    res.status(400).json({ error: "competencia deve ser YYYY-MM (ou vazia, para limpar)" });
+  if (!limpa && !/^\d{4}(-\d{2})?$/.test(competencia!)) {
+    res.status(400).json({ error: "competencia deve ser YYYY-MM (mês) ou YYYY (ano fechado) — ou vazia, para limpar" });
     return;
   }
   const company = await companyNoEscopo(companyId, req);
@@ -186,7 +190,7 @@ router.put("/documentos/:docId/competencia", async (req: AuthRequest, res: Respo
 router.post("/fechar", async (req: AuthRequest, res: Response): Promise<void> => {
   const { companyId, periodo } = (req.body ?? {}) as Record<string, string | undefined>;
   if (!companyId || !periodo || !RE_PERIODO.test(periodo)) {
-    res.status(400).json({ error: "companyId e periodo (YYYY-MM) são obrigatórios" });
+    res.status(400).json({ error: "companyId e periodo (YYYY-MM ou YYYY) são obrigatórios" });
     return;
   }
   const company = await companyNoEscopo(companyId, req);
@@ -214,7 +218,7 @@ router.post("/fechar", async (req: AuthRequest, res: Response): Promise<void> =>
 router.post("/reabrir", async (req: AuthRequest, res: Response): Promise<void> => {
   const { companyId, periodo, motivo } = (req.body ?? {}) as Record<string, string | undefined>;
   if (!companyId || !periodo || !RE_PERIODO.test(periodo)) {
-    res.status(400).json({ error: "companyId e periodo (YYYY-MM) são obrigatórios" });
+    res.status(400).json({ error: "companyId e periodo (YYYY-MM ou YYYY) são obrigatórios" });
     return;
   }
   const company = await companyNoEscopo(companyId, req);
