@@ -543,8 +543,20 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
     return;
   }
 
-  // Linha fixada compartilha o arquivo com o pool — NUNCA apagar do storage.
-  if (doc.storagePath && !doc.fixadoDeId) await deleteFile(doc.storagePath);
+  // ARQUIVO COMPARTILHADO — nunca apagar do storage se QUALQUER outra linha
+  // ainda aponta para o mesmo storagePath. Duas fontes de compartilhamento:
+  //  (a) fixação (linha do IBR reusa o arquivo do pool);
+  //  (b) ADOÇÃO de legado (linha nova do pool reusa o arquivo do documento do
+  //      IBR antigo) — aqui a linha excluída NÃO tem fixadoDeId, então a
+  //      checagem por flag não bastava: apagar o arquivo cegaria o IBR de
+  //      origem, que continua apontando para ele. Bug de perda de dado achado
+  //      na revisão de 21/07/2026 — a contagem abaixo é a guarda definitiva.
+  if (doc.storagePath) {
+    const outrasComMesmoArquivo = await prisma.document.count({
+      where: { storagePath: doc.storagePath, id: { not: doc.id } },
+    });
+    if (outrasComMesmoArquivo === 0) await deleteFile(doc.storagePath);
+  }
   await prisma.document.delete({ where: { id } });
   void registrarAuditoria({
     userId: req.userId!, analysisId: doc.analysisId, entity: "document", entityId: id,

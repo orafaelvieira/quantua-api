@@ -2406,9 +2406,15 @@ router.delete("/:id/documents/:docId", async (req: AuthRequest, res: Response): 
     return;
   }
 
-  // Linha fixada compartilha o arquivo com o pool — NUNCA apagar do storage.
-  if (doc.storagePath && !doc.fixadoDeId) {
-    try { await deleteFile(doc.storagePath); } catch (e) { console.warn("deleteFile failed:", e); }
+  // ARQUIVO COMPARTILHADO (fixação e adoção de legado reusam o mesmo
+  // storagePath): só apaga do storage se nenhuma outra linha apontar para ele.
+  if (doc.storagePath) {
+    const outrasComMesmoArquivo = await prisma.document.count({
+      where: { storagePath: doc.storagePath, id: { not: doc.id } },
+    });
+    if (outrasComMesmoArquivo === 0) {
+      try { await deleteFile(doc.storagePath); } catch (e) { console.warn("deleteFile failed:", e); }
+    }
   }
   await prisma.document.delete({ where: { id: doc.id } });
 
