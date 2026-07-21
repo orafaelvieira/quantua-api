@@ -190,7 +190,14 @@ router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise
     await prisma.analysis.update({
       where: { id: nova.id },
       data: {
-        dadosEstruturados: origem.dadosEstruturados as object,
+        dadosEstruturados: {
+          ...(origem.dadosEstruturados as object),
+          // A fotografia vale para ESTA análise a partir de agora — sem o
+          // re-carimbo, o aviso de "extração desatualizada" dispara à toa
+          // (docs fixados hoje vs. extraidoEm antigo da v1).
+          extraidoEm: new Date().toISOString(),
+          extracaoHerdadaDeId: origem.id,
+        },
         confianca: origem.confianca,
         periodo: origem.periodo,
         status: "Pronta para gerar",
@@ -386,8 +393,13 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   // última extração (upload novo ou substituição de versão) — os números exibidos
   // não refletem a base atual até reprocessar. Nada muda silencioso: só o aviso.
   const extraidoEm = (analysis.dadosEstruturados as any)?.extraidoEm as string | undefined;
+  // Documento HERDADO (fixação Processada, fase B/nova-versão) carrega a própria
+  // extração — não conta como "adicionado depois": sem isto, toda v2 herdada
+  // acendia "extração desatualizada" à toa (falso positivo real, 21/07/2026).
   const extracaoDesatualizada = !!extraidoEm && analysis.documents.some((d) =>
-    d.tipo !== MATERIAL_TIPO && d.status !== "Substituído" && d.createdAt > new Date(extraidoEm)
+    d.tipo !== MATERIAL_TIPO && d.status !== "Substituído" &&
+    !(d.status === "Processado" && d.fixadoDeId) &&
+    d.createdAt > new Date(extraidoEm)
   );
   // VALUATIONS/MODELOS vinculados a este IBR (pode ser mais de um): o cabeçalho
   // do IBR mostra os links — a relação IBR↔produto fica visível dos dois lados.
