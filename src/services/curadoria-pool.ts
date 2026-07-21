@@ -13,6 +13,7 @@
  *  - Quando o conteúdo não sustenta afirmação nenhuma, devolve null —
  *    ausência de dado nunca vira afirmação (regra da casa).
  */
+import * as XLSX from "xlsx";
 import { parseDocument, extrairTextoLayoutPDF } from "./parser";
 import { pareceBalancete } from "./balancete-parser";
 
@@ -103,14 +104,87 @@ export function curarConteudo(texto: string, periodos: string[] = []): Curadoria
   return { tipo, competencia, evidencias: [`assinatura de ${tipo} no conteúdo`] };
 }
 
-/** Wrapper de I/O: extrai o texto conforme o formato e delega ao núcleo puro. */
-export async function curarUpload(buffer: Buffer, nome: string): Promise<Curadoria> {
+/** Wrapper de I/O: extrai o texto conforme o formato e delega ao núcleo puro.
+ *  Devolve também o TEXTO extraído — a validação de empresa (trava de upload
+ *  na empresa errada) reusa a mesma extração, sem parse duplo. */
+export async function curarUpload(buffer: Buffer, nome: string): Promise<Curadoria & { texto: string }> {
   if (/\.pdf$/i.test(nome)) {
     const texto = await extrairTextoLayoutPDF(buffer);
-    if (!texto || texto.length < 300) return VAZIA; // escaneado/sem texto
-    return curarConteudo(texto);
+    if (!texto || texto.length < 300) return { ...VAZIA, texto: texto ?? "" }; // escaneado/sem texto
+    return { ...curarConteudo(texto), texto };
   }
-  // Planilha/CSV: o parser tabular leve dá o texto bruto e os períodos.
+  // Planilha/CSV: o parser tabular dá tipo/período, mas seu `raw` já é a TABELA
+  // reconhecida — o cabeçalho (onde mora o nome da empresa) fica de fora. Para
+  // a validação de empresa devolvemos o texto BRUTO da planilha inteira.
   const parsed = await parseDocument(buffer, nome, "Outro");
-  return curarConteudo(parsed.raw, parsed.periodos);
+  return { ...curarConteudo(parsed.raw, parsed.periodos), texto: textoBrutoPlanilha(buffer, nome) || parsed.raw };
+}
+
+/** Texto integral de uma planilha/CSV (todas as abas, cabeçalhos inclusos). */
+function textoBrutoPlanilha(buffer: Buffer, nome: string): string {
+  try {
+    if (/\.(csv|txt|md)$/i.test(nome)) return buffer.toString("utf8");
+    const wb = XLSX.read(buffer, { type: "buffer" });
+    return wb.SheetNames.map((n) => XLSX.utils.sheet_to_csv(wb.Sheets[n]!)).join("\n");
+  } catch {
+    return ""; // formato ilegível: a validação de empresa simplesmente não opina
+  }
+}
+
+// ── TRAVA DE EMPRESA ERRADA (pedido do usuário, 21/07/2026) ─────────────────
+// A Data room é POR EMPRESA: um balancete da Belagro subido na Move Farma
+// envenena períodos, cadência e extração. Validação determinística pelo NOME:
+// se o conteúdo cita OUTRA empresa cadastrada e NÃO cita a do workspace, o
+// upload exige confirmação explícita (auditada). Citar as duas vira aviso.
+
+/** Normaliza para comparação: caixa alta, sem acentos, espaços colapsados.
+ *  NFD separa o acento da letra e o filtro não-ASCII o REMOVE (nunca troca por
+ *  espaço — senão "FRIGORÍFICO" viraria "FRIGORI FICO" e a empresa escaparia
+ *  da trava; bug pego por teste). Só depois a pontuação vira espaço. */
+function normalizarTexto(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[^\x00-\x7F]/g, "") // marcas combinantes e demais não-ASCII: fora
+    .toUpperCase()
+    .replace(/[^A-Z0-9 ]+/g, " ")
+    .replace(/ +/g, " ")
+    .trim();
+}
+
+/** Nome DISTINTIVO da empresa: fantasia, ou razão social sem o sufixo legal
+ *  (LTDA, S.A., EIRELI, ME, EPP…). Nomes curtos (<4) não valem — falso positivo. */
+export function nomeDistintivo(e: { razaoSocial: string; nomeFantasia?: string | null }): string | null {
+  const candidatos = [e.nomeFantasia, e.razaoSocial]
+    .filter((n): n is string => !!n && n.trim().length > 0)
+    .map((n) => normalizarTexto(n).replace(/\b(LTDA|EIRELI|EPP|ME|SA|S A)\b/g, " ").replace(/\s+/g, " ").trim());
+  const melhor = candidatos.find((c) => c.length >= 4);
+  return melhor ?? null;
+}
+
+export interface ValidacaoEmpresa {
+  /** O nome da empresa do workspace aparece no documento? */
+  alvoNoDoc: boolean;
+  /** OUTRA empresa cadastrada citada no documento (a primeira encontrada). */
+  outraDetectada: { id: string; nome: string } | null;
+}
+
+export function validarEmpresaDoDocumento(
+  texto: string,
+  alvo: { razaoSocial: string; nomeFantasia?: string | null },
+  outras: Array<{ id: string; razaoSocial: string; nomeFantasia?: string | null }>,
+): ValidacaoEmpresa {
+  const corpo = normalizarTexto(texto);
+  if (!corpo) return { alvoNoDoc: false, outraDetectada: null };
+  const nomeAlvo = nomeDistintivo(alvo);
+  const alvoNoDoc = !!nomeAlvo && corpo.includes(nomeAlvo);
+  let outraDetectada: ValidacaoEmpresa["outraDetectada"] = null;
+  for (const e of outras) {
+    const nome = nomeDistintivo(e);
+    if (!nome || (nomeAlvo && nome === nomeAlvo)) continue;
+    if (corpo.includes(nome)) {
+      outraDetectada = { id: e.id, nome: e.nomeFantasia || e.razaoSocial };
+      break;
+    }
+  }
+  return { alvoNoDoc, outraDetectada };
 }

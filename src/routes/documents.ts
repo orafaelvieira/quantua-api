@@ -9,7 +9,7 @@ import { uploadFile, deleteFile } from "../services/storage";
 import { registrarAuditoria } from "../services/audit-trail";
 import { derivarDocumentosLogicos, periodosFaltantes } from "../services/fechamento-periodo";
 import { montarLinhaAdotada, montarLinhaFixada, propagarMetadadosDoPool } from "../services/fixacao-pool";
-import { curarUpload } from "../services/curadoria-pool";
+import { curarUpload, validarEmpresaDoDocumento } from "../services/curadoria-pool";
 import { downloadFile } from "../services/storage";
 
 const router = Router();
@@ -215,6 +215,36 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
     try {
       const det = await curarUpload(req.file.buffer, nome);
       const avisos: string[] = [];
+
+      // TRAVA DE EMPRESA ERRADA (21/07/2026): a Data room é POR EMPRESA — um
+      // balancete da Belagro na Move Farma envenena período, cadência e
+      // extração. Se o conteúdo cita OUTRA empresa cadastrada e NÃO cita a do
+      // workspace, recusa com 409; o operador confirma explicitamente
+      // (confirmarEmpresa=1) e a confirmação fica na trilha.
+      if (det.texto && req.body?.confirmarEmpresa !== "1") {
+        const [alvo, outras] = await Promise.all([
+          prisma.company.findUnique({ where: { id: companyId }, select: { razaoSocial: true, nomeFantasia: true } }),
+          prisma.company.findMany({
+            where: { id: { not: companyId }, ...whereEmpresaVisivel(req) },
+            select: { id: true, razaoSocial: true, nomeFantasia: true },
+          }),
+        ]);
+        if (alvo) {
+          const v = validarEmpresaDoDocumento(det.texto, alvo, outras);
+          if (v.outraDetectada && !v.alvoNoDoc) {
+            res.status(409).json({
+              error: `Este documento parece ser da empresa "${v.outraDetectada.nome}", não de "${alvo.nomeFantasia || alvo.razaoSocial}". Confira o arquivo — a Data room é por empresa e um documento trocado contamina períodos e extração.`,
+              empresaDivergente: { nome: v.outraDetectada.nome, id: v.outraDetectada.id },
+              podeConfirmar: true,
+            });
+            return;
+          }
+          if (v.outraDetectada && v.alvoNoDoc) {
+            avisos.push(`O documento cita também "${v.outraDetectada.nome}" — se for consolidado de grupo, tudo bem; se for do outro CNPJ, remova e envie na empresa certa.`);
+          }
+        }
+      }
+
       const tipoDeclarado = tipoFinal;
       if (det.tipo && det.tipo !== tipoFinal) {
         tipoFinal = det.tipo;
@@ -260,6 +290,8 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
         ...(curadoria && curadoria.avisos.length
           ? { curadoria: { tipoDetectado: curadoria.tipoDetectado, competenciaDetectada: curadoria.competenciaDetectada, evidencias: curadoria.evidencias } }
           : {}),
+        // Confirmação FORÇADA da trava de empresa: fica explícita na trilha.
+        ...(req.body?.confirmarEmpresa === "1" ? { empresaConfirmadaManualmente: true } : {}),
       },
       source: "data-room",
     });

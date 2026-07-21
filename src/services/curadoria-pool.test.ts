@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  nomeDistintivo,
+  validarEmpresaDoDocumento,
   curarConteudo,
   competenciaDoCabecalho,
   competenciaDosPeriodos,
@@ -87,5 +89,48 @@ describe("curarConteudo", () => {
   });
   it("texto curto/escaneado → nada se afirma", () => {
     expect(curarConteudo("abc")).toEqual({ tipo: null, competencia: null, evidencias: [] });
+  });
+});
+
+describe("trava de EMPRESA ERRADA no upload (21/07/2026)", () => {
+  const MOVE = { razaoSocial: "MOVE FARMA LTDA", nomeFantasia: "Move Farma" };
+  const BELAGRO = { id: "c-bel", razaoSocial: "Belagro Comércio de Insumos Agrícolas Ltda", nomeFantasia: "Belagro" };
+  const PAMPA = { id: "c-pam", razaoSocial: "Frigorífico Pampa Ltda.", nomeFantasia: "Pampa Carnes" };
+
+  it("nomeDistintivo tira o sufixo legal e normaliza acentos", () => {
+    expect(nomeDistintivo(MOVE)).toBe("MOVE FARMA");
+    expect(nomeDistintivo(BELAGRO)).toBe("BELAGRO");
+    expect(nomeDistintivo({ razaoSocial: "Frigorífico Pampa Ltda." })).toBe("FRIGORIFICO PAMPA");
+  });
+
+  it("nome curto demais não vale como assinatura (evita falso positivo)", () => {
+    expect(nomeDistintivo({ razaoSocial: "ABC ME", nomeFantasia: "ABC" })).toBeNull();
+  });
+
+  it("CASO REAL: balancete da Belagro subido na Move Farma → outra empresa detectada, alvo ausente", () => {
+    const texto = "Balancete de Verificação\nBELAGRO COMERCIO DE INSUMOS AGRICOLAS LTDA\nCNPJ 00.000.000/0001-00\nPeríodo: 05/2026";
+    const v = validarEmpresaDoDocumento(texto, MOVE, [BELAGRO, PAMPA]);
+    expect(v.alvoNoDoc).toBe(false);
+    expect(v.outraDetectada?.nome).toBe("Belagro");
+  });
+
+  it("documento da própria empresa passa limpo (com acento no texto)", () => {
+    const texto = "DEMONSTRAÇÃO DO RESULTADO\nMove Farma Ltda — CNPJ 11.111.111/0001-11\nReceita Bruta 1.000,00";
+    const v = validarEmpresaDoDocumento(texto, MOVE, [BELAGRO, PAMPA]);
+    expect(v.alvoNoDoc).toBe(true);
+    expect(v.outraDetectada).toBeNull();
+  });
+
+  it("cita AS DUAS (consolidado//grupo) → alvo presente e outra detectada (vira aviso, não trava)", () => {
+    const texto = "Consolidado do grupo: MOVE FARMA e BELAGRO\nAtivo Circulante 100,00";
+    const v = validarEmpresaDoDocumento(texto, MOVE, [BELAGRO]);
+    expect(v.alvoNoDoc).toBe(true);
+    expect(v.outraDetectada?.nome).toBe("Belagro");
+  });
+
+  it("documento sem nome nenhum (escaneado/genérico) não acusa nada", () => {
+    const v = validarEmpresaDoDocumento("Conta;2024;2025\nCaixa;10;20", MOVE, [BELAGRO, PAMPA]);
+    expect(v.alvoNoDoc).toBe(false);
+    expect(v.outraDetectada).toBeNull();
   });
 });
