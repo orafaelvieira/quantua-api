@@ -5,6 +5,7 @@ import { runFetchDamodaranBenchmarks } from "./fetch-damodaran-benchmarks";
 import { runFetchIbgePia } from "./fetch-ibge-pia";
 import { runFetchBcbSgs } from "./fetch-bcb-sgs";
 import { runCheckCvmUpdates } from "./check-cvm-updates";
+import { runSnapshotDiario } from "./snapshot-diario";
 
 /**
  * Bootstrap dos jobs schedulados. Chamado de `server.ts` no boot.
@@ -88,6 +89,19 @@ export function startJobs(): void {
   );
 
   console.log("[jobs] registrado: check-cvm-updates (0 6 * * 1)");
+
+  // Diário às 4h — snapshot automático (rede de segurança tipo Excel) de IBRs e modelos.
+  cron.schedule(
+    "0 4 * * *",
+    () => {
+      runSnapshotDiario().catch((err) => {
+        console.error("[jobs] snapshot-diario: erro não capturado", err);
+      });
+    },
+    { timezone: tz },
+  );
+
+  console.log("[jobs] registrado: snapshot-diario (0 4 * * *)");
 }
 
 /**
@@ -100,4 +114,5 @@ export const TRIGGERABLE_JOBS: Record<string, () => Promise<void>> = {
   "fetch-ibge-pia": runFetchIbgePia,
   "fetch-bcb-sgs": runFetchBcbSgs,
   "check-cvm-updates": runCheckCvmUpdates,
+  "snapshot-diario": runSnapshotDiario,
 };

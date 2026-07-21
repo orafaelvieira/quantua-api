@@ -32,6 +32,7 @@ import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
 import { resolverCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
 import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
+import { montarConteudoAnalise, aplicarFotoAnalise, hashConteudo, STATUS_TRANSITORIOS, type ConteudoFotoAnalise, type DocFoto } from "../services/snapshot-diario";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
 const router = Router();
@@ -161,13 +162,25 @@ router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise
     const inalterado = vigente.hash && doc.hash ? vigente.hash === doc.hash : vigente.id === doc.fixadoDeId;
     if (inalterado) {
       // Insumo INALTERADO: herda a fotografia da v1 (extração + curadoria do IBR).
+      // Balancete herdado leva a ÁRVORE junto (vive em dadosEstruturados da
+      // origem): é o que permite ao /process do caso MISTO pular o re-parse e
+      // ir direto ao fold com o dicionário/modelos atuais.
+      const arv = (origem.dadosEstruturados as any)?.arvoresBalancete?.find?.((a: any) => a?.docId === doc.id);
       await prisma.document.create({
         data: {
           ...montarLinhaFixada(vigente, { id: nova.id, companyId: nova.companyId }),
           tipo: doc.tipo,
           competencia: doc.competencia,
           moeda: doc.moeda,
-          ...(doc.dadosExtraidos !== null ? { dadosExtraidos: doc.dadosExtraidos as object, status: "Processado" } : {}),
+          ...(doc.dadosExtraidos !== null
+            ? {
+                dadosExtraidos: { ...(doc.dadosExtraidos as object), ...(arv ? { arvoreBP: arv.arvoreBP, arvoreDRE: arv.arvoreDRE } : {}) },
+                status: "Processado",
+                // Marca do caso MISTO: conteúdo idêntico (hash) + extração copiada →
+                // o /process reusa o cache em vez de re-baixar/re-parsear.
+                extracaoHerdada: true,
+              }
+            : {}),
           editadoManualmente: doc.editadoManualmente,
           confianca: doc.confianca,
         },
@@ -432,6 +445,98 @@ router.get("/:id/versoes", async (req: AuthRequest, res: Response): Promise<void
   res.json({
     hashAtual,
     versoes: versoes.map((v) => ({ hash: v.hash, motivo: v.motivo, criadoEm: v.criadoEm, insumos: v.insumos, vigente: v.hash === hashAtual })),
+  });
+});
+
+// ── FOTOS DE SEGURANÇA (snapshot automático diário, 2026-07-21) ──────────────
+// A rede de segurança tipo Excel: o cron fotografa 1×/dia o estado editável do
+// IBR (snapshot-diario.ts). Aqui: listar e RESTAURAR. Restaurar fotografa o
+// estado atual antes ("pre-restauracao") — a restauração nunca destrói nada.
+
+const SELECT_DOCS_FOTO = {
+  where: { status: { not: "Substituído" } },
+  select: {
+    id: true, nome: true, tipo: true, competencia: true, moeda: true, status: true,
+    confianca: true, dadosExtraidos: true, editadoManualmente: true, versao: true,
+    hash: true, fixadoDeId: true,
+  },
+} as const;
+
+router.get("/:id/snapshots-diarios", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({ where: { id, ...whereRecursoEmpresa(req) }, select: { id: true } });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const fotos = await prisma.snapshotDiario.findMany({
+    where: { entidade: "analysis", entidadeId: id },
+    orderBy: { criadoEm: "desc" },
+    select: { id: true, criadoEm: true, origem: true, hash: true, conteudo: true },
+  });
+  res.json({
+    fotos: fotos.map((f) => {
+      const c = f.conteudo as unknown as ConteudoFotoAnalise;
+      return {
+        id: f.id, criadoEm: f.criadoEm, origem: f.origem, hash: f.hash.slice(0, 12),
+        resumo: { status: c.analysis?.status ?? null, periodo: c.analysis?.periodo ?? null, documentos: c.documentos?.length ?? 0 },
+      };
+    }),
+  });
+});
+
+// body: { motivo?: string }
+router.post("/:id/snapshots-diarios/:snapshotId/restaurar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, ...whereRecursoEmpresa(req) },
+    include: { documents: SELECT_DOCS_FOTO },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
+  if (STATUS_TRANSITORIOS.includes(analysis.status)) {
+    res.status(409).json({ error: "Há um processamento em andamento — aguarde terminar antes de restaurar uma foto." });
+    return;
+  }
+  const foto = await prisma.snapshotDiario.findFirst({
+    where: { id: req.params.snapshotId as string, entidade: "analysis", entidadeId: id },
+  });
+  if (!foto) { res.status(404).json({ error: "Foto de segurança não encontrada para este IBR." }); return; }
+
+  // Foto do estado ATUAL antes de mexer — a restauração é reversível por construção.
+  const conteudoAtual = montarConteudoAnalise(analysis as unknown as Record<string, unknown>, analysis.documents as DocFoto[]);
+  const preFoto = await prisma.snapshotDiario.create({
+    data: {
+      entidade: "analysis", entidadeId: id, companyId: analysis.companyId,
+      conteudo: conteudoAtual as unknown as object, hash: hashConteudo(conteudoAtual), origem: "pre-restauracao",
+    },
+  });
+
+  const r = aplicarFotoAnalise(
+    foto.conteudo as unknown as ConteudoFotoAnalise,
+    analysis.status,
+    analysis.documents.map((d) => ({ id: d.id, nome: d.nome })),
+  );
+  await prisma.$transaction([
+    prisma.analysis.update({ where: { id }, data: r.data as object }),
+    ...r.docs.map((d) => prisma.document.update({ where: { id: d.id }, data: d.data as object })),
+  ]);
+
+  const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.trim().slice(0, 300) : "";
+  void registrarAuditoria({
+    userId: req.userId!, analysisId: id, entity: "analysis", entityId: id,
+    field: "restauração de foto de segurança (snapshot diário)",
+    before: { estadoAtualFotografadoEm: preFoto.id, statusAntes: analysis.status },
+    after: {
+      fotoRestaurada: foto.id, fotoDe: foto.criadoEm.toISOString(), origem: foto.origem,
+      documentosRestaurados: r.docs.length, documentosIgnorados: r.docsIgnorados, documentosForaDaFoto: r.docsForaDaFoto,
+    },
+    reason: motivo || undefined,
+    source: "snapshot-diario",
+  });
+  res.json({
+    ok: true,
+    documentosRestaurados: r.docs.length,
+    documentosIgnorados: r.docsIgnorados,
+    documentosForaDaFoto: r.docsForaDaFoto,
+    preRestauracaoId: preFoto.id,
   });
 });
 
@@ -922,6 +1027,15 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     return;
   }
 
+  // CASO MISTO DA HERANÇA (2026-07-21): documento com extração HERDADA (arquivo
+  // idêntico à versão anterior, provado por hash) reusa o cache como o
+  // editadoManualmente sempre reusou — re-baixar e re-parsear os mesmos bytes
+  // seria pagar duas vezes pelo mesmo número. { forcarReextracao: true } no
+  // body ignora a marca (ex.: parser melhorou e o analista quer re-extrair).
+  const forcarReextracao = req.body?.forcarReextracao === true;
+  const reusaCache = (d: { editadoManualmente: boolean; extracaoHerdada: boolean }) =>
+    d.editadoManualmente || (d.extracaoHerdada && !forcarReextracao);
+
   // ASSÍNCRONO: marca "Extraindo" e RESPONDE JÁ (202). O processamento pesado (cascata de
   // extração + análise por IA) roda em background e pode levar minutos em IBR multi-ano — o
   // frontend acompanha por polling do status. Evita o timeout do proxy/LB (que aparecia como
@@ -947,7 +1061,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     };
     const alertasTipoDoc: Array<{ tipo: "erro" | "aviso" | "info"; area: string; mensagem: string; detalhes?: string }> = [];
     for (const doc of docsAtivos) {
-      if (!doc.storagePath || !/\.pdf$/i.test(doc.nome) || doc.editadoManualmente) continue;
+      // Herdado pula o sniff também: o tipo foi curado na versão anterior e o
+      // download aqui anularia a economia do reuso de cache.
+      if (!doc.storagePath || !/\.pdf$/i.test(doc.nome) || reusaCache(doc)) continue;
       try {
         const texto = await extrairTextoLayoutPDF(await baixarDoc(doc));
         if (!texto || texto.length < 300) continue; // escaneado/sem texto — não dá para afirmar nada
@@ -984,8 +1100,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const parsedDocs: ParsedDocument[] = await Promise.all(
       financialDocs.map(async (doc) => {
         try {
-          // Se o documento foi editado manualmente, usar os dados editados
-          if (doc.editadoManualmente && doc.dadosExtraidos) {
+          // Editado manualmente OU extração herdada (hash idêntico): usa o cache
+          if (reusaCache(doc) && doc.dadosExtraidos) {
+            console.log(`[process] ${doc.nome}: extração ${doc.editadoManualmente ? "editada manualmente" : "HERDADA"} reusada — download e re-parse pulados`);
             const dados = doc.dadosExtraidos as any;
             const linhas: ExtractedRow[] = dados.linhas || (Array.isArray(dados) ? dados : []);
             const periodos: string[] = dados.periodos ||
@@ -1194,7 +1311,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       const visDocs: Array<{ buffer: Buffer; tipo: string; periodos: string[] }> = [];
       for (let i = 0; i < financialDocs.length; i++) {
         const doc = financialDocs[i];
-        if (doc.editadoManualmente || !doc.storagePath) continue;
+        if (reusaCache(doc) || !doc.storagePath) continue;
         const buffer = await downloadFile(doc.storagePath);
         visDocs.push({ buffer, tipo: doc.tipo, periodos: parsedDocs[i]?.periodos ?? [] });
       }
@@ -1254,6 +1371,27 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const nmBalancete: NaoMapeado[] = [];
     for (const doc of balanceteDocs) {
       try {
+        // CASO MISTO: balancete HERDADO carrega a própria árvore (a nova-versão
+        // a copia para dadosExtraidos) — pula download+parse+conversão e vai
+        // direto ao fold com o dicionário/modelos ATUAIS. As provas são as da
+        // extração original (mesmos bytes ⇒ mesmas provas, por construção).
+        const cacheBal = doc.dadosExtraidos as any;
+        if (reusaCache(doc) && cacheBal?.balancete && cacheBal.arvoreBP && cacheBal.arvoreDRE && cacheBal.periodos?.[0]) {
+          const periodoBP = String(cacheBal.periodos[0]);
+          const rB = foldBP(cacheBal.arvoreBP as any, [periodoBP], dictForBP, bpModel);
+          const rD = foldDRE(cacheBal.arvoreDRE as any, [periodoBP], dictForDRE, dreModel);
+          if (structuredBP.length === 0) structuredBP = rB.bp; else mergeItensPorConta(structuredBP, rB.bp);
+          if (structuredDRE.length === 0) structuredDRE = rD.dre; else mergeItensPorConta(structuredDRE, rD.dre);
+          if (!allPeriodos.includes(periodoBP)) allPeriodos.push(periodoBP);
+          nmBalancete.push(...semPlugBalancete(rB.naoMapeados as NaoMapeado[]), ...(rD.naoMapeados as NaoMapeado[]));
+          arvoresBalancete.push({ docId: doc.id, nome: doc.nome, periodo: periodoBP, arvoreBP: cacheBal.arvoreBP, arvoreDRE: cacheBal.arvoreDRE });
+          balancetes.push({
+            docId: doc.id, nome: doc.nome, periodo: periodoBP, periodoInicio: cacheBal.periodoInicio,
+            provas: cacheBal.provas, avisos: cacheBal.avisos ?? [], linhas: cacheBal.totalLinhas ?? 0,
+          });
+          console.log(`[process] balancete ${doc.nome}: extração HERDADA reusada (período ${periodoBP}) — re-parse pulado`);
+          continue;
+        }
         if (!doc.storagePath || !/\.pdf$/i.test(doc.nome)) {
           balancetes.push({ docId: doc.id, nome: doc.nome, erro: "Balancete é suportado apenas em PDF nesta fase" });
           await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } });
@@ -1288,7 +1426,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         await prisma.document.update({
           where: { id: doc.id },
           data: {
-            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], provas: conv.provas, avisos: conv.avisos, totalLinhas: parseado.linhas.length } as any,
+            // periodoInicio entra no cache: a herança (nova-versão) reproduz a
+            // linha `balancetes` completa sem re-parsear o PDF.
+            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], periodoInicio: parseado.periodoInicio, provas: conv.provas, avisos: conv.avisos, totalLinhas: parseado.linhas.length } as any,
             status: "Processado",
             // "verde só com prova": confiança alta SOMENTE com fechamento ao centavo
             confianca: conv.provas.fechamento.ok ? 95 : 40,
