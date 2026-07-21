@@ -132,11 +132,24 @@ router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise
   const idsParaReextrair: string[] = [];
   let herdados = 0;
   for (const doc of origem.documents) {
-    if (!doc.fixadoDeId) {
-      if (doc.tipo !== "Material complementar") avisos.push(`"${doc.nome}" não veio da Data room (legado) — traga-o pela adoção e fixe na nova versão.`);
+    // Origem no pool: pela FIXAÇÃO (fase B) ou — IBR LEGADO, caso Move Farma —
+    // pelo HASH do arquivo: a adoção copia o hash, e mesmos bytes = mesmo
+    // documento, com a mesma extração. Sem isso, a 1ª nova versão de um IBR
+    // antigo nascia VAZIA e pedia re-extração de tudo (falha real, 21/07).
+    let poolOrigemId = doc.fixadoDeId;
+    if (!poolOrigemId && doc.hash) {
+      const adotado = await prisma.document.findFirst({
+        where: { companyId: origem.companyId, analysisId: null, hash: doc.hash },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      });
+      poolOrigemId = adotado?.id ?? null;
+    }
+    if (!poolOrigemId) {
+      if (doc.tipo !== "Material complementar") avisos.push(`"${doc.nome}" não está na Data room — use "Trazer documentos dos IBRs" na Data room da empresa e fixe na nova versão pelo wizard.`);
       continue;
     }
-    let vigente = await prisma.document.findUnique({ where: { id: doc.fixadoDeId } });
+    let vigente = await prisma.document.findUnique({ where: { id: poolOrigemId } });
     for (let i = 0; vigente?.substituidoPorId && i < 50; i++) {
       const prox = await prisma.document.findUnique({ where: { id: vigente.substituidoPorId } });
       if (!prox) break;
@@ -144,7 +157,9 @@ router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise
     }
     if (!vigente) { avisos.push(`Origem de "${doc.nome}" não existe mais na Data room — fixe manualmente.`); continue; }
 
-    if (vigente.id === doc.fixadoDeId) {
+    // INALTERADO = mesmos BYTES (hash) — vale para fixação e para legado.
+    const inalterado = vigente.hash && doc.hash ? vigente.hash === doc.hash : vigente.id === doc.fixadoDeId;
+    if (inalterado) {
       // Insumo INALTERADO: herda a fotografia da v1 (extração + curadoria do IBR).
       await prisma.document.create({
         data: {
