@@ -8,8 +8,9 @@ import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from
 import { uploadFile, deleteFile } from "../services/storage";
 import { registrarAuditoria } from "../services/audit-trail";
 import { derivarDocumentosLogicos, periodosFaltantes } from "../services/fechamento-periodo";
-import { montarLinhaFixada, propagarMetadadosDoPool } from "../services/fixacao-pool";
+import { montarLinhaAdotada, montarLinhaFixada, propagarMetadadosDoPool } from "../services/fixacao-pool";
 import { curarUpload } from "../services/curadoria-pool";
+import { downloadFile } from "../services/storage";
 
 const router = Router();
 router.use(requireAuth);
@@ -108,6 +109,68 @@ router.get("/pool", async (req: AuthRequest, res: Response): Promise<void> => {
     };
   });
   res.json({ documentos, faltantes: periodosFaltantes(logicos, new Date()) });
+});
+
+// POST /documents/pool/adotar — ADOÇÃO DE LEGADOS: documentos subidos direto
+// em IBRs (antes da Data room única) viram linhas do POOL, para o seletor do
+// wizard enxergá-los. Dedup por HASH (o mesmo arquivo re-subido em N IBRs vira
+// UMA linha); material herda o resumo de IA; a linha do IBR fica INTOCADA
+// (evidência dele — zero retrocesso). Curadoria best-effort preenche a
+// competência que faltar (legados costumam não ter).
+// body: { companyId }
+router.post("/pool/adotar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const companyId = String((req.body ?? {}).companyId ?? "");
+  if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
+  const company = await prisma.company.findFirst({ where: { id: companyId, ...whereEmpresaVisivel(req) } });
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+
+  const [legados, poolAtual] = await Promise.all([
+    prisma.document.findMany({
+      where: { companyId, analysisId: { not: null }, fixadoDeId: null, status: { not: "Substituído" } },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.document.findMany({ where: { companyId, analysisId: null }, select: { hash: true } }),
+  ]);
+  const hashesNoPool = new Set(poolAtual.map((d) => d.hash).filter(Boolean));
+
+  let adotados = 0, pulados = 0;
+  const avisos: string[] = [];
+  for (const doc of legados) {
+    if (!doc.hash || hashesNoPool.has(doc.hash)) { pulados++; continue; }
+    hashesNoPool.add(doc.hash);
+
+    const data = montarLinhaAdotada(doc);
+    // Curadoria best-effort: legado costuma vir sem competência — o conteúdo
+    // decide (mesmas regras do upload). Falha = segue com o que há.
+    if (data.tipo !== "Material complementar") {
+      try {
+        if (doc.storagePath) {
+          const det = await curarUpload(await downloadFile(doc.storagePath), doc.nome);
+          if (det.tipo && det.tipo !== data.tipo) {
+            avisos.push(`${doc.nome}: enviado como "${data.tipo}", mas o conteúdo é ${det.tipo} — tipo corrigido na adoção.`);
+            data.tipo = det.tipo;
+          }
+          if (det.competencia && !data.competencia) {
+            data.competencia = det.competencia;
+            avisos.push(`${doc.nome}: competência identificada pelo conteúdo: ${det.competencia}.`);
+          }
+        }
+      } catch (e: any) {
+        console.warn(`[adotar] curadoria falhou para ${doc.nome} (segue sem):`, e?.message ?? e);
+      }
+    }
+
+    const novo = await prisma.document.create({ data });
+    adotados++;
+    void registrarAuditoria({
+      userId: req.userId!, entity: "document", entityId: novo.id,
+      field: "adoção de documento legado na Data room da empresa",
+      after: { nome: novo.nome, tipo: novo.tipo, competencia: novo.competencia, documentoOrigemId: doc.id, analiseOrigemId: doc.analysisId, hash: (novo.hash ?? "").slice(0, 12) },
+      source: "data-room",
+    });
+  }
+
+  res.json({ adotados, pulados, avisos });
 });
 
 router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Response): Promise<void> => {

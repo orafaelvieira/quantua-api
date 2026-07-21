@@ -153,6 +153,36 @@ export async function fixarDocumentosDoPool(
 }
 
 /**
+ * ADOÇÃO de documento LEGADO (subido direto num IBR, antes da Data room única)
+ * como linha do POOL — PURA. O arquivo continua guardado UMA vez (mesmo
+ * storagePath); a linha do IBR fica intocada (evidência dele, zero retrocesso).
+ * Material com resumo herda o cache (pago 1× por versão de arquivo).
+ */
+export function montarLinhaAdotada(doc: PoolDocMin & { companyId: string }): {
+  analysisId: null; companyId: string; nome: string; tipo: string;
+  competencia: string | null; moeda: string; storagePath: string | null;
+  hash: string | null; tamanho: string | null; versao: number; status: string;
+  dadosExtraidos?: object;
+} {
+  const cache = doc.dadosExtraidos as { resumo?: string } | null;
+  const herdaResumo = doc.tipo === MATERIAL_TIPO && !!cache?.resumo;
+  return {
+    analysisId: null,
+    companyId: doc.companyId,
+    nome: doc.nome,
+    tipo: doc.tipo,
+    competencia: doc.competencia,
+    moeda: doc.moeda,
+    storagePath: doc.storagePath,
+    hash: doc.hash,
+    tamanho: doc.tamanho,
+    versao: 1, // cadeia NOVA no pool — versões futuras nascem aqui
+    status: herdaResumo ? "Processado" : "Pendente",
+    ...(herdaResumo ? { dadosExtraidos: doc.dadosExtraidos as object } : {}),
+  };
+}
+
+/**
  * Metadados corrigidos na linha do POOL (tipo/competência/moeda) escorrem para
  * as fixações ainda Pendentes — o pipeline lê a linha fixada, e uma correção
  * feita antes da extração é fato do documento, não estado do IBR. Fixações já

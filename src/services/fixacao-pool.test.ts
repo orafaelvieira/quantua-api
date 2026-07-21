@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { montarLinhaFixada, type PoolDocMin } from "./fixacao-pool";
+import { montarLinhaAdotada, montarLinhaFixada, type PoolDocMin } from "./fixacao-pool";
 import { MATERIAL_TIPO } from "./material-context";
 
 const ANALYSIS = { id: "ibr-1", companyId: "emp-1" };
@@ -67,5 +67,26 @@ describe("montarLinhaFixada", () => {
     );
     expect(linha.status).toBe("Pendente");
     expect(linha.dadosExtraidos).toBeUndefined();
+  });
+});
+
+describe("montarLinhaAdotada (legado do IBR → pool)", () => {
+  const legado = { ...poolDoc({ versao: 2, dadosExtraidos: { linhas: [], periodos: [] } }), companyId: "emp-1" };
+
+  it("vira linha de POOL: sem análise, mesmo arquivo, cadeia NOVA (v1), sem extração do IBR", () => {
+    const linha = montarLinhaAdotada(legado);
+    expect(linha.analysisId).toBeNull();
+    expect(linha.companyId).toBe("emp-1");
+    expect(linha.storagePath).toBe(legado.storagePath); // arquivo guardado UMA vez
+    expect(linha.versao).toBe(1); // versões futuras nascem no pool
+    expect(linha.status).toBe("Pendente");
+    expect(linha.dadosExtraidos).toBeUndefined(); // correções do IBR não vazam
+  });
+
+  it("material com resumo herda o cache (pago 1× por versão de arquivo)", () => {
+    const cache = { resumo: "Deck institucional…" };
+    const linha = montarLinhaAdotada({ ...poolDoc({ tipo: MATERIAL_TIPO, dadosExtraidos: cache }), companyId: "emp-1" });
+    expect(linha.status).toBe("Processado");
+    expect(linha.dadosExtraidos).toEqual(cache);
   });
 });

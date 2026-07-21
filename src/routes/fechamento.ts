@@ -40,9 +40,12 @@ async function docsDaEmpresa(companyId: string): Promise<DocFechamento[]> {
     // Fixações (fase B) ficam de fora: são a LENTE do IBR sobre um documento
     // que já está aqui — contá-las empilharia versões-fantasma no painel.
     where: { companyId, fixadoDeId: null },
-    select: { id: true, nome: true, tipo: true, competencia: true, versao: true, status: true, substituidoPorId: true, createdAt: true, moeda: true },
+    select: { id: true, nome: true, tipo: true, competencia: true, versao: true, status: true, substituidoPorId: true, createdAt: true, moeda: true, hash: true, analysisId: true },
   });
-  return docs;
+  // Legado ADOTADO no pool: a linha do pool passa a representá-lo — a cópia
+  // do IBR (mesmo hash) sai da listagem para não aparecer em dobro.
+  const hashesNoPool = new Set(docs.filter((d) => d.analysisId === null && d.hash).map((d) => d.hash));
+  return docs.filter((d) => d.analysisId === null || !d.hash || !hashesNoPool.has(d.hash));
 }
 
 // Período fechável: mês ("2026-05") OU exercício/ano fechado ("2025") —
