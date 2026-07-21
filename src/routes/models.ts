@@ -24,6 +24,7 @@ import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
 import { resolveSectorPremises } from "../services/sector-benchmark";
 import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
+import { cicloVidaModel } from "../services/ciclo-vida";
 
 const router = Router();
 router.use(requireAuth);
@@ -255,6 +256,8 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
       const cache = m.resultadoCache as { checks?: Array<{ ok: boolean }> } | null;
       return {
         id: m.id, nome: m.nome, objetivo: m.objetivo, status: m.status,
+        // Ciclo unificado (21/07/2026): derivado, aditivo — normaliza o legado "Rascunho".
+        cicloVida: cicloVidaModel(m.status), motivoVersao: m.motivoVersao,
         mesInicial: m.mesInicial, horizonteMeses: m.horizonteMeses, visao: m.visao,
         companyId: m.companyId, empresa: porId.get(m.companyId)?.nomeFantasia || porId.get(m.companyId)?.razaoSocial || "—",
         cenarioAtivo: m.scenarios.find((s) => s.id === m.cenarioAtivoId)?.nome ?? "Base",
@@ -266,6 +269,80 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
       };
     }),
   });
+});
+
+// NOVA VERSÃO do modelo (21/07/2026, "salvar como" com motivo): o concluído é
+// imutável — atualizar = copiar para a versão seguinte, Em produção. Copia
+// premissas por inteiro (blocos, cenários, realizado, índices macro), remapeia
+// o cenário ativo e entra no MESMO envelope com produtoVersao seguinte.
+// body: { motivo: string } — obrigatório (motivoVersao + trilha).
+router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.trim().slice(0, 300) : "";
+  if (!motivo) {
+    res.status(400).json({ error: "Informe o MOTIVO da nova versão — ele fica no cabeçalho da versão e na trilha de auditoria." });
+    return;
+  }
+  const origem = await prisma.financialModel.findUnique({
+    where: { id },
+    include: { blocks: true, scenarios: true },
+  });
+  if (!origem || !(await companyNoEscopo(origem.companyId, req))) {
+    res.status(404).json({ error: "Modelo não encontrado" });
+    return;
+  }
+
+  let produtoVersao: number | null = null;
+  if (origem.produtoId) {
+    const max = await prisma.financialModel.aggregate({ where: { produtoId: origem.produtoId }, _max: { produtoVersao: true } });
+    produtoVersao = (max._max.produtoVersao ?? 0) + 1;
+  }
+
+  const novo = await prisma.financialModel.create({
+    data: {
+      companyId: origem.companyId,
+      userId: req.userId!,
+      nome: produtoVersao ? `${origem.nome.replace(/ · v\d+$/, "")} · v${produtoVersao}` : `${origem.nome} · nova versão`,
+      objetivo: origem.objetivo,
+      mesInicial: origem.mesInicial,
+      horizonteMeses: origem.horizonteMeses,
+      visao: origem.visao,
+      analysisSeedId: origem.analysisSeedId,
+      realizado: origem.realizado ?? undefined,
+      resultadoCache: origem.resultadoCache ?? undefined,
+      indicesMacro: origem.indicesMacro ?? undefined,
+      status: "Em produção",
+      produtoId: origem.produtoId,
+      produtoVersao,
+      motivoVersao: motivo,
+    },
+  });
+  // Blocos e cenários copiados por inteiro; o cenário ativo aponta para a CÓPIA.
+  for (const b of origem.blocks) {
+    await prisma.modelBlock.create({
+      data: { modelId: novo.id, tipo: b.tipo, nome: b.nome, ordem: b.ordem, modo: b.modo, ativo: b.ativo, config: b.config as object },
+    });
+  }
+  let cenarioAtivoNovoId: string | null = null;
+  for (const s of origem.scenarios) {
+    const copia = await prisma.modelScenario.create({
+      data: { modelId: novo.id, nome: s.nome, isBase: s.isBase, overrides: s.overrides as object },
+    });
+    if (s.id === origem.cenarioAtivoId) cenarioAtivoNovoId = copia.id;
+  }
+  if (cenarioAtivoNovoId) {
+    await prisma.financialModel.update({ where: { id: novo.id }, data: { cenarioAtivoId: cenarioAtivoNovoId } });
+  }
+
+  void registrarAuditoria({
+    userId: req.userId!, entity: "model", entityId: novo.id,
+    field: "nova versão do modelo (criada a partir de versão anterior)",
+    before: { origemId: origem.id, origemNome: origem.nome, origemStatus: origem.status },
+    after: { nome: novo.nome, produtoVersao, blocos: origem.blocks.length, cenarios: origem.scenarios.length },
+    reason: motivo, source: "models",
+  });
+
+  res.status(201).json({ id: novo.id, nome: novo.nome, produtoVersao });
 });
 
 // POST /models — cria modelo + blocos default + cenários (wizard).

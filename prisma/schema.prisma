@@ -501,6 +501,10 @@ model Analysis {
   /// portal nunca o veem). Marcação explícita, com trilha — os dados ficam na
   /// base como evidência, mas invisíveis no dia a dia.
   ehTeste           Boolean  @default(false) @map("eh_teste")
+  /// MOTIVO DA VERSÃO (21/07/2026): por que esta versão existe ("refeita após
+  /// substituição do balancete de mai/26"). Preenchido pelo "Nova versão…" —
+  /// obrigatório lá; null nas versões originais. Aparece no envelope e no PDF.
+  motivoVersao      String?  @map("motivo_versao")
   /// mode (pivot B2B-3, v3): "recurring" | "ibr" — modalidade de operação.
   /// "recurring": diagnóstico mensal/trimestral do BPO sobre cliente da carteira (default).
   /// "ibr": modalidade premium contratada à parte para momentos críticos (valuation,
@@ -1043,6 +1047,9 @@ model FinancialModel {
   /// null = solto). Ver ProdutoEmpresa.
   produtoId     String? @map("produto_id")
   produtoVersao Int?    @map("produto_versao")
+  /// MOTIVO DA VERSÃO (21/07/2026): por que esta versão existe — preenchido
+  /// pelo "Nova versão…" (obrigatório lá); null nas versões originais.
+  motivoVersao  String? @map("motivo_versao")
 
   blocks    ModelBlock[]
   scenarios ModelScenario[]

@@ -16,6 +16,7 @@ import { comparePeersCvm, CVM_COMPARAVEIS } from "../services/peer-benchmark-cvm
 import { researchCompanyWeb, researchSectorBenchmarksWeb } from "../services/web-research";
 import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-context";
 import { fixarDocumentosDoPool } from "../services/fixacao-pool";
+import { cicloVidaAnalysis, etapaAnalysis } from "../services/ciclo-vida";
 import { sugerirClassificacoesIA, chaveNM } from "../services/classification-suggest";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta, ordPeriodo } from "../services/account-mapper";
 import { DRE_TEMPLATE } from "../services/financial-templates";
@@ -73,6 +74,87 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
     before: { nome: existing.nome, status: existing.status, companyId: existing.companyId, criadoEm: existing.createdAt },
   });
   res.status(204).send();
+});
+
+// NOVA VERSÃO do IBR (21/07/2026, "salvar como" com motivo): o concluído é
+// imutável — atualizar = criar a v seguinte. Copia o CADASTRO (escopo, setor,
+// dores) e REFIXA as versões VIGENTES do pool dos mesmos documentos lógicos;
+// extração e geração rodam de novo no fluxo normal (números nascem dos insumos
+// atuais, nunca copiados). Entra no MESMO envelope com produtoVersao seguinte.
+// body: { motivo: string } — obrigatório; vai para motivoVersao e para a trilha.
+router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.trim().slice(0, 300) : "";
+  if (!motivo) {
+    res.status(400).json({ error: "Informe o MOTIVO da nova versão — sem ele, daqui a meses ninguém sabe por que existem duas (fica no cabeçalho da versão e no PDF)." });
+    return;
+  }
+  const origem = await prisma.analysis.findFirst({
+    where: { id, ...whereRecursoEmpresa(req) },
+    include: { documents: { where: { status: { not: "Substituído" } } } },
+  });
+  if (!origem) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  // Versão seguinte DENTRO do envelope (se organizado); solto continua solto.
+  let produtoVersao: number | null = null;
+  if (origem.produtoId) {
+    const max = await prisma.analysis.aggregate({ where: { produtoId: origem.produtoId }, _max: { produtoVersao: true } });
+    produtoVersao = (max._max.produtoVersao ?? 0) + 1;
+  }
+
+  const nova = await prisma.analysis.create({
+    data: {
+      companyId: origem.companyId,
+      userId: req.userId!,
+      nome: produtoVersao ? `${origem.nome.replace(/ · v\d+$/, "")} · v${produtoVersao}` : `${origem.nome} · nova versão`,
+      tipo: origem.tipo,
+      kind: origem.kind,
+      mode: origem.mode,
+      ibrType: origem.ibrType,
+      sectorId: origem.sectorId,
+      setorConfirmado: origem.setorConfirmado,
+      sectorCustom: origem.sectorCustom,
+      dores: origem.dores ?? undefined,
+      status: "Rascunho",
+      produtoId: origem.produtoId,
+      produtoVersao,
+      motivoVersao: motivo,
+    },
+  });
+
+  // Refixa as VIGENTES do pool dos mesmos documentos lógicos. Fixações da
+  // origem seguem a cadeia até a vigente; legados sem fixação não têm origem
+  // no pool — entram no aviso (adote-os na Data room e fixe pelo wizard).
+  const avisos: string[] = [];
+  const idsVigentes: string[] = [];
+  for (const doc of origem.documents) {
+    if (!doc.fixadoDeId) {
+      if (doc.tipo !== "Material complementar") avisos.push(`"${doc.nome}" não veio da Data room (legado) — traga-o pela adoção e fixe na nova versão.`);
+      continue;
+    }
+    let vigente = await prisma.document.findUnique({ where: { id: doc.fixadoDeId } });
+    for (let i = 0; vigente?.substituidoPorId && i < 50; i++) {
+      const prox = await prisma.document.findUnique({ where: { id: vigente.substituidoPorId } });
+      if (!prox) break;
+      vigente = prox;
+    }
+    if (vigente) idsVigentes.push(vigente.id);
+    else avisos.push(`Origem de "${doc.nome}" não existe mais na Data room — fixe manualmente.`);
+  }
+  const fixacao = idsVigentes.length
+    ? await fixarDocumentosDoPool({ id: nova.id, companyId: nova.companyId }, idsVigentes)
+    : { fixados: [], erros: [] };
+  for (const e of fixacao.erros) avisos.push(e.erro);
+
+  void registrarAuditoria({
+    userId: req.userId!, analysisId: nova.id, entity: "analysis", entityId: nova.id,
+    field: "nova versão do IBR (criada a partir de versão anterior)",
+    before: { origemId: origem.id, origemNome: origem.nome, origemStatus: origem.status },
+    after: { nome: nova.nome, produtoVersao, documentosFixados: fixacao.fixados.length },
+    reason: motivo,
+  });
+
+  res.status(201).json({ id: nova.id, nome: nova.nome, produtoVersao, documentosFixados: fixacao.fixados.length, avisos });
 });
 
 // MARCAR COMO TESTE: tira o IBR de toda listagem e relatório futuro (a listagem
@@ -157,7 +239,9 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     orderBy: { createdAt: "desc" },
     include: { company: { select: { razaoSocial: true, nomeFantasia: true } } },
   });
-  res.json(analyses);
+  // CICLO DE VIDA UNIFICADO (21/07/2026): campos DERIVADOS, aditivos — quem lê
+  // `status` segue igual; telas novas usam cicloVida (comercial) + etapa (máquina).
+  res.json(analyses.map((a) => ({ ...a, cicloVida: cicloVidaAnalysis(a.status), etapa: etapaAnalysis(a.status) })));
 });
 
 router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
@@ -253,7 +337,10 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     orderBy: { createdAt: "desc" },
     select: { id: true, nome: true, objetivo: true, status: true },
   });
-  res.json({ ...analysis, extracaoDesatualizada, modelosVinculados });
+  res.json({
+    ...analysis, extracaoDesatualizada, modelosVinculados,
+    cicloVida: cicloVidaAnalysis(analysis.status), etapa: etapaAnalysis(analysis.status),
+  });
 });
 
 // VERSÕES da extração (política 2026-07-15): trilha consultável de cada hash de
@@ -741,6 +828,11 @@ function mergeItensPorConta<T extends { conta: string; valores: Record<string, n
   }
 }
 
+// Mensagem única da IMUTABILIDADE do concluído (decisão do usuário, 21/07/2026):
+// produto emitido não se altera — atualização é NOVA VERSÃO, com motivo.
+const ERRO_CONCLUIDA_IMUTAVEL =
+  "IBR concluído é imutável — os números emitidos são evidência. Para atualizar com documentos novos, crie uma NOVA VERSÃO no workspace da empresa (botão \"Nova versão…\"), informando o motivo.";
+
 router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
@@ -748,6 +840,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     include: { company: true, documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
   // Materiais complementares (notas/apresentações) NÃO entram na extração financeira —
   // são resumidos depois, na geração da análise (buildMateriaisContext). Documentos
   // SUBSTITUÍDOS também não: a versão corrigida é quem representa o insumo (política
@@ -1359,9 +1452,11 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, ...whereRecursoEmpresa(req) },
-    select: { id: true, dadosEstruturados: true, setorConfirmado: true, resultado: true },
+    select: { id: true, status: true, dadosEstruturados: true, setorConfirmado: true, resultado: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  // Concluído é IMUTÁVEL (21/07/2026): regerar sobre produto emitido = nova versão.
+  if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
   const dados = analysis.dadosEstruturados as any;
 
   // TRAVA (decisão do usuário 2026-07-06): a IA só roda com a extração VALIDADA.
@@ -2357,9 +2452,11 @@ router.post("/:id/documents/fixar", async (req: AuthRequest, res: Response): Pro
   // Cancelada já morre no guarda único do router (mutação em /:id → 409).
   const analysis = await prisma.analysis.findFirst({
     where: { id, ...whereRecursoEmpresa(req) },
-    select: { id: true, companyId: true },
+    select: { id: true, companyId: true, status: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  // Concluído é IMUTÁVEL (21/07/2026): fixar documento novo = nova versão.
+  if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
 
   const resultado = await fixarDocumentosDoPool(analysis, parsed.data.documentIds);
   for (const f of resultado.fixados) {
