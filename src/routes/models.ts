@@ -25,6 +25,7 @@ import { resolveSectorPremises } from "../services/sector-benchmark";
 import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { cicloVidaModel } from "../services/ciclo-vida";
+import { montarConteudoModelo, aplicarFotoModelo, hashConteudo, type ConteudoFotoModelo } from "../services/snapshot-diario";
 
 const router = Router();
 router.use(requireAuth);
@@ -817,6 +818,78 @@ const travaEdicao = (model: { status: string }): string | null =>
   model.status === "Concluído" || model.status === "Cancelado"
     ? `Modelo "${model.status}" está travado para edição — reabra o modelo (com motivo) ou crie uma nova versão a partir do IBR.`
     : null;
+
+// ── FOTOS DE SEGURANÇA (snapshot automático diário, 2026-07-21) ─────────────
+// Rede de segurança tipo Excel: o cron fotografa 1×/dia o estado editável do
+// modelo (blocos, cenários, horizonte). NÃO confundir com o ORÇAMENTO
+// CONGELADO acima (emissão de negócio): a foto é proteção operacional.
+// Restaurar fotografa o estado atual antes ("pre-restauracao").
+
+router.get("/:id/snapshots-diarios", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const fotos = await prisma.snapshotDiario.findMany({
+    where: { entidade: "model", entidadeId: model.id },
+    orderBy: { criadoEm: "desc" },
+    select: { id: true, criadoEm: true, origem: true, hash: true, conteudo: true },
+  });
+  res.json({
+    fotos: fotos.map((f) => {
+      const c = f.conteudo as unknown as ConteudoFotoModelo;
+      return {
+        id: f.id, criadoEm: f.criadoEm, origem: f.origem, hash: f.hash.slice(0, 12),
+        resumo: { status: c.model?.status ?? null, blocos: c.blocks?.length ?? 0, cenarios: c.scenarios?.length ?? 0 },
+      };
+    }),
+  });
+});
+
+// body: { motivo?: string }
+router.post("/:id/snapshots-diarios/:snapshotId/restaurar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
+  const foto = await prisma.snapshotDiario.findFirst({
+    where: { id: req.params.snapshotId as string, entidade: "model", entidadeId: model.id },
+  });
+  if (!foto) { res.status(404).json({ error: "Foto de segurança não encontrada para este modelo." }); return; }
+
+  const [blocks, scenarios] = await Promise.all([
+    prisma.modelBlock.findMany({ where: { modelId: model.id }, select: { id: true, tipo: true, nome: true, ordem: true, modo: true, ativo: true, config: true } }),
+    prisma.modelScenario.findMany({ where: { modelId: model.id }, select: { id: true, nome: true, isBase: true, overrides: true } }),
+  ]);
+
+  // Foto do estado ATUAL antes de mexer — a restauração é reversível por construção.
+  const conteudoAtual = montarConteudoModelo(model as unknown as Record<string, unknown>, blocks, scenarios);
+  const preFoto = await prisma.snapshotDiario.create({
+    data: {
+      entidade: "model", entidadeId: model.id, companyId: model.companyId,
+      conteudo: conteudoAtual as unknown as object, hash: hashConteudo(conteudoAtual), origem: "pre-restauracao",
+    },
+  });
+
+  const r = aplicarFotoModelo(foto.conteudo as unknown as ConteudoFotoModelo, model.status, blocks, scenarios);
+  await prisma.$transaction([
+    prisma.financialModel.update({ where: { id: model.id }, data: r.data as object }),
+    ...r.blocks.map((b) => prisma.modelBlock.update({ where: { id: b.id }, data: b.data as object })),
+    ...r.scenarios.map((c) => prisma.modelScenario.update({ where: { id: c.id }, data: c.data as object })),
+  ]);
+
+  const motivo = typeof req.body?.motivo === "string" ? req.body.motivo.trim().slice(0, 300) : "";
+  await registrarAuditoria({
+    userId: req.userId!, analysisId: model.analysisSeedId ?? null,
+    entity: "financial_model", entityId: model.id,
+    field: "restauração de foto de segurança (snapshot diário)",
+    before: { estadoAtualFotografadoEm: preFoto.id, statusAntes: model.status },
+    after: {
+      fotoRestaurada: foto.id, fotoDe: foto.criadoEm.toISOString(), origem: foto.origem,
+      blocosRestaurados: r.blocks.length, cenariosRestaurados: r.scenarios.length, ignorados: r.ignorados,
+    },
+    reason: motivo || undefined,
+    source: "snapshot-diario",
+  });
+  res.json({ ok: true, blocosRestaurados: r.blocks.length, cenariosRestaurados: r.scenarios.length, ignorados: r.ignorados, preRestauracaoId: preFoto.id });
+});
 
 router.post("/:id/atualizar-indices", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);

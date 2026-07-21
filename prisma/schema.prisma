@@ -601,6 +601,12 @@ model Document {
   hash           String?
   dadosExtraidos     Json?    @map("dados_extraidos")
   editadoManualmente Boolean  @default(false) @map("editado_manualmente")
+  /// EXTRAÇÃO HERDADA (caso misto da herança, 2026-07-21): dadosExtraidos foi
+  /// COPIADO da versão anterior do IBR porque o arquivo é idêntico (hash) —
+  /// o /process reusa esse cache em vez de re-baixar e re-parsear (mesma
+  /// mecânica do editadoManualmente). Substituir o documento zera a marca
+  /// (linha nova). Reprocessar com { forcarReextracao: true } ignora a marca.
+  extracaoHerdada    Boolean  @default(false) @map("extracao_herdada")
   tamanho            String?
   // VERSIONAMENTO (política 2026-07-15): documento nunca é deletado depois de
   // processado — é SUBSTITUÍDO. A versão antiga fica com status "Substituído",
@@ -1164,4 +1170,30 @@ model ModelScenario {
 
   @@index([modelId])
   @@map("model_scenarios")
+}
+/// SNAPSHOT AUTOMÁTICO DIÁRIO (rede de segurança tipo Excel, 2026-07-21):
+/// fotografia do estado EDITÁVEL de IBRs e modelos, tirada por cron 1×/dia.
+/// Dedup por hash (dia sem mudança não grava); poda mantém as últimas 30
+/// fotos automáticas por entidade. Restaurar é ato auditado que primeiro
+/// fotografa o estado atual ("pre-restauracao") — nada se perde, nunca.
+/// Sem FK para as entidades (tabela transversal): a foto de uma entidade
+/// excluída é apagada pela própria poda quando sair da janela.
+model SnapshotDiario {
+  id         String   @id @default(uuid())
+  /// "analysis" | "model"
+  entidade   String
+  entidadeId String   @map("entidade_id")
+  /// Redundante de propósito: permite varrer/limpar por empresa sem join.
+  companyId  String   @map("company_id")
+  /// Estado completo fotografado (ver snapshot-diario.ts: montarConteudo*).
+  conteudo   Json
+  /// sha256 do conteúdo — base do dedup diário.
+  hash       String
+  /// "auto-diario" | "pre-restauracao" (esta última nunca é podada).
+  origem     String   @default("auto-diario")
+  criadoEm   DateTime @default(now()) @map("criado_em")
+
+  @@index([entidade, entidadeId, criadoEm])
+  @@index([companyId])
+  @@map("snapshots_diarios")
 }

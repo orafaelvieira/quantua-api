@@ -129,14 +129,40 @@ router.post("/pool/adotar", async (req: AuthRequest, res: Response): Promise<voi
       where: { companyId, analysisId: { not: null }, fixadoDeId: null, status: { not: "Substituído" } },
       orderBy: { createdAt: "asc" },
     }),
-    prisma.document.findMany({ where: { companyId, analysisId: null }, select: { hash: true } }),
+    prisma.document.findMany({ where: { companyId, analysisId: null }, select: { id: true, hash: true, createdAt: true } }),
   ]);
   const hashesNoPool = new Set(poolAtual.map((d) => d.hash).filter(Boolean));
+  // hash → linhas de pool existentes (para a cura retroativa da data original).
+  const poolPorHash = new Map<string, Array<{ id: string; createdAt: Date }>>();
+  for (const p of poolAtual) {
+    if (!p.hash) continue;
+    poolPorHash.set(p.hash, [...(poolPorHash.get(p.hash) ?? []), { id: p.id, createdAt: p.createdAt }]);
+  }
 
-  let adotados = 0, pulados = 0;
+  let adotados = 0, pulados = 0, redatados = 0;
   const avisos: string[] = [];
   for (const doc of legados) {
-    if (!doc.hash || hashesNoPool.has(doc.hash)) { pulados++; continue; }
+    if (!doc.hash || hashesNoPool.has(doc.hash)) {
+      // CURA RETROATIVA da DATA ORIGINAL (2026-07-21): linha adotada antes desta
+      // correção nasceu com a data da ADOÇÃO — se o legado é mais antigo, re-data
+      // para a origem. Mata o falso "retificado após fechamento" (caso AOCP)
+      // re-rodando o botão "Trazer documentos dos IBRs".
+      for (const p of doc.hash ? poolPorHash.get(doc.hash) ?? [] : []) {
+        if (p.createdAt.getTime() <= doc.createdAt.getTime()) continue;
+        await prisma.document.update({ where: { id: p.id }, data: { createdAt: doc.createdAt } });
+        void registrarAuditoria({
+          userId: req.userId!, entity: "document", entityId: p.id,
+          field: "data original restaurada na linha adotada (era a data da adoção)",
+          before: { createdAt: p.createdAt.toISOString() }, after: { createdAt: doc.createdAt.toISOString(), documentoOrigemId: doc.id },
+          source: "data-room",
+        });
+        avisos.push(`${doc.nome}: data original restaurada na Data room (${doc.createdAt.toLocaleDateString("pt-BR")} — era a data da adoção).`);
+        p.createdAt = doc.createdAt;
+        redatados++;
+      }
+      pulados++;
+      continue;
+    }
     hashesNoPool.add(doc.hash);
 
     const data = montarLinhaAdotada(doc);
@@ -170,7 +196,7 @@ router.post("/pool/adotar", async (req: AuthRequest, res: Response): Promise<voi
     });
   }
 
-  res.json({ adotados, pulados, avisos });
+  res.json({ adotados, pulados, redatados, avisos });
 });
 
 router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Response): Promise<void> => {

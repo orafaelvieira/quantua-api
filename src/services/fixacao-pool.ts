@@ -157,12 +157,18 @@ export async function fixarDocumentosDoPool(
  * como linha do POOL — PURA. O arquivo continua guardado UMA vez (mesmo
  * storagePath); a linha do IBR fica intocada (evidência dele, zero retrocesso).
  * Material com resumo herda o cache (pago 1× por versão de arquivo).
+ *
+ * DATA ORIGINAL (2026-07-21): a linha do pool nasce com o createdAt DO LEGADO,
+ * não o da adoção — a adoção é catalogação, não chegada de documento novo.
+ * Sem isso, adotar legado de período já fechado acendia o falso "retificado
+ * após fechamento" (caso real AOCP: docs de 2023 adotados em jul/26 apareciam
+ * como retificação de exercício fechado).
  */
-export function montarLinhaAdotada(doc: PoolDocMin & { companyId: string }): {
+export function montarLinhaAdotada(doc: PoolDocMin & { companyId: string; createdAt: Date }): {
   analysisId: null; companyId: string; nome: string; tipo: string;
   competencia: string | null; moeda: string; storagePath: string | null;
   hash: string | null; tamanho: string | null; versao: number; status: string;
-  dadosExtraidos?: object;
+  createdAt: Date; dadosExtraidos?: object;
 } {
   const cache = doc.dadosExtraidos as { resumo?: string } | null;
   const herdaResumo = doc.tipo === MATERIAL_TIPO && !!cache?.resumo;
@@ -178,6 +184,7 @@ export function montarLinhaAdotada(doc: PoolDocMin & { companyId: string }): {
     tamanho: doc.tamanho,
     versao: 1, // cadeia NOVA no pool — versões futuras nascem aqui
     status: herdaResumo ? "Processado" : "Pendente",
+    createdAt: doc.createdAt, // data ORIGINAL do upload no IBR
     ...(herdaResumo ? { dadosExtraidos: doc.dadosExtraidos as object } : {}),
   };
 }

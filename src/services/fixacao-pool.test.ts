@@ -71,7 +71,8 @@ describe("montarLinhaFixada", () => {
 });
 
 describe("montarLinhaAdotada (legado do IBR → pool)", () => {
-  const legado = { ...poolDoc({ versao: 2, dadosExtraidos: { linhas: [], periodos: [] } }), companyId: "emp-1" };
+  const dataOriginal = new Date("2023-04-10T12:00:00Z");
+  const legado = { ...poolDoc({ versao: 2, dadosExtraidos: { linhas: [], periodos: [] } }), companyId: "emp-1", createdAt: dataOriginal };
 
   it("vira linha de POOL: sem análise, mesmo arquivo, cadeia NOVA (v1), sem extração do IBR", () => {
     const linha = montarLinhaAdotada(legado);
@@ -83,9 +84,14 @@ describe("montarLinhaAdotada (legado do IBR → pool)", () => {
     expect(linha.dadosExtraidos).toBeUndefined(); // correções do IBR não vazam
   });
 
+  it("nasce com a DATA ORIGINAL do legado, não a da adoção — sem isso, adotar doc de período fechado acende o falso 'retificado após fechamento' (caso AOCP)", () => {
+    const linha = montarLinhaAdotada(legado);
+    expect(linha.createdAt).toEqual(dataOriginal);
+  });
+
   it("material com resumo herda o cache (pago 1× por versão de arquivo)", () => {
     const cache = { resumo: "Deck institucional…" };
-    const linha = montarLinhaAdotada({ ...poolDoc({ tipo: MATERIAL_TIPO, dadosExtraidos: cache }), companyId: "emp-1" });
+    const linha = montarLinhaAdotada({ ...poolDoc({ tipo: MATERIAL_TIPO, dadosExtraidos: cache }), companyId: "emp-1", createdAt: dataOriginal });
     expect(linha.status).toBe("Processado");
     expect(linha.dadosExtraidos).toEqual(cache);
   });
