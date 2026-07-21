@@ -42,22 +42,61 @@ router.use(guardaEscritaSuspensao("analysis"));
 // NENHUMA mutação passa — reprocessar, regerar análise, indicadores, War Room,
 // escopo, dores, documentos, assinatura, STCF, cenários… Guarda ÚNICO no router
 // (fonte da verdade): qualquer botão esquecido na UI morre aqui com 409.
+// ── ROTAS DE HIGIENIZAÇÃO — declaradas ANTES do guarda de cancelado ──────────
+// (decisão do usuário, 21/07/2026). Declarar a rota antes do router.use elimina
+// qualquer dependência do matching do guarda (a exceção por URL falhou em
+// produção sem reprodução local — antes da rota, o guarda nem executa).
+
+// EXCLUSÃO do IBR: rascunho/erro E CANCELADO (higienização — descartado não
+// entra em relatório). Concluído continua inexcluível: cancele primeiro.
+router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const existing = await prisma.analysis.findFirst({ where: { id, ...whereRecursoEmpresa(req) } });
+  if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  // POLÍTICA (2026-07-15): IBR concluído é produto emitido (pode ter valuation
+  // vinculado e relatório entregue) — nunca some da base. Só CANCELAR, com motivo.
+  if (existing.status === "Concluída") {
+    res.status(409).json({ error: "IBR concluído não pode ser excluído — cancele (com motivo) para tirá-lo de circulação mantendo a evidência." });
+    return;
+  }
+  // Valuation/modelo vinculado a este IBR perderia a fonte do histórico — bloqueia.
+  const modelosVinculados = await prisma.financialModel.count({ where: { analysisSeedId: id } });
+  if (modelosVinculados > 0) {
+    res.status(409).json({ error: `Este IBR é a fonte de ${modelosVinculados} modelo(s) financeiro(s) (valuation/orçamento) — exclua ou cancele os modelos primeiro.` });
+    return;
+  }
+  await prisma.analysis.delete({ where: { id } });
+  // TRILHA da exclusão do IBR — analysisId NULL de propósito: com o id preenchido, o
+  // cascade da análise apagaria a própria trilha da exclusão. entityId guarda o id.
+  void registrarAuditoria({
+    userId: req.userId!, entity: "analysis", entityId: id, field: "exclusão do IBR",
+    before: { nome: existing.nome, status: existing.status, companyId: existing.companyId, criadoEm: existing.createdAt },
+  });
+  res.status(204).send();
+});
+
+// MARCAR COMO TESTE: tira o IBR de toda listagem e relatório futuro (a listagem
+// padrão exclui ehTeste; os dados ficam na base como evidência, com trilha).
+// Vale para qualquer status — inclusive Cancelada (é o caso típico).
+// body: { teste: boolean } (false = desmarcar, via ?incluirTestes=1 na listagem)
+router.post("/:id/marcar-teste", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const teste = req.body?.teste !== false; // default true
+  const existing = await prisma.analysis.findFirst({ where: { id, ...whereRecursoEmpresa(req) }, select: { id: true, nome: true, ehTeste: true, status: true } });
+  if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  await prisma.analysis.update({ where: { id }, data: { ehTeste: teste } });
+  void registrarAuditoria({
+    userId: req.userId!, analysisId: id, entity: "analysis", entityId: id,
+    field: teste ? "marcação de IBR como TESTE (fora de listagens e relatórios)" : "desmarcação de IBR de teste",
+    before: { ehTeste: existing.ehTeste, status: existing.status, nome: existing.nome },
+    after: { ehTeste: teste },
+    source: "higienizacao",
+  });
+  res.json({ ok: true, ehTeste: teste });
+});
+
 router.use("/:id", async (req: AuthRequest, res: Response, next: () => void): Promise<void> => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") { next(); return; }
-  // EXCEÇÃO deliberada (higienização, decisão do usuário 21/07/2026): a EXCLUSÃO
-  // do IBR cancelado passa — cancelado é lixo de teste/descartado, não entra em
-  // relatório nenhum. Só o DELETE da própria análise; qualquer mutação de
-  // subrecurso segue bloqueada (somente consulta).
-  // Duas checagens equivalentes (originalUrl E url residual pós-mount) — se o
-  // ingress/proxy de produção reescrever o caminho, uma das duas ainda casa.
-  const urlResidual = (req.url ?? "").split("?")[0];
-  if (
-    req.method === "DELETE" &&
-    (/^\/analyses\/[0-9a-f-]{36}\/?$/i.test((req.originalUrl ?? "").split("?")[0]!) ||
-      urlResidual === "/" || urlResidual === "")
-  ) {
-    next(); return;
-  }
   const id = String(req.params.id ?? ""); // em router.use o param é string|string[]
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id)) { next(); return; }
   const a = await prisma.analysis.findUnique({ where: { id }, select: { status: true } }).catch(() => null);
@@ -105,10 +144,15 @@ const analysisSchema = z.object({
 
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const companyId = req.query.companyId as string | undefined;
+  // TESTES ficam fora de TODA listagem (e de tudo que deriva dela: lista de
+  // IBRs, hub da empresa, pickers de valuation). ?incluirTestes=1 é a porta de
+  // recuperação — sem UI por decisão do usuário ("não serem visualizados").
+  const incluirTestes = req.query.incluirTestes === "1";
   const analyses = await prisma.analysis.findMany({
     where: {
       ...whereRecursoEmpresa(req),
       ...(companyId ? { companyId } : {}),
+      ...(incluirTestes ? {} : { ehTeste: false }),
     },
     orderBy: { createdAt: "desc" },
     include: { company: { select: { razaoSocial: true, nomeFantasia: true } } },
@@ -233,33 +277,7 @@ router.get("/:id/versoes", async (req: AuthRequest, res: Response): Promise<void
   });
 });
 
-router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
-  const id = req.params.id as string;
-  const existing = await prisma.analysis.findFirst({ where: { id, ...whereRecursoEmpresa(req) } });
-  if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
-  // POLÍTICA (2026-07-15): IBR concluído é produto emitido (pode ter valuation
-  // vinculado e relatório entregue) — nunca some da base. Só CANCELAR, com motivo.
-  // CANCELADO é excluível (higienização, 21/07/2026): descartado/teste não entra
-  // em relatório — a trilha de auditoria registra a exclusão (analysisId null).
-  if (existing.status === "Concluída") {
-    res.status(409).json({ error: "IBR concluído não pode ser excluído — cancele (com motivo) para tirá-lo de circulação mantendo a evidência." });
-    return;
-  }
-  // Valuation/modelo vinculado a este IBR perderia a fonte do histórico — bloqueia.
-  const modelosVinculados = await prisma.financialModel.count({ where: { analysisSeedId: id } });
-  if (modelosVinculados > 0) {
-    res.status(409).json({ error: `Este IBR é a fonte de ${modelosVinculados} modelo(s) financeiro(s) (valuation/orçamento) — exclua ou cancele os modelos primeiro.` });
-    return;
-  }
-  await prisma.analysis.delete({ where: { id } });
-  // TRILHA da exclusão do IBR — analysisId NULL de propósito: com o id preenchido, o
-  // cascade da análise apagaria a própria trilha da exclusão. entityId guarda o id.
-  void registrarAuditoria({
-    userId: req.userId!, entity: "analysis", entityId: id, field: "exclusão do IBR",
-    before: { nome: existing.nome, status: existing.status, companyId: existing.companyId, criadoEm: existing.createdAt },
-  });
-  res.status(204).send();
-});
+// (a rota DELETE /:id vive ANTES do guarda de cancelado — ver topo do arquivo.)
 
 // CANCELAMENTO DEFINITIVO de IBR concluído (política 2026-07-15: concluído nunca
 // é excluído — cancelar tira de circulação mantendo a evidência e a trilha).
