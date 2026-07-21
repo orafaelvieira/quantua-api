@@ -44,6 +44,13 @@ router.use(guardaEscritaSuspensao("analysis"));
 // (fonte da verdade): qualquer botão esquecido na UI morre aqui com 409.
 router.use("/:id", async (req: AuthRequest, res: Response, next: () => void): Promise<void> => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") { next(); return; }
+  // EXCEÇÃO deliberada (higienização, decisão do usuário 21/07/2026): a EXCLUSÃO
+  // do IBR cancelado passa — cancelado é lixo de teste/descartado, não entra em
+  // relatório nenhum. Só o DELETE da própria análise; qualquer mutação de
+  // subrecurso segue bloqueada (somente consulta).
+  if (req.method === "DELETE" && /^\/analyses\/[0-9a-f-]{36}\/?$/i.test((req.originalUrl ?? "").split("?")[0]!)) {
+    next(); return;
+  }
   const id = String(req.params.id ?? ""); // em router.use o param é string|string[]
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id)) { next(); return; }
   const a = await prisma.analysis.findUnique({ where: { id }, select: { status: true } }).catch(() => null);
@@ -225,6 +232,8 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
   if (!existing) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   // POLÍTICA (2026-07-15): IBR concluído é produto emitido (pode ter valuation
   // vinculado e relatório entregue) — nunca some da base. Só CANCELAR, com motivo.
+  // CANCELADO é excluível (higienização, 21/07/2026): descartado/teste não entra
+  // em relatório — a trilha de auditoria registra a exclusão (analysisId null).
   if (existing.status === "Concluída") {
     res.status(409).json({ error: "IBR concluído não pode ser excluído — cancele (com motivo) para tirá-lo de circulação mantendo a evidência." });
     return;
