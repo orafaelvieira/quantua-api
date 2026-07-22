@@ -5,6 +5,9 @@ name: Deploy API (Cloud Run)
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
 
 permissions:
   id-token: write
