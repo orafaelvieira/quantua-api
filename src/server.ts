@@ -36,6 +36,10 @@ import { exec } from "node:child_process";
 
 const app = express();
 
+// Atrás do proxy do Cloud Run/LB: necessário para o express-rate-limit ver o IP
+// real do cliente (X-Forwarded-For) em vez do IP do balanceador.
+app.set("trust proxy", 1);
+
 app.use(cors({
   origin: [
     env.frontendUrl,
@@ -64,7 +68,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-07-21.v152.aviso-desatualizada-sem-falso-positivo";
+const BUILD_VERSION = "2026-07-21.v154.aba-escopo-casa-do-cadastro";
 
 // Sonda de diagnóstico dos restarts: health-check/deploy manda SIGTERM (dá tempo de
 // anotar no snapshot); OOM manda SIGKILL (não aparece). A anotação só ocorre com o
