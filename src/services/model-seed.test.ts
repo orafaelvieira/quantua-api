@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { derivarAberturaReceita, derivarAberturaCustos, derivarAberturaCustosCanonica } from "./model-seed";
+import { derivarAberturaReceita, derivarAberturaCustos, derivarAberturaCustosCanonica, regraDaConta, cagrDaSerie, ultimoCrescimentoPositivo, normConta, TETO_CRESCIMENTO_CONTA } from "./model-seed";
 
 const PERIODOS = ["31/12/2023", "31/12/2024"];
 
@@ -262,5 +262,101 @@ describe("derivarAberturaCustos", () => {
     expect(abertura).toEqual([
       { conta: "RECEITA OPERACIONAL BRUTA", valores: { "31/12/2023": 842167.29 } },
     ]);
+  });
+});
+
+/* ── REGRA DE PROJEÇÃO POR CONTA (decisão do usuário, 22/07/2026) ────────────
+ * Custo fixo não acompanha faturamento: estas contas projetam por crescimento
+ * PRÓPRIO (CAGR, com cascata) ou por IPCA — nunca como % da receita.
+ */
+describe("cagrDaSerie", () => {
+  it("calcula o CAGR composto entre o primeiro e o último ponto", () => {
+    // 100 → 121 em 2 anos = 10% a.a.
+    expect(cagrDaSerie([100, 110, 121])).toBeCloseTo(0.1, 10);
+  });
+
+  it("devolve null quando não dá para computar (1 ponto, base zero ou negativa)", () => {
+    expect(cagrDaSerie([100])).toBeNull();
+    expect(cagrDaSerie([0, 100])).toBeNull();
+    expect(cagrDaSerie([-50, 100])).toBeNull();
+    expect(cagrDaSerie([100, 0])).toBeNull();
+  });
+
+  it("devolve CAGR negativo quando a conta encolheu (quem decide é a cascata)", () => {
+    expect(cagrDaSerie([200, 100])).toBeCloseTo(-0.5, 10);
+  });
+});
+
+describe("ultimoCrescimentoPositivo", () => {
+  it("pega o crescimento positivo MAIS RECENTE, ignorando quedas posteriores", () => {
+    // 100 →(+20%) 120 →(−25%) 90 : o último positivo é o de 100→120
+    expect(ultimoCrescimentoPositivo([100, 120, 90])).toBeCloseTo(0.2, 10);
+  });
+
+  it("devolve null quando a série só cai", () => {
+    expect(ultimoCrescimentoPositivo([300, 200, 100])).toBeNull();
+  });
+});
+
+describe("regraDaConta", () => {
+  it("aluguel e terceiros são contrato indexado — IPCA, sem opinião de crescimento", () => {
+    for (const conta of ["Despesas com Aluguel, Condomínio e IPTU", "Despesas com Terceiros"]) {
+      const r = regraDaConta(conta, [100, 500, 20]); // série irrelevante p/ a regra
+      expect(r).not.toBeNull();
+      expect(r!.reajusteIndice).toBe("ipca");
+      expect(r!.reajusteAnual).toBeUndefined();
+    }
+  });
+
+  it("custo fixo com histórico saudável projeta pelo CAGR próprio", () => {
+    const r = regraDaConta("Despesas com Pessoas", [100, 110, 121]);
+    expect(r!.modo).toBe("fixoReajuste");
+    expect(r!.reajusteAnual).toBeCloseTo(0.1, 10);
+    expect(r!.reajusteIndice).toBeUndefined();
+    expect(r!.prova).toContain("CAGR próprio");
+  });
+
+  it("CAGR negativo cai para o último crescimento positivo (despesa não encolhe na projeção)", () => {
+    // 100 →(+20%) 120 →(−25%) 90 : CAGR = −5,1% (negativo) → usa +20%
+    const r = regraDaConta("Despesas com Veículos", [100, 120, 90]);
+    expect(r!.reajusteAnual).toBeCloseTo(0.2, 10);
+    expect(r!.prova).toContain("CAGR negativo");
+  });
+
+  it("série só decrescente, sem nenhum crescimento positivo, projeta por IPCA", () => {
+    const r = regraDaConta("Despesas Gerais e Administrativas", [300, 200, 100]);
+    expect(r!.reajusteIndice).toBe("ipca");
+    expect(r!.reajusteAnual).toBeUndefined();
+    expect(r!.prova).toContain("sem crescimento positivo");
+  });
+
+  it("CAGR acima do teto de sanidade não é usado (base pequena / ano atípico)", () => {
+    // 10 → 1000 = 900% a.a., muito acima do teto
+    const r = regraDaConta("Despesas com Veículos", [10, 1000]);
+    expect(r!.reajusteAnual).toBeUndefined();
+    expect(r!.reajusteIndice).toBe("ipca");
+    expect(r!.prova).toContain("teto");
+    expect(TETO_CRESCIMENTO_CONTA).toBe(0.5);
+  });
+
+  it("um único período não tem CAGR — projeta por IPCA em vez de inventar taxa", () => {
+    const r = regraDaConta("Despesas com Limpeza, Manutenção e Reparos", [250]);
+    expect(r!.reajusteIndice).toBe("ipca");
+  });
+
+  it("conta fora das listas devolve null (segue a heurística estatística de sempre)", () => {
+    expect(regraDaConta("Despesas com Marketing", [100, 110])).toBeNull();
+    expect(regraDaConta("Custo Operacional", [100, 110])).toBeNull();
+  });
+
+  it("casa o nome sem depender de acento, caixa ou espaço duplicado", () => {
+    expect(regraDaConta("DESPESAS COM ENERGIA, AGUA, TELEFONE E INTERNET", [100, 110])).not.toBeNull();
+    expect(regraDaConta("despesas  com   veiculos", [100, 110])).not.toBeNull();
+    expect(normConta("Despesas com Veículos")).toBe("despesas com veiculos");
+  });
+
+  it("Outras Receitas/Despesas Operacionais entram na regra de crescimento próprio", () => {
+    expect(regraDaConta("Outras Receitas Operacionais", [100, 110])!.reajusteAnual).toBeCloseTo(0.1, 10);
+    expect(regraDaConta("Outras Despesas Operacionais", [100, 110])!.reajusteAnual).toBeCloseTo(0.1, 10);
   });
 });
