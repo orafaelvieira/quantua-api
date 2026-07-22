@@ -36,6 +36,10 @@ import { exec } from "node:child_process";
 
 const app = express();
 
+// Atrás do proxy do Cloud Run/LB: necessário para o express-rate-limit ver o IP
+// real do cliente (X-Forwarded-For) em vez do IP do balanceador.
+app.set("trust proxy", 1);
+
 app.use(cors({
   origin: [
     env.frontendUrl,
