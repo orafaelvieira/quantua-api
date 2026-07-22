@@ -258,7 +258,7 @@ export function derivarAberturaCustos(dadosEstruturados: unknown): LinhaReceitaH
     const add = (nome: string | undefined, destino: string, p: string, v: number | undefined) => {
       const conta = (nome ?? "").trim();
       if (!conta || typeof v !== "number" || !Number.isFinite(v) || v === 0) return;
-      const chave = `${conta} ${destino}`;
+      const chave = `${conta}${destino}`;
       const ent = porChave.get(chave) ?? { conta, destino, vals: {} };
       ent.vals[p] = (ent.vals[p] ?? 0) + v;
       porChave.set(chave, ent);
@@ -334,6 +334,137 @@ export function derivarAberturaCustosCanonica(dadosEstruturados: unknown): Linha
       valoresAssinados: Object.fromEntries(periodos.map((p) => [p, valorEm(l, p)])),
     };
   });
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * REGRA DE PROJEÇÃO POR CONTA (decisão do usuário, 22/07/2026)
+ *
+ * Antes, o modo de cada conta era escolhido por evidência estatística (a série
+ * mais estável em R$ virava fixo; a mais estável como % virava % da receita).
+ * O usuário determinou regras FIXAS por conta, com uma razão de fundo: estas
+ * despesas são CUSTO FIXO — não acompanham o faturamento, então "% da receita"
+ * projeta errado por construção. Todas viram `fixoReajuste` (valor do último
+ * período ÷ 12) e o que muda é COMO o valor cresce ao longo do horizonte:
+ *
+ *  (a) CAGR PRÓPRIO — a conta cresce na média composta do próprio histórico.
+ *      Cascata quando esse número "não faz sentido" (palavras do usuário):
+ *        1. CAGR computável, ≥ 0 e dentro do teto → usa o CAGR;
+ *        2. senão → último crescimento anual POSITIVO observado (mesmo teto);
+ *        3. senão → IPCA (a conta ao menos acompanha a inflação, nunca encolhe).
+ *  (b) IPCA — aluguel/condomínio/IPTU e terceiros são contratos indexados:
+ *      último período corrigido pelo índice oficial, sem opinião de crescimento.
+ *
+ * Determinístico e sem I/O; cada decisão vira prova na memória do seed.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/** Teto de sanidade do crescimento derivado (a.a.). Uma despesa fixa crescendo
+ *  mais que isso ao ano por todo o horizonte não é trajetória plausível — é
+ *  ruído de base pequena ou período atípico. Estourou o teto = "não faz
+ *  sentido", e a cascata segue para o próximo degrau. */
+export const TETO_CRESCIMENTO_CONTA = 0.5;
+
+/** Contas projetadas pelo CAGR do próprio histórico (custos fixos). */
+export const CONTAS_CRESCIMENTO_PROPRIO = [
+  "Despesas Gerais e Administrativas",
+  "Despesas com Pessoas",
+  "Despesas com Energia, Água, Telefone e Internet",
+  "Despesas com Limpeza, Manutenção e Reparos",
+  "Despesas com Veículos",
+  "Outras Receitas Operacionais",
+  "Outras Despesas Operacionais",
+];
+
+/** Contas indexadas: último período corrigido por IPCA (contratos). */
+export const CONTAS_INDEXADAS_IPCA = [
+  "Despesas com Aluguel, Condomínio e IPTU",
+  "Despesas com Terceiros",
+];
+
+/** Marcas de acento (combining diacritical marks) — construída a partir de
+ *  string para o fonte ficar 100% ASCII: caractere combinante solto no código
+ *  é invisível no editor e já corrompeu este arquivo uma vez. */
+const DIACRITICOS = new RegExp("[\\u0300-\\u036f]", "g");
+
+/** Normaliza nome de conta para casar sem depender de acento/caixa/espaço. */
+export function normConta(nome: string): string {
+  return nome
+    .normalize("NFD")
+    .replace(DIACRITICOS, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const SET_CRESCIMENTO = new Set(CONTAS_CRESCIMENTO_PROPRIO.map(normConta));
+const SET_IPCA = new Set(CONTAS_INDEXADAS_IPCA.map(normConta));
+
+/** CAGR de uma série anual: (último/primeiro)^(1/(n-1)) − 1.
+ *  null quando não é computável (menos de 2 pontos, ou base não positiva). */
+export function cagrDaSerie(valores: number[]): number | null {
+  const xs = valores.filter((v) => Number.isFinite(v));
+  if (xs.length < 2) return null;
+  const primeiro = xs[0]!;
+  const ultimo = xs[xs.length - 1]!;
+  if (primeiro <= 0 || ultimo <= 0) return null;
+  const anos = xs.length - 1;
+  const c = Math.pow(ultimo / primeiro, 1 / anos) - 1;
+  return Number.isFinite(c) ? c : null;
+}
+
+/** Último crescimento ano-a-ano POSITIVO da série (o degrau 2 da cascata). */
+export function ultimoCrescimentoPositivo(valores: number[]): number | null {
+  const xs = valores.filter((v) => Number.isFinite(v));
+  for (let i = xs.length - 1; i > 0; i--) {
+    const ant = xs[i - 1]!;
+    const atual = xs[i]!;
+    if (ant > 0 && atual > 0) {
+      const g = atual / ant - 1;
+      if (g > 0) return g;
+    }
+  }
+  return null;
+}
+
+export interface RegraProjecaoConta {
+  modo: "fixoReajuste";
+  /** Crescimento a.a. derivado do histórico; ausente quando a regra é IPCA. */
+  reajusteAnual?: number;
+  /** Índice oficial — manda sobre reajusteAnual quando presente. */
+  reajusteIndice?: "ipca";
+  /** Prova legível da decisão (vai para a memória do seed). */
+  prova: string;
+}
+
+/**
+ * Regra de projeção de UMA conta, ou null quando a conta não está nas listas
+ * (aí vale a heurística estatística de sempre).
+ * `contribPorAno` = contribuição anual da conta, do período mais antigo ao mais
+ * recente, já com o sinal do bloco (positivo = gasto).
+ */
+export function regraDaConta(nome: string, contribPorAno: number[]): RegraProjecaoConta | null {
+  const n = normConta(nome);
+
+  if (SET_IPCA.has(n)) {
+    return { modo: "fixoReajuste", reajusteIndice: "ipca", prova: "contrato indexado — último período corrigido por IPCA" };
+  }
+  if (!SET_CRESCIMENTO.has(n)) return null;
+
+  const pct = (x: number) => `${(x * 100).toFixed(1).replace(".", ",")}%`;
+  const dentroDoTeto = (g: number) => g >= 0 && g <= TETO_CRESCIMENTO_CONTA;
+
+  const cagr = cagrDaSerie(contribPorAno);
+  if (cagr !== null && dentroDoTeto(cagr)) {
+    return { modo: "fixoReajuste", reajusteAnual: cagr, prova: `CAGR próprio de ${pct(cagr)} a.a. (${contribPorAno.length} períodos)` };
+  }
+
+  const ultimo = ultimoCrescimentoPositivo(contribPorAno);
+  if (ultimo !== null && dentroDoTeto(ultimo)) {
+    const porque = cagr === null ? "CAGR não computável" : cagr < 0 ? `CAGR negativo (${pct(cagr)})` : `CAGR acima do teto (${pct(cagr)})`;
+    return { modo: "fixoReajuste", reajusteAnual: ultimo, prova: `${porque} — usou o último crescimento positivo, ${pct(ultimo)} a.a.` };
+  }
+
+  const porque = cagr === null ? "sem CAGR computável" : cagr < 0 ? `CAGR negativo (${pct(cagr)})` : `CAGR fora do teto (${pct(cagr)})`;
+  return { modo: "fixoReajuste", reajusteIndice: "ipca", prova: `${porque} e sem crescimento positivo no histórico — projetada por IPCA` };
 }
 
 /** Ativos de LONGO PRAZO do BP extraído (Imobilizado, Intangível, Ativos

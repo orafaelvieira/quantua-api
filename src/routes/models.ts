@@ -17,7 +17,7 @@ import { buscarDadosWacc } from "../services/wacc-dados";
 import { ERP_REFERENCIA, BETAS_EMERGING, BETAS_DATA, KROLL_DECIS, KROLL_FONTE, CSRP_FATORES } from "../services/wacc-referencias";
 import { perguntarJson } from "../services/ai-extraction";
 import { montarLinhaReceita, TEMPLATES_RECEITA } from "../services/model-templates";
-import { derivarSeed, derivarHistoricoAnual, derivarRealizadoParcial, derivarAberturaReceita, derivarAberturaCustos, derivarAberturaCustosCanonica, derivarImobilizadoHistorico, derivarGiroHistorico, derivarDividaHistorico, derivarCaixaHistorico, derivarOutrosBalanco } from "../services/model-seed";
+import { derivarSeed, derivarHistoricoAnual, derivarRealizadoParcial, derivarAberturaReceita, derivarAberturaCustos, derivarAberturaCustosCanonica, derivarImobilizadoHistorico, derivarGiroHistorico, derivarDividaHistorico, derivarCaixaHistorico, derivarOutrosBalanco, regraDaConta } from "../services/model-seed";
 import { rodarMonteCarlo, McVariavelSpec } from "../services/monte-carlo";
 import { ConfigReforma } from "../services/reforma-tributaria";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
@@ -26,6 +26,7 @@ import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { cicloVidaModel } from "../services/ciclo-vida";
 import { montarConteudoModelo, aplicarFotoModelo, hashConteudo, type ConteudoFotoModelo } from "../services/snapshot-diario";
+import { damodaranDoSetorB3, DAMODARAN_PT } from "../services/damodaran-b3";
 
 const router = Router();
 router.use(requireAuth);
@@ -101,7 +102,11 @@ router.get("/indices-economicos", async (req: AuthRequest, res: Response): Promi
 // GET /models/wacc-referencias — datasets ANUAIS do WACC (Damodaran/Kroll/CSRP),
 // embutidos no código (mesmas tabelas da planilha padrão; atualização anual).
 router.get("/wacc-referencias", async (_req: AuthRequest, res: Response): Promise<void> => {
-  res.json({ erp: ERP_REFERENCIA, betas: BETAS_EMERGING, betasData: BETAS_DATA, kroll: KROLL_DECIS, krollFonte: KROLL_FONTE, csrpFatores: CSRP_FATORES });
+  // `setor` (inglês) continua sendo a CHAVE — é ela que casa com a tabela de
+  // betas e com a fonte publicada. `setorPt` é só exibição (pedido do usuário,
+  // 22/07/2026); a tela ordena e mostra em português, sem perder a origem.
+  const betas = BETAS_EMERGING.map((b) => ({ ...b, setorPt: DAMODARAN_PT[b.setor] ?? b.setor }));
+  res.json({ erp: ERP_REFERENCIA, betas, betasData: BETAS_DATA, kroll: KROLL_DECIS, krollFonte: KROLL_FONTE, csrpFatores: CSRP_FATORES });
 });
 
 // GET /models/wacc-dados — dados de MERCADO do WACC (Rf/risco-país/dif. vol/…),
@@ -539,6 +544,23 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
         .filter((x) => x.v > 0 && x.rec > 0);
       let modoAuto: "pctReceita" | "fixoReajuste" = "pctReceita";
       let provaModo = "";
+
+      // REGRA FIXA POR CONTA (decisão do usuário, 22/07/2026) — vem ANTES da
+      // heurística: estas contas são custo FIXO, e projetá-las como % da receita
+      // erra por construção (a conta não acompanha o faturamento). Ver
+      // regraDaConta em model-seed.ts: CAGR próprio com cascata, ou IPCA.
+      const regra = regraDaConta(nome, contribPorAno.map((x) => x.v));
+      if (regra && pct > 0) {
+        alvo.push({
+          id: linhaId, nome, modo: "fixoReajuste", pct, valorMensal: contribuicaoUlt / 12,
+          ...(regra.reajusteIndice ? { reajusteIndice: regra.reajusteIndice } : {}),
+          // Sem índice oficial, o crescimento derivado manda. Com índice, este
+          // valor é só o fallback de quem não tem snapshot macro.
+          reajusteAnual: regra.reajusteAnual ?? 0.04,
+        });
+        linhasFixoAuto++;
+        provaModo = `regra da conta — ${regra.prova}`;
+      } else {
       if (contribPorAno.length >= 2 && pct > 0) {
         const cvRs = cvDe(contribPorAno.map((x) => x.v));
         const cvPct = cvDe(contribPorAno.map((x) => x.v / x.rec));
@@ -554,6 +576,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
         alvo.push({ id: linhaId, nome, modo: "fixoReajuste", pct, valorMensal: contribuicaoUlt / 12, reajusteIndice: "ipca", reajusteAnual: 0.04 });
       } else {
         alvo.push({ id: linhaId, nome, modo: "pctReceita", pct });
+      }
       }
       custoPorLinha[linhaId] = ab.valores;
       // Histórico ASSINADO (contribuição p/ o bloco): a Demonstração exibe a
@@ -609,8 +632,12 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     buscarDadosWacc(60).catch((e) => { console.error("[models/create] dados de mercado do WACC falharam (a aba auto-carrega ao abrir):", e instanceof Error ? e.message : e); return null; }),
     (async () => {
       if (!fonteMeta?.sectorId) return null;
+      // A tabela `damodaran_mappings` (códigos LEGADOS) ainda vence quando tem
+      // entrada — é editável por seed. Sem ela, a cascata B3 resolve: subsetor
+      // → setor-pai → mercado. Antes do de-para B3 (22/07/2026) todo IBR com
+      // taxonomia nova ficava sem beta e o WACC usava 1,00 em silêncio.
       const m = await prisma.damodaranMapping.findFirst({ where: { sectorCode: fonteMeta.sectorId } });
-      return m?.damodaranIndustry ?? null;
+      return m?.damodaranIndustry ?? damodaranDoSetorB3(fonteMeta.sectorId).industria;
     })().catch((e) => { console.error("[models/create] mapeamento Damodaran falhou:", e instanceof Error ? e.message : e); return null; }),
   ]);
 
@@ -767,9 +794,16 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
           // Rf/CDS/vol com fonte e janela no snapshot; tudo editável na aba.
           {
             tipo: "wacc", nome: "WACC", ordem: 10,
+            // ANINHADO em `wacc` (correção 22/07/2026): a tela lê
+            // `config.wacc.dadosMercado`/`.setorBeta` (types.ts: WaccConfig).
+            // Gravado plano, tudo o que a criação buscou ficava INVISÍVEL — era
+            // por isso que a aba WACC só "carregava" quando clicada (ela
+            // refazia a busca do zero). Espelha o vizinho `impostos`.
             config: {
-              ...(dadosMercadoWacc ? { dadosMercado: dadosMercadoWacc } : {}),
-              ...(setorBetaAuto ? { setorBeta: setorBetaAuto } : {}),
+              wacc: {
+                ...(dadosMercadoWacc ? { dadosMercado: dadosMercadoWacc } : {}),
+                ...(setorBetaAuto ? { setorBeta: setorBetaAuto } : {}),
+              },
             } as object,
           },
           { tipo: "valuation", nome: "Valuation", ordem: 11, config: {} as object },
@@ -930,6 +964,24 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     }
   }
 
+  // CURA DO SHAPE DO WACC (22/07/2026): modelos criados antes da correção
+  // gravaram dadosMercado/setorBeta no nível RAIZ do config, onde a tela nunca
+  // olha — o WACC parecia "vazio" e a aba refazia a busca a cada abertura.
+  // Move para dentro de `wacc` uma única vez, sem sobrescrever o que já existe
+  // lá (edição do analista sempre vence o dado legado).
+  {
+    const bWacc = await prisma.modelBlock.findFirst({ where: { modelId: model.id, tipo: "wacc" } });
+    const cfg = (bWacc?.config ?? {}) as Record<string, unknown>;
+    const solto = { dadosMercado: cfg.dadosMercado, setorBeta: cfg.setorBeta };
+    if (bWacc && (solto.dadosMercado !== undefined || solto.setorBeta !== undefined)) {
+      const wacc = { ...(cfg.wacc as Record<string, unknown> | undefined ?? {}) };
+      if (solto.dadosMercado !== undefined && wacc.dadosMercado === undefined) wacc.dadosMercado = solto.dadosMercado;
+      if (solto.setorBeta !== undefined && wacc.setorBeta === undefined) wacc.setorBeta = solto.setorBeta;
+      const { dadosMercado: _d, setorBeta: _s, ...resto } = cfg;
+      await prisma.modelBlock.update({ where: { id: bWacc.id }, data: { config: { ...resto, wacc } as object } });
+    }
+  }
+
   // Backfill preguiçoso: modelos criados antes do histórico anual ganham as
   // colunas "hist" na primeira abertura (deriva da análise-seed e persiste).
   if (!model.realizado && model.analysisSeedId) {
@@ -1025,7 +1077,8 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     // do seed automático (ou com setor confirmado depois) ganham a seleção ao abrir.
     if (fonte?.sectorId) {
       const map = await prisma.damodaranMapping.findFirst({ where: { sectorCode: fonte.sectorId } }).catch(() => null);
-      setorBetaSugerido = map?.damodaranIndustry ?? null;
+      // Mesma cascata da criação: tabela legada primeiro, de-para B3 depois.
+      setorBetaSugerido = map?.damodaranIndustry ?? damodaranDoSetorB3(fonte.sectorId).industria;
     }
     if (fonte) {
       const num = fonte.id.replace(/[^0-9]/g, "").slice(-3).padStart(3, "0");
