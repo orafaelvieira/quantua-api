@@ -148,8 +148,34 @@ function cleanValue(val: unknown): number | null {
   return isNeg ? -Math.abs(num) : num;
 }
 
+/**
+ * CSV COM ACENTO (correção 22/07/2026): recebendo BYTES, o SheetJS assume a
+ * codepage do Windows (CP1252) e "Lucro Líquido" chegava como "Lucro LÃ­quido"
+ * — o de-para falhava em TODA conta acentuada, silenciosamente. Quando o
+ * conteúdo é UTF-8 válido (o padrão de quem exporta de sistema web/Google
+ * Sheets), decodificamos explicitamente.
+ *
+ * XLSX/XLS são binários (zip começa em "PK", xls antigo em D0CF) e continuam
+ * pelo caminho de buffer — só texto passa pela detecção.
+ */
+function lerWorkbook(buffer: Buffer) {
+  const binario = buffer.length >= 2 && (
+    (buffer[0] === 0x50 && buffer[1] === 0x4b) ||  // PK.. → xlsx/zip
+    (buffer[0] === 0xd0 && buffer[1] === 0xcf)     // xls (OLE2)
+  );
+  if (!binario) {
+    const texto = buffer.toString("utf8");
+    // O replacement char denuncia bytes que NÃO eram UTF-8 (arquivo latin-1
+    // legítimo) — aí o caminho antigo, com a codepage do SheetJS, acerta mais.
+    if (!texto.includes("�")) {
+      return XLSX.read(texto.replace(/^﻿/, ""), { type: "string" });
+    }
+  }
+  return XLSX.read(buffer, { type: "buffer" });
+}
+
 export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
-  const wb = XLSX.read(buffer, { type: "buffer" });
+  const wb = lerWorkbook(buffer);
   const sheet = wb.Sheets[wb.SheetNames[0]];
   const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
     header: 1,

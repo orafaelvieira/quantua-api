@@ -27,6 +27,12 @@ import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { cicloVidaModel } from "../services/ciclo-vida";
 import { montarConteudoModelo, aplicarFotoModelo, hashConteudo, type ConteudoFotoModelo } from "../services/snapshot-diario";
 import { damodaranDoSetorB3, DAMODARAN_PT } from "../services/damodaran-b3";
+import multer from "multer";
+import { parseDocument } from "../services/parser";
+import {
+  sugerirMapa, montarHistorico, paraHistoricoAnual, todosDestinos,
+  type MapaConfirmado, type LinhaCrua,
+} from "../services/historico-gerencial";
 
 const router = Router();
 router.use(requireAuth);
@@ -1313,7 +1319,29 @@ router.get("/:id/historico-dfs", async (req: AuthRequest, res: Response): Promis
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   const vazio = { temHistorico: false, periodosBP: [], periodosFC: [], bp: {}, fc: {}, avisoFC: null };
-  if (!model.analysisSeedId) { res.json(vazio); return; }
+
+  // HISTÓRICO GERENCIAL (BP sem IBR): quando o analista importou a planilha da
+  // empresa, ela responde por esta rota — mesmos ids `bp-*`, então gráficos e
+  // aba DFs funcionam igual. Sem FC indireto: ele exige a DRE completa e a
+  // conciliação de caixa que o gerencial nem sempre tem; derivar por cima de
+  // uma planilha não auditada seria afirmar o que não se sabe.
+  const histGerencial = (model.realizado as { historicoBP?: { periodos?: string[]; linhas?: Record<string, Record<string, number>> } } | null)?.historicoBP;
+  if (!model.analysisSeedId) {
+    if (histGerencial?.periodos?.length && histGerencial.linhas && Object.keys(histGerencial.linhas).length) {
+      res.json({
+        temHistorico: true,
+        periodosBP: histGerencial.periodos,
+        periodosFC: [],
+        bp: histGerencial.linhas,
+        fc: {},
+        avisoFC: "Histórico gerencial importado: o fluxo de caixa indireto não é calculado sobre planilha do cliente (exige a DRE completa e a conciliação de caixa do balanço).",
+        origem: "gerencial",
+      });
+      return;
+    }
+    res.json(vazio);
+    return;
+  }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
   const de = analysis?.dadosEstruturados as {
     periodos?: string[];
@@ -1944,6 +1972,125 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
   });
   await prisma.financialModel.delete({ where: { id: model.id } });
   res.json({ ok: true });
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * HISTÓRICO GERENCIAL (Business Plan sem IBR) — decisão do usuário, 22/07/2026.
+ *
+ * O BP não exige IBR, mas a empresa costuma ter passado numa planilha própria.
+ * Duas rotas, no mesmo desenho do dicionário de contas: a primeira LÊ e propõe
+ * o de-para; a segunda aplica o que o humano confirmou. Nada entra sozinho.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+const uploadHist = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+});
+
+// POST /models/:id/historico-gerencial/analisar (multipart: file)
+// Lê a planilha COMO ELA É e devolve as linhas com a sugestão de destino.
+// Não grava nada — é a etapa de conferência.
+router.post("/:id/historico-gerencial/analisar", uploadHist.single("file"), async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
+  if (!req.file) { res.status(400).json({ error: "Envie a planilha (campo 'file')." }); return; }
+
+  try {
+    // O parser da casa já lê xlsx/csv e devolve linhas + colunas de período.
+    const parsed = await parseDocument(req.file.buffer, req.file.originalname, "Histórico gerencial");
+    if (!parsed.linhas.length) {
+      res.status(422).json({ error: "Não consegui ler nenhuma linha com valores nesta planilha. Confira se a primeira coluna tem os nomes das contas e as demais os períodos." });
+      return;
+    }
+    const linhas: LinhaCrua[] = parsed.linhas.map((l) => ({ conta: l.conta, valores: l.valores }));
+    res.json({
+      arquivo: req.file.originalname,
+      periodos: parsed.periodos,
+      linhas: sugerirMapa(linhas),
+      destinos: todosDestinos(),
+    });
+  } catch (e) {
+    console.error("[historico-gerencial/analisar]", e instanceof Error ? e.message : e);
+    res.status(422).json({ error: "Não foi possível interpretar o arquivo. Formatos aceitos: .xlsx, .xls e .csv." });
+  }
+});
+
+// POST /models/:id/historico-gerencial/importar
+// body: { periodos, linhas: [{conta, valores}], mapa: {indice: destinoId|null}, semear? }
+// Grava o histórico no MESMO formato do que vem do IBR — por isso gráficos,
+// Demonstração e seed passam a enxergá-lo sem código novo.
+router.post("/:id/historico-gerencial/importar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
+
+  const { periodos, linhas, mapa, semear } = (req.body ?? {}) as {
+    periodos?: string[]; linhas?: LinhaCrua[]; mapa?: MapaConfirmado; semear?: boolean;
+  };
+  if (!Array.isArray(periodos) || !periodos.length) { res.status(400).json({ error: "periodos é obrigatório" }); return; }
+  if (!Array.isArray(linhas) || !linhas.length) { res.status(400).json({ error: "linhas é obrigatório" }); return; }
+  if (!mapa || typeof mapa !== "object") { res.status(400).json({ error: "mapa é obrigatório" }); return; }
+
+  const montado = montarHistorico(linhas, periodos, mapa);
+  const historicoAnual = paraHistoricoAnual(montado);
+  if (!historicoAnual.periodos.length || !Object.keys(historicoAnual.linhas).length) {
+    res.status(422).json({ error: "Nenhuma linha de DRE foi mapeada — o histórico ficaria vazio. Aponte ao menos a receita." });
+    return;
+  }
+
+  const realizadoAtual = (model.realizado ?? {}) as Record<string, unknown>;
+  await prisma.financialModel.update({
+    where: { id: model.id },
+    data: {
+      realizado: {
+        ...realizadoAtual,
+        historicoAnual,
+        // Balanço no mesmo formato que /historico-dfs devolve para o IBR.
+        historicoBP: { periodos: montado.periodos, linhas: montado.bp },
+        // PROVENIÊNCIA (regra da casa): de onde este histórico veio.
+        origemHistorico: {
+          tipo: "gerencial",
+          importadoEm: new Date().toISOString(),
+          importadoPorId: req.userId!,
+          linhasMapeadas: Object.values(mapa).filter(Boolean).length,
+          linhasIgnoradas: Object.values(mapa).filter((x) => !x).length,
+          avisos: montado.avisos,
+        },
+      } as object,
+    },
+  });
+
+  await registrarAuditoria({
+    userId: req.userId!, entity: "financial_model", entityId: model.id,
+    field: "importação de histórico gerencial (planilha do cliente)",
+    after: {
+      periodos: montado.periodos,
+      contasDRE: Object.keys(montado.dre).length,
+      contasBP: Object.keys(montado.bp).length,
+      semear: semear === true,
+      avisos: montado.avisos,
+    },
+    source: "models",
+  });
+
+  // SEMEAR é opcional e explícito (o analista escolhe na importação): sem isso
+  // o histórico só aparece como referência nos gráficos, e a projeção continua
+  // sendo decisão dele — que é o espírito do BP (estudo do NOVO).
+  let recalculado = false;
+  if (semear === true) {
+    const calc = await calcularEGravar(model.id).catch(() => null);
+    recalculado = !!calc;
+  }
+
+  res.json({
+    ok: true,
+    periodos: montado.periodos,
+    contasDRE: Object.keys(montado.dre).length,
+    contasBP: Object.keys(montado.bp).length,
+    avisos: montado.avisos,
+    recalculado,
+  });
 });
 
 export default router;
