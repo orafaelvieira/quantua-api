@@ -103,7 +103,81 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     orderBy: { createdAt: "desc" },
     include: { _count: { select: { analyses: true } } },
   });
-  res.json(companies);
+  // DUPLICATA DE CNPJ (23/07/2026): criar e editar já barram — mas fichas
+  // ANTERIORES às travas continuam duplicadas no banco, invisíveis até alguém
+  // reparar na lista. Marcar aqui é o que permite a tela oferecer a unificação.
+  const porCnpj = new Map<string, string[]>();
+  for (const c of companies) {
+    const d = (c.cnpj ?? "").replace(/\D/g, "");
+    if (d.length !== 14) continue;
+    porCnpj.set(d, [...(porCnpj.get(d) ?? []), c.id]);
+  }
+  res.json(companies.map((c) => {
+    const d = (c.cnpj ?? "").replace(/\D/g, "");
+    const irmas = (porCnpj.get(d) ?? []).filter((id) => id !== c.id);
+    return { ...c, duplicataDe: irmas.length ? irmas : undefined };
+  }));
+});
+
+/**
+ * POST /companies/:id/unificar — funde uma ficha DUPLICADA nesta.
+ * body: { duplicataId }
+ *
+ * Move TUDO que aponta para a duplicata (IBRs, documentos, modelos, envelopes,
+ * períodos, fotos, dicionário e modelos padrão da empresa) e só então remove a
+ * ficha vazia. Nada é apagado: o que existe muda de dono. Exige mesmo CNPJ —
+ * unificar fichas de empresas diferentes seria misturar histórico contábil.
+ */
+router.post("/:id/unificar", requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const duplicataId = String((req.body ?? {}).duplicataId ?? "");
+  if (!duplicataId) { res.status(400).json({ error: "duplicataId é obrigatório" }); return; }
+  if (duplicataId === id) { res.status(400).json({ error: "Uma ficha não se unifica com ela mesma." }); return; }
+
+  const [principal, duplicata] = await Promise.all([
+    prisma.company.findFirst({ where: { id, ...whereEmpresaVisivel(req) } }),
+    prisma.company.findFirst({ where: { id: duplicataId, ...whereEmpresaVisivel(req) } }),
+  ]);
+  if (!principal || !duplicata) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+
+  const dig = (v: string | null) => (v ?? "").replace(/\D/g, "");
+  if (dig(principal.cnpj).length !== 14 || dig(principal.cnpj) !== dig(duplicata.cnpj)) {
+    res.status(409).json({ error: "As duas fichas precisam ter o MESMO CNPJ para serem unificadas — sem isso não há prova de que são a mesma empresa." });
+    return;
+  }
+
+  const movidos = await prisma.$transaction(async (tx) => {
+    const onde = { where: { companyId: duplicataId }, data: { companyId: id } };
+    const [analyses, documents, models, produtos, periodos, snapshots, dicionario, modelosPadrao] = await Promise.all([
+      tx.analysis.updateMany(onde),
+      tx.document.updateMany(onde),
+      tx.financialModel.updateMany(onde),
+      tx.produtoEmpresa.updateMany(onde),
+      tx.periodoEmpresa.updateMany(onde),
+      tx.snapshotDiario.updateMany(onde),
+      tx.accountDictionary.updateMany(onde),
+      tx.standardModel.updateMany(onde),
+    ]);
+    // Vínculo com organizações: a duplicata pode estar ligada às mesmas orgs —
+    // move só o que não colide, o resto some com a ficha.
+    await tx.organizacaoEmpresa.deleteMany({
+      where: { companyId: duplicataId, organizacaoId: { in: (await tx.organizacaoEmpresa.findMany({ where: { companyId: id }, select: { organizacaoId: true } })).map((o) => o.organizacaoId) } },
+    });
+    await tx.organizacaoEmpresa.updateMany({ where: { companyId: duplicataId }, data: { companyId: id } });
+    await tx.company.delete({ where: { id: duplicataId } });
+    return {
+      analyses: analyses.count, documents: documents.count, models: models.count,
+      produtos: produtos.count, periodos: periodos.count, snapshots: snapshots.count,
+      dicionario: dicionario.count, modelosPadrao: modelosPadrao.count,
+    };
+  });
+
+  void registrarAuditoria({
+    userId: req.userId!, entity: "company", entityId: id, field: "unificação de ficha duplicada",
+    before: { duplicataId, duplicataNome: duplicata.nomeFantasia || duplicata.razaoSocial, cnpj: duplicata.cnpj },
+    after: { principalNome: principal.nomeFantasia || principal.razaoSocial, movidos },
+  });
+  res.json({ ok: true, movidos });
 });
 
 /** Duplicidade de CNPJ no workspace (comparação por DÍGITOS — o campo é salvo
