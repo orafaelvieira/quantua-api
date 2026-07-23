@@ -277,6 +277,9 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
         // Vínculo com o IBR que serve de histórico. Já existia no banco; passa a
         // sair na lista para o hub da empresa exibir a relação entre produtos.
         analysisSeedId: m.analysisSeedId,
+        // Versão dentro do envelope: sem ela, duas versões do mesmo produto
+        // aparecem como linhas IDÊNTICAS na seção de vínculos do workspace.
+        produtoVersao: m.produtoVersao,
         updatedAt: m.updatedAt,
       };
     }),
