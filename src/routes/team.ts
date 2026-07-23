@@ -255,12 +255,17 @@ router.post("/convites", async (req: AuthRequest, res: Response): Promise<void> 
   const rawToken = crypto.randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   const invite = await prisma.teamInvite.create({ data: { workspaceId: ws, email, role: papel, tokenHash: hashToken(rawToken), expiresAt, invitedById: req.userId! } });
-  await sendTeamInviteEmail({
+  // Mesma cegueira do reset de senha (corrigida em 23/07/2026): o erro do envio
+  // ia só para o log do servidor e a tela dizia "convite criado", como se
+  // estivesse tudo bem. Agora o motivo volta e aparece.
+  // Idem: a função devolve { ok, error } em vez de lançar — ler o retorno.
+  const envioConvite = await sendTeamInviteEmail({
     to: email, workspaceName: inviter?.workspace?.razaoSocial ?? "Quantua", invitedByName: inviter?.name ?? "Equipe Quantua",
     role: papel, magicLink: `${env.frontendUrl}/convite/equipe/${rawToken}`, expiresAt,
-  }).catch((e) => console.error("[team-invite email]", (e as Error)?.message ?? e));
-  void registrarAuditoria({ userId: req.userId!, entity: "team", entityId: invite.id, field: "convite de equipe enviado", after: { email, papel }, source: "team" });
-  res.status(201).json({ id: invite.id, email, papel, expiraEm: expiresAt, magicLink: `/convite/equipe/${rawToken}`, emailEnviado: env.email.provider === "resend" });
+  });
+  const erroEnvio = envioConvite.ok ? null : envioConvite.error ?? "falha desconhecida no envio";
+  void registrarAuditoria({ userId: req.userId!, entity: "team", entityId: invite.id, field: "convite de equipe enviado", after: { email, papel, emailFalhou: !!erroEnvio }, source: "team" });
+  res.status(201).json({ id: invite.id, email, papel, expiraEm: expiresAt, magicLink: `/convite/equipe/${rawToken}`, emailEnviado: !erroEnvio && env.email.provider === "resend", erroEnvio });
 });
 
 // POST /team/convites/:id/reenviar — novo link + reenvia (invalida o antigo).
@@ -431,21 +436,22 @@ router.post("/membros/:userId/redefinir-senha", async (req: AuthRequest, res: Re
     },
   });
   const link = `${env.frontendUrl}/redefinir-senha?token=${rawToken}`;
-  let emailEnviado = false;
-  try {
-    await sendPasswordResetEmail({ to: membro.email, name: membro.name, resetLink: link, expiresAt });
-    emailEnviado = env.email.provider === "resend";
-  } catch (e) {
-    console.error("[team/redefinir-senha] envio falhou:", (e as Error)?.message ?? e);
-  }
+  // O ERRO VOLTA PARA A TELA (23/07/2026): o sintoma "ele não recebeu o e-mail"
+  // ficava sem diagnóstico nenhum. Atenção: `sendPasswordResetEmail` NÃO lança —
+  // ela devolve `{ ok, error }` (sendSafe engole por dentro), então try/catch
+  // aqui não pega nada. É o RETORNO que precisa ser lido. A causa mais comum é
+  // domínio não verificado no Resend, e a mensagem dele diz isso literalmente.
+  const envio = await sendPasswordResetEmail({ to: membro.email, name: membro.name, resetLink: link, expiresAt });
+  const emailEnviado = envio.ok && env.email.provider === "resend";
+  const erroEnvio = envio.ok ? null : envio.error ?? "falha desconhecida no envio";
   void registrarAuditoria({
     userId: req.userId!, entity: "user", entityId: membro.id,
     field: "link de redefinição de senha enviado pelo partner",
     after: { email: membro.email, expiraEm: expiresAt.toISOString() }, source: "team",
   });
-  // O link volta na resposta como PLANO B (mesmo padrão do convite): sem
-  // provedor de e-mail configurado, o partner ainda consegue destravar a pessoa.
-  res.json({ ok: true, emailEnviado, expiraEm: expiresAt, link });
+  // O link volta na resposta como PLANO B (mesmo padrão do convite): com ou sem
+  // e-mail, o partner sempre consegue destravar a pessoa.
+  res.json({ ok: true, emailEnviado, erroEnvio, provedor: env.email.provider, destinatario: membro.email, expiraEm: expiresAt, link });
 });
 
 router.get("/allocations", async (req: AuthRequest, res: Response): Promise<void> => {
