@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { prisma } from "../db/client";
 import { requireAuth, requireQuantua, AuthRequest } from "../middleware/auth";
 import { registrarAuditoria } from "../services/audit-trail";
-import { sendTeamInviteEmail } from "../services/email";
+import { sendTeamInviteEmail, sendPasswordResetEmail } from "../services/email";
 import { env } from "../config/env";
 
 const router = Router();
@@ -14,6 +14,11 @@ router.use(requireQuantua);
 
 const PAPEIS_EQUIPE = ["operator", "reviewer", "partner"];
 const hashToken = (raw: string): string => crypto.createHash("sha256").update(raw).digest("hex");
+/** Hash do token de REDEFINIÇÃO DE SENHA — precisa ser idêntico ao de
+ *  auth.ts (`hashInvitationToken`), que é quem valida o link. São algoritmos
+ *  DIFERENTES: o convite de equipe usa sha256 puro; o reset leva o segredo. */
+const hashResetSenha = (raw: string): string =>
+  crypto.createHash("sha256").update(raw + env.invitationSecret).digest("hex");
 
 /** Gerir a equipe (convidar/papel/desativar) é ação de PARTNER (ou role nula — fundador). */
 async function podeGerirEquipe(userId: string): Promise<boolean> {
@@ -196,7 +201,36 @@ router.post("/convites", async (req: AuthRequest, res: Response): Promise<void> 
   const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
   const papel = PAPEIS_EQUIPE.includes(req.body?.papel) ? req.body.papel : "operator";
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { res.status(400).json({ error: "E-mail inválido" }); return; }
-  if (await prisma.user.findUnique({ where: { email }, select: { id: true } })) { res.status(409).json({ error: "Já existe uma conta com este e-mail." }); return; }
+  // CONTA JÁ EXISTENTE NÃO É MAIS BECO SEM SAÍDA (23/07/2026). A checagem é
+  // GLOBAL (e-mail é único no sistema), mas a LISTAGEM é por workspace — então
+  // uma conta órfã (workspaceId null, criada antes dos workspaces) ficava
+  // invisível na tela E impossível de convidar: "já existe" sem dizer onde nem
+  // o que fazer. Caso real relatado pelo usuário em 23/07. Agora o 409 carrega
+  // o DIAGNÓSTICO e a tela oferece a ação certa.
+  const existente = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true, name: true, workspaceId: true, desativadoEm: true, role: true },
+  });
+  if (existente) {
+    const mesmoWorkspace = existente.workspaceId === ws;
+    const semWorkspace = existente.workspaceId === null;
+    res.status(409).json({
+      error: mesmoWorkspace
+        ? "Esta pessoa já está na sua equipe."
+        : semWorkspace
+          ? "Já existe uma conta com este e-mail, mas ela não está vinculada a nenhuma equipe — por isso não aparece na lista. Você pode trazê-la para a sua equipe."
+          : "Já existe uma conta com este e-mail em OUTRA equipe. Por segurança, ela não pode ser movida por aqui.",
+      conta: {
+        id: existente.id,
+        nome: existente.name,
+        desativado: !!existente.desativadoEm,
+        mesmoWorkspace,
+        semWorkspace,
+        podeAdotar: semWorkspace,
+      },
+    });
+    return;
+  }
   if (await prisma.teamInvite.findFirst({ where: { workspaceId: ws, email, status: "pending" } })) { res.status(409).json({ error: "Já existe convite pendente para este e-mail." }); return; }
 
   const inviter = await prisma.user.findUnique({ where: { id: req.userId! }, select: { name: true, workspace: { select: { razaoSocial: true } } } });
@@ -278,6 +312,107 @@ router.put("/membros/:userId/ativo", async (req: AuthRequest, res: Response): Pr
   await prisma.user.update({ where: { id: alvo }, data: { desativadoEm: ativo ? null : new Date() } });
   void registrarAuditoria({ userId: req.userId!, entity: "user", entityId: alvo, field: ativo ? "acesso da equipe reativado" : "acesso da equipe desativado (offboarding)", source: "team" });
   res.json({ ok: true });
+});
+
+/**
+ * POST /team/membros/adotar — traz para a equipe uma conta que EXISTE mas está
+ * órfã (sem workspace). body: { email, papel? }
+ *
+ * Por que existe (23/07/2026): contas criadas antes dos workspaces ficaram com
+ * `workspaceId` nulo. Elas não aparecem na listagem (que filtra por workspace) e
+ * o convite as recusa ("já existe conta com este e-mail") — o partner ficava sem
+ * nenhuma porta para consertar o acesso da própria equipe.
+ *
+ * TRAVA MULTI-TENANT: conta de OUTRO workspace nunca é movida por aqui. Roubar
+ * um usuário de outra equipe seria uma escalada de privilégio silenciosa.
+ */
+router.post("/membros/adotar", async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!(await podeGerirEquipe(req.userId!))) { res.status(403).json({ error: "Gerir a equipe é ação de partner." }); return; }
+  const ws = await workspaceDoCaller(req.userId!);
+  if (!ws) { res.status(409).json({ error: "Seu usuário não tem workspace configurado — conclua o onboarding." }); return; }
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  const papel = PAPEIS_EQUIPE.includes(req.body?.papel) ? req.body.papel : "operator";
+  if (!email) { res.status(400).json({ error: "email é obrigatório" }); return; }
+
+  const alvo = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true, name: true, email: true, workspaceId: true, role: true, desativadoEm: true },
+  });
+  if (!alvo) { res.status(404).json({ error: "Não existe conta com este e-mail — use o convite normal." }); return; }
+  if (alvo.workspaceId === ws) { res.status(409).json({ error: "Esta pessoa já está na sua equipe." }); return; }
+  if (alvo.workspaceId !== null) {
+    res.status(409).json({ error: "Esta conta pertence a outra equipe e não pode ser movida por aqui. Peça ao partner daquela equipe para desativá-la, ou use outro e-mail." });
+    return;
+  }
+
+  await prisma.user.update({
+    where: { id: alvo.id },
+    // Adotar RESTAURA o acesso: uma conta órfã costuma estar desativada por
+    // offboarding antigo, e trazê-la de volta sem reativar seria meio conserto.
+    data: { workspaceId: ws, role: papel, desativadoEm: null },
+  });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "user", entityId: alvo.id,
+    field: "conta órfã trazida para a equipe (vínculo de workspace)",
+    before: { workspaceId: null, papel: alvo.role, desativado: !!alvo.desativadoEm },
+    after: { workspaceId: ws, papel }, source: "team",
+  });
+  res.json({ ok: true, id: alvo.id, nome: alvo.name, email: alvo.email, papel });
+});
+
+/**
+ * POST /team/membros/:userId/redefinir-senha — envia ao membro um link de
+ * redefinição (pedido do usuário, 23/07/2026: "faz sentido colocar um link na
+ * tela para enviar novamente um link de alteração de senha?").
+ *
+ * O partner NUNCA vê nem define a senha: gera-se o mesmo token do fluxo público
+ * de "esqueci a senha" e quem escolhe a nova senha é a própria pessoa, pelo
+ * e-mail dela. Tokens pendentes anteriores são invalidados.
+ */
+router.post("/membros/:userId/redefinir-senha", async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!(await podeGerirEquipe(req.userId!))) { res.status(403).json({ error: "Sem permissão" }); return; }
+  const ws = await workspaceDoCaller(req.userId!);
+  const alvo = String(req.params.userId);
+  const membro = await prisma.user.findFirst({
+    where: { id: alvo, ...(ws ? { workspaceId: ws } : {}) },
+    select: { id: true, name: true, email: true, desativadoEm: true },
+  });
+  if (!membro) { res.status(404).json({ error: "Membro não encontrado na sua equipe" }); return; }
+  if (membro.desativadoEm) {
+    res.status(409).json({ error: "Esta conta está desativada — reative o acesso antes de enviar o link (senha nova não destrava conta desativada)." });
+    return;
+  }
+
+  await prisma.passwordResetToken.updateMany({ where: { userId: membro.id, usedAt: null }, data: { usedAt: new Date() } });
+  const rawToken = crypto.randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1h, igual ao fluxo público
+  await prisma.passwordResetToken.create({
+    data: {
+      userId: membro.id,
+      // hashResetSenha, NÃO o hashToken local: /auth/reset-password valida com
+      // sha256(token + invitationSecret). Gravar com o hash simples do convite
+      // geraria um link que sempre responde "token inválido".
+      tokenHash: hashResetSenha(rawToken),
+      expiresAt,
+      ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "team-admin",
+    },
+  });
+  const link = `${env.frontendUrl}/redefinir-senha?token=${rawToken}`;
+  let emailEnviado = false;
+  try {
+    await sendPasswordResetEmail({ to: membro.email, name: membro.name, resetLink: link, expiresAt });
+    emailEnviado = env.email.provider === "resend";
+  } catch (e) {
+    console.error("[team/redefinir-senha] envio falhou:", (e as Error)?.message ?? e);
+  }
+  void registrarAuditoria({
+    userId: req.userId!, entity: "user", entityId: membro.id,
+    field: "link de redefinição de senha enviado pelo partner",
+    after: { email: membro.email, expiraEm: expiresAt.toISOString() }, source: "team",
+  });
+  // O link volta na resposta como PLANO B (mesmo padrão do convite): sem
+  // provedor de e-mail configurado, o partner ainda consegue destravar a pessoa.
+  res.json({ ok: true, emailEnviado, expiraEm: expiresAt, link });
 });
 
 router.get("/allocations", async (req: AuthRequest, res: Response): Promise<void> => {
