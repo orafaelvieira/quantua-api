@@ -354,7 +354,7 @@ router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise
 // POST /models — cria modelo + blocos default + cenários (wizard).
 // body: { companyId, nome?, objetivo?, mesInicial?, horizonteMeses?, templateReceita?, analysisSeedId? }
 router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
-  const { companyId, nome, objetivo, mesInicial, horizonteMeses, templateReceita, analysisSeedId } = req.body ?? {};
+  const { companyId, nome, objetivo, mesInicial, horizonteMeses, templateReceita, analysisSeedId, semHistorico } = req.body ?? {};
   if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
   const company = await companyNoEscopo(companyId, req);
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
@@ -383,9 +383,18 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
 
   // Seed determinístico do histórico: análise indicada ou a mais recente com dados
   // (mesma seleção do seed-preview — o wizard e a criação enxergam a mesma fonte).
-  const analysis = analysisSeedId
-    ? await prisma.analysis.findFirst({ where: { id: analysisSeedId, companyId }, select: { id: true, dadosEstruturados: true } })
-    : await analiseFonteSeed(companyId);
+  //
+  // "SEGUIR SEM HISTÓRICO" É ESCOLHA, NÃO OMISSÃO (correção 22/07/2026): antes,
+  // a ausência de analysisSeedId caía no fallback `analiseFonteSeed` e o modelo
+  // nascia semeado com as DFs do IBR mais recente da empresa — o analista dizia
+  // "não tenho histórico" e o Business Plan vinha cheio de números que ele não
+  // pediu (bug relatado pelo usuário). Um BP de negócio NOVO tem de nascer
+  // ZERADO; o fallback só vale para chamadas antigas que não declaram nada.
+  const analysis = semHistorico === true
+    ? null
+    : analysisSeedId
+      ? await prisma.analysis.findFirst({ where: { id: analysisSeedId, companyId }, select: { id: true, dadosEstruturados: true } })
+      : await analiseFonteSeed(companyId);
   const seed = derivarSeed(analysis?.dadosEstruturados ?? null);
 
   const agora = new Date();
