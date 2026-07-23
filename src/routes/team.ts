@@ -209,24 +209,42 @@ router.post("/convites", async (req: AuthRequest, res: Response): Promise<void> 
   // o DIAGNÓSTICO e a tela oferece a ação certa.
   const existente = await prisma.user.findUnique({
     where: { email },
-    select: { id: true, name: true, workspaceId: true, desativadoEm: true, role: true },
+    select: {
+      id: true, name: true, workspaceId: true, desativadoEm: true, role: true,
+      workspace: { select: { id: true, razaoSocial: true, nomeFantasia: true } },
+    },
   });
   if (existente) {
     const mesmoWorkspace = existente.workspaceId === ws;
     const semWorkspace = existente.workspaceId === null;
+    // OUTRO WORKSPACE: o caso comum não é um tenant de verdade — é a pessoa que
+    // se auto-cadastrou e o onboarding criou um workspace SÓ DELA (caso real do
+    // usuário em 23/07). Distinguimos os dois pelo tamanho: sozinha lá dentro,
+    // trazê-la não tira ninguém de equipe nenhuma; com colegas, é tenant real e
+    // continua bloqueado. O nome da outra equipe vai na resposta para o partner
+    // decidir com o dado na frente, não no escuro.
+    const outrosMembros = existente.workspaceId
+      ? await prisma.user.count({ where: { workspaceId: existente.workspaceId, id: { not: existente.id } } })
+      : 0;
+    const sozinhoNoOutro = !!existente.workspaceId && !mesmoWorkspace && outrosMembros === 0;
+    const nomeOutro = existente.workspace?.nomeFantasia || existente.workspace?.razaoSocial || "equipe sem nome";
     res.status(409).json({
       error: mesmoWorkspace
         ? "Esta pessoa já está na sua equipe."
         : semWorkspace
           ? "Já existe uma conta com este e-mail, mas ela não está vinculada a nenhuma equipe — por isso não aparece na lista. Você pode trazê-la para a sua equipe."
-          : "Já existe uma conta com este e-mail em OUTRA equipe. Por segurança, ela não pode ser movida por aqui.",
+          : sozinhoNoOutro
+            ? `Esta conta está sozinha em outra equipe ("${nomeOutro}") — provavelmente um auto-cadastro. Trazê-la para cá não afeta mais ninguém; os dados dela vêm junto.`
+            : `Esta conta pertence à equipe "${nomeOutro}", que tem outros ${outrosMembros} membro(s). Por segurança, ela não pode ser movida por aqui.`,
       conta: {
         id: existente.id,
         nome: existente.name,
         desativado: !!existente.desativadoEm,
         mesmoWorkspace,
         semWorkspace,
-        podeAdotar: semWorkspace,
+        sozinhoNoOutro,
+        outraEquipe: mesmoWorkspace || semWorkspace ? null : { nome: nomeOutro, outrosMembros },
+        podeAdotar: semWorkspace || sozinhoNoOutro,
       },
     });
     return;
@@ -336,25 +354,40 @@ router.post("/membros/adotar", async (req: AuthRequest, res: Response): Promise<
 
   const alvo = await prisma.user.findUnique({
     where: { email },
-    select: { id: true, name: true, email: true, workspaceId: true, role: true, desativadoEm: true },
+    select: {
+      id: true, name: true, email: true, workspaceId: true, role: true, desativadoEm: true,
+      workspace: { select: { razaoSocial: true, nomeFantasia: true } },
+    },
   });
   if (!alvo) { res.status(404).json({ error: "Não existe conta com este e-mail — use o convite normal." }); return; }
   if (alvo.workspaceId === ws) { res.status(409).json({ error: "Esta pessoa já está na sua equipe." }); return; }
+
+  // A trava não é "tem workspace", é "tem COLEGAS lá". Workspace de uma pessoa
+  // só é auto-cadastro acidental (o onboarding cria um por conta nova); mover
+  // não deixa ninguém sem equipe. Com outros membros é tenant real — recusa.
+  let origem: { id: string; nome: string } | null = null;
   if (alvo.workspaceId !== null) {
-    res.status(409).json({ error: "Esta conta pertence a outra equipe e não pode ser movida por aqui. Peça ao partner daquela equipe para desativá-la, ou use outro e-mail." });
-    return;
+    const outrosMembros = await prisma.user.count({ where: { workspaceId: alvo.workspaceId, id: { not: alvo.id } } });
+    const nomeOutro = alvo.workspace?.nomeFantasia || alvo.workspace?.razaoSocial || "equipe sem nome";
+    if (outrosMembros > 0) {
+      res.status(409).json({ error: `Esta conta pertence à equipe "${nomeOutro}", que tem outros ${outrosMembros} membro(s), e não pode ser movida por aqui. Peça ao partner daquela equipe para liberá-la.` });
+      return;
+    }
+    origem = { id: alvo.workspaceId, nome: nomeOutro };
   }
 
   await prisma.user.update({
     where: { id: alvo.id },
-    // Adotar RESTAURA o acesso: uma conta órfã costuma estar desativada por
-    // offboarding antigo, e trazê-la de volta sem reativar seria meio conserto.
+    // Adotar RESTAURA o acesso: a conta costuma estar desativada por offboarding
+    // antigo, e trazê-la de volta sem reativar seria meio conserto.
     data: { workspaceId: ws, role: papel, desativadoEm: null },
   });
   void registrarAuditoria({
     userId: req.userId!, entity: "user", entityId: alvo.id,
-    field: "conta órfã trazida para a equipe (vínculo de workspace)",
-    before: { workspaceId: null, papel: alvo.role, desativado: !!alvo.desativadoEm },
+    field: origem
+      ? `conta movida para a equipe (vinha da equipe "${origem.nome}", onde estava sozinha)`
+      : "conta órfã trazida para a equipe (vínculo de workspace)",
+    before: { workspaceId: alvo.workspaceId, workspaceNome: origem?.nome ?? null, papel: alvo.role, desativado: !!alvo.desativadoEm },
     after: { workspaceId: ws, papel }, source: "team",
   });
   res.json({ ok: true, id: alvo.id, nome: alvo.name, email: alvo.email, papel });
