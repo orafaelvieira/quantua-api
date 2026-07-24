@@ -132,6 +132,10 @@ export interface LinhaCusto {
   /** fixoReajuste: reajustar pelo ÍNDICE OFICIAL do snapshot BCB do modelo
    *  (IPCA/IGP-M) — sobrepõe os %s manuais; "Atualizar índices" corrige junto. */
   reajusteIndice?: "ipca" | "igpm";
+  /** Curva do ano: 12 fatores de MÉDIA 1 (uniforme = sem efeito). Distribui o
+   *  gasto dentro do ano nos modos pctReceita e fixoReajuste — o modo "serie"
+   *  já é mês a mês e não usa. */
+  sazonalidade?: number[];
   /** serie: valores explícitos. */
   valores?: Serie;
   /** Só em bloco CAPEX: taxa de depreciação linear da classe (a.a.; 0.1 = 10 anos). */
@@ -1515,16 +1519,24 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
           fatorAno[ano] = fator;
         });
 
+        // SAZONALIDADE nos modos simples (23/07/2026): 12 fatores de média 1,
+        // como nos drivers. Uniforme (todos 1) = sem efeito, que é o default —
+        // por isso ligar isto não muda nenhum modelo existente. Serve ao gasto
+        // com curva própria (13º em dezembro, energia no verão).
+        const sazLinha = linha.sazonalidade;
+        const temSazLinha = Array.isArray(sazLinha) && sazLinha.length === 12;
+
         const valores: Serie = {};
         for (const mes of meses) {
           const ano = mes.slice(0, 4);
+          const fSaz = temSazLinha ? num(sazLinha![Number(mes.split("-")[1]) - 1], 1) : 1;
           if (linha.modo === "pctReceita") {
             const pct = typeof pctPorAno?.[ano] === "number" ? pctPorAno[ano] : pctFlat;
-            valores[mes] = baseEm(mes) * pct * multiLinha;
+            valores[mes] = baseEm(mes) * pct * fSaz * multiLinha;
           } else if (linha.modo === "fixoReajuste") {
-            valores[mes] = valorMensal * (fatorAno[ano] ?? 1) * multiLinha;
+            valores[mes] = valorMensal * (fatorAno[ano] ?? 1) * fSaz * multiLinha;
           } else {
-            valores[mes] = num(linha.valores?.[mes]) * multiLinha;
+            valores[mes] = num(linha.valores?.[mes]) * multiLinha; // série já é mês a mês
           }
         }
         out.push({ id: linha.id, nome: linha.nome, valores, destino: linha.destino });
