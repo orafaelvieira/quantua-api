@@ -30,7 +30,7 @@ function modeloBase(mesInicial = "2026-01", horizonteMeses = 24) {
   return calcularModelo({ mesInicial, horizonteMeses, blocks } as never);
 }
 
-const valorDe = (inds: ReturnType<typeof indicadoresIbrDoModelo>, nome: string, ano: string) =>
+const valorDe = (inds: ReturnType<typeof indicadoresIbrDoModelo>["indicadores"], nome: string, ano: string) =>
   inds.find((i) => i.nome === nome)?.valores[ano] ?? null;
 
 describe("projeção traduzida para o formato do IBR", () => {
@@ -76,25 +76,25 @@ describe("projeção traduzida para o formato do IBR", () => {
 
 describe("indicadores do modelo no catálogo do IBR", () => {
   it("devolve o catálogo INTEIRO do IBR, na mesma ordem", () => {
-    const inds = indicadoresIbrDoModelo(modeloBase(), ["2026", "2027"]);
+    const inds = indicadoresIbrDoModelo(modeloBase(), ["2026", "2027"]).indicadores;
     expect(inds.length).toBe(INDICADORES_TEMPLATE.length);
     expect(inds.map((i) => i.nome)).toEqual(INDICADORES_TEMPLATE.map((t) => t.nome));
     expect(inds.map((i) => i.tipo)).toEqual(INDICADORES_TEMPLATE.map((t) => t.tipo));
   });
 
   it("MARGEM BRUTA bate com a premissa (custo de 30% ⇒ margem de 70%)", () => {
-    const inds = indicadoresIbrDoModelo(modeloBase(), ["2026"]);
+    const inds = indicadoresIbrDoModelo(modeloBase(), ["2026"]).indicadores;
     expect(valorDe(inds, "Margem Bruta", "2026")).toBeCloseTo(0.7, 6);
   });
 
   it("PRAZO MÉDIO de recebimento devolve o PMR informado (30 dias)", () => {
-    const inds = indicadoresIbrDoModelo(modeloBase(), ["2026", "2027"]);
+    const inds = indicadoresIbrDoModelo(modeloBase(), ["2026", "2027"]).indicadores;
     // 2027 é ano cheio: o prazo tem de reproduzir a premissa de giro.
     expect(valorDe(inds, "Prazo Médio Contas a Receber", "2027") as number).toBeCloseTo(30, 0);
   });
 
   it("ANO PARCIAL não infla o prazo médio (a armadilha dos 365 dias)", () => {
-    const parcial = indicadoresIbrDoModelo(modeloBase("2026-07", 18), ["2026"]);
+    const parcial = indicadoresIbrDoModelo(modeloBase("2026-07", 18), ["2026"]).indicadores;
     // Com 365 dias sobre 6 meses de receita o PMR sairia ~2× (≈61 dias).
     expect(parcial.find((i) => i.nome === "Prazo Médio Contas a Receber")!.valores["2026"] as number)
       .toBeCloseTo(30, 0);
@@ -109,13 +109,13 @@ describe("EVA (Valor Econômico Agregado)", () => {
   });
 
   it("SEM custo de capital fica null — não inventa um WACC", () => {
-    const inds = indicadoresIbrDoModelo(modeloBase(), ["2026"]);
+    const inds = indicadoresIbrDoModelo(modeloBase(), ["2026"]).indicadores;
     expect(valorDe(inds, "EVA (Valor Econômico Agregado)", "2026")).toBeNull();
   });
 
   it("COM custo de capital: EVA = (ROIC − custo) × Capital Investido", () => {
     const custoCapital = 0.12;
-    const inds = indicadoresIbrDoModelo(modeloBase(), ["2026"], { custoCapital });
+    const inds = indicadoresIbrDoModelo(modeloBase(), ["2026"], { custoCapital }).indicadores;
     const eva = valorDe(inds, "EVA (Valor Econômico Agregado)", "2026") as number;
     const roic = valorDe(inds, "ROIC (Retorno sobre Capital Investido)", "2026") as number;
     const nopat = valorDe(inds, "NOPAT", "2026") as number;
@@ -127,9 +127,9 @@ describe("EVA (Valor Econômico Agregado)", () => {
   });
 
   it("custo de capital MAIOR que o ROIC ⇒ EVA negativo (destruiu valor)", () => {
-    const inds = indicadoresIbrDoModelo(modeloBase(), ["2026"]);
+    const inds = indicadoresIbrDoModelo(modeloBase(), ["2026"]).indicadores;
     const roic = valorDe(inds, "ROIC (Retorno sobre Capital Investido)", "2026") as number;
-    const caro = indicadoresIbrDoModelo(modeloBase(), ["2026"], { custoCapital: roic + 0.05 });
+    const caro = indicadoresIbrDoModelo(modeloBase(), ["2026"], { custoCapital: roic + 0.05 }).indicadores;
     expect(valorDe(caro, "EVA (Valor Econômico Agregado)", "2026") as number).toBeLessThan(0);
   });
 });
@@ -137,7 +137,7 @@ describe("EVA (Valor Econômico Agregado)", () => {
 describe("nada quebrou no IBR", () => {
   it("os anos do horizonte viram os PERÍODOS dos indicadores", () => {
     const anos = ["2026", "2027"];
-    const inds = indicadoresIbrDoModelo(modeloBase(), anos);
+    const inds = indicadoresIbrDoModelo(modeloBase(), anos).indicadores;
     for (const i of inds) expect(Object.keys(i.valores).sort()).toEqual(anos);
   });
 
@@ -149,7 +149,7 @@ describe("nada quebrou no IBR", () => {
       } },
     ] as unknown as BlocoModelo[];
     const r = calcularModelo({ mesInicial: "2026-01", horizonteMeses: 12, blocks } as never);
-    const inds = indicadoresIbrDoModelo(r, ["2026"]);
+    const inds = indicadoresIbrDoModelo(r, ["2026"]).indicadores;
     for (const i of inds) {
       const v = i.valores["2026"];
       if (typeof v === "number") expect(Number.isFinite(v)).toBe(true);

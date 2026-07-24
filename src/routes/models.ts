@@ -15,6 +15,8 @@ import { buscarIndicesEconomicos } from "../services/indices-economicos";
 import { mesclarArvoresBalancete } from "../services/balancete-conversao";
 import { buscarDadosWacc } from "../services/wacc-dados";
 import { indicadoresIbrDoModelo } from "../services/model-indicadores-ibr";
+import type { HistoricoDfsIbr } from "../services/model-indicadores-ibr";
+import { indicesRealizadosPorAno } from "../services/indices-realizados";
 import { catalogoPadraoEfetivo } from "../services/indicador-config-ibr";
 import type { SemaforoDef } from "../services/indicator-calculator";
 import { ERP_REFERENCIA, BETAS_EMERGING, BETAS_DATA, KROLL_DECIS, KROLL_FONTE, CSRP_FATORES } from "../services/wacc-referencias";
@@ -1478,12 +1480,32 @@ router.get("/:id/indicadores", async (req: AuthRequest, res: Response): Promise<
       }
     }
   }
+  // HISTÓRICO NA MESMA TABELA (pedido do usuário, 24/07/2026): os DFs realizados
+  // do IBR-fonte entram como colunas adicionais e passam pelo MESMO
+  // calculateIndicators — é o que torna legítima a leitura horizontal
+  // "realizado → projetado" de cada indicador.
+  let historico: HistoricoDfsIbr | undefined;
+  if (model.analysisSeedId) {
+    const analysis = await prisma.analysis.findUnique({
+      where: { id: model.analysisSeedId }, select: { dadosEstruturados: true },
+    });
+    const de = analysis?.dadosEstruturados as HistoricoDfsIbr | null;
+    if (de?.periodos?.length && de.bp?.length) historico = de;
+  }
+  const espelho = indicadoresIbrDoModelo(calc.resultado, anos, { custoCapital, semaforoOverrides, historico });
   res.json({
-    periodos: anos,
+    periodos: espelho.periodos,
+    periodosHistoricos: espelho.periodosHistoricos,
+    mesesPorPeriodo: espelho.mesesPorPeriodo,
     custoCapital: custoCapital ?? null,
     cenario: calc.cenario,
     ocultos,
-    indicadores: indicadoresIbrDoModelo(calc.resultado, anos, { custoCapital, semaforoOverrides }),
+    indicadores: espelho.indicadores,
+    // Macro REALIZADO (BCB/SGS) nos mesmos anos do histórico da empresa, para o
+    // quadro macro contar a mesma história de ponta a ponta.
+    macroRealizado: espelho.periodosHistoricos.length
+      ? await indicesRealizadosPorAno(espelho.periodosHistoricos).catch(() => null)
+      : null,
   });
 });
 
