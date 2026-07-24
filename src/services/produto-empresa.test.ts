@@ -5,6 +5,9 @@ import {
   proximaVersao,
   vigenteDoEnvelope,
   tipoCompativel,
+  dataBaseDoModelo,
+  dataBaseDoIbr,
+  nomeDocumento,
   VersaoEnvelope,
 } from "./produto-empresa";
 
@@ -32,26 +35,90 @@ describe("normalizarRotulo", () => {
 // ── Rótulo híbrido ─────────────────────────────────────────────────────────
 
 describe("montarRotulo", () => {
-  it("prefixo do sistema + período", () => {
+  it("ano SÓ no orçamento — o exercício é o que identifica o produto", () => {
     expect(montarRotulo("orcamento", { periodo: "2027" }).rotulo).toBe("Orçamento 2027");
-    expect(montarRotulo("valuation", { periodo: "2026" }).rotulo).toBe("Valuation 2026");
+    // IBR e Valuation são relação contínua: o ano é da VERSÃO (data-base).
+    expect(montarRotulo("valuation", { periodo: "2026" }).rotulo).toBe("Valuation");
+    expect(montarRotulo("ibr", { periodo: "2025" }).rotulo).toBe("IBR");
   });
 
   it("complemento livre entra com travessão", () => {
-    expect(montarRotulo("valuation", { periodo: "2026", complemento: "venda da empresa" }).rotulo)
-      .toBe("Valuation 2026 — venda da empresa");
+    expect(montarRotulo("valuation", { complemento: "disputa judicial" }).rotulo)
+      .toBe("Valuation — disputa judicial");
     expect(montarRotulo("business-plan", { complemento: "Sementes" }).rotulo)
       .toBe("Business Plan — Sementes");
   });
 
-  it("IBR pode ser só o prefixo", () => {
+  it("IBR e Valuation são só o prefixo quando não há complemento", () => {
     expect(montarRotulo("ibr").rotulo).toBe("IBR");
+    expect(montarRotulo("valuation").rotulo).toBe("Valuation");
   });
 
   it("BP sem complemento é ERRO — não identifica iniciativa nenhuma", () => {
     const r = montarRotulo("business-plan", {});
     expect(r.erro).toBeTruthy();
     expect(r.rotulo).toBe("");
+  });
+
+  it("Orçamento sem ano é ERRO — o exercício é obrigatório", () => {
+    expect(montarRotulo("orcamento", {}).erro).toBeTruthy();
+    expect(montarRotulo("orcamento", { periodo: "26" }).erro).toBeTruthy();
+  });
+});
+
+// ── Data-base e nome do documento ──────────────────────────────────────────
+
+describe("dataBaseDoModelo", () => {
+  it("é o fecho do mês ANTERIOR ao início da projeção", () => {
+    expect(dataBaseDoModelo("2026-07")).toBe("jun/26");
+    expect(dataBaseDoModelo("2026-01")).toBe("dez/25"); // vira o ano
+  });
+  it("entrada inválida devolve vazio, sem estourar", () => {
+    expect(dataBaseDoModelo("")).toBe("");
+    expect(dataBaseDoModelo("2026")).toBe("");
+  });
+});
+
+describe("dataBaseDoIbr", () => {
+  it("usa o ÚLTIMO período extraído — a data do último documento", () => {
+    expect(dataBaseDoIbr("31/12/2023 a 31/12/2024 a 31/12/2025")).toBe("dez/25");
+    expect(dataBaseDoIbr("31/12/2023 a 31/05/2026")).toBe("mai/26");
+  });
+  it("exercícios sem dia/mês fecham em dezembro", () => {
+    expect(dataBaseDoIbr("2023 · 2024 · 2025")).toBe("dez/25");
+  });
+  it("sem período declarado, não inventa data", () => {
+    expect(dataBaseDoIbr(null)).toBe("");
+    expect(dataBaseDoIbr("")).toBe("");
+  });
+});
+
+describe("nomeDocumento", () => {
+  it("IBR e Valuation: produto + empresa + data-base + versão", () => {
+    expect(nomeDocumento({ tipo: "ibr", empresa: "Move Farma Repro", dataBase: "dez/25", versao: 2 }))
+      .toBe("IBR Move Farma Repro · dez/25 · v2");
+    expect(nomeDocumento({ tipo: "valuation", empresa: "Move Farma Repro", dataBase: "jun/26", versao: 1 }))
+      .toBe("Valuation Move Farma Repro · jun/26 · v1");
+  });
+
+  it("Orçamento carrega o ANO do exercício, não a data-base", () => {
+    expect(nomeDocumento({ tipo: "orcamento", empresa: "Move Farma Repro", ano: "2026", versao: 1 }))
+      .toBe("Orçamento Move Farma Repro 2026 · v1");
+  });
+
+  it("Business Plan carrega a INICIATIVA", () => {
+    expect(nomeDocumento({ tipo: "business-plan", empresa: "Move Farma Repro", complemento: "Nova filial", versao: 1 }))
+      .toBe("Business Plan Move Farma Repro — Nova filial · v1");
+  });
+
+  it("sem data-base conhecida, o nome sai sem ela — nunca com data chutada", () => {
+    expect(nomeDocumento({ tipo: "ibr", empresa: "Move Farma Repro", versao: 1 }))
+      .toBe("IBR Move Farma Repro · v1");
+  });
+
+  it("complemento opcional separa mandatos distintos do mesmo tipo", () => {
+    expect(nomeDocumento({ tipo: "valuation", empresa: "Belagro", complemento: "disputa judicial", dataBase: "dez/25", versao: 3 }))
+      .toBe("Valuation Belagro — disputa judicial · dez/25 · v3");
   });
 });
 
