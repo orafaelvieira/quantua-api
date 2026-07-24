@@ -23,6 +23,9 @@ import {
   proximaVersao,
   vigenteDoEnvelope,
   tipoCompativel,
+  nomeDocumento,
+  dataBaseDoIbr,
+  dataBaseDoModelo,
   VersaoEnvelope,
 } from "../services/produto-empresa";
 
@@ -112,6 +115,132 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
       analyses: analisesSoltas.map((a) => ({ ...a, cicloVida: cicloVidaAnalysis(a.status), etapa: etapaAnalysis(a.status) })),
       models: modelosSoltos.map((m) => ({ ...m, cicloVida: cicloVidaModel(m.status), etapa: null as string | null })),
     },
+  });
+});
+
+/**
+ * POST /produtos/padronizar-nomes — aplica o padrão de nomes ao que JÁ EXISTE.
+ *
+ * Pedido do usuário (24/07/2026): o padrão novo (produto + empresa + data-base
+ * + versão) só valia para o que nascia depois do deploy, então a lista ficava
+ * com dois idiomas. Aqui o passado é acertado — com PRÉVIA obrigatória: sem
+ * `aplicar: true` a rota só DIZ o que mudaria, não muda nada.
+ *
+ * Duas regras de prudência:
+ *  - o complemento de IBR/Valuation só é removido quando a empresa tem UM
+ *    produto daquele tipo; com dois ou mais, ele é o que os distingue e fica;
+ *  - rótulo que colidiria com outro produto da mesma empresa não é alterado —
+ *    a rota reporta o caso em vez de fundir dois produtos por conta própria.
+ *
+ * body: { companyId?, todas?, aplicar? }
+ */
+router.post("/padronizar-nomes", async (req: AuthRequest, res: Response): Promise<void> => {
+  const { companyId, todas, aplicar } = (req.body ?? {}) as { companyId?: string; todas?: boolean; aplicar?: boolean };
+  if (!companyId && !todas) { res.status(400).json({ error: "Informe companyId ou todas: true" }); return; }
+
+  const empresas = companyId
+    ? await prisma.company.findMany({ where: { id: companyId, ...whereEmpresaVisivel(req) }, select: { id: true, nomeFantasia: true, razaoSocial: true } })
+    : await prisma.company.findMany({ where: whereEmpresaVisivel(req), select: { id: true, nomeFantasia: true, razaoSocial: true } });
+  if (!empresas.length) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+
+  const produtosRenomeados: Array<{ id: string; de: string; para: string; empresa: string }> = [];
+  const documentosRenomeados: Array<{ id: string; origem: "analysis" | "model"; de: string; para: string; empresa: string }> = [];
+  const mantidos: Array<{ id: string; rotulo: string; motivo: string }> = [];
+
+  for (const empresa of empresas) {
+    const nomeEmpresa = empresa.nomeFantasia || empresa.razaoSocial;
+    const produtos = await prisma.produtoEmpresa.findMany({ where: { companyId: empresa.id } });
+    const porTipo = new Map<string, number>();
+    for (const p of produtos) porTipo.set(p.tipo, (porTipo.get(p.tipo) ?? 0) + 1);
+    // Rótulos ocupados na empresa — a trava anti-duplicata vale também aqui.
+    const ocupados = new Map(produtos.map((p) => [p.rotuloNorm, p.id]));
+
+    for (const p of produtos) {
+      const tipo = p.tipo as TipoProduto;
+      // O rótulo atual é a única fonte do complemento e do ano ("Orçamento 2026
+      // — Revisado" → ano 2026, complemento "Revisado").
+      const [cabeca, ...resto] = p.rotulo.split("—");
+      const complementoAtual = resto.join("—").trim();
+      const anoAtual = /(\d{4})/.exec(cabeca)?.[1] ?? "";
+      const unicoDoTipo = (porTipo.get(p.tipo) ?? 0) <= 1;
+      const complementoNovo = tipo === "business-plan"
+        ? complementoAtual
+        : tipo === "orcamento" || !unicoDoTipo
+          ? complementoAtual
+          : ""; // IBR/Valuation únicos do tipo: o complemento vira ruído
+      const { rotulo: rotuloNovo, erro } = montarRotulo(tipo, { periodo: anoAtual, complemento: complementoNovo });
+      // Rótulo EFETIVO: o que o produto terá depois desta rodada. Os nomes dos
+      // documentos derivam dele — nunca de um rótulo que não vai valer.
+      let rotuloEfetivo = p.rotulo;
+      if (erro || !rotuloNovo) {
+        mantidos.push({ id: p.id, rotulo: p.rotulo, motivo: erro ?? "não foi possível montar o rótulo padrão" });
+      } else if (rotuloNovo !== p.rotulo) {
+        const norm = normalizarRotulo(rotuloNovo);
+        const dono = ocupados.get(norm);
+        if (dono && dono !== p.id) {
+          mantidos.push({ id: p.id, rotulo: p.rotulo, motivo: `"${rotuloNovo}" já é de outro produto desta empresa — renomear fundiria os dois` });
+        } else {
+          rotuloEfetivo = rotuloNovo;
+          produtosRenomeados.push({ id: p.id, de: p.rotulo, para: rotuloNovo, empresa: nomeEmpresa });
+          ocupados.delete(p.rotuloNorm);
+          ocupados.set(norm, p.id);
+          if (aplicar) {
+            await prisma.produtoEmpresa.update({ where: { id: p.id }, data: { rotulo: rotuloNovo, rotuloNorm: norm } });
+            await registrarAuditoria({
+              userId: req.userId!, entity: "produto_empresa", entityId: p.id, field: "rótulo padronizado",
+              before: { rotulo: p.rotulo }, after: { rotulo: rotuloNovo }, source: "produtos",
+            });
+          }
+        }
+      } else {
+        rotuloEfetivo = rotuloNovo;
+      }
+
+      // ── Documentos (versões) do produto ──
+      const complementoFinal = rotuloEfetivo.split("—").slice(1).join("—").trim();
+      const anoFinal = /(\d{4})/.exec(rotuloEfetivo.split("—")[0] ?? "")?.[1] ?? anoAtual;
+      const [analyses, models] = await Promise.all([
+        prisma.analysis.findMany({ where: { produtoId: p.id }, select: { id: true, nome: true, periodo: true, produtoVersao: true } }),
+        prisma.financialModel.findMany({ where: { produtoId: p.id }, select: { id: true, nome: true, mesInicial: true, produtoVersao: true } }),
+      ]);
+      for (const a of analyses) {
+        const novo = nomeDocumento({ tipo, empresa: nomeEmpresa, complemento: complementoFinal, dataBase: dataBaseDoIbr(a.periodo), versao: a.produtoVersao ?? 1 });
+        if (novo === a.nome) continue;
+        documentosRenomeados.push({ id: a.id, origem: "analysis", de: a.nome, para: novo, empresa: nomeEmpresa });
+        if (aplicar) {
+          await prisma.analysis.update({ where: { id: a.id }, data: { nome: novo } });
+          await registrarAuditoria({
+            userId: req.userId!, analysisId: a.id, entity: "analysis", entityId: a.id, field: "nome padronizado",
+            before: { nome: a.nome }, after: { nome: novo }, source: "produtos",
+          });
+        }
+      }
+      for (const m of models) {
+        const novo = nomeDocumento({
+          tipo, empresa: nomeEmpresa, complemento: complementoFinal,
+          dataBase: dataBaseDoModelo(m.mesInicial), ano: anoFinal || m.mesInicial.slice(0, 4),
+          versao: m.produtoVersao ?? 1,
+        });
+        if (novo === m.nome) continue;
+        documentosRenomeados.push({ id: m.id, origem: "model", de: m.nome, para: novo, empresa: nomeEmpresa });
+        if (aplicar) {
+          await prisma.financialModel.update({ where: { id: m.id }, data: { nome: novo } });
+          await registrarAuditoria({
+            userId: req.userId!, entity: "financial_model", entityId: m.id, field: "nome padronizado",
+            before: { nome: m.nome }, after: { nome: novo }, source: "produtos",
+          });
+        }
+      }
+    }
+  }
+
+  res.json({
+    aplicado: !!aplicar,
+    empresas: empresas.length,
+    produtosRenomeados,
+    documentosRenomeados,
+    mantidos,
+    total: produtosRenomeados.length + documentosRenomeados.length,
   });
 });
 

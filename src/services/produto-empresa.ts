@@ -68,11 +68,94 @@ export function montarRotulo(
   if (tipo === "business-plan" && !complemento) {
     return { rotulo: "", erro: "Business Plan precisa de um nome — ele identifica a iniciativa (ex.: “Sementes”, “Filial Sorriso”)." };
   }
+  if (tipo === "orcamento" && !/^\d{4}$/.test(periodo)) {
+    return { rotulo: "", erro: "Orçamento precisa do ano do exercício (ex.: 2026) — é ele que identifica o produto." };
+  }
 
+  // ANO SÓ NO ORÇAMENTO (decisão do usuário, 24/07/2026): o exercício É o
+  // produto orçamentário — 2027 tem metas próprias, é outro produto. Em IBR e
+  // Valuation o ano é atributo da VERSÃO (a data-base), não do produto: a
+  // relação com a empresa é contínua e reavaliar em 2027 é v3, não outro
+  // trabalho. No BP quem identifica é a iniciativa.
   let rotulo = prefixo;
-  if (periodo) rotulo += ` ${periodo}`;
+  if (tipo === "orcamento") rotulo += ` ${periodo}`;
   if (complemento) rotulo += ` — ${complemento}`;
   return { rotulo };
+}
+
+const MESES_ABREV = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+
+/** (2025, 12) → "dez/25". Formato curto da data-base no nome do documento. */
+export function mesAbreviado(ano: number, mes: number): string {
+  if (!Number.isFinite(ano) || !Number.isFinite(mes) || mes < 1 || mes > 12) return "";
+  return `${MESES_ABREV[mes - 1]}/${String(ano).slice(-2)}`;
+}
+
+/**
+ * DATA-BASE DO MODELO: o fecho do mês ANTERIOR ao início da projeção — o
+ * balanço que abre o estudo. "2026-07" → "jun/26" (é a mesma data-base que o
+ * wizard já mostra no passo do horizonte).
+ */
+export function dataBaseDoModelo(mesInicial: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(mesInicial || "");
+  if (!m) return "";
+  const ano = Number(m[1]);
+  const mes = Number(m[2]);
+  return mes === 1 ? mesAbreviado(ano - 1, 12) : mesAbreviado(ano, mes - 1);
+}
+
+/**
+ * DATA-BASE DO IBR (regra do usuário, 24/07/2026): a data do ÚLTIMO documento
+ * usado — ou seja, o fim do último período extraído. "31/12/2023 a 31/12/2024 a
+ * 31/12/2025" → "dez/25"; "2023 · 2024 · 2025" → "dez/25" (exercício fechado).
+ * A data de REALIZAÇÃO do IBR não entra no nome: fica no sistema, para controle.
+ */
+export function dataBaseDoIbr(periodo?: string | null): string {
+  const p = (periodo || "").trim();
+  if (!p) return "";
+  const datas = p.match(/(\d{2})\/(\d{2})\/(\d{4})/g);
+  if (datas?.length) {
+    // dd/mm/aaaa — o dia não entra no nome; a data-base é o MÊS de fechamento.
+    const partes = /(\d{2})\/(\d{2})\/(\d{4})/.exec(datas[datas.length - 1]!)!;
+    return mesAbreviado(Number(partes[3]), Number(partes[2]));
+  }
+  const anos = p.match(/\d{4}/g);
+  if (anos?.length) return mesAbreviado(Number(anos[anos.length - 1]), 12);
+  return "";
+}
+
+/**
+ * NOME DO DOCUMENTO (padrão da casa, 24/07/2026): produto + empresa +
+ * data-base (ou ano, no orçamento; ou a iniciativa, no BP) + versão.
+ *
+ * Versionar NÃO renomeia: todas as versões do produto carregam o mesmo nome,
+ * mudando só o sufixo — antes, duas versões do mesmo valuation nasciam com o
+ * nome idêntico e fora da pilha ninguém distinguia uma da outra.
+ */
+export function nomeDocumento(opts: {
+  tipo: TipoProduto;
+  empresa: string;
+  /** BP: a iniciativa. IBR/Valuation: o complemento opcional do produto. */
+  complemento?: string | null;
+  /** "dez/25" — IBR e Valuation. */
+  dataBase?: string | null;
+  /** "2026" — só orçamento. */
+  ano?: string | null;
+  versao: number;
+}): string {
+  const empresa = (opts.empresa || "").trim();
+  const complemento = opts.complemento?.trim() || "";
+  const base = `${PREFIXO_TIPO[opts.tipo]}${empresa ? ` ${empresa}` : ""}`;
+  const sufixo = ` · v${opts.versao}`;
+  if (opts.tipo === "orcamento") {
+    const ano = opts.ano?.trim() || "";
+    return `${base}${ano ? ` ${ano}` : ""}${complemento ? ` — ${complemento}` : ""}${sufixo}`;
+  }
+  if (opts.tipo === "business-plan") {
+    return `${base}${complemento ? ` — ${complemento}` : ""}${sufixo}`;
+  }
+  const dataBase = opts.dataBase?.trim() || "";
+  return `${base}${complemento ? ` — ${complemento}` : ""}${dataBase ? ` · ${dataBase}` : ""}${sufixo}`;
 }
 
 /** Próxima versão do envelope: monotônica, nunca reaproveita número. */

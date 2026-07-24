@@ -34,7 +34,7 @@ import { resolveSectorPremises } from "../services/sector-benchmark";
 import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { cicloVidaModel } from "../services/ciclo-vida";
-import { TIPOS_PRODUTO, TipoProduto, PREFIXO_TIPO, montarRotulo, normalizarRotulo, tipoCompativel } from "../services/produto-empresa";
+import { TIPOS_PRODUTO, TipoProduto, montarRotulo, normalizarRotulo, tipoCompativel, nomeDocumento, dataBaseDoModelo } from "../services/produto-empresa";
 import { montarConteudoModelo, aplicarFotoModelo, hashConteudo, type ConteudoFotoModelo } from "../services/snapshot-diario";
 import { damodaranDoSetorB3, DAMODARAN_PT } from "../services/damodaran-b3";
 import multer from "multer";
@@ -913,9 +913,16 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       // 2026"), e fora da pilha ninguém distinguia uma da outra.
       // O complemento do BP entra no nome porque é ele que identifica a
       // iniciativa — sem ele, dois planos da mesma empresa colidiriam de novo.
-      const nomeEmpresa = company.nomeFantasia || company.razaoSocial;
-      const complementoRotulo = envelope.rotulo.split("—")[1]?.trim();
-      const nomeVersao = `${PREFIXO_TIPO[envelope.tipo as TipoProduto]} ${nomeEmpresa}${complementoRotulo ? ` — ${complementoRotulo}` : ""} · v${versao}`;
+      const nomeVersao = nomeDocumento({
+        tipo: envelope.tipo as TipoProduto,
+        empresa: company.nomeFantasia || company.razaoSocial,
+        complemento: envelope.rotulo.split("—")[1]?.trim(),
+        // Valuation/BP: data-base = fecho do mês anterior ao início da projeção.
+        dataBase: dataBaseDoModelo(mesInicialEfetivo),
+        // Orçamento: o que identifica é o EXERCÍCIO, não a data-base.
+        ano: mesInicialEfetivo.slice(0, 4),
+        versao,
+      });
       await prisma.financialModel.update({ where: { id: model.id }, data: { produtoId: envelope.id, produtoVersao: versao, nome: nomeVersao } });
       // Envelope novo (não-IBR) sem vigente: a 1ª versão vira a vigente — mesma
       // regra de POST /produtos/:id/versoes; depois disso a escolha é manual.
