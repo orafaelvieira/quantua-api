@@ -34,6 +34,7 @@ import { resolveSectorPremises } from "../services/sector-benchmark";
 import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { cicloVidaModel } from "../services/ciclo-vida";
+import { TIPOS_PRODUTO, TipoProduto, montarRotulo, normalizarRotulo, tipoCompativel } from "../services/produto-empresa";
 import { montarConteudoModelo, aplicarFotoModelo, hashConteudo, type ConteudoFotoModelo } from "../services/snapshot-diario";
 import { damodaranDoSetorB3, DAMODARAN_PT } from "../services/damodaran-b3";
 import multer from "multer";
@@ -384,9 +385,10 @@ router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise
 });
 
 // POST /models — cria modelo + blocos default + cenários (wizard).
-// body: { companyId, nome?, objetivo?, mesInicial?, horizonteMeses?, templateReceita?, analysisSeedId? }
+// body: { companyId, nome?, objetivo?, mesInicial?, horizonteMeses?, templateReceita?, analysisSeedId?,
+//         produtoId?, produtoNovo?: { tipo?, periodo?, complemento? } }
 router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
-  const { companyId, nome, objetivo, mesInicial, horizonteMeses, templateReceita, analysisSeedId, semHistorico } = req.body ?? {};
+  const { companyId, nome, objetivo, mesInicial, horizonteMeses, templateReceita, analysisSeedId, semHistorico, produtoId, produtoNovo } = req.body ?? {};
   if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
   const company = await companyNoEscopo(companyId, req);
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
@@ -868,6 +870,62 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     source: "models",
   });
 
+  // PRODUTO (envelope de versões) JÁ NA CRIAÇÃO — pedido do usuário (24/07/2026):
+  // "cada vez que crio um novo documento ele fica como ainda sem produto; já
+  // deve criar abaixo do produto devido". O modelo nasce DENTRO do envelope, em
+  // vez de cair em "ainda sem produto" e exigir uma segunda viagem ao workspace.
+  //
+  // A versão continua DECLARADA, nunca inferida: quem declara é o wizard, que
+  // mostra o destino (produto existente × produto novo) ANTES de criar. Sem
+  // `produtoId`/`produtoNovo` no body, o comportamento é o de sempre — o modelo
+  // nasce solto (compatibilidade com quem chama a API direto).
+  //
+  // O rótulo é a IDENTIDADE do envelope: se já existe um com o mesmo rótulo
+  // normalizado, o modelo entra NELE como versão seguinte — nunca cria duplicata.
+  let produtoVinculado: { id: string; rotulo: string; versao: number } | null = null;
+  try {
+    const objetivoModelo = model.objetivo;
+    let envelope = produtoId
+      ? await prisma.produtoEmpresa.findFirst({ where: { id: String(produtoId), companyId } })
+      : null;
+    if (!envelope && produtoNovo && typeof produtoNovo === "object") {
+      const pn = produtoNovo as { tipo?: string; periodo?: string; complemento?: string };
+      const tipo = (pn.tipo || (objetivoModelo === "ambos" ? "valuation" : objetivoModelo)) as TipoProduto;
+      if (TIPOS_PRODUTO.includes(tipo)) {
+        const { rotulo, erro } = montarRotulo(tipo, { periodo: pn.periodo, complemento: pn.complemento });
+        if (!erro) {
+          const rotuloNorm = normalizarRotulo(rotulo);
+          envelope = await prisma.produtoEmpresa.findFirst({ where: { companyId, rotuloNorm } })
+            ?? await prisma.produtoEmpresa.create({ data: { companyId, tipo, rotulo, rotuloNorm, userId: req.userId! } });
+        }
+      }
+    }
+    if (envelope && tipoCompativel(envelope.tipo as TipoProduto, "model", objetivoModelo).ok) {
+      const [maxAnalise, maxModelo] = await Promise.all([
+        prisma.analysis.aggregate({ where: { produtoId: envelope.id }, _max: { produtoVersao: true } }),
+        prisma.financialModel.aggregate({ where: { produtoId: envelope.id }, _max: { produtoVersao: true } }),
+      ]);
+      const versao = Math.max(maxAnalise._max.produtoVersao ?? 0, maxModelo._max.produtoVersao ?? 0) + 1;
+      await prisma.financialModel.update({ where: { id: model.id }, data: { produtoId: envelope.id, produtoVersao: versao } });
+      // Envelope novo (não-IBR) sem vigente: a 1ª versão vira a vigente — mesma
+      // regra de POST /produtos/:id/versoes; depois disso a escolha é manual.
+      if (envelope.tipo !== "ibr" && !envelope.versaoVigenteId && versao === 1) {
+        await prisma.produtoEmpresa.update({ where: { id: envelope.id }, data: { versaoVigenteId: model.id } });
+      }
+      await registrarAuditoria({
+        userId: req.userId!, entity: "produto_empresa", entityId: envelope.id,
+        field: "versão declarada",
+        after: { origem: "model", registroId: model.id, nome: model.nome, versao, naCriacao: true },
+        source: "models",
+      });
+      produtoVinculado = { id: envelope.id, rotulo: envelope.rotulo, versao };
+    }
+  } catch {
+    // O envelope é organização, não o produto em si: falhar aqui NUNCA derruba a
+    // criação do modelo — ele fica solto e o workspace continua oferecendo
+    // "Organizar…", exatamente como antes desta mudança.
+  }
+
   // SNAPSHOT dos índices macro (BCB) já na criação — as variáveis macro_* das
   // fórmulas nascem funcionando. Sem internet, o modelo nasce sem snapshot e o
   // botão "Atualizar índices" resolve depois (nunca bloqueia a criação).
@@ -879,7 +937,7 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   } catch { /* sem conexão com o BCB agora — segue sem snapshot */ }
 
   const calc = await calcularEGravar(model.id);
-  res.status(201).json({ id: model.id, seedMemoria: seed.memoria, checks: calc?.resultado.checks ?? [] });
+  res.status(201).json({ id: model.id, seedMemoria: seed.memoria, checks: calc?.resultado.checks ?? [], produto: produtoVinculado });
 });
 
 // POST /models/:id/atualizar-indices — renova o SNAPSHOT dos índices macro do
