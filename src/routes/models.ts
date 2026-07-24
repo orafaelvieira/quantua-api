@@ -18,6 +18,9 @@ import { DIVERGENCIAS_BELAGRO, resumoDivergencias } from "../services/model-reco
 import { buscarIndicesEconomicos } from "../services/indices-economicos";
 import { mesclarArvoresBalancete } from "../services/balancete-conversao";
 import { buscarDadosWacc } from "../services/wacc-dados";
+import { indicadoresIbrDoModelo } from "../services/model-indicadores-ibr";
+import { catalogoPadraoEfetivo } from "../services/indicador-config-ibr";
+import type { SemaforoDef } from "../services/indicator-calculator";
 import { ERP_REFERENCIA, BETAS_EMERGING, BETAS_DATA, KROLL_DECIS, KROLL_FONTE, CSRP_FATORES } from "../services/wacc-referencias";
 import { perguntarJson } from "../services/ai-extraction";
 import { montarLinhaReceita, TEMPLATES_RECEITA } from "../services/model-templates";
@@ -1626,6 +1629,50 @@ router.get("/:id/historico-dfs", async (req: AuthRequest, res: Response): Promis
   }
 
   res.json({ temHistorico: true, periodosBP: periodos, periodosFC, bp: bpHist, fc: fcHist, avisoFC });
+});
+
+// GET /models/:id/indicadores?custoCapital=0.18 — INDICADORES DO MODELO NO
+// CATÁLOGO DO IBR (pedido do usuário, 24/07/2026: "precisa ser espelho do IBR,
+// mesmos cálculos, estrutura, tudo").
+//
+// A conta não é refeita aqui: a projeção é traduzida para o par (BP, DRE) que o
+// IBR consome e passa pelo MESMO `calculateIndicators`. Quem alterar uma fórmula
+// do IBR altera as duas pontas de uma vez — é o ponto de espelhar por construção
+// em vez de manter duas listas parecidas.
+//
+// `custoCapital` (decimal) alimenta o EVA e vem do WACC calculado na tela; sem
+// ele o EVA fica null em vez de sair com um WACC inventado.
+router.get("/:id/indicadores", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const calc = await calcularEGravar(model.id);
+  if (!calc) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const anos = [...new Set(calc.resultado.meses.map((m) => m.slice(0, 4)))].sort();
+  const bruto = Number(req.query.custoCapital);
+  // Sanidade: um WACC fora de (0, 2] é erro de unidade (18 em vez de 0,18) —
+  // aceitar levaria a um EVA absurdo com cara de número calculado.
+  const custoCapital = Number.isFinite(bruto) && bruto > 0 && bruto <= 2 ? bruto : undefined;
+  // Semáforos e visibilidade vêm da MESMA configuração do IBR (tela
+  // /indicadores): espelho também nas faixas, não só nas fórmulas. `ativo:false`
+  // esconde da tela sem parar o cálculo — a regra que já vale no IBR.
+  const catalogo = await catalogoPadraoEfetivo();
+  const semaforoOverrides: Record<string, SemaforoDef> = {};
+  const ocultos: string[] = [];
+  for (const row of catalogo) {
+    if (!row.ativo) ocultos.push(row.nome);
+    if (row.semDirecao === "menor_ruim" || row.semDirecao === "maior_ruim") {
+      if (typeof row.semCritico === "number" && typeof row.semAtencao === "number") {
+        semaforoOverrides[row.nome] = { direcao: row.semDirecao, critico: row.semCritico, atencao: row.semAtencao };
+      }
+    }
+  }
+  res.json({
+    periodos: anos,
+    custoCapital: custoCapital ?? null,
+    cenario: calc.cenario,
+    ocultos,
+    indicadores: indicadoresIbrDoModelo(calc.resultado, anos, { custoCapital, semaforoOverrides }),
+  });
 });
 
 // GET /models/:id/historico-divida — saldo de Empréstimos e Financiamentos
