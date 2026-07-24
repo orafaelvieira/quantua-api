@@ -127,16 +127,33 @@ async function recalculaIndicadores(
     const bloco = alvo.slice(inicio, inicio + TAMANHO_BLOCO);
     const empresas = await carregaEmpresasDoBanco(bloco, dtFimMin, dtFimMax);
     for (const emp of empresas.values()) {
-      // calculateIndicators é CPU-síncrono. Pausa REAL (não só yield) a cada empresa:
-      // a vCPU compartilhada do plano básico estrangula sob carga contínua e o health
-      // check atrasa → DO reinicia o container (mortes com memória limpa em recalc;
-      // perfil local: 0,3ms/empresa — em prod chega a 0,5s = throttling de ~1000×).
-      // Ciclo de trabalho ~25%: 75ms/empresa + 1s a cada 25 — janelas generosas p/ o
-      // scheduler e o /health, ao custo de ~1 min a mais por arquivo de fechamento.
-      await new Promise<void>((r) => setTimeout(r, 75));
+      // CADÊNCIA (revista em 24/07/2026, com a migração para o Cloud Run).
+      //
+      // A pausa fixa daqui (75ms por empresa + 1s a cada 25) existia por uma
+      // razão que deixou de valer: no DigitalOcean, o /health tinha timeout de
+      // 1s e 9 falhas reiniciavam o container, e a vCPU compartilhada do plano
+      // básico estrangulava sob carga contínua. No Cloud Run não há liveness
+      // probe, então o recálculo não derruba mais nada — o que a pausa protege
+      // agora é só a LATÊNCIA das requisições dos usuários, já que o cálculo
+      // divide o event loop com o servidor HTTP.
+      //
+      // Medido: calculateIndicators custa 0,04ms; uma empresa inteira (3 visões
+      // × 16 dtFims) dá ~2ms, e o arquivo de 683 empresas gasta ~1,3s de CPU.
+      // A pausa fixa somava 78,5s no mesmo arquivo — 98% do tempo era espera
+      // fabricada para um risco que não existe mais.
+      //
+      // Agora: setImmediate a cada empresa CEDE o loop (a fase "check" roda
+      // depois do I/O, então uma requisição pendente é atendida antes de o
+      // recálculo continuar) sem parar o relógio. Como o trabalho entre duas
+      // cessões é de ~2ms, nenhuma requisição espera mais que isso.
+      await new Promise<void>((r) => setImmediate(r));
       feitas++;
       if (feitas % 25 === 0) {
-        await new Promise<void>((r) => setTimeout(r, 1000));
+        // Rede de segurança MEDIDA, não chutada: o atraso do event loop já é
+        // instrumentado; se ele passar do alvo, devolvemos ao loop o tempo que
+        // ele atrasou. Loop folgado (o caso normal) não paga nada.
+        const pausa = pausaAdaptativa(atrasoLoop.max / 1e6);
+        if (pausa > 0) await new Promise<void>((r) => setTimeout(r, pausa));
         await onProgresso?.(feitas, alvo.length);
       }
       for (const dtFim of dtFims) {
@@ -169,7 +186,11 @@ async function recalculaIndicadores(
     await grava();
     empresas.clear();
     coletaLixo();
-    await new Promise<void>((r) => setTimeout(r, 150));
+    // Respiro de fim de bloco: aqui a pausa REAL continua fazendo sentido — o
+    // coletaLixo() acima é uma GC major, a operação que mais bloqueia o loop no
+    // ciclo todo, e uma janela logo depois dela é o que mantém a API fluida.
+    // Também é barata: são ~17 blocos por arquivo (40 empresas cada).
+    await new Promise<void>((r) => setTimeout(r, pausaAdaptativa(atrasoLoop.max / 1e6) || 50));
   }
   return gravados;
 }
@@ -397,6 +418,31 @@ const progHist: ProgressoHistorico = {
 const atrasoLoop = monitorEventLoopDelay({ resolution: 20 });
 atrasoLoop.enable();
 let picoRss = 0;
+
+/** Alvo de latência do event loop durante o recálculo (ms). Abaixo disto o
+ *  recálculo não paga pausa nenhuma; acima, devolve ao loop o que atrasou. */
+export const ALVO_ATRASO_LOOP_MS = 50;
+/** Teto da pausa por respiro — evita que um pico isolado congele o recálculo. */
+export const TETO_PAUSA_MS = 500;
+
+/**
+ * Quanto pausar, dado o atraso REAL do event loop na janela recém-medida.
+ *
+ * A cadência do recálculo deixou de ser um número fixo (75ms por empresa,
+ * escolhido para sobreviver ao health check de 1s do DigitalOcean) e passou a
+ * reagir ao que está acontecendo: com o loop folgado — o caso normal no Cloud
+ * Run — a função devolve 0 e o recálculo corre solto; se o loop começa a
+ * atrasar (requisições concorrentes, GC major, throttling de CPU), ela devolve
+ * o próprio atraso como pausa, cedendo tempo de volta a quem está esperando.
+ *
+ * Função pura para poder ser provada sem subir servidor nem banco.
+ */
+export function pausaAdaptativa(atrasoMs: number, alvoMs = ALVO_ATRASO_LOOP_MS, tetoMs = TETO_PAUSA_MS): number {
+  // Medida inválida (NaN/Infinity) = instrumentação quebrada, não carga real:
+  // pausar por causa dela trocaria um problema de medição por lentidão de fato.
+  if (!Number.isFinite(atrasoMs) || atrasoMs <= alvoMs) return 0;
+  return Math.min(tetoMs, Math.round(atrasoMs));
+}
 
 /** Pico de RSS observado nas operações longas — exposto no /version. */
 export function getPicoRssMB(): number {
