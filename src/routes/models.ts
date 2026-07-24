@@ -34,7 +34,7 @@ import { resolveSectorPremises } from "../services/sector-benchmark";
 import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { cicloVidaModel } from "../services/ciclo-vida";
-import { TIPOS_PRODUTO, TipoProduto, montarRotulo, normalizarRotulo, tipoCompativel } from "../services/produto-empresa";
+import { TIPOS_PRODUTO, TipoProduto, PREFIXO_TIPO, montarRotulo, normalizarRotulo, tipoCompativel } from "../services/produto-empresa";
 import { montarConteudoModelo, aplicarFotoModelo, hashConteudo, type ConteudoFotoModelo } from "../services/snapshot-diario";
 import { damodaranDoSetorB3, DAMODARAN_PT } from "../services/damodaran-b3";
 import multer from "multer";
@@ -906,7 +906,17 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
         prisma.financialModel.aggregate({ where: { produtoId: envelope.id }, _max: { produtoVersao: true } }),
       ]);
       const versao = Math.max(maxAnalise._max.produtoVersao ?? 0, maxModelo._max.produtoVersao ?? 0) + 1;
-      await prisma.financialModel.update({ where: { id: model.id }, data: { produtoId: envelope.id, produtoVersao: versao } });
+      // NOME DA VERSÃO (regra do usuário, 24/07/2026): versionar NÃO renomeia —
+      // todas as versões do produto carregam o mesmo nome, mudando só o sufixo.
+      // Padrão: tipo + empresa + versão ("Valuation Move Farma · v2"). Antes,
+      // duas versões do mesmo valuation nasciam com o nome IDÊNTICO ("Valuation
+      // 2026"), e fora da pilha ninguém distinguia uma da outra.
+      // O complemento do BP entra no nome porque é ele que identifica a
+      // iniciativa — sem ele, dois planos da mesma empresa colidiriam de novo.
+      const nomeEmpresa = company.nomeFantasia || company.razaoSocial;
+      const complementoRotulo = envelope.rotulo.split("—")[1]?.trim();
+      const nomeVersao = `${PREFIXO_TIPO[envelope.tipo as TipoProduto]} ${nomeEmpresa}${complementoRotulo ? ` — ${complementoRotulo}` : ""} · v${versao}`;
+      await prisma.financialModel.update({ where: { id: model.id }, data: { produtoId: envelope.id, produtoVersao: versao, nome: nomeVersao } });
       // Envelope novo (não-IBR) sem vigente: a 1ª versão vira a vigente — mesma
       // regra de POST /produtos/:id/versoes; depois disso a escolha é manual.
       if (envelope.tipo !== "ibr" && !envelope.versaoVigenteId && versao === 1) {
