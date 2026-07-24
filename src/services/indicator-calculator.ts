@@ -111,7 +111,9 @@ function computeIndicator(
   dre: DRELineItem[],
   periodo: string,
   computed: Record<string, number | null>,
-  diasPeriodo = 365
+  diasPeriodo = 365,
+  /** Custo de capital do período (decimal). undefined = EVA não calculável. */
+  custoCapital?: number
 ): number | string | null {
   // BP values — Ativo (always positive)
   const ativoTotal = bpVal(bp, "Ativo Total", periodo);
@@ -265,6 +267,16 @@ function computeIndicator(
     case "ROA (Retorno sobre Ativos)": return div(lucroLiquido, ativoTotal);
     case "ROIC (Retorno sobre Capital Investido)":
       return div(nopat, patrimonioLiquido + capitalTerceiros);
+    // EVA — lucro econômico: o que sobra DEPOIS de remunerar todo o capital
+    // empregado, próprio inclusive. Positivo = a empresa criou valor no período;
+    // negativo = deu lucro contábil mas não pagou o custo do capital.
+    // Mesmo Capital Investido do ROIC, então EVA = (ROIC − custo capital) × CI.
+    case "EVA (Valor Econômico Agregado)": {
+      if (custoCapital === undefined) return null; // sem WACC não se inventa
+      const capitalInvestido = patrimonioLiquido + capitalTerceiros;
+      if (!Number.isFinite(capitalInvestido) || capitalInvestido === 0) return null;
+      return nopat - capitalInvestido * custoCapital;
+    }
 
     // DuPont
     case "ROE (Retorno sobre Patrimônio Líquido)": return div(lucroLiquido, patrimonioLiquido);
@@ -317,7 +329,17 @@ export function calculateIndicators(
   periodos: string[],
   semaforoOverrides?: Record<string, SemaforoDef>,
   diasOverride?: number, // força a base dos prazos (ex.: pares CVM — TRI=90, LTM=365)
-  periodosYTD?: string[] // períodos de BALANCETE (DRE acumulada no ano): dias = mês × 30
+  periodosYTD?: string[], // períodos de BALANCETE (DRE acumulada no ano): dias = mês × 30
+  extras?: {
+    /** Dias-base POR período, quando quem chama sabe melhor que a heurística.
+     *  O espelho do Valuation/BP usa isto: um ano parcial do horizonte (jul–dez)
+     *  tem 6 meses de DRE, e assumir 365 dobraria os prazos médios. */
+    diasPorPeriodo?: Record<string, number>;
+    /** Custo de capital (decimal, ex.: 0.1842) usado no EVA. Sem ele o EVA fica
+     *  null — estimar um WACC por conta seria inventar o número mais sensível
+     *  do indicador. No Valuation/BP vem do WACC do próprio modelo. */
+    custoCapital?: number;
+  }
 ): Indicador[] {
   // Ordem cronológica p/ os indicadores MULTI-PERÍODO (YoY) e dias-base dos prazos.
   const periodosOrd = [...periodos].sort((a, b) => diasKey(a) - diasKey(b));
@@ -326,7 +348,7 @@ export function calculateIndicators(
   // Períodos de balancete têm dias-base PRÓPRIOS (YTD): a mediana do espaçamento
   // da série mista anual+mensal daria 365 para um mês de maio (prazos médios ~2,4×
   // inflados). Cada período usa a base da SUA periodicidade.
-  for (const p of periodos) diasPorPeriodo[p] = diasOverride ?? (ytd.has(p) ? diasYTD(p) : diasDoPeriodo(p, periodos.filter((x) => !ytd.has(x) || x === p)));
+  for (const p of periodos) diasPorPeriodo[p] = extras?.diasPorPeriodo?.[p] ?? diasOverride ?? (ytd.has(p) ? diasYTD(p) : diasDoPeriodo(p, periodos.filter((x) => !ytd.has(x) || x === p)));
   // Receita Líquida por período (base do Crescimento YoY)
   const rlPor: Record<string, number | null> = {};
   for (const p of periodos) {
@@ -348,7 +370,7 @@ export function calculateIndicators(
         const cur = rlPor[periodo], antV = antP ? rlPor[antP] : null;
         val = cur != null && antV != null && antV !== 0 ? (cur - antV) / Math.abs(antV) : null;
       } else {
-        val = computeIndicator(template.nome, bp, dre, periodo, computed, diasPorPeriodo[periodo]);
+        val = computeIndicator(template.nome, bp, dre, periodo, computed, diasPorPeriodo[periodo], extras?.custoCapital);
       }
       valores[periodo] = val;
 

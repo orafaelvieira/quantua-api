@@ -103,8 +103,10 @@ describe("correções e novos indicadores (jul/2026)", () => {
   it("identidade DuPont: Margem Líquida × Giro do Ativo = ROA (na cascata da Rentabilidade)", () => {
     const inds = calculateIndicators(BP2, DRE2, ["2023"]);
     const rent = inds.filter((i) => i.tipo === "Indicadores de Rentabilidade").map((i) => i.nome);
-    // cascata na ordem: Margem, Giro, ROA, Alavancagem, ROE, ROIC
-    expect(rent).toEqual(["Margem Líquida", "Giro do Ativo", "ROA (Retorno sobre Ativos)", "Alavancagem", "ROE (Retorno sobre Patrimônio Líquido)", "ROIC (Retorno sobre Capital Investido)"]);
+    // cascata na ordem: Margem, Giro, ROA, Alavancagem, ROE, ROIC — e o EVA
+    // fechando o grupo (24/07/2026): o ROIC diz QUANTO rende o capital, o EVA
+    // diz se rendeu ACIMA do que custa. Ler um logo depois do outro é a leitura.
+    expect(rent).toEqual(["Margem Líquida", "Giro do Ativo", "ROA (Retorno sobre Ativos)", "Alavancagem", "ROE (Retorno sobre Patrimônio Líquido)", "ROIC (Retorno sobre Capital Investido)", "EVA (Valor Econômico Agregado)"]);
     const de = (nome: string) => inds.find((i) => i.tipo === "Indicadores de Rentabilidade" && i.nome === nome)?.valores["2023"] as number;
     expect(de("Margem Líquida") * de("Giro do Ativo")).toBeCloseTo(de("ROA (Retorno sobre Ativos)"), 10);
     expect(de("ROA (Retorno sobre Ativos)") * de("Alavancagem")).toBeCloseTo(de("ROE (Retorno sobre Patrimônio Líquido)"), 10);

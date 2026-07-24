@@ -180,6 +180,7 @@ export const INDICADORES_TEMPLATE: Array<{
   { tipo: "Indicadores de Rentabilidade", nome: "Alavancagem", formula: "Passivo Total / Patrimônio Líquido", tipoDado: "Índice" },
   { tipo: "Indicadores de Rentabilidade", nome: "ROE (Retorno sobre Patrimônio Líquido)", formula: "DuPont: ROA × Alavancagem (= Lucro Líquido / Patrimônio Líquido)", tipoDado: "%" },
   { tipo: "Indicadores de Rentabilidade", nome: "ROIC (Retorno sobre Capital Investido)", formula: "NOPAT / (Patrimônio Líquido + Capital de Terceiros + Partes Relacionadas)", tipoDado: "%" },
+  { tipo: "Indicadores de Rentabilidade", nome: "EVA (Valor Econômico Agregado)", formula: "NOPAT − (Capital Investido × custo de capital), com Capital Investido = Patrimônio Líquido + Capital de Terceiros + Partes Relacionadas (o mesmo do ROIC). Equivale a (ROIC − custo de capital) × Capital Investido. Positivo = criou valor além do custo do capital; negativo = houve lucro contábil, mas não o suficiente para remunerar o capital empregado. Exige um custo de capital definido — no Valuation e no Business Plan vem do WACC do próprio modelo.", tipoDado: "R$" },
 
   // Indicadores de Solvência — três lentes: Fleuriet (liquidez dinâmica) ·
   // Kanitz (liquidez estática) · Altman (sustentação econômica)
