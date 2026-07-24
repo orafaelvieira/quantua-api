@@ -136,6 +136,10 @@ export interface LinhaCusto {
    *  gasto dentro do ano nos modos pctReceita e fixoReajuste — o modo "serie"
    *  já é mês a mês e não usa. */
   sazonalidade?: number[];
+  /** Visão de preenchimento da TELA ("ano" default | "mes"). O motor não muda de
+   *  conta por causa dela — quem manda no cálculo é `valores` (mês digitado é
+   *  fato). Fica aqui só para o modelo carregar a tela no estado em que ficou. */
+  preenchimento?: "ano" | "mes";
   /** serie: valores explícitos. */
   valores?: Serie;
   /** Só em bloco CAPEX: taxa de depreciação linear da classe (a.a.; 0.1 = 10 anos). */
@@ -1001,6 +1005,54 @@ function valorSerie(
   return base * Math.pow(1 + g, i / 12) * fatorSaz * multi;
 }
 
+/**
+ * RATEIO DO ANO COM MESES TRAVADOS (regra do usuário, 24/07/2026).
+ *
+ * O total do ano é a PREMISSA; os meses que o analista digitou são FATOS; os
+ * meses livres absorvem a diferença, mantendo entre si a proporção da
+ * sazonalidade. Exemplo do usuário: ano projetado 100, curva uniforme, mas
+ * jan–jun foram digitados somando 60 → jul–dez recebem os 40 restantes (e não
+ * os 50 que a curva pediria), para o ano fechar em 100. Ano sem mês digitado
+ * segue a sazonalidade integralmente — nada muda.
+ *
+ * Por que importa: sem isto, digitar o realizado de um mês estoura (ou fura) o
+ * total do ano em silêncio — o valuation passa a descontar um fluxo que não é
+ * o que a premissa anual declara.
+ *
+ * @param total       total do ano (premissa)
+ * @param mesesDoAno  meses (1–12) do ano PRESENTES no horizonte
+ * @param pesos       sazonalidade por mês (índice 0–11, média 1); undefined = uniforme
+ * @param travados    mês (1–12) → valor digitado
+ * @returns valor por mês (1–12) para os meses LIVRES; os travados saem como digitados
+ */
+export function ratearAnoComTravas(
+  total: number,
+  mesesDoAno: number[],
+  pesos: number[] | undefined,
+  travados: Record<number, number>,
+): Record<number, number> {
+  const peso = (m: number) => (Array.isArray(pesos) && pesos.length === 12 ? num(pesos[m - 1], 1) : 1);
+  const out: Record<number, number> = {};
+  const livres: number[] = [];
+  let somaTravados = 0;
+  for (const m of mesesDoAno) {
+    if (typeof travados[m] === "number" && Number.isFinite(travados[m])) {
+      out[m] = travados[m];
+      somaTravados += travados[m];
+    } else {
+      livres.push(m);
+    }
+  }
+  if (!livres.length) return out; // ano inteiro digitado: o total vira a soma deles
+  const resto = total - somaTravados;
+  const somaPesosLivres = livres.reduce((s, m) => s + peso(m), 0);
+  for (const m of livres) {
+    // Peso zero em todos os livres: divide igual, senão o resto se perderia.
+    out[m] = somaPesosLivres > 0 ? resto * (peso(m) / somaPesosLivres) : resto / livres.length;
+  }
+  return out;
+}
+
 /** Modo "Por ano": materializa valoresAno para TODOS os anos do horizonte, para
  *  os modos ficarem EXCLUSIVOS (ano vazio nunca cai no Simples escondido):
  *  - ano vazio CONTINUA o último informado — pela TAXA MENSAL em [R$] (ano
@@ -1526,17 +1578,48 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
         const sazLinha = linha.sazonalidade;
         const temSazLinha = Array.isArray(sazLinha) && sazLinha.length === 12;
 
+        // O MÊS DIGITADO MANDA, E O ANO FECHA (regra do usuário, 24/07/2026).
+        // Valores mensais preenchidos à mão (tipicamente o realizado de jan..N)
+        // são FATO; a premissa anual continua valendo como total; os meses
+        // livres absorvem a diferença na proporção da sazonalidade. Sem meses
+        // digitados, nada muda — o rateio é o de sempre.
+        const manuais = (linha.valores ?? {}) as Serie;
+        const temManual = linha.modo !== "serie" && Object.keys(manuais).some((m) => mesesSet.has(m));
+
         const valores: Serie = {};
-        for (const mes of meses) {
-          const ano = mes.slice(0, 4);
-          const fSaz = temSazLinha ? num(sazLinha![Number(mes.split("-")[1]) - 1], 1) : 1;
-          if (linha.modo === "pctReceita") {
-            const pct = typeof pctPorAno?.[ano] === "number" ? pctPorAno[ano] : pctFlat;
-            valores[mes] = baseEm(mes) * pct * fSaz * multiLinha;
-          } else if (linha.modo === "fixoReajuste") {
-            valores[mes] = valorMensal * (fatorAno[ano] ?? 1) * fSaz * multiLinha;
-          } else {
-            valores[mes] = num(linha.valores?.[mes]) * multiLinha; // série já é mês a mês
+        if (temManual) {
+          // Total do ANO pela premissa (o que a linha renderia sem travas).
+          const brutoMes = (mes: string): number => {
+            const ano = mes.slice(0, 4);
+            const fSaz = temSazLinha ? num(sazLinha![Number(mes.split("-")[1]) - 1], 1) : 1;
+            return linha.modo === "pctReceita"
+              ? baseEm(mes) * (typeof pctPorAno?.[ano] === "number" ? pctPorAno[ano] : pctFlat) * fSaz
+              : valorMensal * (fatorAno[ano] ?? 1) * fSaz;
+          };
+          const porAno = new Map<string, string[]>();
+          for (const mes of meses) porAno.set(mes.slice(0, 4), [...(porAno.get(mes.slice(0, 4)) ?? []), mes]);
+          for (const [ano, mesesAno] of porAno) {
+            const total = mesesAno.reduce((s, m) => s + brutoMes(m), 0);
+            const travados: Record<number, number> = {};
+            for (const m of mesesAno) {
+              const v = manuais[m];
+              if (typeof v === "number" && Number.isFinite(v)) travados[Number(m.split("-")[1])] = v;
+            }
+            const rateio = ratearAnoComTravas(total, mesesAno.map((m) => Number(m.split("-")[1])), sazLinha, travados);
+            for (const m of mesesAno) valores[m] = num(rateio[Number(m.split("-")[1])]) * multiLinha;
+          }
+        } else {
+          for (const mes of meses) {
+            const ano = mes.slice(0, 4);
+            const fSaz = temSazLinha ? num(sazLinha![Number(mes.split("-")[1]) - 1], 1) : 1;
+            if (linha.modo === "pctReceita") {
+              const pct = typeof pctPorAno?.[ano] === "number" ? pctPorAno[ano] : pctFlat;
+              valores[mes] = baseEm(mes) * pct * fSaz * multiLinha;
+            } else if (linha.modo === "fixoReajuste") {
+              valores[mes] = valorMensal * (fatorAno[ano] ?? 1) * fSaz * multiLinha;
+            } else {
+              valores[mes] = num(linha.valores?.[mes]) * multiLinha; // série já é mês a mês
+            }
           }
         }
         out.push({ id: linha.id, nome: linha.nome, valores, destino: linha.destino });
