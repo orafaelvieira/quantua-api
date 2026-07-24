@@ -35,10 +35,27 @@ jobs:
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
 
-      # Só --image: secrets, envs, Cloud SQL e min/max instances ficam
-      # preservados da revisão anterior do serviço.
+      # Secrets, envs e Cloud SQL seguem preservados da revisão anterior (não são
+      # passados aqui). O que MUDOU em 24/07/2026: as três configurações de que o
+      # código depende para funcionar passam a ser declaradas no repositório, em
+      # vez de existirem só no serviço — onde ninguém as vê e um ajuste futuro as
+      # derruba sem deixar rastro.
+      #
+      # --timeout=1800  O padrão do Cloud Run é 300s e o cliente do front espera
+      #   até 300s na reconciliação multi-documento com IA (api.ts). Empate exato:
+      #   qualquer variação e o Cloud Run corta primeiro, devolvendo 504 no meio
+      #   do processamento de um IBR. 30 min dão folga sobre a operação mais longa.
+      #
+      # --min-instances=1 --max-instances=1  O node-cron roda IN-PROCESS e o
+      #   rate-limit e os locks são em memória: com 2 instâncias o snapshot diário
+      #   roda duas vezes, o sync da CVM concorre consigo mesmo e o rate-limit
+      #   fura. min=1 também mantém a CPU sempre alocada, sem o que os crons nem
+      #   disparam. Já estava assim no serviço; agora está escrito.
       - name: Deploy Cloud Run
         run: >-
           gcloud run deploy quantua-api
           --image=southamerica-east1-docker.pkg.dev/quantua/quantua/quantua-api:${{ github.sha }}
           --region=southamerica-east1
+          --timeout=1800
+          --min-instances=1
+          --max-instances=1
