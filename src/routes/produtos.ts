@@ -200,11 +200,15 @@ router.post("/padronizar-nomes", async (req: AuthRequest, res: Response): Promis
       const complementoFinal = rotuloEfetivo.split("—").slice(1).join("—").trim();
       const anoFinal = /(\d{4})/.exec(rotuloEfetivo.split("—")[0] ?? "")?.[1] ?? anoAtual;
       const [analyses, models] = await Promise.all([
-        prisma.analysis.findMany({ where: { produtoId: p.id }, select: { id: true, nome: true, periodo: true, produtoVersao: true } }),
+        // dadosEstruturados entra por causa da DATA-BASE: `periodo` é texto de
+        // exibição e às vezes vem sem o mês ("2026-LTM"); a lista extraída tem
+        // a data do último documento, que é a definição da data-base.
+        prisma.analysis.findMany({ where: { produtoId: p.id }, select: { id: true, nome: true, periodo: true, produtoVersao: true, dadosEstruturados: true } }),
         prisma.financialModel.findMany({ where: { produtoId: p.id }, select: { id: true, nome: true, mesInicial: true, produtoVersao: true } }),
       ]);
       for (const a of analyses) {
-        const novo = nomeDocumento({ tipo, empresa: nomeEmpresa, complemento: complementoFinal, dataBase: dataBaseDoIbr(a.periodo), versao: a.produtoVersao ?? 1 });
+        const periodosExtraidos = (a.dadosEstruturados as { periodos?: string[] } | null)?.periodos ?? null;
+        const novo = nomeDocumento({ tipo, empresa: nomeEmpresa, complemento: complementoFinal, dataBase: dataBaseDoIbr(a.periodo, periodosExtraidos), versao: a.produtoVersao ?? 1 });
         if (novo === a.nome) continue;
         documentosRenomeados.push({ id: a.id, origem: "analysis", de: a.nome, para: novo, empresa: nomeEmpresa });
         if (aplicar) {
@@ -295,8 +299,8 @@ router.post("/:id/versoes", async (req: AuthRequest, res: Response): Promise<voi
 
   // O registro precisa ser DA MESMA empresa, estar SOLTO, e casar com o tipo.
   const registro = origem === "analysis"
-    ? await prisma.analysis.findFirst({ where: { id: registroId, companyId }, select: { id: true, nome: true, produtoId: true, status: true } })
-    : await prisma.financialModel.findFirst({ where: { id: registroId, companyId }, select: { id: true, nome: true, produtoId: true, objetivo: true, status: true } });
+    ? await prisma.analysis.findFirst({ where: { id: registroId, companyId }, select: { id: true, nome: true, produtoId: true, status: true, periodo: true, dadosEstruturados: true } })
+    : await prisma.financialModel.findFirst({ where: { id: registroId, companyId }, select: { id: true, nome: true, produtoId: true, objetivo: true, status: true, mesInicial: true } });
   if (!registro) { res.status(404).json({ error: "Registro não encontrado nesta empresa" }); return; }
   if (registro.produtoId) {
     res.status(409).json({ error: "Este registro já pertence a um produto — remova de lá antes (nada é movido em silêncio)." });
@@ -308,10 +312,37 @@ router.post("/:id/versoes", async (req: AuthRequest, res: Response): Promise<voi
   const versoes = await versoesDoProduto(produto.id);
   const versao = proximaVersao(versoes);
 
+  // NOME NO PADRÃO ao entrar no produto (24/07/2026): entrar num produto É
+  // ganhar uma versão, e o nome carrega a versão. Sem isto, um registro
+  // organizado à mão ficava com o nome antigo ao lado de irmãos padronizados.
+  const empresaDoProduto = await prisma.company.findUnique({ where: { id: companyId }, select: { nomeFantasia: true, razaoSocial: true } });
+  const nomeEmpresa = empresaDoProduto?.nomeFantasia || empresaDoProduto?.razaoSocial || "";
+  const complementoProduto = produto.rotulo.split("—").slice(1).join("—").trim();
+  const nomePadrao = nomeEmpresa
+    ? nomeDocumento({
+        tipo: produto.tipo as TipoProduto,
+        empresa: nomeEmpresa,
+        complemento: complementoProduto,
+        dataBase: origem === "analysis"
+          ? dataBaseDoIbr((registro as { periodo?: string | null }).periodo, ((registro as { dadosEstruturados?: { periodos?: string[] } | null }).dadosEstruturados)?.periodos ?? null)
+          : dataBaseDoModelo((registro as { mesInicial?: string }).mesInicial ?? ""),
+        ano: /(\d{4})/.exec(produto.rotulo)?.[1] ?? (registro as { mesInicial?: string }).mesInicial?.slice(0, 4),
+        versao,
+      })
+    : registro.nome;
+
   if (origem === "analysis") {
-    await prisma.analysis.update({ where: { id: registroId }, data: { produtoId: produto.id, produtoVersao: versao } });
+    await prisma.analysis.update({ where: { id: registroId }, data: { produtoId: produto.id, produtoVersao: versao, nome: nomePadrao } });
   } else {
-    await prisma.financialModel.update({ where: { id: registroId }, data: { produtoId: produto.id, produtoVersao: versao } });
+    await prisma.financialModel.update({ where: { id: registroId }, data: { produtoId: produto.id, produtoVersao: versao, nome: nomePadrao } });
+  }
+  if (nomePadrao !== registro.nome) {
+    await registrarAuditoria({
+      userId: req.userId!, entity: origem === "analysis" ? "analysis" : "financial_model", entityId: registroId,
+      ...(origem === "analysis" ? { analysisId: registroId } : {}),
+      field: "nome padronizado (entrada no produto)",
+      before: { nome: registro.nome }, after: { nome: nomePadrao }, source: "produtos",
+    });
   }
 
   // Primeiro registro de um envelope NÃO-IBR vira vigente por default óbvio

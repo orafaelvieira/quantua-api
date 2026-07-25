@@ -91,6 +91,17 @@ describe("dataBaseDoIbr", () => {
     expect(dataBaseDoIbr(null)).toBe("");
     expect(dataBaseDoIbr("")).toBe("");
   });
+
+  it("os períodos EXTRAÍDOS mandam — é a data do último documento", () => {
+    // Caso real (Pampa): o texto diz "2026-LTM", que não tem mês de fechamento;
+    // a lista extraída tem 30/06/2026, que é a data-base de verdade.
+    expect(dataBaseDoIbr("2024 · 2025 · 2026-LTM", ["31/12/2024", "31/12/2025", "30/06/2026"])).toBe("jun/26");
+    expect(dataBaseDoIbr("2024 · 2025 · 2026-LTM")).toBe(""); // sem a lista, não chuta dezembro
+  });
+
+  it("período no formato AAAA-MM também é aceito", () => {
+    expect(dataBaseDoIbr("2026-05", null)).toBe("mai/26");
+  });
 });
 
 describe("nomeDocumento", () => {
