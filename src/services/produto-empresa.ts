@@ -110,17 +110,26 @@ export function dataBaseDoModelo(mesInicial: string): string {
  * 31/12/2025" → "dez/25"; "2023 · 2024 · 2025" → "dez/25" (exercício fechado).
  * A data de REALIZAÇÃO do IBR não entra no nome: fica no sistema, para controle.
  */
-export function dataBaseDoIbr(periodo?: string | null): string {
-  const p = (periodo || "").trim();
-  if (!p) return "";
-  const datas = p.match(/(\d{2})\/(\d{2})\/(\d{4})/g);
-  if (datas?.length) {
-    // dd/mm/aaaa — o dia não entra no nome; a data-base é o MÊS de fechamento.
-    const partes = /(\d{2})\/(\d{2})\/(\d{4})/.exec(datas[datas.length - 1]!)!;
-    return mesAbreviado(Number(partes[3]), Number(partes[2]));
-  }
-  const anos = p.match(/\d{4}/g);
-  if (anos?.length) return mesAbreviado(Number(anos[anos.length - 1]), 12);
+export function dataBaseDoIbr(periodo?: string | null, periodosExtraidos?: string[] | null): string {
+  // FONTE PREFERIDA: os períodos EXTRAÍDOS — a data do último documento, que é
+  // a definição da data-base. O campo `periodo` é texto de exibição e às vezes
+  // chega sem o mês de fechamento ("2024 · 2025 · 2026-LTM"), caso em que ele
+  // sozinho não diz quando a série termina.
+  const lista = (periodosExtraidos ?? []).filter((s): s is string => typeof s === "string" && !!s.trim());
+  const alvo = lista.length
+    ? lista[lista.length - 1]!.trim()
+    : ((periodo || "").split(/\s+a\s+|·|;|,/).map((s) => s.trim()).filter(Boolean).pop() ?? "");
+  if (!alvo) return "";
+
+  // dd/mm/aaaa — o dia não entra no nome; a data-base é o MÊS de fechamento.
+  const dma = /(\d{2})\/(\d{2})\/(\d{4})/.exec(alvo);
+  if (dma) return mesAbreviado(Number(dma[3]), Number(dma[2]));
+  const anoMes = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(alvo);
+  if (anoMes) return mesAbreviado(Number(anoMes[1]), Number(anoMes[2]));
+  // Exercício fechado ("2025") encerra em dezembro.
+  if (/^\d{4}$/.test(alvo)) return mesAbreviado(Number(alvo), 12);
+  // "2026-LTM" e afins: o mês de fechamento não está declarado — não se inventa
+  // data. Sem data-base, o nome sai sem ela.
   return "";
 }
 

@@ -32,6 +32,7 @@ import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
 import { resolverCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
 import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
+import { nomeDocumento, dataBaseDoIbr } from "../services/produto-empresa";
 import { montarConteudoAnalise, aplicarFotoAnalise, hashConteudo, STATUS_TRANSITORIOS, type ConteudoFotoAnalise, type DocFoto } from "../services/snapshot-diario";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
@@ -912,6 +913,43 @@ async function runAnalysisBackground(
     });
     if (salvo.count === 0) { console.log(`[generate] ${analysisId} cancelada durante a IA — resultado descartado`); return; }
     console.log(`[generate] ${analysisId} CONCLUÍDA`);
+
+    // NOME NO PADRÃO AO CONCLUIR (pedido do usuário, 24/07/2026). A data-base do
+    // IBR é a data do ÚLTIMO documento extraído — ela só vira FATO aqui. Por
+    // isso o nome nasce "IBR <Empresa> · v1" na criação e ganha a data-base na
+    // conclusão: "IBR Move Farma Repro · dez/25 · v1". Fica na trilha (nome
+    // antes → nome depois), e falhar aqui nunca desfaz a conclusão: o nome é
+    // organização, o resultado é o produto.
+    try {
+      const a = await prisma.analysis.findUnique({
+        where: { id: analysisId },
+        select: { nome: true, periodo: true, produtoVersao: true, produtoId: true, userId: true, dadosEstruturados: true, company: { select: { nomeFantasia: true, razaoSocial: true } } },
+      });
+      const periodosExtraidos = (a?.dadosEstruturados as { periodos?: string[] } | null)?.periodos ?? null;
+      const empresa = a?.company?.nomeFantasia || a?.company?.razaoSocial || "";
+      if (a && empresa) {
+        const produto = a.produtoId
+          ? await prisma.produtoEmpresa.findUnique({ where: { id: a.produtoId }, select: { rotulo: true } })
+          : null;
+        const novoNome = nomeDocumento({
+          tipo: "ibr",
+          empresa,
+          complemento: produto?.rotulo.split("—")[1]?.trim(),
+          dataBase: dataBaseDoIbr(a.periodo, periodosExtraidos),
+          versao: a.produtoVersao ?? 1,
+        });
+        if (novoNome !== a.nome) {
+          await prisma.analysis.update({ where: { id: analysisId }, data: { nome: novoNome } });
+          await registrarAuditoria({
+            userId: a.userId, analysisId, entity: "analysis", entityId: analysisId,
+            field: "nome padronizado (conclusão do IBR)",
+            before: { nome: a.nome }, after: { nome: novoNome }, source: "analyses",
+          });
+        }
+      }
+    } catch (e) {
+      console.error(`[generate] ${analysisId}: padronização do nome falhou (IBR segue concluído):`, e);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // PRESERVA o resultado anterior: gravar só { erro } apagava a análise boa que já
