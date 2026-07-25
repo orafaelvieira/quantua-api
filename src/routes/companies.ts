@@ -1,7 +1,7 @@
 import { Router, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../db/client";
-import { requireAuth, requireQuantua, AuthRequest } from "../middleware/auth";
+import { requireAuth, requireQuantua, requireInternal, AuthRequest } from "../middleware/auth";
 import { whereEmpresaVisivel } from "../services/escopo-empresa";
 import { deleteFile } from "../services/storage";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
@@ -36,10 +36,13 @@ function normalizarReceitaWs(d: Record<string, any>): Record<string, unknown> {
   };
 }
 
-router.get("/cnpj/:cnpj", async (req: AuthRequest, res: Response): Promise<void> => {
-  const digits = (req.params.cnpj as string).replace(/\D/g, "");
-  if (digits.length !== 14) { res.status(400).json({ error: "CNPJ inválido" }); return; }
-
+/**
+ * Consulta o CNPJ na cadeia de fontes e devolve a resposta no shape BrasilAPI —
+ * ou `{ naoEncontrado: true }` quando as fontes confirmam que o CNPJ não existe.
+ * Extraído da rota (24/07/2026) para a reconsulta da ficha usar a MESMA cadeia:
+ * duas cópias da cascata dariam duas verdades sobre o que é "a Receita".
+ */
+async function consultarCnpj(digits: string): Promise<Record<string, any> | { naoEncontrado: true } | null> {
   let houve404 = false;
 
   // 1ª e 2ª pernas: BrasilAPI e minhareceita (mesmo shape — passa direto)
@@ -51,8 +54,7 @@ router.get("/cnpj/:cnpj", async (req: AuthRequest, res: Response): Promise<void>
       const r = await fetch(url, { headers: CABECALHOS_CNPJ, signal: AbortSignal.timeout(6000) });
       if (r.status === 404) { houve404 = true; continue; } // confirma na próxima fonte
       if (!r.ok) { console.error(`[cnpj] ${nome} ${digits} → HTTP ${r.status}`); continue; }
-      res.json(await r.json());
-      return;
+      return (await r.json()) as Record<string, any>;
     } catch (err) {
       console.error(`[cnpj] ${nome} falhou:`, err instanceof Error ? err.message : err);
     }
@@ -63,7 +65,7 @@ router.get("/cnpj/:cnpj", async (req: AuthRequest, res: Response): Promise<void>
     const r = await fetch(`https://receitaws.com.br/v1/cnpj/${digits}`, { headers: CABECALHOS_CNPJ, signal: AbortSignal.timeout(8000) });
     if (r.ok) {
       const d = (await r.json()) as Record<string, any>;
-      if (d.status !== "ERROR" && d.nome) { res.json(normalizarReceitaWs(d)); return; }
+      if (d.status !== "ERROR" && d.nome) return normalizarReceitaWs(d) as Record<string, any>;
       houve404 = houve404 || d.status === "ERROR";
     } else {
       console.error(`[cnpj] ReceitaWS ${digits} → HTTP ${r.status}`);
@@ -72,7 +74,16 @@ router.get("/cnpj/:cnpj", async (req: AuthRequest, res: Response): Promise<void>
     console.error("[cnpj] ReceitaWS falhou:", err instanceof Error ? err.message : err);
   }
 
-  if (houve404) { res.status(404).json({ error: "CNPJ não encontrado na Receita Federal" }); return; }
+  return houve404 ? { naoEncontrado: true } : null;
+}
+
+router.get("/cnpj/:cnpj", async (req: AuthRequest, res: Response): Promise<void> => {
+  const digits = (req.params.cnpj as string).replace(/\D/g, "");
+  if (digits.length !== 14) { res.status(400).json({ error: "CNPJ inválido" }); return; }
+
+  const dados = await consultarCnpj(digits);
+  if (dados && !("naoEncontrado" in dados)) { res.json(dados); return; }
+  if (dados) { res.status(404).json({ error: "CNPJ não encontrado na Receita Federal" }); return; }
   res.status(502).json({ error: "Fontes da Receita indisponíveis no momento — preencha manualmente e reconsulte depois" });
 });
 
@@ -225,6 +236,141 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   });
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
   res.json(company);
+});
+
+/**
+ * GET /companies/:id/cadastro — FICHA CADASTRAL completa (uso interno).
+ *
+ * Pedido do usuário (24/07/2026): "criar uma tela de consulta que tenha todos os
+ * dados possíveis da receita". A consulta de CNPJ sempre gravou a resposta
+ * INTEIRA em `cnpjData` — endereço, contatos, CNAEs secundários e quadro
+ * societário estavam na base e não apareciam em lugar nenhum. Esta rota expõe
+ * tudo, organizado, sem reconsultar a Receita.
+ *
+ * `requireInternal`: o quadro societário é público na Receita, mas é dado
+ * PESSOAL de terceiros — fica na equipe interna e nunca em documento do cliente
+ * (o portal usa outras rotas; esta responde 403 para role "client").
+ */
+router.get("/:id/cadastro", requireInternal, async (req: AuthRequest, res: Response): Promise<void> => {
+  const company = await prisma.company.findFirst({
+    where: { id: req.params.id as string, ...whereEmpresaVisivel(req) },
+  });
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+
+  const d = (company.cnpjData ?? {}) as Record<string, any>;
+  const texto = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const numero = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+  res.json({
+    // ── O que está no CADASTRO (editável pelo analista) ──
+    cadastro: {
+      id: company.id,
+      razaoSocial: company.razaoSocial,
+      nomeFantasia: company.nomeFantasia,
+      cnpj: company.cnpj,
+      setor: company.setor,
+      porte: company.porte,
+      uf: company.uf,
+      municipio: company.municipio,
+      regimeTributario: company.regimeTributario,
+      regimeFechamento: company.regimeFechamento,
+      status: company.status,
+      criadoEm: company.createdAt,
+    },
+    // ── O que veio da RECEITA (leitura; a fonte é a consulta de CNPJ) ──
+    receita: {
+      razaoSocial: texto(d.razao_social),
+      nomeFantasia: texto(d.nome_fantasia),
+      situacaoCadastral: company.situacaoCadastral ?? texto(d.descricao_situacao_cadastral),
+      dataSituacaoCadastral: texto(d.data_situacao_cadastral),
+      motivoSituacaoCadastral: texto(d.descricao_motivo_situacao_cadastral),
+      dataInicioAtividade: company.dataInicioAtividade ?? texto(d.data_inicio_atividade),
+      naturezaJuridica: company.naturezaJuridica ?? texto(d.natureza_juridica),
+      porteReceita: texto(d.porte),
+      capitalSocial: company.capitalSocial ?? numero(d.capital_social),
+      matrizFilial: texto(d.descricao_identificador_matriz_filial),
+      cnaePrincipal: company.cnae ? { codigo: company.cnae, descricao: company.cnaeDescricao } : null,
+      cnaesSecundarios: Array.isArray(d.cnaes_secundarios)
+        ? d.cnaes_secundarios.map((c: any) => ({ codigo: String(c?.codigo ?? ""), descricao: texto(c?.descricao) })).filter((c: any) => c.codigo)
+        : [],
+      endereco: {
+        logradouro: texto(d.logradouro),
+        numero: texto(d.numero),
+        complemento: texto(d.complemento),
+        bairro: texto(d.bairro),
+        municipio: company.municipio ?? texto(d.municipio),
+        uf: company.uf ?? texto(d.uf),
+        cep: texto(d.cep),
+      },
+      contato: {
+        telefone: texto(d.ddd_telefone_1),
+        telefone2: texto(d.ddd_telefone_2),
+        email: texto(d.email),
+      },
+      simples: {
+        optanteSimples: typeof d.opcao_pelo_simples === "boolean" ? d.opcao_pelo_simples : null,
+        dataOpcaoSimples: texto(d.data_opcao_pelo_simples),
+        optanteMei: typeof d.opcao_pelo_mei === "boolean" ? d.opcao_pelo_mei : null,
+      },
+      fonte: texto(d._fonte) ?? (Object.keys(d).length ? "brasilapi" : null),
+    },
+    // ── QUADRO SOCIETÁRIO — dado pessoal de terceiros, uso interno ──
+    socios: Array.isArray(d.qsa)
+      ? d.qsa.map((s: any) => ({
+          nome: texto(s?.nome_socio) ?? texto(s?.nome),
+          qualificacao: texto(s?.qualificacao_socio) ?? texto(s?.qual),
+          dataEntrada: texto(s?.data_entrada_sociedade),
+          faixaEtaria: texto(s?.faixa_etaria),
+          representanteLegal: texto(s?.nome_representante_legal),
+          qualificacaoRepresentante: texto(s?.qualificacao_representante_legal),
+          pais: texto(s?.pais),
+        })).filter((s: any) => s.nome)
+      : [],
+    /** Sem consulta de CNPJ gravada, a ficha só tem o que o analista digitou. */
+    temDadosDaReceita: Object.keys(d).length > 0,
+  });
+});
+
+/**
+ * POST /companies/:id/reconsultar-cnpj — atualiza a ficha com a Receita de hoje.
+ * Situação cadastral, endereço e QSA mudam com o tempo; sem isto a ficha
+ * congelava no dia do cadastro. Grava a resposta inteira e promove os campos que
+ * a análise usa; o que o analista editou à mão (setor, porte, regime) NÃO é
+ * sobrescrito — decisão dele vale mais que palpite de mapeamento.
+ */
+router.post("/:id/reconsultar-cnpj", requireInternal, async (req: AuthRequest, res: Response): Promise<void> => {
+  const company = await prisma.company.findFirst({
+    where: { id: req.params.id as string, ...whereEmpresaVisivel(req) },
+  });
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  const digits = (company.cnpj ?? "").replace(/\D/g, "");
+  if (digits.length !== 14) { res.status(400).json({ error: "Esta empresa não tem CNPJ no cadastro — informe o CNPJ para consultar a Receita." }); return; }
+
+  const dados = await consultarCnpj(digits);
+  if (!dados) { res.status(502).json({ error: "Não foi possível consultar a Receita agora (as três fontes falharam). Tente novamente em alguns minutos." }); return; }
+  if ("naoEncontrado" in dados) { res.status(404).json({ error: "CNPJ não encontrado na Receita Federal." }); return; }
+
+  const d = dados;
+  const antes = { situacaoCadastral: company.situacaoCadastral, capitalSocial: company.capitalSocial, municipio: company.municipio };
+  const atualizado = await prisma.company.update({
+    where: { id: company.id },
+    data: {
+      cnpjData: d as object,
+      municipio: typeof d.municipio === "string" ? d.municipio : company.municipio,
+      cnae: d.cnae_fiscal ? String(d.cnae_fiscal) : company.cnae,
+      cnaeDescricao: typeof d.cnae_fiscal_descricao === "string" ? d.cnae_fiscal_descricao : company.cnaeDescricao,
+      naturezaJuridica: typeof d.natureza_juridica === "string" ? d.natureza_juridica : company.naturezaJuridica,
+      dataInicioAtividade: typeof d.data_inicio_atividade === "string" ? d.data_inicio_atividade : company.dataInicioAtividade,
+      situacaoCadastral: typeof d.descricao_situacao_cadastral === "string" ? d.descricao_situacao_cadastral : company.situacaoCadastral,
+      capitalSocial: Number.isFinite(Number(d.capital_social)) ? Number(d.capital_social) : company.capitalSocial,
+    },
+  });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "company", entityId: company.id, field: "reconsulta da Receita",
+    before: antes,
+    after: { situacaoCadastral: atualizado.situacaoCadastral, capitalSocial: atualizado.capitalSocial, municipio: atualizado.municipio, fonte: d._fonte ?? "brasilapi" },
+  });
+  res.json({ ok: true });
 });
 
 /** Sugestão de SETOR B3 pelo CNAE da Receita (principal + secundários) — zero IA.
