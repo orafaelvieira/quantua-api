@@ -28,6 +28,7 @@ import {
   dataBaseDoModelo,
   VersaoEnvelope,
 } from "../services/produto-empresa";
+import { rotuloDoDestino } from "../services/produto-vinculo";
 
 const router = Router();
 router.use(requireAuth);
@@ -115,6 +116,38 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
       analyses: analisesSoltas.map((a) => ({ ...a, cicloVida: cicloVidaAnalysis(a.status), etapa: etapaAnalysis(a.status) })),
       models: modelosSoltos.map((m) => ({ ...m, cicloVida: cicloVidaModel(m.status), etapa: null as string | null })),
     },
+  });
+});
+
+/**
+ * GET /produtos/rotulo?companyId=&tipo=&complemento= — qual rótulo o "produto
+ * novo" produziria e se ele está LIVRE na empresa.
+ *
+ * Serve aos wizards: eles avisam ANTES de criar ("esta empresa já tem o produto
+ * IBR — diferencie ou use Nova versão dentro dele"), em vez de deixar o analista
+ * descobrir na tela seguinte. Leitura pura, sem efeito colateral.
+ */
+router.get("/rotulo", async (req: AuthRequest, res: Response): Promise<void> => {
+  const companyId = String(req.query.companyId ?? "");
+  const tipo = String(req.query.tipo ?? "") as TipoProduto;
+  if (!companyId || !TIPOS_PRODUTO.includes(tipo)) {
+    res.status(400).json({ error: `companyId e tipo (${TIPOS_PRODUTO.join(", ")}) são obrigatórios` });
+    return;
+  }
+  const company = await companyNoEscopo(companyId, req);
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  const r = await rotuloDoDestino({
+    companyId,
+    tipo,
+    periodo: req.query.periodo ? String(req.query.periodo) : null,
+    complemento: req.query.complemento ? String(req.query.complemento) : null,
+  });
+  res.json({
+    rotulo: r.rotulo,
+    erro: r.erro ?? null,
+    disponivel: !r.erro && !!r.rotulo && !r.existente,
+    existente: r.existente ?? null,
+    empresa: company.nomeFantasia || company.razaoSocial,
   });
 });
 

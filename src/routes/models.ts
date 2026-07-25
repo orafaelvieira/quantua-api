@@ -34,7 +34,8 @@ import { resolveSectorPremises } from "../services/sector-benchmark";
 import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { cicloVidaModel } from "../services/ciclo-vida";
-import { TIPOS_PRODUTO, TipoProduto, montarRotulo, normalizarRotulo, tipoCompativel, nomeDocumento, dataBaseDoModelo } from "../services/produto-empresa";
+import { TipoProduto, dataBaseDoModelo } from "../services/produto-empresa";
+import { vincularAoProduto, VinculoFeito, ColisaoProduto } from "../services/produto-vinculo";
 import { montarConteudoModelo, aplicarFotoModelo, hashConteudo, type ConteudoFotoModelo } from "../services/snapshot-diario";
 import { damodaranDoSetorB3, DAMODARAN_PT } from "../services/damodaran-b3";
 import multer from "multer";
@@ -882,61 +883,25 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   //
   // O rótulo é a IDENTIDADE do envelope: se já existe um com o mesmo rótulo
   // normalizado, o modelo entra NELE como versão seguinte — nunca cria duplicata.
-  let produtoVinculado: { id: string; rotulo: string; versao: number } | null = null;
+  let produtoVinculado: VinculoFeito | null = null;
+  let colisaoProduto: ColisaoProduto | null = null;
   try {
-    const objetivoModelo = model.objetivo;
-    let envelope = produtoId
-      ? await prisma.produtoEmpresa.findFirst({ where: { id: String(produtoId), companyId } })
-      : null;
-    if (!envelope && produtoNovo && typeof produtoNovo === "object") {
-      const pn = produtoNovo as { tipo?: string; periodo?: string; complemento?: string };
-      const tipo = (pn.tipo || (objetivoModelo === "ambos" ? "valuation" : objetivoModelo)) as TipoProduto;
-      if (TIPOS_PRODUTO.includes(tipo)) {
-        const { rotulo, erro } = montarRotulo(tipo, { periodo: pn.periodo, complemento: pn.complemento });
-        if (!erro) {
-          const rotuloNorm = normalizarRotulo(rotulo);
-          envelope = await prisma.produtoEmpresa.findFirst({ where: { companyId, rotuloNorm } })
-            ?? await prisma.produtoEmpresa.create({ data: { companyId, tipo, rotulo, rotuloNorm, userId: req.userId! } });
-        }
-      }
-    }
-    if (envelope && tipoCompativel(envelope.tipo as TipoProduto, "model", objetivoModelo).ok) {
-      const [maxAnalise, maxModelo] = await Promise.all([
-        prisma.analysis.aggregate({ where: { produtoId: envelope.id }, _max: { produtoVersao: true } }),
-        prisma.financialModel.aggregate({ where: { produtoId: envelope.id }, _max: { produtoVersao: true } }),
-      ]);
-      const versao = Math.max(maxAnalise._max.produtoVersao ?? 0, maxModelo._max.produtoVersao ?? 0) + 1;
-      // NOME DA VERSÃO (regra do usuário, 24/07/2026): versionar NÃO renomeia —
-      // todas as versões do produto carregam o mesmo nome, mudando só o sufixo.
-      // Padrão: tipo + empresa + versão ("Valuation Move Farma · v2"). Antes,
-      // duas versões do mesmo valuation nasciam com o nome IDÊNTICO ("Valuation
-      // 2026"), e fora da pilha ninguém distinguia uma da outra.
-      // O complemento do BP entra no nome porque é ele que identifica a
-      // iniciativa — sem ele, dois planos da mesma empresa colidiriam de novo.
-      const nomeVersao = nomeDocumento({
-        tipo: envelope.tipo as TipoProduto,
-        empresa: company.nomeFantasia || company.razaoSocial,
-        complemento: envelope.rotulo.split("—")[1]?.trim(),
-        // Valuation/BP: data-base = fecho do mês anterior ao início da projeção.
-        dataBase: dataBaseDoModelo(mesInicialEfetivo),
-        // Orçamento: o que identifica é o EXERCÍCIO, não a data-base.
-        ano: mesInicialEfetivo.slice(0, 4),
-        versao,
-      });
-      await prisma.financialModel.update({ where: { id: model.id }, data: { produtoId: envelope.id, produtoVersao: versao, nome: nomeVersao } });
-      // Envelope novo (não-IBR) sem vigente: a 1ª versão vira a vigente — mesma
-      // regra de POST /produtos/:id/versoes; depois disso a escolha é manual.
-      if (envelope.tipo !== "ibr" && !envelope.versaoVigenteId && versao === 1) {
-        await prisma.produtoEmpresa.update({ where: { id: envelope.id }, data: { versaoVigenteId: model.id } });
-      }
-      await registrarAuditoria({
-        userId: req.userId!, entity: "produto_empresa", entityId: envelope.id,
-        field: "versão declarada",
-        after: { origem: "model", registroId: model.id, nome: model.nome, versao, naCriacao: true },
-        source: "models",
-      });
-      produtoVinculado = { id: envelope.id, rotulo: envelope.rotulo, versao };
-    }
+    const r = await vincularAoProduto({
+      companyId,
+      empresaNome: company.nomeFantasia || company.razaoSocial,
+      userId: req.userId!,
+      origem: "model",
+      registroId: model.id,
+      objetivo: model.objetivo,
+      tipoPadrao: (model.objetivo === "ambos" ? "valuation" : model.objetivo) as TipoProduto,
+      destino: { produtoId, produtoNovo },
+      // Valuation/BP: data-base = fecho do mês anterior ao início da projeção.
+      dataBase: dataBaseDoModelo(mesInicialEfetivo),
+      // Orçamento: o que identifica é o EXERCÍCIO, não a data-base.
+      ano: mesInicialEfetivo.slice(0, 4),
+    });
+    produtoVinculado = r.vinculo ?? null;
+    colisaoProduto = r.colisao ?? null;
   } catch {
     // O envelope é organização, não o produto em si: falhar aqui NUNCA derruba a
     // criação do modelo — ele fica solto e o workspace continua oferecendo
@@ -954,7 +919,10 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   } catch { /* sem conexão com o BCB agora — segue sem snapshot */ }
 
   const calc = await calcularEGravar(model.id);
-  res.status(201).json({ id: model.id, seedMemoria: seed.memoria, checks: calc?.resultado.checks ?? [], produto: produtoVinculado });
+  // `colisaoProduto` preenchido = o modelo existe, SOLTO, e o rótulo pedido já é
+  // de outro produto: quem decide é o analista (declarar como próxima versão ×
+  // diferenciar com um complemento). O wizard pergunta antes de sair da tela.
+  res.status(201).json({ id: model.id, seedMemoria: seed.memoria, checks: calc?.resultado.checks ?? [], produto: produtoVinculado, colisaoProduto });
 });
 
 // POST /models/:id/atualizar-indices — renova o SNAPSHOT dos índices macro do

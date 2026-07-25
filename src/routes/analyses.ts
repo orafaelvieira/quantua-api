@@ -33,6 +33,7 @@ import { resolverCascataDicionario, whereCascataDicionarioAtiva } from "../servi
 import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
 import { nomeDocumento, dataBaseDoIbr } from "../services/produto-empresa";
+import { vincularAoProduto, VinculoFeito, ColisaoProduto } from "../services/produto-vinculo";
 import { montarConteudoAnalise, aplicarFotoAnalise, hashConteudo, STATUS_TRANSITORIOS, type ConteudoFotoAnalise, type DocFoto } from "../services/snapshot-diario";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
@@ -367,6 +368,37 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     },
   });
 
+  // PRODUTO JÁ NA CRIAÇÃO (24/07/2026): o IBR também nasce dentro do produto —
+  // "Novo produto IBR" cria o produto "IBR" da empresa (mais o complemento de
+  // diferenciação, quando houver) e este registro entra como v1. A data-base
+  // ainda não existe (ela é a data do último documento extraído); ela entra no
+  // nome quando o IBR CONCLUI. Sem produtoId/produtoNovo no body, o IBR nasce
+  // solto como antes — compatibilidade com quem chama a API direto.
+  let produtoVinculado: VinculoFeito | null = null;
+  let colisaoProduto: ColisaoProduto | null = null;
+  try {
+    const { produtoId, produtoNovo } = (req.body ?? {}) as {
+      produtoId?: string;
+      produtoNovo?: { tipo?: string; periodo?: string; complemento?: string };
+    };
+    if (produtoId || produtoNovo) {
+      const r = await vincularAoProduto({
+        companyId: company.id,
+        empresaNome: company.nomeFantasia || company.razaoSocial,
+        userId: req.userId!,
+        origem: "analysis",
+        registroId: analysis.id,
+        tipoPadrao: "ibr",
+        destino: { produtoId, produtoNovo: produtoNovo ? { ...produtoNovo, tipo: "ibr" } : null },
+        dataBase: "",
+      });
+      produtoVinculado = r.vinculo ?? null;
+      colisaoProduto = r.colisao ?? null;
+    }
+  } catch (e) {
+    console.error("[analyses] vínculo com o produto falhou (IBR segue criado, solto):", e);
+  }
+
   // Cria Engagement vinculado quando IBR (mode canônico, ou kind legado).
   if ((resolvedMode === "ibr" || parsed.data.kind === "ibr") && engagement) {
     await prisma.engagement.create({
@@ -385,7 +417,8 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     });
   }
 
-  res.status(201).json(analysis);
+  // Devolve o registro + o vínculo (ou a colisão, que é decisão do analista).
+  res.status(201).json({ ...analysis, produto: produtoVinculado, colisaoProduto });
 });
 
 router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
