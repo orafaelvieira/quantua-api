@@ -1046,6 +1046,9 @@ model FinancialModel {
   /// SNAPSHOT dos índices macro (BCB Focus + PTAX) usado pelas fórmulas macro_* —
   /// gravado no modelo p/ projeção reproduzível; botão Atualizar renova + recalcula
   indicesMacro   Json?    @map("indices_macro")
+  /// METAS TOP-DOWN (F3, 25/07/2026): { "2027": { receita?, ebitda?, margemEbitda? } }.
+  /// O CEO declara; o painel de gap compara com o Σ bottom-up do modelo.
+  metas          Json?
   status         String   @default("Rascunho")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
@@ -1086,6 +1089,10 @@ model UnidadeNegocio {
   /// Código interno ou CNPJ da filial — exibição, opcional.
   codigo    String?
   ehMatriz  Boolean  @default(false) @map("eh_matriz")
+  /// RESPONSÁVEL pela unidade (F4, colaboração por área): membro da equipe que
+  /// preenche o orçamento desta unidade. Papel operator com responsabilidade
+  /// atribuída edita SÓ as linhas das suas unidades; partner/reviewer, tudo.
+  responsavelUserId String? @map("responsavel_user_id")
   /// Desativar em vez de excluir (política da casa): linhas antigas podem
   /// apontar para cá, e histórico não fica órfão.
   ativo     Boolean  @default(true)
@@ -1244,8 +1251,15 @@ model ModelSnapshot {
   conteudo       Json
   /// Hash do conteúdo: prova de que o snapshot não foi adulterado depois.
   contentHash    String?  @map("content_hash")
-  /// Snapshot vigente do modelo. Congelar de novo desliga os anteriores.
+  /// BASELINE do Orçado × Realizado. Desde a F2 (25/07/2026), quem liga isto é
+  /// a APROVAÇÃO — congelar cria rascunho (ativo=false); aprovar torna vigente.
   ativo          Boolean  @default(true)
+  /// CICLO DE APROVAÇÃO (F2): "rascunho" → "final" (pronto p/ aprovação) →
+  /// "aprovado" (trava e vira baseline). Reabrir exige motivo (trilha).
+  status         String   @default("rascunho")
+  /// Quem aprovou (papel partner) e quando — assinatura do orçamento.
+  aprovadoPor    String?  @map("aprovado_por")
+  aprovadoEm     DateTime? @map("aprovado_em")
   /// Quem congelou.
   userId         String   @map("user_id")
   /// Motivo/observação do congelamento (entra na trilha).

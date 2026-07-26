@@ -387,6 +387,8 @@ const unidadeSchema = z.object({
   nome: z.string().min(1).max(80),
   codigo: z.string().max(40).optional().nullable(),
   ehMatriz: z.boolean().optional(),
+  /** F4: responsável pela unidade (membro da equipe) — null limpa. */
+  responsavelUserId: z.string().uuid().optional().nullable(),
   ativo: z.boolean().optional(),
   ordem: z.number().int().optional(),
 });
@@ -413,7 +415,15 @@ router.get("/:id/estrutura", async (req: AuthRequest, res: Response): Promise<vo
     prisma.unidadeNegocio.findMany({ where: { companyId: company.id }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
     prisma.centroCusto.findMany({ where: { companyId: company.id }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
   ]);
-  res.json({ unidades, centros });
+  // Nome do responsável (F4) — a tela mostra quem preenche cada unidade.
+  const idsResp = [...new Set(unidades.map((u) => u.responsavelUserId).filter((v): v is string => !!v))];
+  const nomes = idsResp.length
+    ? new Map((await prisma.user.findMany({ where: { id: { in: idsResp } }, select: { id: true, name: true } })).map((u) => [u.id, u.name]))
+    : new Map<string, string>();
+  res.json({
+    unidades: unidades.map((u) => ({ ...u, responsavelNome: u.responsavelUserId ? nomes.get(u.responsavelUserId) ?? null : null })),
+    centros,
+  });
 });
 
 router.post("/:id/unidades", async (req: AuthRequest, res: Response): Promise<void> => {

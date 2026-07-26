@@ -129,6 +129,151 @@ export function pesosPorReceita(
   return Object.fromEntries(brutos.map(([id, v]) => [id, v / total]));
 }
 
+// ── Folha por unidade (F2) ─────────────────────────────────────────────────
+
+/** Posição do bloco Pessoas, no mínimo que a decomposição precisa. */
+export interface PosicaoDim {
+  id: string;
+  nome: string;
+  classificacao: "custo" | "despesa";
+  unidadeId?: string | null;
+  centroCustoId?: string | null;
+}
+
+const normNome = (s: string): string =>
+  (s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+
+/**
+ * DECOMPÕE A FOLHA nas posições etiquetadas, ANTES da distribuição por unidade.
+ *
+ * O motor dobra a folha inteira numa linha só — "folha-custos"/"folha-despesas",
+ * ou SOMADA na conta canônica ("Custo Operacional"/"Despesas com Pessoas") — e
+ * uma linha agregada não tem unidade. Mas o motor também emite a série de custo
+ * POR POSIÇÃO (`series["folha_<id>_custo"]`); aqui cada posição etiquetada vira
+ * uma pseudo-linha própria (`pos:<id>`, com a etiqueta dela) e o valor sai da
+ * linha agregada, que fica com o RESTO (premissa da linha + posições sem
+ * etiqueta). Soma preservada por construção — a prova de partição continua
+ * valendo ao centavo.
+ */
+export function decomporFolha(
+  dre: LinhaDre[],
+  posicoes: PosicaoDim[],
+  series: Record<string, Serie>,
+): { dre: LinhaDre[]; tagsExtras: Record<string, TagLinha> } {
+  const etiquetadas = posicoes.filter((p) => p.unidadeId || p.centroCustoId);
+  if (etiquetadas.length === 0) return { dre, tagsExtras: {} };
+
+  // A MESMA regra de destino do motor: linha própria da folha, senão a canônica.
+  const alvoDe = (classificacao: "custo" | "despesa", linhas: LinhaDre[]): LinhaDre | undefined => {
+    const grupo = classificacao === "custo" ? "custos" : "despesas";
+    const idProprio = classificacao === "custo" ? "folha-custos" : "folha-despesas";
+    const nomeCanonico = classificacao === "custo" ? "custo operacional" : "despesas com pessoas";
+    return (
+      linhas.find((l) => l.id === idProprio) ??
+      linhas.find((l) => l.grupo === grupo && normNome(l.nome) === nomeCanonico)
+    );
+  };
+
+  const saida: LinhaDre[] = dre.map((l) => ({ ...l, valores: { ...l.valores } }));
+  const tagsExtras: Record<string, TagLinha> = {};
+  const idxEbitda = saida.findIndex((l) => l.id === "ebitda");
+
+  for (const pos of etiquetadas) {
+    const custoPos = series[`folha_${pos.id}_custo`];
+    if (!custoPos || !Object.values(custoPos).some((v) => v !== 0)) continue;
+    const alvo = alvoDe(pos.classificacao, saida);
+    if (!alvo) continue; // folha não dobrou em linha nenhuma — nada a decompor
+
+    // Subtrai da linha agregada e emite a pseudo-linha da posição.
+    for (const [m, v] of Object.entries(custoPos)) {
+      alvo.valores[m] = (alvo.valores[m] ?? 0) - v;
+    }
+    const pseudo: LinhaDre = {
+      id: `pos:${pos.id}`,
+      nome: `Folha — ${pos.nome}`,
+      grupo: pos.classificacao === "custo" ? "custos" : "despesas",
+      valores: { ...custoPos },
+      pctReceita: {},
+    };
+    // Entra ANTES do EBITDA (dentro do corte da visão por unidade).
+    saida.splice(idxEbitda >= 0 ? idxEbitda : saida.length, 0, pseudo);
+    tagsExtras[pseudo.id] = { unidadeId: pos.unidadeId ?? null, centroCustoId: pos.centroCustoId ?? null };
+  }
+  return { dre: saida, tagsExtras };
+}
+
+// ── Trava de edição por responsável (F4) ───────────────────────────────────
+
+/** Config de bloco no mínimo que a trava precisa (linhas e posições). */
+interface ConfigComLinhas {
+  linhasReceita?: Array<{ id: string; unidadeId?: string | null; centroCustoId?: string | null }>;
+  linhasCusto?: Array<{ id: string; unidadeId?: string | null; centroCustoId?: string | null }>;
+  posicoes?: Array<{ id: string; unidadeId?: string | null; centroCustoId?: string | null }>;
+  [k: string]: unknown;
+}
+
+/**
+ * F4 — colaboração por área: um usuário RESPONSÁVEL por unidade(s) edita SÓ as
+ * linhas/posições das suas unidades. Devolve a lista de violações (vazia = pode
+ * salvar). Regras:
+ *  - linha cuja unidade resolvida (direta ou via CC) NÃO é do usuário: nem
+ *    alterar, nem criar, nem excluir;
+ *  - linha sem etiqueta ou de CC COMPARTILHADO é corporativa — fora do escopo
+ *    do responsável;
+ *  - mudanças fora das linhas (campos do bloco: deduções, sazonalidade, tabela
+ *    de encargos…) são corporativas — bloqueadas;
+ *  - mudar a PRÓPRIA etiqueta de unidade é mudar de dono — bloqueado (isso é
+ *    decisão de quem consolida).
+ */
+export function validarEdicaoRestrita(
+  configAntes: ConfigComLinhas,
+  configDepois: ConfigComLinhas,
+  unidadesDoUsuario: Set<string>,
+  centros: CentroCustoDim[],
+): string[] {
+  const porCc = new Map(centros.map((c) => [c.id, c]));
+  const unidadeDe = (l: { unidadeId?: string | null; centroCustoId?: string | null }): string | null => {
+    if (l.centroCustoId) return porCc.get(l.centroCustoId)?.unidadeId ?? null; // CSC → null (corporativo)
+    return l.unidadeId ?? null;
+  };
+  const violacoes: string[] = [];
+  const j = (v: unknown) => JSON.stringify(v ?? null);
+
+  for (const chave of ["linhasReceita", "linhasCusto", "posicoes"] as const) {
+    const antes = new Map((configAntes[chave] ?? []).map((l) => [l.id, l]));
+    const depois = new Map((configDepois[chave] ?? []).map((l) => [l.id, l]));
+    for (const [id, ld] of depois) {
+      const la = antes.get(id);
+      if (!la) {
+        const u = unidadeDe(ld);
+        if (!u || !unidadesDoUsuario.has(u)) violacoes.push(`criar linha fora das suas unidades (${id})`);
+        continue;
+      }
+      if (j(la) === j(ld)) continue; // inalterada
+      const uAntes = unidadeDe(la);
+      const uDepois = unidadeDe(ld);
+      if (uAntes !== uDepois) { violacoes.push(`mudar a unidade/CC de uma linha (${id}) — decisão de quem consolida`); continue; }
+      if (!uAntes || !unidadesDoUsuario.has(uAntes)) violacoes.push(`alterar linha fora das suas unidades (${id})`);
+    }
+    for (const [id, la] of antes) {
+      if (depois.has(id)) continue;
+      const u = unidadeDe(la);
+      if (!u || !unidadesDoUsuario.has(u)) violacoes.push(`excluir linha fora das suas unidades (${id})`);
+    }
+  }
+
+  // Campos do bloco FORA das linhas: corporativos.
+  const semLinhas = (c: ConfigComLinhas) => {
+    const { linhasReceita, linhasCusto, posicoes, ...resto } = c;
+    void linhasReceita; void linhasCusto; void posicoes;
+    return resto;
+  };
+  if (j(semLinhas(configAntes)) !== j(semLinhas(configDepois))) {
+    violacoes.push("alterar configuração do bloco fora das linhas (deduções, curvas, encargos…) — corporativo");
+  }
+  return violacoes;
+}
+
 // ── Motor ──────────────────────────────────────────────────────────────────
 
 export function calcularPorUnidade(input: {
