@@ -1,5 +1,6 @@
 import { Router, Response } from "express";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db/client";
 import { requireAuth, requireQuantua, requireInternal, AuthRequest } from "../middleware/auth";
 import { whereEmpresaVisivel } from "../services/escopo-empresa";
@@ -371,6 +372,128 @@ router.post("/:id/reconsultar-cnpj", requireInternal, async (req: AuthRequest, r
     after: { situacaoCadastral: atualizado.situacaoCadastral, capitalSocial: atualizado.capitalSocial, municipio: atualizado.municipio, fonte: d._fonte ?? "brasilapi" },
   });
   res.json({ ok: true });
+});
+
+// ── ESTRUTURA ORGANIZACIONAL (F1 do orçamento por unidade, 25/07/2026) ──────
+// Unidades de negócio (filiais) + centros de custo da empresa. CC pertence a
+// UMA unidade; CC sem unidade = COMPARTILHADO (CSC), rateado pelo critério
+// gravado nele. Desativar em vez de excluir (linhas de modelo apontam para cá).
+
+async function companyNoEscopoEstrutura(id: string, req: AuthRequest) {
+  return prisma.company.findFirst({ where: { id, ...whereEmpresaVisivel(req) } });
+}
+
+const unidadeSchema = z.object({
+  nome: z.string().min(1).max(80),
+  codigo: z.string().max(40).optional().nullable(),
+  ehMatriz: z.boolean().optional(),
+  /** F4: responsável pela unidade (membro da equipe) — null limpa. */
+  responsavelUserId: z.string().uuid().optional().nullable(),
+  ativo: z.boolean().optional(),
+  ordem: z.number().int().optional(),
+});
+
+const rateioSchema = z.object({
+  driver: z.enum(["manual", "receita"]),
+  pesos: z.record(z.number().min(0)).optional(),
+});
+
+const centroCustoSchema = z.object({
+  nome: z.string().min(1).max(80),
+  codigo: z.string().max(40).optional().nullable(),
+  /** null/ausente = compartilhado (CSC). */
+  unidadeId: z.string().uuid().optional().nullable(),
+  rateio: rateioSchema.optional().nullable(),
+  ativo: z.boolean().optional(),
+  ordem: z.number().int().optional(),
+});
+
+router.get("/:id/estrutura", async (req: AuthRequest, res: Response): Promise<void> => {
+  const company = await companyNoEscopoEstrutura(req.params.id as string, req);
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  const [unidades, centros] = await Promise.all([
+    prisma.unidadeNegocio.findMany({ where: { companyId: company.id }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
+    prisma.centroCusto.findMany({ where: { companyId: company.id }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
+  ]);
+  // Nome do responsável (F4) — a tela mostra quem preenche cada unidade.
+  const idsResp = [...new Set(unidades.map((u) => u.responsavelUserId).filter((v): v is string => !!v))];
+  const nomes = idsResp.length
+    ? new Map((await prisma.user.findMany({ where: { id: { in: idsResp } }, select: { id: true, name: true } })).map((u) => [u.id, u.name]))
+    : new Map<string, string>();
+  res.json({
+    unidades: unidades.map((u) => ({ ...u, responsavelNome: u.responsavelUserId ? nomes.get(u.responsavelUserId) ?? null : null })),
+    centros,
+  });
+});
+
+router.post("/:id/unidades", async (req: AuthRequest, res: Response): Promise<void> => {
+  const company = await companyNoEscopoEstrutura(req.params.id as string, req);
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  const parsed = unidadeSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const criada = await prisma.unidadeNegocio.create({ data: { ...parsed.data, companyId: company.id } });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "unidade_negocio", entityId: criada.id, field: "criação da unidade",
+    after: { nome: criada.nome, companyId: company.id }, source: "companies",
+  });
+  res.status(201).json(criada);
+});
+
+router.put("/:id/unidades/:uid", async (req: AuthRequest, res: Response): Promise<void> => {
+  const company = await companyNoEscopoEstrutura(req.params.id as string, req);
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  const antes = await prisma.unidadeNegocio.findFirst({ where: { id: req.params.uid as string, companyId: company.id } });
+  if (!antes) { res.status(404).json({ error: "Unidade não encontrada" }); return; }
+  const parsed = unidadeSchema.partial().safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const depois = await prisma.unidadeNegocio.update({ where: { id: antes.id }, data: parsed.data });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "unidade_negocio", entityId: antes.id, field: "edição da unidade",
+    before: { nome: antes.nome, ativo: antes.ativo }, after: { nome: depois.nome, ativo: depois.ativo }, source: "companies",
+  });
+  res.json(depois);
+});
+
+router.post("/:id/centros-custo", async (req: AuthRequest, res: Response): Promise<void> => {
+  const company = await companyNoEscopoEstrutura(req.params.id as string, req);
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  const parsed = centroCustoSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  if (parsed.data.unidadeId) {
+    const dona = await prisma.unidadeNegocio.findFirst({ where: { id: parsed.data.unidadeId, companyId: company.id } });
+    if (!dona) { res.status(400).json({ error: "A unidade indicada não é desta empresa." }); return; }
+  }
+  const criado = await prisma.centroCusto.create({
+    data: { ...parsed.data, rateio: parsed.data.rateio ?? undefined, companyId: company.id },
+  });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "centro_custo", entityId: criado.id, field: "criação do centro de custo",
+    after: { nome: criado.nome, unidadeId: criado.unidadeId, compartilhado: !criado.unidadeId }, source: "companies",
+  });
+  res.status(201).json(criado);
+});
+
+router.put("/:id/centros-custo/:cid", async (req: AuthRequest, res: Response): Promise<void> => {
+  const company = await companyNoEscopoEstrutura(req.params.id as string, req);
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  const antes = await prisma.centroCusto.findFirst({ where: { id: req.params.cid as string, companyId: company.id } });
+  if (!antes) { res.status(404).json({ error: "Centro de custo não encontrado" }); return; }
+  const parsed = centroCustoSchema.partial().safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  if (parsed.data.unidadeId) {
+    const dona = await prisma.unidadeNegocio.findFirst({ where: { id: parsed.data.unidadeId, companyId: company.id } });
+    if (!dona) { res.status(400).json({ error: "A unidade indicada não é desta empresa." }); return; }
+  }
+  const depois = await prisma.centroCusto.update({
+    where: { id: antes.id },
+    data: { ...parsed.data, rateio: parsed.data.rateio === null ? Prisma.DbNull : parsed.data.rateio ?? undefined },
+  });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "centro_custo", entityId: antes.id, field: "edição do centro de custo",
+    before: { nome: antes.nome, unidadeId: antes.unidadeId, rateio: antes.rateio },
+    after: { nome: depois.nome, unidadeId: depois.unidadeId, rateio: depois.rateio }, source: "companies",
+  });
+  res.json(depois);
 });
 
 /** Sugestão de SETOR B3 pelo CNAE da Receita (principal + secundários) — zero IA.

@@ -390,6 +390,8 @@ model Company {
   organizacoes OrganizacaoEmpresa[]
   produtos  ProdutoEmpresa[]
   periodos  PeriodoEmpresa[]
+  unidades  UnidadeNegocio[]
+  centrosCusto CentroCusto[]
 
   @@map("companies")
 }
@@ -1044,6 +1046,9 @@ model FinancialModel {
   /// SNAPSHOT dos índices macro (BCB Focus + PTAX) usado pelas fórmulas macro_* —
   /// gravado no modelo p/ projeção reproduzível; botão Atualizar renova + recalcula
   indicesMacro   Json?    @map("indices_macro")
+  /// METAS TOP-DOWN (F3, 25/07/2026): { "2027": { receita?, ebitda?, margemEbitda? } }.
+  /// O CEO declara; o painel de gap compara com o Σ bottom-up do modelo.
+  metas          Json?
   status         String   @default("Rascunho")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
@@ -1060,6 +1065,7 @@ model FinancialModel {
   blocks    ModelBlock[]
   scenarios ModelScenario[]
   produto   ProdutoEmpresa? @relation(fields: [produtoId], references: [id], onDelete: SetNull)
+  snapshots ModelSnapshot[]
 
   @@index([companyId])
   @@index([userId])
@@ -1070,6 +1076,57 @@ model FinancialModel {
 /// ── WORKSPACE FP&A (W1) ──────────────────────────────────────────────────────
 /// PRODUTO da empresa: o ENVELOPE que acumula versões de um mesmo entregável
 /// ("Orçamento 2026", "Business Plan — Sementes"). Versão é DECLARADA pelo
+/// ESTRUTURA ORGANIZACIONAL (F1 do orçamento por unidade, 25/07/2026).
+/// Unidade de negócio = filial/planta/loja da empresa. Decisão do usuário:
+/// o centro de custo pertence a UMA unidade; o caso CSC (Centro de Serviço
+/// Compartilhado) é o CC SEM unidade, cujo custo é RATEADO entre as unidades
+/// pelo critério gravado nele. Consolidado = o próprio modelo (soma de tudo);
+/// a visão por unidade é derivada, nunca uma segunda contabilidade.
+model UnidadeNegocio {
+  id        String   @id @default(uuid())
+  companyId String   @map("company_id")
+  nome      String
+  /// Código interno ou CNPJ da filial — exibição, opcional.
+  codigo    String?
+  ehMatriz  Boolean  @default(false) @map("eh_matriz")
+  /// RESPONSÁVEL pela unidade (F4, colaboração por área): membro da equipe que
+  /// preenche o orçamento desta unidade. Papel operator com responsabilidade
+  /// atribuída edita SÓ as linhas das suas unidades; partner/reviewer, tudo.
+  responsavelUserId String? @map("responsavel_user_id")
+  /// Desativar em vez de excluir (política da casa): linhas antigas podem
+  /// apontar para cá, e histórico não fica órfão.
+  ativo     Boolean  @default(true)
+  ordem     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  centros CentroCusto[]
+
+  @@map("unidades_negocio")
+}
+
+model CentroCusto {
+  id        String   @id @default(uuid())
+  companyId String   @map("company_id")
+  /// NULL = COMPARTILHADO (CSC/corporativo): serve mais de uma unidade e o
+  /// custo é rateado pelo critério em `rateio`.
+  unidadeId String?  @map("unidade_id")
+  nome      String
+  codigo    String?
+  /// Só CC compartilhado: { driver: "manual" | "receita", pesos?: { [unidadeId]: fração } }.
+  /// "manual" usa os pesos declarados; "receita" rateia pela receita direta de
+  /// cada unidade no mês (quem fatura mais, carrega mais do CSC).
+  rateio    Json?
+  ativo     Boolean  @default(true)
+  ordem     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  unidade UnidadeNegocio? @relation(fields: [unidadeId], references: [id], onDelete: SetNull)
+
+  @@map("centros_custo")
+}
+
 /// analista, nunca inferida por tipo+data (decisão de 20/07/2026 — dois
 /// "Valuation 2026" podem ser trabalhos distintos, não versões).
 model ProdutoEmpresa {
@@ -1171,6 +1228,51 @@ model ModelScenario {
   @@index([modelId])
   @@map("model_scenarios")
 }
+
+/// ORÇAMENTO CONGELADO (B12): fotografia versionada da projeção num instante,
+/// para servir de base do Orçado × Realizado.
+///
+/// POLÍTICA DE VERSIONAMENTO DE INSUMOS (regra da casa): nunca deletar,
+/// SUBSTITUIR. Cada congelamento é uma versão nova, monotônica por modelo;
+/// o snapshot vigente é o de maior `versao` com `ativo = true`. Congelar de
+/// novo NÃO apaga o anterior — só deixa de ser o vigente, e o Orçado ×
+/// Realizado de meses já publicados continua reproduzível.
+model ModelSnapshot {
+  id             String   @id @default(uuid())
+  modelId        String   @map("model_id")
+  /// Versão monotônica dentro do modelo (1, 2, 3…).
+  versao         Int
+  nome           String
+  /// Cenário ativo no instante do congelamento (selo do CFI).
+  cenario        String
+  mesInicial     String   @map("mes_inicial")
+  horizonteMeses Int      @map("horizonte_meses")
+  /// { dre: LinhaDre[], bp?: LinhaDre[], fc?: LinhaDre[] } — ver model-orcamento.ts
+  conteudo       Json
+  /// Hash do conteúdo: prova de que o snapshot não foi adulterado depois.
+  contentHash    String?  @map("content_hash")
+  /// BASELINE do Orçado × Realizado. Desde a F2 (25/07/2026), quem liga isto é
+  /// a APROVAÇÃO — congelar cria rascunho (ativo=false); aprovar torna vigente.
+  ativo          Boolean  @default(true)
+  /// CICLO DE APROVAÇÃO (F2): "rascunho" → "final" (pronto p/ aprovação) →
+  /// "aprovado" (trava e vira baseline). Reabrir exige motivo (trilha).
+  status         String   @default("rascunho")
+  /// Quem aprovou (papel partner) e quando — assinatura do orçamento.
+  aprovadoPor    String?  @map("aprovado_por")
+  aprovadoEm     DateTime? @map("aprovado_em")
+  /// Quem congelou.
+  userId         String   @map("user_id")
+  /// Motivo/observação do congelamento (entra na trilha).
+  observacao     String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  model FinancialModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@unique([modelId, versao])
+  @@index([modelId])
+  @@map("model_snapshots")
+}
+
 /// SNAPSHOT AUTOMÁTICO DIÁRIO (rede de segurança tipo Excel, 2026-07-21):
 /// fotografia do estado EDITÁVEL de IBRs e modelos, tirada por cron 1×/dia.
 /// Dedup por hash (dia sem mudança não grava); poda mantém as últimas 30

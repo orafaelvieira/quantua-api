@@ -24,6 +24,11 @@ export const TEMPLATES_RECEITA: TemplateReceita[] = [
   { id: "capacidade", nome: "Capacidade × ocupação", descricao: "Quantos lugares existem, quantos ficam ocupados e quanto rende cada um.", exemplos: "Clínicas, hotéis, escolas com vagas, restaurantes" },
   { id: "servicos", nome: "Horas de serviço", descricao: "Profissionais × horas que conseguem faturar × valor da hora.", exemplos: "Consultorias, escritórios, agências" },
   { id: "varejo", nome: "Fluxo × conversão × ticket", descricao: "Quantas pessoas passam, quantas compram e quanto gastam.", exemplos: "Lojas, e-commerce" },
+  // ── Agronegócio (revenda de insumos e grãos) ──
+  { id: "agro_insumo", nome: "Insumo agrícola (preço a partir do custo)", descricao: "Volume vendido × preço, com o preço calculado a partir do custo do produto: sobe o custo pelos impostos, frete, armazenagem, comissão e a margem que você quer ganhar.", exemplos: "Revenda de fertilizantes, defensivos, sementes" },
+  { id: "agro_graos", nome: "Grãos (volume em kg, preço por saca)", descricao: "Volume controlado em quilos e preço negociado por saca de 60 kg — a conversão é automática.", exemplos: "Revenda de soja, milho, sorgo" },
+  { id: "agro_agrupado", nome: "Família de produtos (receita e margem)", descricao: "Para quem não quer detalhar produto a produto: digite a receita do mês e a margem da família.", exemplos: "Agro, distribuição, atacado" },
+  { id: "agro_barter", nome: "Barter (troca de insumo por grão)", descricao: "O produtor paga em grão. Converte a venda em sacas pelo preço pago ao produtor e revaloriza pelo preço da trading — o ganho é o spread entre os dois.", exemplos: "Revendas agrícolas com operação de barter" },
 ];
 
 function no(parcial: Omit<DriverNode, "params"> & { params?: Record<string, unknown> }): DriverNode {
@@ -125,6 +130,68 @@ export function montarLinhaReceita(
           no({ id: p("conversao"), tipo: "taxa", nome: "Taxa de conversão (quem compra)", unidade: "%", params: { valorMensal: conversao, max: 1 } }),
           no({ id: p("ticket"), tipo: "preco", nome: "Gasto médio por compra", unidade: "R$/un", params: { valorMensal: ticket } }),
           no({ id: p("receita"), tipo: "formula", nome: `Memória de Cálculo — ${nome}`, unidade: "R$", params: { expr: `${p("fluxo")} * ${p("conversao")} * ${p("ticket")}` } }),
+        ],
+      };
+    }
+    // ── Agronegócio ──
+    // Cada linha nasce AUTOSSUFICIENTE (nós próprios, inclusive a pilha de
+    // custos variáveis do barter/insumo): o analista adiciona uma linha por vez
+    // pela tela. Para montar o bloco inteiro de uma vez (17 SKUs com a pilha
+    // COMPARTILHADA entre eles, como na planilha), use montarBlocoAgro().
+    case "agro_insumo": {
+      const custo = 100;
+      const volume = receitaMensal > 0 ? Math.round(receitaMensal / (custo / 0.9)) : 1_000;
+      return {
+        id: linhaId, nome, template, nodeRaiz: p("receita"),
+        nodes: [
+          no({ id: p("cv_impostos"), tipo: "taxa", nome: "Impostos sobre venda", unidade: "%", params: { valorMensal: 0.02, max: 1 } }),
+          no({ id: p("cv_frete"), tipo: "taxa", nome: "Custo com frete", unidade: "%", params: { valorMensal: 0, max: 1 } }),
+          no({ id: p("cv_armazenagem"), tipo: "taxa", nome: "Custo de armazenagem", unidade: "%", params: { valorMensal: 0.01, max: 1 } }),
+          no({ id: p("cv_comissao"), tipo: "taxa", nome: "Comissão sobre vendas", unidade: "%", params: { valorMensal: 0, max: 1 } }),
+          no({ id: p("cv_financeiro"), tipo: "taxa", nome: "Custo financeiro", unidade: "%", params: { valorMensal: 0, max: 1 } }),
+          no({ id: p("cv_margem"), tipo: "taxa", nome: "Margem de contribuição desejada", unidade: "%", params: { valorMensal: 0.07, max: 1 } }),
+          no({ id: p("cv_soma"), tipo: "formula", nome: "Soma dos custos variáveis e da margem", unidade: "%", params: { expr: `${p("cv_impostos")} + ${p("cv_frete")} + ${p("cv_armazenagem")} + ${p("cv_comissao")} + ${p("cv_financeiro")} + ${p("cv_margem")}` } }),
+          no({ id: p("volume"), tipo: "serie", nome: "Volume vendido no mês", unidade: "#", papel: "quantidade", params: { valorMensal: volume } }),
+          no({ id: p("custo"), tipo: "preco", nome: "Custo unitário do produto", unidade: "R$/un", params: { valorMensal: custo } }),
+          // Preço DERIVADO: sobe o custo pela pilha (custo ÷ (1 − Σ%)).
+          no({ id: p("preco"), tipo: "formula", nome: "Preço de venda", unidade: "R$/un", params: { expr: `${p("custo")} / (1 - ${p("cv_soma")})` } }),
+          no({ id: p("receita"), tipo: "formula", nome: `Memória de Cálculo — ${nome}`, unidade: "R$", params: { expr: `${p("volume")} * ${p("preco")}` } }),
+        ],
+      };
+    }
+    case "agro_graos": {
+      const precoSaca = 130;
+      const volumeKg = receitaMensal > 0 ? Math.round((receitaMensal / precoSaca) * 60) : 600_000;
+      return {
+        id: linhaId, nome, template, nodeRaiz: p("receita"),
+        nodes: [
+          no({ id: p("volume_kg"), tipo: "serie", nome: "Volume vendido no mês (kg)", unidade: "#", papel: "quantidade", params: { valorMensal: volumeKg } }),
+          no({ id: p("preco_saca"), tipo: "preco", nome: "Preço por saca (60 kg)", unidade: "R$/un", params: { valorMensal: precoSaca } }),
+          no({ id: p("sacas"), tipo: "formula", nome: "Sacas vendidas (60 kg por saca)", unidade: "#", params: { expr: `${p("volume_kg")} / 60` } }),
+          no({ id: p("receita"), tipo: "formula", nome: `Memória de Cálculo — ${nome}`, unidade: "R$", params: { expr: `${p("sacas")} * ${p("preco_saca")}` } }),
+        ],
+      };
+    }
+    case "agro_agrupado": {
+      return {
+        id: linhaId, nome, template, nodeRaiz: p("receita"),
+        nodes: [
+          no({ id: p("margem"), tipo: "taxa", nome: "Margem bruta da família", unidade: "%", params: { valorMensal: 0.15, max: 1 } }),
+          no({ id: p("receita"), tipo: "serie", nome: `Memória de Cálculo — ${nome}`, unidade: "R$", params: { valorMensal: receitaMensal || 100_000, crescimentoAnual: cresc } }),
+        ],
+      };
+    }
+    case "agro_barter": {
+      const precoProdutor = 120;
+      return {
+        id: linhaId, nome, template, nodeRaiz: p("receita"),
+        nodes: [
+          no({ id: p("base"), tipo: "serie", nome: "Venda de insumos liquidada em grão (R$)", unidade: "R$", params: { valorMensal: receitaMensal || 0 } }),
+          no({ id: p("preco_produtor"), tipo: "preco", nome: "Preço da saca pago ao produtor", unidade: "R$/un", params: { valorMensal: precoProdutor } }),
+          no({ id: p("preco_trading"), tipo: "preco", nome: "Preço da saca na trading", unidade: "R$/un", params: { valorMensal: precoProdutor * 1.1 } }),
+          // R$ ÷ (R$/un) = un: a análise dimensional garante que isto fecha em sacas.
+          no({ id: p("sacas"), tipo: "formula", nome: "Sacas recebidas do produtor", unidade: "#", params: { expr: `${p("base")} / ${p("preco_produtor")}` } }),
+          no({ id: p("receita"), tipo: "formula", nome: `Memória de Cálculo — ${nome}`, unidade: "R$", params: { expr: `${p("sacas")} * ${p("preco_trading")}` } }),
         ],
       };
     }
