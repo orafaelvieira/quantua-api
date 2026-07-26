@@ -390,6 +390,8 @@ model Company {
   organizacoes OrganizacaoEmpresa[]
   produtos  ProdutoEmpresa[]
   periodos  PeriodoEmpresa[]
+  unidades  UnidadeNegocio[]
+  centrosCusto CentroCusto[]
 
   @@map("companies")
 }
@@ -1071,6 +1073,53 @@ model FinancialModel {
 /// ── WORKSPACE FP&A (W1) ──────────────────────────────────────────────────────
 /// PRODUTO da empresa: o ENVELOPE que acumula versões de um mesmo entregável
 /// ("Orçamento 2026", "Business Plan — Sementes"). Versão é DECLARADA pelo
+/// ESTRUTURA ORGANIZACIONAL (F1 do orçamento por unidade, 25/07/2026).
+/// Unidade de negócio = filial/planta/loja da empresa. Decisão do usuário:
+/// o centro de custo pertence a UMA unidade; o caso CSC (Centro de Serviço
+/// Compartilhado) é o CC SEM unidade, cujo custo é RATEADO entre as unidades
+/// pelo critério gravado nele. Consolidado = o próprio modelo (soma de tudo);
+/// a visão por unidade é derivada, nunca uma segunda contabilidade.
+model UnidadeNegocio {
+  id        String   @id @default(uuid())
+  companyId String   @map("company_id")
+  nome      String
+  /// Código interno ou CNPJ da filial — exibição, opcional.
+  codigo    String?
+  ehMatriz  Boolean  @default(false) @map("eh_matriz")
+  /// Desativar em vez de excluir (política da casa): linhas antigas podem
+  /// apontar para cá, e histórico não fica órfão.
+  ativo     Boolean  @default(true)
+  ordem     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  centros CentroCusto[]
+
+  @@map("unidades_negocio")
+}
+
+model CentroCusto {
+  id        String   @id @default(uuid())
+  companyId String   @map("company_id")
+  /// NULL = COMPARTILHADO (CSC/corporativo): serve mais de uma unidade e o
+  /// custo é rateado pelo critério em `rateio`.
+  unidadeId String?  @map("unidade_id")
+  nome      String
+  codigo    String?
+  /// Só CC compartilhado: { driver: "manual" | "receita", pesos?: { [unidadeId]: fração } }.
+  /// "manual" usa os pesos declarados; "receita" rateia pela receita direta de
+  /// cada unidade no mês (quem fatura mais, carrega mais do CSC).
+  rateio    Json?
+  ativo     Boolean  @default(true)
+  ordem     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  unidade UnidadeNegocio? @relation(fields: [unidadeId], references: [id], onDelete: SetNull)
+
+  @@map("centros_custo")
+}
+
 /// analista, nunca inferida por tipo+data (decisão de 20/07/2026 — dois
 /// "Valuation 2026" podem ser trabalhos distintos, não versões).
 model ProdutoEmpresa {

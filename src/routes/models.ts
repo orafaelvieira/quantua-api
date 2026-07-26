@@ -13,6 +13,7 @@ import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
 import { calcularModelo, validarFormula, backfillPremissasAoRecuar, BlocoModelo, ScenarioOverrides, RealizadoModelo, IndicesMacroSnapshot, SERIES_MACRO, MACRO_CAMBIO, ResultadoModelo, LinhaDre } from "../services/model-engine";
 import { calcularOrcadoRealizado, congelarOrcamento } from "../services/model-orcamento";
+import { calcularPorUnidade, RateioCC } from "../services/estrutura-dimensional";
 import { agregarPorPeriodo, recorteJanelaMovel } from "../services/model-safra";
 import { DIVERGENCIAS_BELAGRO, resumoDivergencias } from "../services/model-reconciliacao-belagro";
 import { buscarIndicesEconomicos } from "../services/indices-economicos";
@@ -1748,6 +1749,61 @@ router.get("/:id/historico-divida", async (req: AuthRequest, res: Response): Pro
   if (!model.analysisSeedId) { res.json({ periodo: null, itens: [], total: 0 }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
   res.json(derivarDividaHistorico(analysis?.dadosEstruturados ?? null));
+});
+
+// GET /models/:id/por-unidade — DRE POR UNIDADE (F1 do orçamento dimensional).
+// Deriva do resultado consolidado + etiquetas das linhas + estrutura da empresa
+// (unidades e CCs; CSC rateado). Nunca uma segunda contabilidade: a prova de
+// partição (Σ unidades + não atribuído = consolidado) vai junto na resposta.
+router.get("/:id/por-unidade", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+
+  const [unidades, centros] = await Promise.all([
+    prisma.unidadeNegocio.findMany({ where: { companyId: model.companyId }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
+    prisma.centroCusto.findMany({ where: { companyId: model.companyId }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
+  ]);
+  if (unidades.filter((u) => u.ativo).length === 0) {
+    res.json({ semEstrutura: true, unidades: [], centros: [], resultado: null });
+    return;
+  }
+
+  // Etiquetas: vivem na config das linhas dos blocos (unidadeId/centroCustoId).
+  const blocks = await prisma.modelBlock.findMany({ where: { modelId: model.id } });
+  const tags: Record<string, { unidadeId?: string | null; centroCustoId?: string | null }> = {};
+  for (const b of blocks) {
+    const cfg = (b.config ?? {}) as { linhasReceita?: Array<Record<string, unknown>>; linhasCusto?: Array<Record<string, unknown>> };
+    for (const l of [...(cfg.linhasReceita ?? []), ...(cfg.linhasCusto ?? [])]) {
+      const id = typeof l.id === "string" ? l.id : null;
+      if (!id) continue;
+      const unidadeId = typeof l.unidadeId === "string" ? l.unidadeId : null;
+      const centroCustoId = typeof l.centroCustoId === "string" ? l.centroCustoId : null;
+      if (unidadeId || centroCustoId) tags[id] = { unidadeId, centroCustoId };
+    }
+  }
+
+  const cache = model.resultadoCache as (ResultadoModelo & { calculadoEm?: string }) | null;
+  const calc = cache?.dre ? { resultado: cache } : await calcularEGravar(model.id);
+  if (!calc?.resultado?.dre) { res.status(409).json({ error: "O modelo ainda não tem resultado calculado." }); return; }
+
+  const resultado = calcularPorUnidade({
+    dre: calc.resultado.dre,
+    tags,
+    unidades: unidades.map((u) => ({ id: u.id, nome: u.nome, ehMatriz: u.ehMatriz, ativo: u.ativo })),
+    centros: centros.map((c) => ({ id: c.id, nome: c.nome, unidadeId: c.unidadeId, rateio: c.rateio as RateioCC | null, ativo: c.ativo })),
+    meses: calc.resultado.meses,
+  });
+
+  res.json({
+    semEstrutura: false,
+    unidades,
+    centros,
+    meses: calc.resultado.meses,
+    resultado,
+    // Proveniência (regra da casa): data + fonte em todo output.
+    geradoEm: new Date().toISOString(),
+    fonte: "derivado do resultado consolidado do modelo + estrutura organizacional da empresa",
+  });
 });
 
 // PUT /models/:id — cabeçalho (nome, visão, cenário ativo, status).
