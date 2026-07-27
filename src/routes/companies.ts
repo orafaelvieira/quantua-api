@@ -591,6 +591,43 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
   const existing = await prisma.company.findFirst({ where: { id, userId: { in: req.scopeUserIds! } } });
   if (!existing) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
+  // TRAVA DE PRODUTO EMITIDO (pedido do usuário, 27/07/2026): excluir empresa
+  // apagava TUDO em cascata — inclusive IBR concluído e modelo emitido, que as
+  // rotas individuais recusam apagar por serem evidência ("nunca deletar o que
+  // participou de um produto"). Sem esta guarda, a política valia por documento
+  // e caía por inteiro num clique na empresa. Espelha as regras individuais:
+  // Analysis "Concluída" (DELETE /analyses/:id) e FinancialModel
+  // "Concluído"/"Cancelado" (DELETE /models/:id).
+  const [ibrsEmitidos, modelosEmitidos] = await Promise.all([
+    prisma.analysis.findMany({
+      where: { companyId: id, status: "Concluída" },
+      select: { id: true, nome: true },
+      take: 5,
+    }),
+    prisma.financialModel.findMany({
+      where: { companyId: id, status: { in: ["Concluído", "Cancelado"] } },
+      select: { id: true, nome: true, status: true },
+      take: 5,
+    }),
+  ]);
+  if (ibrsEmitidos.length > 0 || modelosEmitidos.length > 0) {
+    const nomes = [
+      ...ibrsEmitidos.map((a) => `IBR "${a.nome}" (concluído)`),
+      ...modelosEmitidos.map((m) => `Modelo "${m.nome}" (${m.status.toLowerCase()})`),
+    ];
+    res.status(409).json({
+      error:
+        `"${existing.nomeFantasia || existing.razaoSocial}" tem produto emitido e não pode ser excluída — ` +
+        `produto entregue é evidência e nunca sai da base: ${nomes.join(" · ")}` +
+        `${nomes.length >= 5 ? " …" : ""}. Se esta ficha é duplicata de outra da MESMA empresa, unifique as fichas (mesmo CNPJ) em vez de excluir.`,
+      produtosEmitidos: [
+        ...ibrsEmitidos.map((a) => ({ tipo: "IBR", id: a.id, nome: a.nome, status: "Concluída" })),
+        ...modelosEmitidos.map((m) => ({ tipo: "Modelo financeiro", id: m.id, nome: m.nome, status: m.status })),
+      ],
+    });
+    return;
+  }
+
   try {
     // Delete associated storage files before cascading DB delete
     const docs = await prisma.document.findMany({
