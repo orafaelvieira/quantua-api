@@ -436,4 +436,39 @@ router.put("/:id/vigente", async (req: AuthRequest, res: Response): Promise<void
   res.json({ ok: true, vigenteId: registroId });
 });
 
+// DELETE /produtos/:id — remove o ENVELOPE VAZIO (pedido do usuário, 27/07/2026).
+//
+// O envelope existe para guardar versões: sem nenhuma, ele é só um rótulo — não
+// é evidência de nada e ainda assim contava no "Produtos N" da tela, o que fazia
+// a empresa parecer ter produto que não tem. Envelope COM versão nunca sai por
+// aqui (a política da casa vale para o conteúdo: cancele/exclua as versões
+// primeiro, cada uma com sua própria regra).
+//
+// body: { companyId } — mesmo contrato das demais mutações (guarda de suspensão).
+router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
+  const { companyId } = (req.body ?? {}) as Record<string, string | undefined>;
+  if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
+  const produto = await produtoNoEscopo(req.params.id as string, req);
+  if (!produto) { res.status(404).json({ error: "Produto não encontrado" }); return; }
+  if (produto.companyId !== companyId) { res.status(400).json({ error: "companyId não confere com o produto" }); return; }
+
+  const versoes = await versoesDoProduto(produto.id);
+  if (versoes.length > 0) {
+    res.status(409).json({
+      error: `"${produto.rotulo}" tem ${versoes.length} versão(ões) — o produto guarda o histórico delas. Exclua ou cancele as versões primeiro; o envelope sai quando ficar vazio.`,
+      versoes: versoes.map((v) => ({ id: v.id, nome: v.nome, status: v.status })),
+    });
+    return;
+  }
+
+  await prisma.produtoEmpresa.delete({ where: { id: produto.id } });
+  await registrarAuditoria({
+    userId: req.userId!, entity: "produto_empresa", entityId: produto.id,
+    field: "exclusão do produto (envelope vazio)",
+    before: { tipo: produto.tipo, rotulo: produto.rotulo, companyId: produto.companyId, criadoEm: produto.createdAt },
+    source: "produtos",
+  });
+  res.status(204).send();
+});
+
 export default router;
