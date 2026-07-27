@@ -166,6 +166,10 @@ export interface LinhaCusto {
   /** F9 — ORÇAMENTO BASE ZERO: justificativa obrigatória para aprovar quando o
    *  modelo tem tipoOrcamento "base-zero". Metadado da governança, não do cálculo. */
   obz?: { justificativa: string; classificacao: "obrigatorio" | "importante" | "desejavel" };
+  /** CÓDIGO DO PLANO DE CONTAS DO CLIENTE (ex.: "4.1.02.001"). A empresa fala a
+   *  língua dela; o roll-up para a conta canônica continua via `destino`. Só
+   *  identificação/reconciliação — o motor não lê. */
+  codigo?: string;
 }
 
 /** Ativo que a empresa JÁ TEM na largada (das DFs ou informado): imobilizado,

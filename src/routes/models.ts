@@ -16,6 +16,7 @@ import { calcularOrcadoRealizado, congelarOrcamento } from "../services/model-or
 import { calcularPorUnidade, decomporFolha, validarEdicaoRestrita, RateioCC, CentroCustoDim } from "../services/estrutura-dimensional";
 import { aplicarRegraGrade, mesesDoAnoNoHorizonte, refAnualDaLinha, RegraGrade } from "../services/grade-orcamentaria";
 import { calcularMatrizGmd } from "../services/gmd-matricial";
+import { planejarImportacaoPlanoContas, ContaImportada } from "../services/plano-contas";
 import { agregarPorPeriodo, recorteJanelaMovel } from "../services/model-safra";
 import { DIVERGENCIAS_BELAGRO, resumoDivergencias } from "../services/model-reconciliacao-belagro";
 import { buscarIndicesEconomicos } from "../services/indices-economicos";
@@ -2004,6 +2005,10 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
           unidadeId: typeof l.unidadeId === "string" ? l.unidadeId : null,
           centroCustoId: typeof l.centroCustoId === "string" ? l.centroCustoId : null,
           grupoDre: typeof l.grupoDre === "string" ? l.grupoDre : null,
+          // Plano de contas do CLIENTE: código próprio + para onde a conta
+          // rola no modelo canônico (o "de-para" que a controladoria cobra).
+          codigo: typeof l.codigo === "string" ? l.codigo : null,
+          destino: l.destino && typeof l.destino === "object" ? (l.destino as { conta: string; sinal: string }) : null,
           // O número que o motor gravou — a grade mostra a VERDADE do cálculo.
           valores: drePorLinha.get(l.id)?.valores ?? {},
           // Meses digitados (mês-que-manda): a grade marca o que é FATO digitado.
@@ -2063,6 +2068,85 @@ router.post("/:id/grade/regra", async (req: AuthRequest, res: Response): Promise
     valorAnual: typeof valorAnual === "number" ? valorAnual : undefined,
   });
   res.json({ ...resultado, mesesAlvo });
+});
+
+// POST /models/:id/plano-contas — IMPORTA O PLANO DE CONTAS DO CLIENTE
+// (27/07/2026): a empresa orça na língua dela (código + nome próprios), e cada
+// conta declara para onde ROLA no modelo canônico (`destino`) e em qual centro
+// de custo mora. Sem isso, "+ conta" só aceitava um nome solto e o de-para
+// ficava na cabeça do analista.
+//
+// body: { contas: [{ codigo?, nome, tipo?: "custo"|"despesa", centroCusto?,
+//                    unidade?, destino? }] }
+// O cliente lê a planilha (mesma cozinha do importar-skus) e manda a lista.
+// Casamento de CC/unidade por CÓDIGO ou NOME normalizado; o que não casar volta
+// listado — nada entra em silêncio nem inventa lotação.
+router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
+
+  const contas = req.body?.contas as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(contas) || contas.length === 0) { res.status(400).json({ error: "Envie ao menos uma conta" }); return; }
+  if (contas.length > 1000) { res.status(400).json({ error: "Máximo de 1.000 contas por importação" }); return; }
+
+  const [unidades, centros, blocks] = await Promise.all([
+    prisma.unidadeNegocio.findMany({ where: { companyId: model.companyId, ativo: true } }),
+    prisma.centroCusto.findMany({ where: { companyId: model.companyId, ativo: true } }),
+    prisma.modelBlock.findMany({ where: { modelId: model.id } }),
+  ]);
+  const blocoCusto = blocks.find((b) => b.tipo === "custos");
+  const blocoDespesa = blocks.find((b) => b.tipo === "despesas");
+  if (!blocoCusto || !blocoDespesa) { res.status(409).json({ error: "O modelo precisa dos blocos de custos e despesas." }); return; }
+
+  const cfgCusto = blocoCusto.config as BlocoModelo["config"];
+  const cfgDespesa = blocoDespesa.config as BlocoModelo["config"];
+  const linhasCusto = [...(cfgCusto.linhasCusto ?? [])];
+  const linhasDespesa = [...(cfgDespesa.linhasCusto ?? [])];
+
+  // A DECISÃO (casamento de CC/unidade, dedupe, classificação) é pura e tem
+  // testes próprios — ver plano-contas.test.ts. Aqui só persistimos o plano.
+  const { criar, ignoradas, semLotacao } = planejarImportacaoPlanoContas({
+    contas: contas as unknown as ContaImportada[],
+    existentes: [...linhasCusto, ...linhasDespesa].map((l) => {
+      const x = l as unknown as { unidadeId?: string; centroCustoId?: string };
+      return { nome: l.nome, codigo: l.codigo ?? null, unidadeId: x.unidadeId ?? null, centroCustoId: x.centroCustoId ?? null };
+    }),
+    unidades, centros,
+  });
+
+  const stamp = Date.now().toString(36);
+  const criadas = criar.map((c, i) => {
+    const linha = {
+      id: `pc${stamp}_${i}`,
+      nome: c.nome,
+      ...(c.codigo ? { codigo: c.codigo } : {}),
+      modo: "serie" as const,
+      valores: {},
+      ...(c.centroCustoId ? { centroCustoId: c.centroCustoId } : {}),
+      ...(c.unidadeId ? { unidadeId: c.unidadeId } : {}),
+      ...(c.destino ? { destino: { conta: c.destino, sinal: "soma" as const } } : {}),
+    };
+    (c.ehCusto ? linhasCusto : linhasDespesa).push(linha);
+    return { codigo: c.codigo, nome: c.nome, tipo: c.ehCusto ? "custo" : "despesa", lotacao: c.lotacao };
+  });
+
+  if (criadas.length === 0) {
+    res.status(409).json({ error: "Nenhuma conta nova — todas já existem no modelo.", ignoradas, semLotacao });
+    return;
+  }
+
+  await prisma.$transaction([
+    prisma.modelBlock.update({ where: { id: blocoCusto.id }, data: { config: { ...cfgCusto, linhasCusto } as object } }),
+    prisma.modelBlock.update({ where: { id: blocoDespesa.id }, data: { config: { ...cfgDespesa, linhasCusto: linhasDespesa } as object } }),
+  ]);
+  await registrarAuditoria({
+    userId: req.userId!, entity: "financial_model", entityId: model.id, field: "plano de contas importado",
+    after: { criadas: criadas.length, ignoradas: ignoradas.length, semLotacao: semLotacao.length, amostra: criadas.slice(0, 10).map((x) => `${x.codigo ?? "—"} ${x.nome} (${x.lotacao})`) },
+    source: "models",
+  });
+  const calc = await calcularEGravar(model.id);
+  res.status(201).json({ criadas, ignoradas, semLotacao, resultado: calc?.resultado ?? null });
 });
 
 // ── F6: PACOTES DE COLETA (um por unidade + corporativo) ────────────────────
