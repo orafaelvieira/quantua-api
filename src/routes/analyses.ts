@@ -792,11 +792,26 @@ async function buildPeerComparison(
  * "Cancelada") e, ao fim, "Concluída" (condicional, respeita cancelamento). Erro → "Erro".
  * Reutilizada pelo /process (auto, quando a extração fecha limpa) e pelo /generate (manual).
  */
+/** Há análise de verdade guardada? `{}` (nunca gerou) e `{erro}` (falha) não contam. */
+function temResultadoUtil(resultado: unknown): boolean {
+  if (!resultado || typeof resultado !== "object") return false;
+  const chaves = Object.keys(resultado as Record<string, unknown>);
+  return chaves.length > 0 && !(chaves.length === 1 && chaves[0] === "erro");
+}
+
 async function runAnalysisBackground(
   analysisId: string,
   modelKey?: string | null,
-  opts?: { reuseWeb?: boolean },
+  // userId = QUEM disparou (a trilha da geração precisa do autor, não do dono do IBR).
+  opts?: { reuseWeb?: boolean; userId?: string },
 ): Promise<void> {
+  // ESTADO ANTERIOR lido ANTES da transição — a foto de segurança precisa do status
+  // real (não do transitório "Gerando diagnóstico", que não é restaurável).
+  const estadoAnterior = await prisma.analysis.findUnique({
+    where: { id: analysisId },
+    select: { status: true, resultado: true },
+  });
+
   // "Extraindo" cobre o fluxo automático do /process (extração → geração). "Erro"/"Interrompida"
   // entram para permitir "Regerar só a análise" (reusa a extração já feita, sem re-extrair — o
   // /generate valida antes que há indicadores). "Cancelada" (definitivo) NUNCA entra: somente consulta.
@@ -805,6 +820,36 @@ async function runAnalysisBackground(
     data: { status: "Gerando diagnóstico" },
   });
   if (iniciou.count === 0) { console.log(`[generate] ${analysisId}: estado não permite gerar (cancelado/corrida) — abortado`); return; }
+
+  // FOTO PRÉ-GERAÇÃO (27/07/2026): regerar SOBRESCREVE diagnóstico, SWOT e
+  // recomendações — sem isto a análise anterior desaparecia sem deixar cópia
+  // (a foto automática é 1×/dia: duas regerações no mesmo dia perdiam a do meio).
+  // Guarda o estado ANTERIOR na mesma prateleira das "Fotos de segurança", com
+  // origem própria — a poda só alcança "auto-diario", então regeração nenhuma
+  // some. Só fotografa se havia análise: na primeira geração não há o que preservar.
+  const regeracao = temResultadoUtil(estadoAnterior?.resultado);
+  if (regeracao) {
+    try {
+      const alvo = await prisma.analysis.findUnique({ where: { id: analysisId }, include: { documents: SELECT_DOCS_FOTO } });
+      if (alvo) {
+        // status da FOTO = o anterior (restaurável), não o transitório em curso.
+        const conteudo = montarConteudoAnalise(
+          { ...(alvo as unknown as Record<string, unknown>), status: estadoAnterior!.status },
+          alvo.documents as DocFoto[],
+        );
+        await prisma.snapshotDiario.create({
+          data: {
+            entidade: "analysis", entidadeId: analysisId, companyId: alvo.companyId,
+            conteudo: conteudo as unknown as object, hash: hashConteudo(conteudo), origem: "pre-geracao",
+          },
+        });
+        console.log(`[generate] ${analysisId}: foto pré-geração gravada (análise anterior preservada)`);
+      }
+    } catch (e: any) {
+      // Best-effort: falhar aqui não pode impedir a geração — mas fica no log.
+      console.error(`[generate] ${analysisId}: foto pré-geração FALHOU (segue gerando):`, e?.message ?? e);
+    }
+  }
 
   try {
     const analysis = await prisma.analysis.findUnique({ where: { id: analysisId }, include: { company: true } });
@@ -951,6 +996,22 @@ async function runAnalysisBackground(
     });
     if (salvo.count === 0) { console.log(`[generate] ${analysisId} cancelada durante a IA — resultado descartado`); return; }
     console.log(`[generate] ${analysisId} CONCLUÍDA`);
+
+    // TRILHA DA GERAÇÃO (27/07/2026): sem este evento não havia como saber sequer
+    // QUANTAS vezes um IBR foi regerado — quanto mais com que modelo e a que custo.
+    // Na regeração, aponta a foto do estado anterior (rastro completo do antes→depois).
+    void registrarAuditoria({
+      userId: opts?.userId ?? analysis.userId, analysisId, entity: "analysis", entityId: analysisId,
+      field: regeracao ? "análise REGERADA pela IA (a anterior ficou na foto pré-geração)" : "análise gerada pela IA",
+      before: regeracao ? { statusAnterior: estadoAnterior?.status ?? null } : undefined,
+      after: {
+        modelo: modelKey ?? "sonnet",
+        custoUsd: (resultado as { custoAnalise?: { usd?: number } }).custoAnalise?.usd ?? null,
+        pesquisaWeb: cachedWeb ? "reusada do cache" : "nova busca",
+        confianca: finalConfianca,
+      },
+      source: "generate",
+    });
 
     // NOME NO PADRÃO AO CONCLUIR (pedido do usuário, 24/07/2026). A data-base do
     // IBR é a data do ÚLTIMO documento extraído — ela só vira FATO aqui. Por
@@ -1772,7 +1833,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const AUTO_GERAR = process.env.AUTO_GERAR_ANALISE === "true";
     if (AUTO_GERAR && dreProvada && !setorPendente(analysis)) {
       const ws = await prisma.workspace.findFirst({ where: { members: { some: { id: req.userId! } } }, select: { aiAnalysisModel: true } });
-      await runAnalysisBackground(analysis.id, ws?.aiAnalysisModel);
+      await runAnalysisBackground(analysis.id, ws?.aiAnalysisModel, { userId: req.userId! });
       // resposta (202) já foi enviada — frontend acompanha por polling do status.
       return;
     }
@@ -1842,7 +1903,7 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
   const refreshWeb = req.body?.refreshWeb === true;
   res.status(202).json({ id, status: "Gerando diagnóstico" });
   // fire-and-forget: runAnalysisBackground faz a transição de status e persiste; o boot-recovery cobre órfãos.
-  void runAnalysisBackground(id, ws?.aiAnalysisModel, { reuseWeb: !refreshWeb });
+  void runAnalysisBackground(id, ws?.aiAnalysisModel, { reuseWeb: !refreshWeb, userId: req.userId! });
 });
 
 // === Structured Financial Data Endpoints ===
