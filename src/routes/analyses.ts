@@ -1368,7 +1368,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const rodaHibrido = async (): Promise<Candidato | null> => {
       // raw = linhasToText (limpo, p/ o LLM) · rawIndent = doc.raw do parser (INDENTADO, p/ a
       // árvore determinística por indentação — recupera as folhas Grau-4 que `linhas` colapsa).
-      const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), rawIndent: d.raw, tipo: d.tipo, periodos: d.periodos }));
+      // linhas = fonte das árvores determinísticas de DRE (e do BP quando o rawIndent chega
+      // achatado do cache herdado) — quando elas provam, o doc nem passa pelo LLM.
+      const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), rawIndent: d.raw, linhas: d.linhas, tipo: d.tipo, periodos: d.periodos }));
       if (!aiDocs.length) return null;
       const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel, { dreModel });
       if (!temDadosIA(r)) return null;

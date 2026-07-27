@@ -15,7 +15,7 @@
 // retorna null e o chamador cai no LLM — logo, ZERO regressão em documentos que não se
 // encaixam nesta reconstrução.
 
-import type { ParsedDocument } from "./parser";
+import type { ParsedDocument, ExtractedRow } from "./parser";
 import { parseBRNumber, juntarNomeValorQuebrados } from "./parser";
 import type { ArvoreOriginalBP, BPN3Item, BPN3Periodo } from "./ai-extraction";
 
@@ -205,6 +205,21 @@ function filhosDoGrupo(grupo: NoIndent): NoIndent[] {
     else out.push(f);
   }
   return out;
+}
+
+/**
+ * Sintetiza um texto INDENTADO a partir das LINHAS do parser. Documento herdado/editado
+ * chega ao /process sem o `doc.raw` original (dadosExtraidosToRaw achata em tabela pipe) —
+ * mas as linhas do cache preservam `indent`, então dá para reconstruir um raw equivalente
+ * e deixar o builder trabalhar do cache. Retorna null se as linhas não trazem indent.
+ */
+export function linhasParaTextoIndentado(linhas: ExtractedRow[], periodos: string[]): string | null {
+  if (!linhas.length || linhas.some((l) => typeof l.indent !== "number")) return null;
+  const fmt = (v: number) => v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const cols = periodos.length ? periodos : Object.keys(linhas[0].valores);
+  return linhas
+    .map((l) => " ".repeat(Math.max(0, l.indent as number)) + l.conta + "  " + cols.map((p) => fmt(l.valores[p] ?? 0)).join("  "))
+    .join("\n");
 }
 
 /**

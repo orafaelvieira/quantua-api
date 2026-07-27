@@ -4,8 +4,9 @@ import { DRE_TEMPLATE } from "./financial-templates";
 import type { BPLineItem, DRELineItem } from "../types/financial";
 import type { DREModel } from "./model-version";
 import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccountToDRE, isContaIgnorada, blocoDoCaminhoDRE, CONFLITO_CONTEXTO_DRE, DEFAULT_BP_MODEL, DRE_DESPESAS_OPERACIONAIS, type BPModel, type DictionaryEntry } from "./account-mapper";
-import { construirArvoreBPporIndentacao } from "./bp-tree-indent";
-import type { ParsedDocument } from "./parser";
+import { construirArvoreBPporIndentacao, linhasParaTextoIndentado } from "./bp-tree-indent";
+import { construirArvoreDREporIndentacao } from "./dre-tree-indent";
+import type { ParsedDocument, ExtractedRow } from "./parser";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
 const AI_MODEL = "claude-sonnet-4-6";        // visão (lê o PDF) — caro
@@ -695,7 +696,7 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
 }
 
 export async function extractFinancialsWithAI(
-  docs: Array<{ buffer?: Buffer; raw?: string; rawIndent?: string; tipo: string; periodos?: string[] }>,
+  docs: Array<{ buffer?: Buffer; raw?: string; rawIndent?: string; linhas?: ExtractedRow[]; tipo: string; periodos?: string[] }>,
   periodos: string[],
   dict?: DictionaryEntry[],
   bpModel: BPModel = DEFAULT_BP_MODEL,
@@ -711,6 +712,9 @@ export async function extractFinancialsWithAI(
   // Capturas de BP resolvidas DETERMINISTICAMENTE (árvore por indentação) — não passam pelo
   // LLM. Cada uma vira uma "captura BP" já pronta, mesclada com as do LLM na mesma pipeline.
   const bpDeterministicos: Array<{ data: ArvoreOriginalBP; ctx: DocCtx }> = [];
+  // Idem para a DRE: árvore de seções + declarados reconstruídos das LINHAS do parser
+  // (indent), aceitos só com a prova de partição (Σ seções = LL declarado). Ver dre-tree-indent.
+  const dreDeterministicos: Array<{ data: NonNullable<ReturnType<typeof construirArvoreDREporIndentacao>>; ctx: DocCtx }> = [];
   const taskThunks = docs.flatMap((doc) => {
     const t = doc.tipo.toLowerCase();
     const isDRE = /dre|resultado|demonstra/.test(t);
@@ -720,7 +724,11 @@ export async function extractFinancialsWithAI(
     const ctx: DocCtx = { pin: docPeriodos.length === 1 ? docPeriodos[0] : null, docPeriodos };
     const promptPeriodos = docPeriodos.length ? docPeriodos : periodos;
     const out: Array<() => Promise<{ kind: "dre" | "bp"; data: any; ctx: DocCtx; inTok: number; outTok: number }>> = [];
-    if (isDRE || !isBP) out.push(() => ask(input, dreTreePrompt(promptPeriodos), model, 0, 16000).then((r) => ({ kind: "dre" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
+    if (isDRE || !isBP) {
+      const arvoreDreDet = doc.linhas?.length ? construirArvoreDREporIndentacao(doc.linhas, promptPeriodos) : null;
+      if (arvoreDreDet) dreDeterministicos.push({ data: arvoreDreDet, ctx });
+      else out.push(() => ask(input, dreTreePrompt(promptPeriodos), model, 0, 16000).then((r) => ({ kind: "dre" as const, data: r.data, ctx, inTok: r.inTok, outTok: r.outTok })));
+    }
     if (isBP || (!isDRE && !isBP)) {
       // ANTES do LLM: se o doc tem o texto INDENTADO do parser (`rawIndent` = doc.raw, com a
       // hierarquia preservada na coluna/x-position), reconstrói a árvore do BP de forma
@@ -730,9 +738,16 @@ export async function extractFinancialsWithAI(
       // no nível do parser), onde o builder sempre via 1 nível e caía no LLM. Se a reconstrução
       // não for confiável (null), mantém EXATAMENTE o fluxo LLM atual — sem regressão.
       const rawArvore = doc.rawIndent ?? doc.raw;
-      const arvoreDet = rawArvore
+      let arvoreDet = rawArvore
         ? construirArvoreBPporIndentacao({ raw: rawArvore } as ParsedDocument, promptPeriodos)
         : null;
+      // Cache herdado/editado: o rawIndent chega ACHATADO (dadosExtraidosToRaw) e o builder
+      // devolve null. As linhas do cache preservam o indent — sintetiza o texto e tenta de
+      // novo. As travas do builder continuam valendo (prova de fechamento); falhou → LLM.
+      if (!arvoreDet && doc.linhas?.length) {
+        const sintetico = linhasParaTextoIndentado(doc.linhas, promptPeriodos);
+        if (sintetico) arvoreDet = construirArvoreBPporIndentacao({ raw: sintetico } as ParsedDocument, promptPeriodos);
+      }
       if (arvoreDet) {
         bpDeterministicos.push({ data: arvoreDet, ctx });
       } else {
@@ -805,6 +820,8 @@ export async function extractFinancialsWithAI(
   // Capturas de BP determinísticas (árvore por indentação) entram na MESMA pipeline de merge
   // (canonicalização de período idêntica à do LLM) — apenas não custaram tokens.
   for (const b of bpDeterministicos) mergeBP(b.data, b.ctx);
+  // DRE determinística: seções + declarados na MESMA pipeline (períodos já provados).
+  for (const d of dreDeterministicos) { mergeDRE({ secoes: d.data.secoes }, d.ctx); storeDeclarados(d.data.declarados, d.ctx); }
 
   // UNIFICA períodos do MESMO ANO com formatos diferentes entre docs ("2022" no DRE vs
   // "31/12/2022" no BP dividia o período em dois — BP num, DRE noutro — e quebrava a
