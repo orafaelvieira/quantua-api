@@ -94,6 +94,10 @@ export interface LinhaReceita {
   nome: string;
   /** Template usado na criação ("saas", "transacional", "capacidade", …) — só metadado. */
   template?: string;
+  /** F7 (comércio) — memória dos SKUs que geraram a série da linha (importação
+   *  em massa "centenas de produtos × preço médio", agregada por categoria).
+   *  Só proveniência: o motor lê a série do nó, nunca isto. */
+  skuDetalhe?: Array<{ nome: string; preco: number; qtd: number }>;
   nodes: DriverNode[];
   /** id do nó cujo valor é a receita da linha. */
   nodeRaiz: string;
@@ -155,6 +159,13 @@ export interface LinhaCusto {
   destino?: { conta: string; sinal: "soma" | "reduz" };
   /** Posição de exibição na lista (nova linha = fim). Metadado da tela. */
   ordem?: number;
+  /** F8 — DETALHAMENTO sob a conta (itens livres, série mensal cada). Quando
+   *  existe, a TELA materializa a soma em `valores`; o motor segue lendo só
+   *  `valores` (profundidade progressiva sem tocar o cálculo). */
+  detalhes?: Array<{ id: string; nome: string; valores: Serie }>;
+  /** F9 — ORÇAMENTO BASE ZERO: justificativa obrigatória para aprovar quando o
+   *  modelo tem tipoOrcamento "base-zero". Metadado da governança, não do cálculo. */
+  obz?: { justificativa: string; classificacao: "obrigatorio" | "importante" | "desejavel" };
 }
 
 /** Ativo que a empresa JÁ TEM na largada (das DFs ou informado): imobilizado,

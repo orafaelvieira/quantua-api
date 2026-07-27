@@ -531,6 +531,56 @@ router.put("/:id/centros-custo/:cid", async (req: AuthRequest, res: Response): P
   res.json(depois);
 });
 
+// ── PACOTES GMD (F10 — gerenciamento matricial de despesas) ─────────────────
+// Grupo de CONTAS que cruza todas as unidades, com um DONO. A dupla checagem:
+// dono do pacote × responsável da unidade — nenhum real fica sem dois olhos.
+
+const pacoteGmdSchema = z.object({
+  nome: z.string().min(1).max(80),
+  donoUserId: z.string().uuid().optional().nullable(),
+  contas: z.array(z.string().min(1)).max(200),
+  ativo: z.boolean().optional(),
+});
+
+router.get("/:id/pacotes-gmd", async (req: AuthRequest, res: Response): Promise<void> => {
+  const company = await companyNoEscopoEstrutura(req.params.id as string, req);
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  const pacotes = await prisma.pacoteGmd.findMany({ where: { companyId: company.id }, orderBy: { createdAt: "asc" } });
+  const idsDonos = [...new Set(pacotes.map((p) => p.donoUserId).filter((v): v is string => !!v))];
+  const nomes = idsDonos.length
+    ? new Map((await prisma.user.findMany({ where: { id: { in: idsDonos } }, select: { id: true, name: true } })).map((u) => [u.id, u.name]))
+    : new Map<string, string>();
+  res.json({ pacotes: pacotes.map((p) => ({ ...p, donoNome: p.donoUserId ? nomes.get(p.donoUserId) ?? null : null })) });
+});
+
+router.post("/:id/pacotes-gmd", async (req: AuthRequest, res: Response): Promise<void> => {
+  const company = await companyNoEscopoEstrutura(req.params.id as string, req);
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  const parsed = pacoteGmdSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const criado = await prisma.pacoteGmd.create({ data: { ...parsed.data, contas: parsed.data.contas, companyId: company.id } });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "pacote_gmd", entityId: criado.id, field: "criação do pacote GMD",
+    after: { nome: criado.nome, contas: parsed.data.contas.length }, source: "companies",
+  });
+  res.status(201).json(criado);
+});
+
+router.put("/:id/pacotes-gmd/:pid", async (req: AuthRequest, res: Response): Promise<void> => {
+  const company = await companyNoEscopoEstrutura(req.params.id as string, req);
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  const antes = await prisma.pacoteGmd.findFirst({ where: { id: req.params.pid as string, companyId: company.id } });
+  if (!antes) { res.status(404).json({ error: "Pacote não encontrado" }); return; }
+  const parsed = pacoteGmdSchema.partial().safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  const depois = await prisma.pacoteGmd.update({ where: { id: antes.id }, data: parsed.data });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "pacote_gmd", entityId: antes.id, field: "edição do pacote GMD",
+    before: { nome: antes.nome, ativo: antes.ativo }, after: { nome: depois.nome, ativo: depois.ativo }, source: "companies",
+  });
+  res.json(depois);
+});
+
 /** Sugestão de SETOR B3 pelo CNAE da Receita (principal + secundários) — zero IA.
  *  Sinal FRACO: pré-preenche o picker do wizard com selo; nunca confirma sozinho. */
 router.get("/:id/sugestao-setor", async (req: AuthRequest, res: Response): Promise<void> => {

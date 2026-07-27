@@ -19,6 +19,10 @@ describe("catálogo de templates", () => {
       expect(r.erros, `template "${t.id}" produziu erros`).toEqual([]);
       // O nó raiz precisa existir e fechar em R$ (senão a análise dimensional acusa).
       expect(r.series[linha.nodeRaiz], `template "${t.id}" sem série no nó raiz`).toBeDefined();
+      // E a PROVA DE UNIDADES precisa passar — foi ela que pegou o agro_area
+      // nascendo com produtividade [#] em vez de [#/un] (sacas POR hectare).
+      const dim = r.checks.find((c) => c.id === "dimensional");
+      expect(dim?.ok, `template "${t.id}" reprova na análise dimensional: ${dim?.prova}`).toBe(true);
     }
   });
 

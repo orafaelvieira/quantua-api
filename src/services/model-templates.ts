@@ -24,6 +24,7 @@ export const TEMPLATES_RECEITA: TemplateReceita[] = [
   { id: "capacidade", nome: "Capacidade × ocupação", descricao: "Quantos lugares existem, quantos ficam ocupados e quanto rende cada um.", exemplos: "Clínicas, hotéis, escolas com vagas, restaurantes" },
   { id: "servicos", nome: "Horas de serviço", descricao: "Profissionais × horas que conseguem faturar × valor da hora.", exemplos: "Consultorias, escritórios, agências" },
   { id: "varejo", nome: "Fluxo × conversão × ticket", descricao: "Quantas pessoas passam, quantas compram e quanto gastam.", exemplos: "Lojas, e-commerce" },
+  { id: "agro_area", nome: "Área × produtividade × preço", descricao: "Hectares plantados × sacas por hectare × preço da saca — a receita da produção própria. Distribua a colheita pelos meses na curva de cada variável.", exemplos: "Produção agrícola, fazendas, cooperativas" },
   // ── Agronegócio (revenda de insumos e grãos) ──
   { id: "agro_insumo", nome: "Insumo agrícola (preço a partir do custo)", descricao: "Volume vendido × preço, com o preço calculado a partir do custo do produto: sobe o custo pelos impostos, frete, armazenagem, comissão e a margem que você quer ganhar.", exemplos: "Revenda de fertilizantes, defensivos, sementes" },
   { id: "agro_graos", nome: "Grãos (volume em kg, preço por saca)", descricao: "Volume controlado em quilos e preço negociado por saca de 60 kg — a conversão é automática.", exemplos: "Revenda de soja, milho, sorgo" },
@@ -62,7 +63,10 @@ export function montarLinhaReceita(
           no({ id: p("cancelados"), tipo: "fluxo", nome: "Clientes que saem", unidade: "#", params: { expr: `${p("clientes")} * ${p("churn")}` } }),
           no({ id: p("clientes"), tipo: "estoque", nome: "Base de clientes", unidade: "#", papel: "baseClientes", params: { saldoInicial: baseInicial, entradasRef: p("novos"), saidasRef: p("cancelados") } }),
           no({ id: p("arpu"), tipo: "preco", nome: "Valor médio por cliente/mês", unidade: "R$/un", papel: "arpu", params: { valorMensal: arpu } }),
-          no({ id: p("receita"), tipo: "formula", nome: `Memória de Cálculo — ${nome}`, unidade: "R$", params: { expr: `${p("clientes")} * ${p("arpu")}` } }),
+          // EXPANSÃO (F7, waterfall SaaS): upsell/cross-sell como % do MRR do
+          // mês — não cumulativo (o cumulativo é o ARPU crescendo por ano).
+          no({ id: p("expansao"), tipo: "taxa", nome: "Expansão (upsell) — % do MRR no mês", unidade: "%", params: { valorMensal: 0 } }),
+          no({ id: p("receita"), tipo: "formula", nome: `Memória de Cálculo — ${nome}`, unidade: "R$", params: { expr: `${p("clientes")} * ${p("arpu")} * (1 + ${p("expansao")})` } }),
         ],
       };
     }
@@ -87,6 +91,21 @@ export function montarLinhaReceita(
           no({ id: p("f1"), tipo: "serie", nome: "Quantidade", unidade: "#", params: { valorMensal: 0 } }),
           no({ id: p("f2"), tipo: "serie", nome: "Valor por unidade", unidade: "R$/un", params: { valorMensal: 0 } }),
           no({ id: p("receita"), tipo: "formula", nome: `Memória de Cálculo — ${nome}`, unidade: "R$", params: { expr: `${p("f1")} * ${p("f2")}` } }),
+        ],
+      };
+    }
+    case "agro_area": {
+      // Produção própria (F7): hectares × sacas/ha × R$/saca. A colheita é
+      // sazonal — o analista distribui pelos meses nas curvas das variáveis.
+      return {
+        id: linhaId, nome, template, nodeRaiz: p("receita"),
+        nodes: [
+          no({ id: p("area"), tipo: "serie", nome: "Área plantada (hectares)", unidade: "#", params: { valorMensal: 0 } }),
+          // sacas POR hectare = [#/un] — assim hectares × (sacas/ha) fecha em
+          // sacas e × R$/saca fecha em R$ (a prova de unidades cobra isso).
+          no({ id: p("produtividade"), tipo: "serie", nome: "Produtividade (sacas por hectare no mês)", unidade: "#/un", params: { valorMensal: 0 } }),
+          no({ id: p("preco"), tipo: "preco", nome: "Preço da saca", unidade: "R$/un", params: { valorMensal: 0 } }),
+          no({ id: p("receita"), tipo: "formula", nome: `Memória de Cálculo — ${nome}`, unidade: "R$", params: { expr: `${p("area")} * ${p("produtividade")} * ${p("preco")}` } }),
         ],
       };
     }

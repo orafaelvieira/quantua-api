@@ -15,6 +15,7 @@ import { calcularModelo, validarFormula, backfillPremissasAoRecuar, BlocoModelo,
 import { calcularOrcadoRealizado, congelarOrcamento } from "../services/model-orcamento";
 import { calcularPorUnidade, decomporFolha, validarEdicaoRestrita, RateioCC, CentroCustoDim } from "../services/estrutura-dimensional";
 import { aplicarRegraGrade, mesesDoAnoNoHorizonte, refAnualDaLinha, RegraGrade } from "../services/grade-orcamentaria";
+import { calcularMatrizGmd } from "../services/gmd-matricial";
 import { agregarPorPeriodo, recorteJanelaMovel } from "../services/model-safra";
 import { DIVERGENCIAS_BELAGRO, resumoDivergencias } from "../services/model-reconciliacao-belagro";
 import { buscarIndicesEconomicos } from "../services/indices-economicos";
@@ -1052,6 +1053,29 @@ router.put("/:id/orcamento/snapshots/:sid/status", async (req: AuthRequest, res:
     return;
   }
 
+  // F9 — BASE ZERO: aprovar exige que TODA linha com valor tenha justificativa.
+  // É o contrato do OBZ: nada é herdado, tudo é defendido.
+  if (status === "aprovado" && model.tipoOrcamento === "base-zero") {
+    const blocks = await prisma.modelBlock.findMany({ where: { modelId: model.id, tipo: { in: ["custos", "despesas"] } } });
+    const semJustificativa: string[] = [];
+    for (const b of blocks) {
+      for (const l of ((b.config ?? {}) as { linhasCusto?: Array<Record<string, unknown>> }).linhasCusto ?? []) {
+        const temValor =
+          (typeof l.pct === "number" && l.pct > 0) ||
+          (typeof l.valorMensal === "number" && l.valorMensal > 0) ||
+          (l.valores && typeof l.valores === "object" && Object.values(l.valores as Record<string, number>).some((v) => Number.isFinite(v) && v !== 0));
+        const obz = l.obz as { justificativa?: string } | undefined;
+        if (temValor && !obz?.justificativa?.trim()) semJustificativa.push(String(l.nome ?? l.id));
+      }
+    }
+    if (semJustificativa.length > 0) {
+      res.status(409).json({
+        error: `Orçamento BASE ZERO: ${semJustificativa.length} linha(s) com valor sem justificativa — ${semJustificativa.slice(0, 5).join(", ")}${semJustificativa.length > 5 ? "…" : ""}. Justifique na grade (base zero: nada é herdado, tudo é defendido) antes de aprovar.`,
+      });
+      return;
+    }
+  }
+
   const atualizado = await prisma.$transaction(async (tx) => {
     if (status === "aprovado") {
       // Uma baseline só: aprovar esta desliga as demais.
@@ -2041,12 +2065,148 @@ router.post("/:id/grade/regra", async (req: AuthRequest, res: Response): Promise
   res.json({ ...resultado, mesesAlvo });
 });
 
+// ── F6: PACOTES DE COLETA (um por unidade + corporativo) ────────────────────
+// A área recebe o Excel carimbado, devolve, o sistema valida e consolida.
+// Status: rascunho → enviado → validado → consolidado (reabrir = rascunho).
+
+const STATUS_PACOTE = ["rascunho", "enviado", "validado", "consolidado"] as const;
+
+// GET /models/:id/pacotes — um pacote por unidade ativa + o corporativo
+// (CSC + não atribuído). Sem registro no banco = rascunho (virtual).
+router.get("/:id/pacotes", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const [unidades, registros] = await Promise.all([
+    prisma.unidadeNegocio.findMany({ where: { companyId: model.companyId, ativo: true }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
+    prisma.pacoteOrcamento.findMany({ where: { modelId: model.id } }),
+  ]);
+  const porUnidade = new Map(registros.map((r) => [r.unidadeId ?? "__corp", r]));
+  const idsResp = [...new Set(unidades.map((u) => u.responsavelUserId).filter((v): v is string => !!v))];
+  const nomes = idsResp.length
+    ? new Map((await prisma.user.findMany({ where: { id: { in: idsResp } }, select: { id: true, name: true } })).map((u) => [u.id, u.name]))
+    : new Map<string, string>();
+  const linha = (unidadeId: string | null, nome: string, responsavelNome: string | null) => {
+    const r = porUnidade.get(unidadeId ?? "__corp");
+    return {
+      unidadeId, nome, responsavelNome,
+      status: r?.status ?? "rascunho",
+      enviadoEm: r?.enviadoEm ?? null,
+      validadoEm: r?.validadoEm ?? null,
+    };
+  };
+  res.json({
+    pacotes: [
+      ...unidades.map((u) => linha(u.id, u.nome, u.responsavelUserId ? nomes.get(u.responsavelUserId) ?? null : null)),
+      linha(null, "Corporativo (CSC + não atribuído)", null),
+    ],
+  });
+});
+
+// PUT /models/:id/pacotes/status — transição de status do pacote.
+// body: { unidadeId: string | null, status }
+router.put("/:id/pacotes/status", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const { unidadeId, status } = (req.body ?? {}) as { unidadeId?: string | null; status?: string };
+  if (!STATUS_PACOTE.includes(status as typeof STATUS_PACOTE[number])) {
+    res.status(400).json({ error: `status deve ser: ${STATUS_PACOTE.join(" | ")}` });
+    return;
+  }
+  // Validar/consolidar é de quem CONSOLIDA (partner/reviewer). Enviar é da área.
+  if (status === "validado" || status === "consolidado") {
+    const u = await prisma.user.findUnique({ where: { id: req.userId! }, select: { role: true } });
+    if (u?.role !== "partner" && u?.role !== "reviewer") {
+      res.status(403).json({ error: "Validar/consolidar pacote é de quem consolida o orçamento (papéis partner/reviewer)." });
+      return;
+    }
+  }
+  const chave = { modelId: model.id, unidadeId: unidadeId ?? null };
+  const antes = await prisma.pacoteOrcamento.findFirst({ where: chave });
+  const agora = new Date();
+  const dados = {
+    status: status!,
+    userId: req.userId!,
+    ...(status === "enviado" ? { enviadoEm: agora } : {}),
+    ...(status === "validado" ? { validadoEm: agora } : {}),
+    ...(status === "rascunho" ? { enviadoEm: null, validadoEm: null } : {}),
+  };
+  const depois = antes
+    ? await prisma.pacoteOrcamento.update({ where: { id: antes.id }, data: dados })
+    : await prisma.pacoteOrcamento.create({ data: { ...chave, ...dados } });
+  await registrarAuditoria({
+    userId: req.userId!, entity: "pacote_orcamento", entityId: depois.id,
+    field: "status do pacote de coleta",
+    before: { status: antes?.status ?? "rascunho", unidadeId: unidadeId ?? "corporativo" },
+    after: { status: depois.status }, source: "models",
+  });
+  res.json({ ok: true, status: depois.status });
+});
+
+// ── F10: MATRIZ GMD (pacotes de conta × unidades — dupla checagem) ──────────
+// GET /models/:id/matriz-gmd?ano=2027
+router.get("/:id/matriz-gmd", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const ano = /^\d{4}$/.test(String(req.query.ano ?? "")) ? String(req.query.ano) : model.mesInicial.slice(0, 4);
+  const meses = mesesDoAnoNoHorizonte(model.mesInicial, model.horizonteMeses, ano);
+
+  const [pacotes, unidades, centros, blocks] = await Promise.all([
+    prisma.pacoteGmd.findMany({ where: { companyId: model.companyId, ativo: true }, orderBy: { createdAt: "asc" } }),
+    prisma.unidadeNegocio.findMany({ where: { companyId: model.companyId, ativo: true }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
+    prisma.centroCusto.findMany({ where: { companyId: model.companyId } }),
+    prisma.modelBlock.findMany({ where: { modelId: model.id } }),
+  ]);
+
+  const cache = model.resultadoCache as (ResultadoModelo & { calculadoEm?: string }) | null;
+  const calc = cache?.dre ? { resultado: cache } : await calcularEGravar(model.id);
+  if (!calc?.resultado?.dre) { res.status(409).json({ error: "O modelo ainda não tem resultado calculado." }); return; }
+  const valoresPorLinha = new Map(calc.resultado.dre.map((l) => [l.id, l.valores]));
+
+  const linhas = blocks
+    .filter((b) => b.ativo && (b.tipo === "custos" || b.tipo === "despesas"))
+    .flatMap((b) => ((b.config ?? {}) as { linhasCusto?: Array<Record<string, unknown>> }).linhasCusto ?? [])
+    .flatMap((l) => (typeof l.id === "string" && typeof l.nome === "string" ? [{
+      id: l.id, nome: l.nome,
+      valores: valoresPorLinha.get(l.id) ?? {},
+      unidadeId: typeof l.unidadeId === "string" ? l.unidadeId : null,
+      centroCustoId: typeof l.centroCustoId === "string" ? l.centroCustoId : null,
+    }] : []));
+
+  const matriz = calcularMatrizGmd({
+    pacotes: pacotes.map((p) => ({ id: p.id, nome: p.nome, donoUserId: p.donoUserId, contas: (p.contas as string[]) ?? [] })),
+    linhas,
+    unidades,
+    centros: centros.map((c) => ({ id: c.id, nome: c.nome, unidadeId: c.unidadeId }) as CentroCustoDim),
+    meses,
+  });
+
+  const idsDonos = [...new Set(pacotes.map((p) => p.donoUserId).filter((v): v is string => !!v))];
+  const idsResp = [...new Set(unidades.map((u) => u.responsavelUserId).filter((v): v is string => !!v))];
+  const nomes = new Map((await prisma.user.findMany({ where: { id: { in: [...idsDonos, ...idsResp] } }, select: { id: true, name: true } })).map((u) => [u.id, u.name]));
+
+  res.json({
+    ano, meses,
+    pacotes: pacotes.map((p) => ({ id: p.id, nome: p.nome, contas: p.contas, donoNome: p.donoUserId ? nomes.get(p.donoUserId) ?? null : null })),
+    unidades: unidades.map((u) => ({ id: u.id, nome: u.nome, responsavelNome: u.responsavelUserId ? nomes.get(u.responsavelUserId) ?? null : null })),
+    matriz,
+    // Nomes de conta do modelo — o cadastro de pacote escolhe daqui.
+    contasDisponiveis: [...new Set(linhas.map((l) => l.nome))].sort((a, b) => a.localeCompare(b, "pt-BR")),
+    geradoEm: new Date().toISOString(),
+  });
+});
+
 // PUT /models/:id — cabeçalho (nome, visão, cenário ativo, status).
 router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
-  const { nome, visao, cenarioAtivoId, status, horizonteMeses, mesInicial } = req.body ?? {};
+  const { nome, visao, cenarioAtivoId, status, horizonteMeses, mesInicial, tipoOrcamento } = req.body ?? {};
+  // F9 (OBZ): o tipo do orçamento é do cabeçalho — "base-zero" liga a exigência
+  // de justificativa por linha e a trava na aprovação.
+  if (tipoOrcamento !== undefined && tipoOrcamento !== "incremental" && tipoOrcamento !== "base-zero") {
+    res.status(400).json({ error: 'tipoOrcamento deve ser "incremental" ou "base-zero"' });
+    return;
+  }
   const horizonte = horizonteMeses !== undefined ? Number(horizonteMeses) : undefined;
   if (horizonte !== undefined && (!Number.isInteger(horizonte) || horizonte < 12 || horizonte > 180)) {
     res.status(400).json({ error: "horizonteMeses deve ser um inteiro entre 12 e 180" });
@@ -2090,6 +2250,7 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
       ...(cenarioAtivoId !== undefined ? { cenarioAtivoId } : {}),
       ...(horizonte !== undefined ? { horizonteMeses: horizonte } : {}),
       ...(mesInicial !== undefined ? { mesInicial: String(mesInicial) } : {}),
+      ...(tipoOrcamento !== undefined ? { tipoOrcamento } : {}),
     },
   });
   await registrarAuditoria({
@@ -2215,6 +2376,75 @@ router.post("/:id/blocks/:blockId/linhas", async (req: AuthRequest, res: Respons
   });
   const calc = await calcularEGravar(model.id);
   res.status(201).json({ linha, resultado: calc?.resultado ?? null });
+});
+
+// POST /models/:id/blocks/:blockId/linhas/importar-skus — COMÉRCIO (F7 do
+// plano): centenas de produtos × preço médio entram por PLANILHA; o app agrega
+// por categoria e manda a série mensal pronta + a memória de SKUs. Cada
+// categoria vira UMA linha de receita (série mensal editável na tela), com a
+// lista de SKUs guardada como proveniência (skuDetalhe) — o BP consolida na
+// conta canônica, o detalhe fica auditável.
+router.post("/:id/blocks/:blockId/linhas/importar-skus", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
+  const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
+  if (!block || block.tipo !== "receitas") { res.status(404).json({ error: "Bloco de receitas não encontrado" }); return; }
+
+  const categorias = req.body?.categorias as Array<{
+    nome?: unknown; valores?: unknown; skus?: unknown;
+  }> | undefined;
+  if (!Array.isArray(categorias) || categorias.length === 0 || categorias.length > 100) {
+    res.status(400).json({ error: "Envie de 1 a 100 categorias" }); return;
+  }
+
+  const config = block.config as BlocoModelo["config"];
+  const linhas = [...(config.linhasReceita ?? [])];
+  const criadas: Array<{ id: string; nome: string; skus: number }> = [];
+  const stamp = Date.now().toString(36);
+  for (let i = 0; i < categorias.length; i++) {
+    const cat = categorias[i]!;
+    const nome = String(cat.nome ?? "").trim().slice(0, 120);
+    const valoresRaw = (cat.valores ?? {}) as Record<string, unknown>;
+    if (!nome) { res.status(400).json({ error: `Categoria ${i + 1} sem nome` }); return; }
+    const valores: Record<string, number> = {};
+    for (const [mes, v] of Object.entries(valoresRaw)) {
+      if (!/^\d{4}-\d{2}$/.test(mes)) continue;
+      const n = Number(v);
+      if (Number.isFinite(n)) valores[mes] = n;
+    }
+    if (Object.keys(valores).length === 0) {
+      res.status(400).json({ error: `Categoria "${nome}" sem nenhum mês com valor` }); return;
+    }
+    const skus = Array.isArray(cat.skus)
+      ? (cat.skus as Array<Record<string, unknown>>).slice(0, 500).map((s) => ({
+          nome: String(s.nome ?? "").slice(0, 120),
+          preco: Number(s.preco) || 0,
+          qtd: Number(s.qtd) || 0,
+        }))
+      : undefined;
+    const linhaId = `lin${stamp}sku${i}`;
+    linhas.push({
+      id: linhaId,
+      nome,
+      template: "generico",
+      nodeRaiz: `${linhaId}_receita`,
+      skuDetalhe: skus,
+      nodes: [{
+        id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${nome}`, unidade: "R$",
+        params: { modoPreenchimento: "mes", valores, valorMensal: 0, crescimentoAnual: 0 },
+      }],
+    });
+    criadas.push({ id: linhaId, nome, skus: skus?.length ?? 0 });
+  }
+
+  await prisma.modelBlock.update({ where: { id: block.id }, data: { config: { ...config, linhasReceita: linhas } as object } });
+  await registrarAuditoria({
+    userId: req.userId!, entity: "financial_model_block", entityId: block.id, field: "importação de SKUs (receita em massa)",
+    after: { categorias: criadas.map((c) => `${c.nome} (${c.skus} SKUs)`) }, source: "models",
+  });
+  const calc = await calcularEGravar(model.id);
+  res.status(201).json({ criadas, resultado: calc?.resultado ?? null });
 });
 
 // PUT /models/:id/blocks/:blockId/linhas/:linhaId/template — TROCA o jeito de

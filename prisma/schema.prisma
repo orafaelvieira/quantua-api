@@ -392,6 +392,7 @@ model Company {
   periodos  PeriodoEmpresa[]
   unidades  UnidadeNegocio[]
   centrosCusto CentroCusto[]
+  pacotesGmd PacoteGmd[]
 
   @@map("companies")
 }
@@ -1049,6 +1050,9 @@ model FinancialModel {
   /// METAS TOP-DOWN (F3, 25/07/2026): { "2027": { receita?, ebitda?, margemEbitda? } }.
   /// O CEO declara; o painel de gap compara com o Σ bottom-up do modelo.
   metas          Json?
+  /// TIPO DE ORÇAMENTO (F9): "incremental" (default) | "base-zero" (OBZ —
+  /// valor > 0 exige justificativa; aprovar bloqueia sem elas).
+  tipoOrcamento  String   @default("incremental") @map("tipo_orcamento")
   status         String   @default("Rascunho")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
@@ -1066,6 +1070,7 @@ model FinancialModel {
   scenarios ModelScenario[]
   produto   ProdutoEmpresa? @relation(fields: [produtoId], references: [id], onDelete: SetNull)
   snapshots ModelSnapshot[]
+  pacotes   PacoteOrcamento[]
 
   @@index([companyId])
   @@index([userId])
@@ -1125,6 +1130,48 @@ model CentroCusto {
   unidade UnidadeNegocio? @relation(fields: [unidadeId], references: [id], onDelete: SetNull)
 
   @@map("centros_custo")
+}
+
+/// PACOTE DE COLETA do orçamento (F6, 27/07/2026): o ciclo de cada ÁREA/unidade
+/// dentro de um modelo de orçamento — a área recebe o Excel carimbado, devolve,
+/// o sistema valida e consolida. Status: rascunho → enviado → validado →
+/// consolidado (reabrir volta a rascunho, com trilha).
+model PacoteOrcamento {
+  id        String   @id @default(uuid())
+  modelId   String   @map("model_id")
+  /// Unidade dona do pacote; NULL = corporativo (CSC + não atribuído).
+  unidadeId String?  @map("unidade_id")
+  status    String   @default("rascunho")
+  enviadoEm DateTime? @map("enviado_em")
+  validadoEm DateTime? @map("validado_em")
+  /// Quem mexeu por último (a trilha completa fica no audit).
+  userId    String   @map("user_id")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  model FinancialModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@unique([modelId, unidadeId])
+  @@map("pacotes_orcamento")
+}
+
+/// PACOTE GMD (F10, gerenciamento matricial de despesas — tradição Falconi):
+/// grupo de CONTAS que cruza todas as unidades, com um DONO próprio. A dupla
+/// checagem: dono do PACOTE (linha da matriz) × responsável da UNIDADE (coluna).
+model PacoteGmd {
+  id          String   @id @default(uuid())
+  companyId   String   @map("company_id")
+  nome        String
+  /// Dono do pacote (membro da equipe) — audita a conta em TODAS as unidades.
+  donoUserId  String?  @map("dono_user_id")
+  /// Nomes de conta (normalizados) que compõem o pacote.
+  contas      Json
+  ativo       Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("pacotes_gmd")
 }
 
 /// analista, nunca inferida por tipo+data (decisão de 20/07/2026 — dois
