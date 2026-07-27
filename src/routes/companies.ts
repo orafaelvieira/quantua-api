@@ -113,7 +113,9 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const companies = await prisma.company.findMany({
     where: { ...whereEmpresaVisivel(req) },
     orderBy: { createdAt: "desc" },
-    include: { _count: { select: { analyses: true } } },
+    // documents entra na contagem: a tela desabilita "Excluir" quando a empresa
+    // já tem acervo (documento é evidência — ver a guarda do DELETE).
+    include: { _count: { select: { analyses: true, documents: true } } },
   });
   // DUPLICATA DE CNPJ (23/07/2026): criar e editar já barram — mas fichas
   // ANTERIORES às travas continuam duplicadas no banco, invisíveis até alguém
@@ -129,6 +131,39 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     const irmas = (porCnpj.get(d) ?? []).filter((id) => id !== c.id);
     return { ...c, duplicataDe: irmas.length ? irmas : undefined };
   }));
+});
+
+/**
+ * PUT /companies/:id/status — ATIVA ou INATIVA a empresa (27/07/2026).
+ *
+ * A saída para a empresa que não deve mais aparecer no dia a dia mas cujo
+ * acervo não pode ser apagado (IBR concluído, documentos, modelos). Inativar
+ * não esconde nem apaga nada: é um estado declarado, auditado e reversível —
+ * a ficha continua acessível e os produtos, intactos.
+ *
+ * body: { status: "ativo" | "inativo", motivo? }
+ */
+const STATUS_EMPRESA = ["ativo", "inativo"] as const;
+router.put("/:id/status", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const { status, motivo } = (req.body ?? {}) as { status?: string; motivo?: string };
+  if (!status || !STATUS_EMPRESA.includes(status as (typeof STATUS_EMPRESA)[number])) {
+    res.status(400).json({ error: `status inválido — use: ${STATUS_EMPRESA.join(" | ")}` });
+    return;
+  }
+  const existing = await prisma.company.findFirst({ where: { id, ...whereEmpresaVisivel(req) } });
+  if (!existing) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  if (existing.status === status) { res.json({ ok: true, status, semMudanca: true }); return; }
+
+  await prisma.company.update({ where: { id }, data: { status } });
+  await registrarAuditoria({
+    userId: req.userId!, entity: "company", entityId: id,
+    field: status === "inativo" ? "inativação da empresa" : "reativação da empresa",
+    before: { status: existing.status }, after: { status },
+    reason: typeof motivo === "string" && motivo.trim() ? motivo.trim().slice(0, 300) : undefined,
+    source: "empresas",
+  });
+  res.json({ ok: true, status });
 });
 
 /**
@@ -619,11 +654,30 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
       error:
         `"${existing.nomeFantasia || existing.razaoSocial}" tem produto emitido e não pode ser excluída — ` +
         `produto entregue é evidência e nunca sai da base: ${nomes.join(" · ")}` +
-        `${nomes.length >= 5 ? " …" : ""}. Se esta ficha é duplicata de outra da MESMA empresa, unifique as fichas (mesmo CNPJ) em vez de excluir.`,
+        `${nomes.length >= 5 ? " …" : ""}. Para tirá-la de circulação, marque a empresa como INATIVA. ` +
+        `Se esta ficha é duplicata de outra da MESMA empresa, unifique as fichas (mesmo CNPJ).`,
       produtosEmitidos: [
         ...ibrsEmitidos.map((a) => ({ tipo: "IBR", id: a.id, nome: a.nome, status: "Concluída" })),
         ...modelosEmitidos.map((m) => ({ tipo: "Modelo financeiro", id: m.id, nome: m.nome, status: m.status })),
       ],
+      podeInativar: true,
+    });
+    return;
+  }
+
+  // ACERVO NA DATA ROOM (pedido do usuário, 27/07/2026): documento é evidência —
+  // excluir a empresa apagaria arquivos e hashes que fundamentam (ou vão
+  // fundamentar) análises. Empresa com acervo sai de circulação por INATIVAÇÃO;
+  // exclusão fica para a ficha criada por engano, ainda vazia.
+  const documentos = await prisma.document.count({ where: { companyId: id } });
+  if (documentos > 0) {
+    res.status(409).json({
+      error:
+        `"${existing.nomeFantasia || existing.razaoSocial}" tem ${documentos} documento(s) na Data room e não pode ser excluída — ` +
+        `documento é evidência, com hash e proveniência. Para tirá-la de circulação, marque a empresa como INATIVA ` +
+        `(nada é apagado e dá para reativar depois).`,
+      documentos,
+      podeInativar: true,
     });
     return;
   }
