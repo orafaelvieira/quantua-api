@@ -14,6 +14,7 @@ import { registrarAuditoria } from "../services/audit-trail";
 import { calcularModelo, validarFormula, backfillPremissasAoRecuar, BlocoModelo, ScenarioOverrides, RealizadoModelo, IndicesMacroSnapshot, SERIES_MACRO, MACRO_CAMBIO, ResultadoModelo, LinhaDre } from "../services/model-engine";
 import { calcularOrcadoRealizado, congelarOrcamento } from "../services/model-orcamento";
 import { calcularPorUnidade, decomporFolha, validarEdicaoRestrita, RateioCC, CentroCustoDim } from "../services/estrutura-dimensional";
+import { aplicarRegraGrade, mesesDoAnoNoHorizonte, refAnualDaLinha, RegraGrade } from "../services/grade-orcamentaria";
 import { agregarPorPeriodo, recorteJanelaMovel } from "../services/model-safra";
 import { DIVERGENCIAS_BELAGRO, resumoDivergencias } from "../services/model-reconciliacao-belagro";
 import { buscarIndicesEconomicos } from "../services/indices-economicos";
@@ -1932,6 +1933,112 @@ router.get("/:id/por-unidade", async (req: AuthRequest, res: Response): Promise<
     geradoEm: new Date().toISOString(),
     fonte: "derivado do resultado consolidado do modelo + estrutura organizacional da empresa",
   });
+});
+
+/** Realizado do modelo com o histórico por linha do seed (referências da grade). */
+type RealizadoComHistorico = RealizadoModelo & {
+  historicoAnual?: { receitaPorLinha?: Record<string, Record<string, number>>; custoPorLinha?: Record<string, Record<string, number>> };
+};
+
+// GET /models/:id/grade — GRADE ORÇAMENTÁRIA (F5): a visão de trabalho do
+// orçamento — árvore unidade → CC → contas com os meses resolvidos, o realizado
+// de referência (mensal quando o balancete acoplou; anual do seed) e o modo de
+// cada linha. Leitura pura: edições seguem pelo PUT de bloco (travas F4 +
+// histórico + trilha num caminho só).
+router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+
+  const [unidades, centros, blocks] = await Promise.all([
+    prisma.unidadeNegocio.findMany({ where: { companyId: model.companyId }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
+    prisma.centroCusto.findMany({ where: { companyId: model.companyId }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
+    prisma.modelBlock.findMany({ where: { modelId: model.id }, orderBy: { ordem: "asc" } }),
+  ]);
+
+  const cache = model.resultadoCache as (ResultadoModelo & { calculadoEm?: string; cenario?: string }) | null;
+  const calc = cache?.dre ? { resultado: cache } : await calcularEGravar(model.id);
+  if (!calc?.resultado?.dre) { res.status(409).json({ error: "O modelo ainda não tem resultado calculado." }); return; }
+  const drePorLinha = new Map(calc.resultado.dre.map((l) => [l.id, l]));
+
+  const realizado = (model.realizado ?? {}) as unknown as RealizadoComHistorico;
+  const refMensalPorLinha = realizado.porLinha ?? {};
+  const refAnualReceita = realizado.historicoAnual?.receitaPorLinha ?? {};
+  const refAnualCusto = realizado.historicoAnual?.custoPorLinha ?? {};
+
+  const grupos = blocks
+    .filter((b) => b.ativo && ["receitas", "custos", "despesas"].includes(b.tipo))
+    .map((b) => {
+      const cfg = (b.config ?? {}) as { linhasReceita?: Array<Record<string, unknown>>; linhasCusto?: Array<Record<string, unknown>> };
+      const linhas = [...(cfg.linhasReceita ?? []), ...(cfg.linhasCusto ?? [])].flatMap((l) => {
+        if (typeof l.id !== "string" || typeof l.nome !== "string") return [];
+        const refAnual = refAnualDaLinha((b.tipo === "receitas" ? refAnualReceita : refAnualCusto)[l.id]);
+        return [{
+          id: l.id,
+          nome: l.nome,
+          modo: typeof l.modo === "string" ? l.modo : b.tipo === "receitas" ? "driver" : null,
+          pct: typeof l.pct === "number" ? l.pct : null,
+          unidadeId: typeof l.unidadeId === "string" ? l.unidadeId : null,
+          centroCustoId: typeof l.centroCustoId === "string" ? l.centroCustoId : null,
+          grupoDre: typeof l.grupoDre === "string" ? l.grupoDre : null,
+          // O número que o motor gravou — a grade mostra a VERDADE do cálculo.
+          valores: drePorLinha.get(l.id)?.valores ?? {},
+          // Meses digitados (mês-que-manda): a grade marca o que é FATO digitado.
+          digitados: (l.valores && typeof l.valores === "object" ? l.valores : {}) as Record<string, number>,
+          refMensal: refMensalPorLinha[l.id] ?? null,
+          refAnual,
+          // Receita edita por driver (aba Receitas) até a F7 — na grade é leitura.
+          editavel: b.tipo !== "receitas",
+        }];
+      });
+      return { blocoId: b.id, tipo: b.tipo, nome: b.nome, linhas };
+    });
+
+  res.json({
+    anos: [...new Set(calc.resultado.meses.map((m) => m.slice(0, 4)))],
+    anoExercicio: model.mesInicial.slice(0, 4),
+    mesInicial: model.mesInicial,
+    horizonteMeses: model.horizonteMeses,
+    unidades: unidades.filter((u) => u.ativo),
+    centros: centros.filter((c) => c.ativo),
+    grupos,
+    mesesRealizados: realizado.meses ?? [],
+    geradoEm: new Date().toISOString(),
+    fonte: `cenário ${cache?.cenario ?? "Base"} · motor Quantua (determinístico)`,
+  });
+});
+
+// POST /models/:id/grade/regra — calcula a REGRA RÁPIDA de uma linha e devolve
+// a série (SEM gravar): "repetir ano anterior", "+X%", "anual com sazonalidade",
+// "% da receita". A gravação é do cliente via PUT de bloco — um caminho só para
+// travas e trilha. body: { blocoId, linhaId, regra, ano, pct?, valorAnual? }
+router.post("/:id/grade/regra", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const { blocoId, linhaId, regra, ano, pct, valorAnual } = (req.body ?? {}) as Record<string, unknown>;
+  if (typeof blocoId !== "string" || typeof linhaId !== "string" || typeof ano !== "string" ||
+      !["repetir", "mais-pct", "anual-sazonal", "pct-receita"].includes(String(regra))) {
+    res.status(400).json({ error: "blocoId, linhaId, ano e regra (repetir | mais-pct | anual-sazonal | pct-receita) são obrigatórios" });
+    return;
+  }
+  const bloco = await prisma.modelBlock.findFirst({ where: { id: blocoId, modelId: model.id } });
+  if (!bloco) { res.status(404).json({ error: "Bloco não encontrado" }); return; }
+
+  const mesesAlvo = mesesDoAnoNoHorizonte(model.mesInicial, model.horizonteMeses, ano);
+  if (mesesAlvo.length === 0) { res.status(400).json({ error: `O ano ${ano} está fora do horizonte do modelo.` }); return; }
+
+  const realizado = (model.realizado ?? {}) as unknown as RealizadoComHistorico;
+  const anualPorLinha = bloco.tipo === "receitas"
+    ? realizado.historicoAnual?.receitaPorLinha?.[linhaId]
+    : realizado.historicoAnual?.custoPorLinha?.[linhaId];
+  const resultado = aplicarRegraGrade({
+    regra: regra as RegraGrade,
+    mesesAlvo,
+    refMensal: realizado.porLinha?.[linhaId] ?? null,
+    refAnual: refAnualDaLinha(anualPorLinha)?.valor ?? null,
+    pct: typeof pct === "number" ? pct : undefined,
+    valorAnual: typeof valorAnual === "number" ? valorAnual : undefined,
+  });
+  res.json({ ...resultado, mesesAlvo });
 });
 
 // PUT /models/:id — cabeçalho (nome, visão, cenário ativo, status).
