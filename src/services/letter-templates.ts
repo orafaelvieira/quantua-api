@@ -1,6 +1,9 @@
 import crypto from "crypto";
 
-export const CURRENT_LETTER_VERSION = "v1.0";
+// v1.1 (27/07/2026): o entregável deixou de citar working capital review, STCF,
+// projeções e cenários (saíram do produto). A versão sobe junto com o texto —
+// carta assinada guarda a SUA versão e o seu hash, então nada retroage.
+export const CURRENT_LETTER_VERSION = "v1.1";
 
 export interface LetterRenderInput {
   engagementId: string;
@@ -96,11 +99,15 @@ export function renderLetter(input: LetterRenderInput): RenderedLetter {
     },
     {
       title: "2. Escopo & entregável",
+      // O entregável descreve o que o IBR ENTREGA hoje. Working capital review,
+      // STCF (13 semanas), projeções e análise de cenários saíram do produto em
+      // 27/07/2026 — prometê-los aqui seria escopo contratado que a entrega não
+      // cobre. Cartas JÁ ASSINADAS não mudam: cada uma guarda seu próprio hash e
+      // versão (Engagement.letterContentHash / letterVersion).
       body:
-        `${scopeLine}. O entregável padrão Quantua inclui: sumário executivo com recomendação ao credor, ` +
-        "histórico financeiro (últimos 3 anos), working capital review, fluxo de caixa de 13 semanas (STCF), " +
-        "projeções, análise de sensibilidade em três cenários (Base/Downside/Severo), opções estratégicas em quatro pilares, " +
-        "covenants & KPIs e anexos com hash SHA-256 dos documentos-fonte.",
+        `${scopeLine}. O entregável padrão Quantua inclui: sumário executivo, ` +
+        "histórico financeiro (últimos 3 anos), indicadores com comparação setorial, " +
+        "análise estratégica, covenants & KPIs e anexos com hash SHA-256 dos documentos-fonte.",
     },
     {
       title: "3. Prazo",
