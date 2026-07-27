@@ -118,3 +118,47 @@ describe("extractFinancialsWithAI — árvore por INDENTAÇÃO (rawIndent) pula 
     expect(val("Passivo Circulante")).toBeCloseTo(600000, 2);
   });
 });
+
+describe("extractFinancialsWithAI — árvore da DRE por LINHAS (determinística) pula o LLM", () => {
+  // Regressão do caso AOCP (SPED): com as `linhas` do parser (indent) e a prova de partição
+  // fechando no LL declarado, a DRE nem passa pelo LLM — custo 0 e imune a falha de IA.
+  const P = "31/12/2025";
+  const linha = (conta: string, valor: number, indent: number) => ({ conta, valores: { [P]: valor }, indent });
+  const LINHAS_DRE = [
+    linha("Receita Operacional", 1000000, 9),
+    linha("SERVIÇOS PRESTADOS", 1000000, 12),
+    linha("Deducoes", -100000, 9),
+    linha("IMPOSTOS S/ VENDAS", -100000, 12),
+    linha("Receita Líquida", 900000, 8),
+    linha("Custos Mercadorias Vendidas", -200000, 9),
+    linha("CUSTOS OPERACIONAIS", -200000, 11),
+    linha("Lucro Bruto", 700000, 7),
+    linha("Despesas Administrativas", -300000, 9),
+    linha("DESPESAS C/ADMINISTRAÇÃO", -300000, 12),
+    linha("LUCRO LÍQUIDO DO EXERCÍCIO", 400000, 4),
+  ];
+
+  it("monta seções+declarados das linhas, PULA o LLM (custo 0) e a cascata reconcilia", async () => {
+    createMock.mockResolvedValue(aiReply({})); // se o LLM for chamado, devolve vazio → asserts falham
+    const docs = [{ raw: "colapsado irrelevante", linhas: LINHAS_DRE, tipo: "DRE", periodos: [P] }];
+    const r = await extractFinancialsWithAI(docs, [], undefined, DEFAULT_BP_MODEL, {});
+
+    expect(createMock).not.toHaveBeenCalled();
+    expect(r.custo.usd).toBe(0);
+    // Declarados fiéis ao documento.
+    expect(r.declarados[P]).toEqual({ "Receita Líquida": 900000, "Lucro Bruto": 700000, "Lucro Líquido": 400000 });
+    // O fold consumiu a árvore e a cascata fecha no LL declarado (sem dupla contagem).
+    const val = (c: string) => r.dre.find((l) => l.conta === c)?.valores[P] ?? 0;
+    expect(val("Lucro Líquido")).toBeCloseTo(400000, 2);
+    expect(val("Receita Líquida")).toBeCloseTo(900000, 2);
+  });
+
+  it("sem prova (LL divergente), cai no LLM como antes — zero regressão", async () => {
+    createMock.mockResolvedValue(aiReply({ secoes: { [P]: [{ nome: "Receita Operacional", valor: 123 }] }, declarados: {} }));
+    const adulteradas = LINHAS_DRE.map((l) => (l.conta === "Despesas Administrativas" ? { ...l, valores: { [P]: -999999 } } : l));
+    const docs = [{ raw: "texto p/ o LLM", linhas: adulteradas, tipo: "DRE", periodos: [P] }];
+    const r = await extractFinancialsWithAI(docs, [], undefined, DEFAULT_BP_MODEL, {});
+    expect(createMock).toHaveBeenCalled(); // builder recusou → LLM assumiu
+    expect(r.arvoreOriginalDRE[P]?.[0]?.nome).toBe("Receita Operacional");
+  });
+});
