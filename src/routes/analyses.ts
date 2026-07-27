@@ -2540,10 +2540,11 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
 router.post("/:id/setor/confirmar", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const sectorId = typeof req.body?.sectorId === "string" ? req.body.sectorId.trim() : "";
+  const customBody = typeof req.body?.sectorCustom === "string" ? req.body.sectorCustom.trim().slice(0, 120) : null;
   if (!sectorId) { res.status(400).json({ error: "Informe o setor (sectorId)" }); return; }
   const analysis = await prisma.analysis.findFirst({
     where: { id, ...whereRecursoEmpresa(req) },
-    select: { sectorId: true, setorConfirmado: true, dadosEstruturados: true, status: true },
+    select: { sectorId: true, sectorCustom: true, setorConfirmado: true, dadosEstruturados: true, status: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   // Concluído é imutável: trocar o setor recalibraria pares/semáforo de um
@@ -2552,8 +2553,27 @@ router.post("/:id/setor/confirmar", async (req: AuthRequest, res: Response): Pro
   const sector = await prisma.sector.findUnique({ where: { code: sectorId }, include: { parent: true } });
   if (!sector) { res.status(400).json({ error: "Setor inválido" }); return; }
 
-  const mudou = analysis.sectorId !== sectorId;
-  await prisma.analysis.update({ where: { id }, data: { sectorId, setorConfirmado: true } });
+  // "OUTROS" (fora da taxonomia B3): o texto livre É o setor — sem ele não há
+  // premissa setorial nem contexto para a pesquisa de mercado, e "Outros" puro
+  // não diz nada a quem lê. O texto vem do card ou, na NOVA VERSÃO, do que foi
+  // digitado na versão anterior (herdado no /nova-versao). Exigido nesse caso.
+  const ehOutros = sectorId === "outros" || sectorId.startsWith("outros__") || sector.parent?.code === "outros";
+  const sectorCustom = ehOutros ? (customBody || analysis.sectorCustom || "") : null;
+  if (ehOutros && !sectorCustom) {
+    res.status(400).json({
+      error: 'Com "Outros" é preciso descrever a atividade da empresa (ex.: "Assessoria em concursos públicos") — é o que orienta as premissas e a pesquisa de mercado.',
+      precisaSectorCustom: true,
+    });
+    return;
+  }
+
+  const mudou = analysis.sectorId !== sectorId || (ehOutros && sectorCustom !== analysis.sectorCustom);
+  await prisma.analysis.update({
+    where: { id },
+    // Só zera o texto ao SAIR de "Outros" — trocar de subsetor B3 não apaga
+    // silenciosamente o que o analista escreveu se ele voltar para "Outros".
+    data: { sectorId, setorConfirmado: true, ...(ehOutros ? { sectorCustom } : {}) },
+  });
   // Confirmou e a extração já estava validada → destrava o checkpoint na hora.
   const dadosConf = analysis.dadosEstruturados as any;
   if (dadosConf && avaliarProntidaoGeracao(dadosConf).pronta) {
@@ -2561,18 +2581,20 @@ router.post("/:id/setor/confirmar", async (req: AuthRequest, res: Response): Pro
   }
   void registrarAuditoria({
     userId: req.userId!, analysisId: id, entity: "analysis", entityId: id,
-    field: "setor da empresa", before: analysis.sectorId ?? "(não definido)", after: `${sector.name} (confirmado)`,
+    field: "setor da empresa",
+    before: `${analysis.sectorId ?? "(não definido)"}${analysis.sectorCustom ? ` — "${analysis.sectorCustom}"` : ""}`,
+    after: `${sector.name} (confirmado)${sectorCustom ? ` — "${sectorCustom}"` : ""}`,
     source: "setor-classificador", reason: mudou ? "Confirmação do setor (alterado)" : "Confirmação do setor",
   });
   if (mudou) await recalibrarConfigSeExistir(id); // calibração por pares nunca fica presa ao setor antigo
-  res.json({ ok: true, sectorId, recalibrado: mudou });
+  res.json({ ok: true, sectorId, sectorCustom, recalibrado: mudou });
 });
 
 router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, ...whereRecursoEmpresa(req) },
-    select: { dadosEstruturados: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true },
+    select: { dadosEstruturados: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true, sectorCustom: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   if (!analysis.dadosEstruturados) { res.status(400).json({ error: "Sem dados estruturados" }); return; }
@@ -2625,7 +2647,14 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
   res.json({
     ...validacao, benford, composicaoOk: errosComp.length === 0, alertasComposicao: alertasComp, prontidao,
     // Card de confirmação do SETOR (classificador): proposta + estado atual.
-    setor: { confirmado: !pendSetor, sectorId: analysis.sectorId, proposta: analysis.setorProposta ?? null },
+    // sectorCustom vai junto: com "Outros" no picker, o texto livre É o setor —
+    // a nova versão o herda da anterior e o card precisa trazê-lo preenchido
+    // (sem isto o analista redigitava, ou confirmava "Outros" sem descrição).
+    setor: {
+      confirmado: !pendSetor, sectorId: analysis.sectorId,
+      sectorCustom: analysis.sectorCustom ?? null,
+      proposta: analysis.setorProposta ?? null,
+    },
   });
 });
 
