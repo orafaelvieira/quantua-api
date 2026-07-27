@@ -44,6 +44,39 @@ export interface ColisaoProduto {
   pergunta: string;
 }
 
+/**
+ * LIMPEZA DO ENVELOPE VAZIO (27/07/2026) — chamada DEPOIS de excluir a versão.
+ *
+ * O envelope existe para guardar versões. Excluída a última, o que sobra é um
+ * rótulo sem conteúdo, que continuava contando em "Produtos N" e fazia a empresa
+ * parecer ter produto que não tem (caso relatado pelo usuário). Removemos com
+ * trilha — nada de evidência se perde, porque envelope vazio não guarda nada.
+ *
+ * Best-effort: falha aqui NUNCA derruba a exclusão que já aconteceu.
+ */
+export async function limparEnvelopeSeVazio(produtoId: string | null | undefined, userId: string): Promise<boolean> {
+  if (!produtoId) return false;
+  try {
+    const [produto, analises, modelos] = await Promise.all([
+      prisma.produtoEmpresa.findUnique({ where: { id: produtoId } }),
+      prisma.analysis.count({ where: { produtoId } }),
+      prisma.financialModel.count({ where: { produtoId } }),
+    ]);
+    if (!produto || analises > 0 || modelos > 0) return false;
+    await prisma.produtoEmpresa.delete({ where: { id: produtoId } });
+    void registrarAuditoria({
+      userId, entity: "produto_empresa", entityId: produtoId,
+      field: "exclusão do produto (ficou sem versões)",
+      before: { tipo: produto.tipo, rotulo: produto.rotulo, companyId: produto.companyId },
+      source: "produtos",
+    });
+    return true;
+  } catch (e: any) {
+    console.warn(`[produto] limpeza do envelope ${produtoId} falhou:`, e?.message ?? e);
+    return false;
+  }
+}
+
 /** Rótulo que o destino "produto novo" produziria + se está livre na empresa. */
 export async function rotuloDoDestino(opts: {
   companyId: string;

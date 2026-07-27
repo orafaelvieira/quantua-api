@@ -35,7 +35,7 @@ import { resolverCascataDicionario, whereCascataDicionarioAtiva } from "../servi
 import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
 import { nomeDocumento, dataBaseDoIbr } from "../services/produto-empresa";
-import { vincularAoProduto, VinculoFeito, ColisaoProduto } from "../services/produto-vinculo";
+import { vincularAoProduto, limparEnvelopeSeVazio, VinculoFeito, ColisaoProduto } from "../services/produto-vinculo";
 import { montarConteudoAnalise, aplicarFotoAnalise, hashConteudo, STATUS_TRANSITORIOS, type ConteudoFotoAnalise, type DocFoto } from "../services/snapshot-diario";
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
@@ -78,6 +78,9 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
     userId: req.userId!, entity: "analysis", entityId: id, field: "exclusão do IBR",
     before: { nome: existing.nome, status: existing.status, companyId: existing.companyId, criadoEm: existing.createdAt },
   });
+  // Era a última versão do produto? O envelope vazio some junto (sem isso ele
+  // ficava contando em "Produtos N" sem nada dentro).
+  await limparEnvelopeSeVazio(existing.produtoId, req.userId!);
   res.status(204).send();
 });
 

@@ -36,7 +36,7 @@ import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { cicloVidaModel } from "../services/ciclo-vida";
 import { TipoProduto, dataBaseDoModelo } from "../services/produto-empresa";
-import { vincularAoProduto, VinculoFeito, ColisaoProduto } from "../services/produto-vinculo";
+import { vincularAoProduto, limparEnvelopeSeVazio, VinculoFeito, ColisaoProduto } from "../services/produto-vinculo";
 import { montarConteudoModelo, aplicarFotoModelo, hashConteudo, type ConteudoFotoModelo } from "../services/snapshot-diario";
 import { damodaranDoSetorB3, DAMODARAN_PT } from "../services/damodaran-b3";
 import multer from "multer";
@@ -2489,6 +2489,9 @@ router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => 
     before: { nome: model.nome, companyId: model.companyId, status: model.status }, source: "models",
   });
   await prisma.financialModel.delete({ where: { id: model.id } });
+  // Era a última versão do produto? O envelope vazio some junto (sem isso ele
+  // ficava contando em "Produtos N" sem nada dentro).
+  await limparEnvelopeSeVazio(model.produtoId, req.userId!);
   res.json({ ok: true });
 });
 
