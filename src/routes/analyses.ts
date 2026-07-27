@@ -1141,10 +1141,24 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // cadência" no pool, caso AOCP 14/07). Apresentação institucional continua
     // material: sem assinatura, nada muda. O filtro pelo nome evita baixar
     // todo material a cada reprocesso.
+    // Material que é CÓPIA de demonstração já ativa no IBR (mesmo hash ou mesmo
+    // nome) NÃO é reclassificado — reclassificar poria o período EM DOBRO na
+    // extração. O analista é avisado para excluir a cópia (§ 11 Materiais).
+    const nomeNorm = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const demonstracoesAtivas = analysis.documents.filter((d) => d.tipo !== MATERIAL_TIPO && d.status !== "Substituído");
+    const hashesAtivos = new Set(demonstracoesAtivas.map((d) => d.hash).filter(Boolean));
+    const nomesAtivos = new Set(demonstracoesAtivas.map((d) => nomeNorm(d.nome)));
     for (const doc of analysis.documents) {
       if (doc.tipo !== MATERIAL_TIPO || doc.status === "Substituído") continue;
       if (!doc.storagePath || !/\.pdf$/i.test(doc.nome) || reusaCache(doc)) continue;
       if (!/balan|dre|resultado|demonstra/i.test(doc.nome)) continue;
+      if ((doc.hash && hashesAtivos.has(doc.hash)) || nomesAtivos.has(nomeNorm(doc.nome))) {
+        alertasTipoDoc.push({
+          tipo: "aviso", area: "Material duplicado",
+          mensagem: `${doc.nome}: é cópia de uma demonstração que já está neste IBR — ficou como material, FORA da extração (contar duas vezes dobraria o período). Para limpar, exclua-o na seção "Materiais complementares" da aba Documentos do IBR.`,
+        });
+        continue;
+      }
       try {
         const texto = await extrairTextoLayoutPDF(await baixarDoc(doc));
         if (!texto || texto.length < 300) continue;
