@@ -16,6 +16,8 @@ import { comparePeersCvm, CVM_COMPARAVEIS } from "../services/peer-benchmark-cvm
 import { researchCompanyWeb, researchSectorBenchmarksWeb } from "../services/web-research";
 import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-context";
 import { fixarDocumentosDoPool, montarLinhaFixada } from "../services/fixacao-pool";
+import { curarUpload, curarConteudo, competenciaDosPeriodos } from "../services/curadoria-pool";
+import { acharDuplicadoPorHash, mensagemDuplicado } from "../services/duplicidade-docs";
 import { cicloVidaAnalysis, etapaAnalysis } from "../services/ciclo-vida";
 import { sugerirClassificacoesIA, chaveNM } from "../services/classification-suggest";
 import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESubtotals, detectPeriodos, normalizePeriods, sugerirConta, ordPeriodo } from "../services/account-mapper";
@@ -1131,6 +1133,46 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       return buffer;
     };
     const alertasTipoDoc: Array<{ tipo: "erro" | "aviso" | "info"; area: string; mensagem: string; detalhes?: string }> = [];
+
+    // ── MATERIAL QUE É DEMONSTRAÇÃO (27/07/2026) ──
+    // PDF subido como "Material complementar" cujo NOME sugere demonstração é
+    // aberto e, com assinatura confiável no conteúdo, RECLASSIFICADO (auditado)
+    // — entra na extração e ganha competência (sem isso ficava "fora da
+    // cadência" no pool, caso AOCP 14/07). Apresentação institucional continua
+    // material: sem assinatura, nada muda. O filtro pelo nome evita baixar
+    // todo material a cada reprocesso.
+    for (const doc of analysis.documents) {
+      if (doc.tipo !== MATERIAL_TIPO || doc.status === "Substituído") continue;
+      if (!doc.storagePath || !/\.pdf$/i.test(doc.nome) || reusaCache(doc)) continue;
+      if (!/balan|dre|resultado|demonstra/i.test(doc.nome)) continue;
+      try {
+        const texto = await extrairTextoLayoutPDF(await baixarDoc(doc));
+        if (!texto || texto.length < 300) continue;
+        const det = curarConteudo(texto);
+        if (!det.tipo) continue;
+        await prisma.document.update({
+          where: { id: doc.id },
+          data: { tipo: det.tipo, ...(doc.competencia || !det.competencia ? {} : { competencia: det.competencia }) },
+        });
+        void registrarAuditoria({
+          userId: req.userId!, analysisId: analysis.id, entity: "document", entityId: doc.id,
+          field: "tipo (identificado pelo conteúdo)",
+          before: { tipo: doc.tipo }, after: { tipo: det.tipo, competencia: doc.competencia ?? det.competencia, evidencias: det.evidencias }, source: "process",
+        });
+        alertasTipoDoc.push({
+          tipo: "aviso", area: "Tipo de documento",
+          mensagem: `${doc.nome}: estava como "Material complementar", mas o conteúdo é ${det.tipo} — o sistema corrigiu o tipo e o documento entrou na extração.`,
+          detalhes: det.evidencias.length ? `Evidências: ${det.evidencias.join("; ")}.` : undefined,
+        });
+        doc.tipo = det.tipo;
+        if (!doc.competencia && det.competencia) doc.competencia = det.competencia;
+        docsAtivos.push(doc); // participa da partição balancete/BP-DRE abaixo
+        console.log(`[process] material reclassificado pelo conteúdo: ${doc.nome} → ${det.tipo}`);
+      } catch (e: any) {
+        console.warn(`[process] sniff de material falhou para ${doc.nome} (segue como material):`, e?.message ?? e);
+      }
+    }
+
     for (const doc of docsAtivos) {
       // Herdado pula o sniff também: o tipo foi curado na versão anterior e o
       // download aqui anularia a economia do reuso de cache.
@@ -1215,6 +1257,25 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         }
       })
     );
+
+    // ── WRITE-BACK DE COMPETÊNCIA (27/07/2026) ──
+    // O parse acabou de descobrir o(s) período(s) de cada documento — documento
+    // sem competência declarada ganha a competência AQUI, de graça (sem isso ele
+    // fica "fora da cadência" na Data room; Reprocessar corrige o legado).
+    // Regra de competenciaDosPeriodos: anuais → "YYYY"; 1 mês → "YYYY-MM"; ambíguo → nada.
+    for (let i = 0; i < financialDocs.length; i++) {
+      const doc = financialDocs[i];
+      if (doc.competencia || !parsedDocs[i]?.periodos?.length) continue;
+      const comp = competenciaDosPeriodos(parsedDocs[i].periodos);
+      if (!comp) continue;
+      await prisma.document.update({ where: { id: doc.id }, data: { competencia: comp } });
+      void registrarAuditoria({
+        userId: req.userId!, analysisId: analysis.id, entity: "document", entityId: doc.id,
+        field: "competência (identificada pelo conteúdo)",
+        after: { competencia: comp, periodos: parsedDocs[i].periodos }, source: "process",
+      });
+      doc.competencia = comp;
+    }
 
     // 2.5 Normalize periods across documents (e.g., "31/12/2023" + "2023" → "31/12/2023")
     normalizePeriods(parsedDocs);
@@ -2709,15 +2770,39 @@ router.post(
     });
     if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
 
+    const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
+
+    // TRAVA DE DUPLICIDADE (27/07/2026): mesmo arquivo (SHA-256) não entra duas
+    // vezes na empresa — recusa apontando a linha existente (pool ou IBR).
+    const dup = await acharDuplicadoPorHash(analysis.companyId, hash);
+    if (dup) {
+      res.status(409).json({ error: mensagemDuplicado(dup), duplicadoDe: dup, podeSubstituir: dup.analysisId === null });
+      return;
+    }
+
     const key = `data-room/${analysis.id}/${Date.now()}-${req.file.originalname}`;
     const url = await uploadFile(req.file.buffer as Buffer, key, req.file.mimetype);
-    const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
 
     // Material complementar (notas/apresentações) vem com tipo explícito do corpo;
     // demais documentos têm o tipo detectado pelo nome/mimetype.
-    const tipo = req.body?.tipo === MATERIAL_TIPO
+    let tipo = req.body?.tipo === MATERIAL_TIPO
       ? MATERIAL_TIPO
       : detectDocType(req.file.originalname, req.file.mimetype);
+    let competencia: string | null = null;
+
+    // CURADORIA pelo conteúdo (27/07/2026): o mesmo sniff da Data room roda aqui —
+    // um BP subido como "material" vira BP e a competência entra sozinha (sem isso
+    // o documento ficava "fora da cadência" no pool — caso AOCP 14/07). Só corrige
+    // com assinatura confiável; sem assinatura, fica como declarado/detectado.
+    if (/\.(pdf|xlsx|xls|xlsm|csv)$/i.test(req.file.originalname)) {
+      try {
+        const det = await curarUpload(req.file.buffer as Buffer, req.file.originalname);
+        if (det.tipo && det.tipo !== tipo) tipo = det.tipo;
+        if (det.competencia) competencia = det.competencia;
+      } catch (e: any) {
+        console.warn(`[data-room IBR] curadoria falhou para ${req.file.originalname} (segue com o declarado):`, e?.message ?? e);
+      }
+    }
 
     const doc = await prisma.document.create({
       data: {
@@ -2725,6 +2810,7 @@ router.post(
         companyId: analysis.companyId,
         nome: req.file.originalname,
         tipo,
+        competencia,
         status: "Pendente",
         storagePath: url,
         hash,
