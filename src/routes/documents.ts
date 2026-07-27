@@ -10,6 +10,7 @@ import { registrarAuditoria } from "../services/audit-trail";
 import { derivarDocumentosLogicos, periodosFaltantes } from "../services/fechamento-periodo";
 import { montarLinhaAdotada, montarLinhaFixada, propagarMetadadosDoPool } from "../services/fixacao-pool";
 import { curarUpload, validarEmpresaDoDocumento } from "../services/curadoria-pool";
+import { acharDuplicadoPorHash, mensagemDuplicado, produtosQueUsamDocumento, avisoProdutosVinculados } from "../services/duplicidade-docs";
 import { downloadFile } from "../services/storage";
 
 const router = Router();
@@ -218,9 +219,18 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
   }
 
   const nome = fixFilename(req.file.originalname);
+  const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
+
+  // TRAVA DE DUPLICIDADE (27/07/2026): o mesmo arquivo (SHA-256) não entra duas
+  // vezes na empresa — recusa apontando a linha existente; correção = Substituição.
+  const dup = await acharDuplicadoPorHash(companyId, hash);
+  if (dup) {
+    res.status(409).json({ error: mensagemDuplicado(dup), duplicadoDe: dup, podeSubstituir: dup.analysisId === null });
+    return;
+  }
+
   const key = `uploads/${req.userId}/${analysisId ?? `pool-${companyId}`}/${Date.now()}-${nome}`;
   const storagePath = await uploadFile(req.file.buffer, key, req.file.mimetype);
-  const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
 
   const tamanho = req.file.size > 1024 * 1024
     ? `${(req.file.size / 1024 / 1024).toFixed(1)} MB`
@@ -231,13 +241,18 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
   let tipoFinal = tipo === "Outro" && /balancete/i.test(nome) ? "Balancete" : tipo;
   let competenciaFinal: string | null = competencia ?? null;
 
-  // CURADORIA ASSISTIDA (pedido do usuário, 20/07/2026): na porta do POOL —
-  // a Data room é fonte única — tipo e competência não ficam só a cargo do
+  // CURADORIA ASSISTIDA (pedido do usuário, 20/07/2026; ESTENDIDA 27/07/2026): na
+  // porta da Data room — fonte única — tipo e competência não ficam só a cargo do
   // analista: o CONTEÚDO decide. Tipo divergente é CORRIGIDO (auditado, como
   // no /process); competência vazia é preenchida; declarada ≠ detectada vira
   // aviso (o humano declarou — o sistema aponta, não sobrescreve).
+  // 27/07: roda TAMBÉM no caminho com analysisId (documento de IBR ficava sem
+  // competência e caía em "fora da cadência" no pool — caso AOCP) e em PDFs
+  // enviados como "Material complementar" (só corrige com assinatura confiável:
+  // um BP subido como material vira BP; uma apresentação segue material).
   let curadoria: { tipoDetectado: string | null; competenciaDetectada: string | null; evidencias: string[]; avisos: string[] } | null = null;
-  if (!analysisId && tipoFinal !== "Material complementar") {
+  // Formatos que a curadoria sabe ler (docx/pptx de material ficam de fora — sem ruído).
+  if (/\.(pdf|xlsx|xls|xlsm|csv)$/i.test(nome)) {
     try {
       const det = await curarUpload(req.file.buffer, nome);
       const avisos: string[] = [];
@@ -246,8 +261,9 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
       // balancete da Belagro na Move Farma envenena período, cadência e
       // extração. Se o conteúdo cita OUTRA empresa cadastrada e NÃO cita a do
       // workspace, recusa com 409; o operador confirma explicitamente
-      // (confirmarEmpresa=1) e a confirmação fica na trilha.
-      if (det.texto && req.body?.confirmarEmpresa !== "1") {
+      // (confirmarEmpresa=1) e a confirmação fica na trilha. Segue SÓ NO POOL:
+      // o wizard do IBR não tem o fluxo de confirmação (zero retrocesso lá).
+      if (!analysisId && det.texto && req.body?.confirmarEmpresa !== "1") {
         const [alvo, outras] = await Promise.all([
           prisma.company.findUnique({ where: { id: companyId }, select: { razaoSocial: true, nomeFantasia: true } }),
           prisma.company.findMany({
@@ -306,7 +322,6 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
   });
 
   // Upload de POOL é mutação da Data room da empresa — trilha (regra da casa).
-  // O fluxo com análise mantém o comportamento de sempre.
   if (!analysisId) {
     await registrarAuditoria({
       userId: req.userId!, entity: "document", entityId: doc.id,
@@ -319,6 +334,15 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
         // Confirmação FORÇADA da trava de empresa: fica explícita na trilha.
         ...(req.body?.confirmarEmpresa === "1" ? { empresaConfirmadaManualmente: true } : {}),
       },
+      source: "data-room",
+    });
+  } else if (curadoria && curadoria.avisos.length) {
+    // Fluxo com análise: o upload em si já era o comportamento de sempre, mas a
+    // CORREÇÃO da curadoria (tipo/competência pelo conteúdo) é mutação — trilha.
+    await registrarAuditoria({
+      userId: req.userId!, analysisId, entity: "document", entityId: doc.id,
+      field: "curadoria no upload (tipo/competência pelo conteúdo)",
+      after: { nome, tipo: tipoFinal, competencia: competenciaFinal, evidencias: curadoria.evidencias },
       source: "data-room",
     });
   }
@@ -418,6 +442,24 @@ router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, r
     ? `${(req.file.size / 1024 / 1024).toFixed(1)} MB`
     : `${Math.round(req.file.size / 1024)} KB`;
 
+  // TRAVA DE DUPLICIDADE na substituição (27/07/2026): bytes idênticos à versão
+  // vigente não são "versão nova" — e um arquivo que já é OUTRO documento da
+  // empresa também não pode virar versão deste (criaria o mesmo doc em 2 linhas).
+  if (hash === doc.hash) {
+    res.status(409).json({ error: `O arquivo enviado é idêntico (SHA-256) à versão vigente de "${doc.nome}" — nada a substituir.` });
+    return;
+  }
+  const dupSubst = await acharDuplicadoPorHash(doc.companyId, hash, [doc.id, ...(doc.fixadoDeId ? [doc.fixadoDeId] : [])]);
+  if (dupSubst) {
+    res.status(409).json({ error: mensagemDuplicado(dupSubst), duplicadoDe: dupSubst });
+    return;
+  }
+
+  // PRODUTOS VINCULADOS (27/07/2026): quem fundamenta números em cima da versão
+  // substituída precisa saber — o analista é INFORMADO para gerar nova versão dos
+  // produtos (IBR aberto reprocessa; IBR concluído exige "Nova versão…").
+  const produtosVinculados = await produtosQueUsamDocumento(doc);
+
   // Linha FIXADA: quem é substituído de verdade é o documento do POOL.
   if (doc.fixadoDeId) {
     // Concluído é IMUTÁVEL (21/07/2026): substituir evidência de IBR emitido =
@@ -475,7 +517,7 @@ router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, r
       after: { nome: novoPool.nome, hash: novoPool.hash, versao: novoPool.versao, documentoPoolId: novoPool.id, documentoFixadoId: novoFixado.id },
       reason: motivo ?? undefined, source: "data-room",
     });
-    res.status(201).json(novoFixado);
+    res.status(201).json({ ...novoFixado, produtosVinculados, avisoProdutos: avisoProdutosVinculados(produtosVinculados) });
     return;
   }
 
@@ -512,7 +554,7 @@ router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, r
     reason: motivo ?? undefined,
   });
 
-  res.status(201).json(novo);
+  res.status(201).json({ ...novo, produtosVinculados, avisoProdutos: avisoProdutosVinculados(produtosVinculados) });
 });
 
 // Cadeia de VERSÕES do documento (da vigente até a original), seguindo os

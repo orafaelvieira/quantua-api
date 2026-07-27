@@ -75,16 +75,20 @@ export function competenciaDosPeriodos(periodos: string[]): string | null {
   return null;
 }
 
-/** BP × DRE pelas palavras-assinatura (mesma lista content-first do /process). */
+/** BP × DRE pelas palavras-assinatura (mesma lista content-first do /process).
+ *  Acentos são NORMALIZADOS antes do match — "Demonstração", "Dedução" e afins
+ *  casam com ou sem acento (o visualizador SPED imprime "DEMONSTRAÇÃO DE
+ *  RESULTADO", com "DE", que escapava da lista antiga — caso AOCP). */
 export function tipoPorKeywords(raw: string): "DRE" | "Balanço Patrimonial" | null {
-  const t = raw.toLowerCase();
+  const t = raw.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
   const temBP = t.includes("ativo circulante") || t.includes("passivo circulante") || t.includes("a t i v o");
   const temDRE = t.includes("receita bruta") || t.includes("resultado liquido") ||
     t.includes("custo operacional") || t.includes("custo produtos vendidos") ||
-    t.includes("demonstrativo de resultado") || t.includes("demonstração do resultado") ||
+    t.includes("demonstrativo de resultado") || t.includes("demonstrativo do resultado") ||
+    t.includes("demonstracao do resultado") || t.includes("demonstracao de resultado") ||
     t.includes("receita de vendas") || t.includes("deducoes da receita") ||
-    t.includes("deduções da receita") || t.includes("despesas com vendas") ||
-    t.includes("receita operacional líquida") || t.includes("custo das mercadorias");
+    t.includes("despesas com vendas") ||
+    t.includes("receita operacional liquida") || t.includes("custo das mercadorias");
   if (temBP && temDRE) return null; // documento composto — não se afirma um tipo só
   if (temBP) return "Balanço Patrimonial";
   if (temDRE) return "DRE";
