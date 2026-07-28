@@ -66,6 +66,8 @@ const uploadSchema = z.object({
   companyId: z.string().uuid(),
   tipo: z.enum(["DRE", "Balanço Patrimonial", "Balancete", "Outro", "Material complementar"]),
   competencia: z.string().optional(),
+  /** Breve explicação — o upload de material complementar pede (28/07/2026). */
+  descricao: z.string().max(500).optional(),
   moeda: z.string().default("BRL"),
 });
 
@@ -206,7 +208,7 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
   const parsed = uploadSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
 
-  const { analysisId, companyId, tipo, competencia, moeda } = parsed.data;
+  const { analysisId, companyId, tipo, competencia, moeda, descricao } = parsed.data;
 
   if (analysisId) {
     // Fluxo de sempre: a análise pertence ao usuário (e ancora o documento).
@@ -313,6 +315,7 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
       nome,
       tipo: tipoFinal,
       competencia: competenciaFinal,
+      ...(descricao?.trim() ? { descricao: descricao.trim().slice(0, 500) } : {}),
       moeda,
       storagePath,
       hash,

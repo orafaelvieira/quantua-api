@@ -40,7 +40,7 @@ async function docsDaEmpresa(companyId: string): Promise<DocFechamento[]> {
     // Fixações (fase B) ficam de fora: são a LENTE do IBR sobre um documento
     // que já está aqui — contá-las empilharia versões-fantasma no painel.
     where: { companyId, fixadoDeId: null },
-    select: { id: true, nome: true, tipo: true, competencia: true, versao: true, status: true, substituidoPorId: true, createdAt: true, moeda: true, hash: true, analysisId: true },
+    select: { id: true, nome: true, tipo: true, competencia: true, descricao: true, versao: true, status: true, substituidoPorId: true, createdAt: true, moeda: true, hash: true, analysisId: true },
   });
   // Legado ADOTADO no pool: a linha do pool passa a representá-lo — a cópia
   // do IBR (mesmo hash) sai da listagem para não aparecer em dobro.
@@ -118,6 +118,8 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
         tipo: l.tipo,
         status: l.vigente.status,
         criadoEm: l.vigente.createdAt,
+        /** Explicação digitada no upload (material complementar). */
+        descricao: (l.vigente as { descricao?: string | null }).descricao ?? null,
         totalVersoes: l.versoes.length,
         // Só documento de POOL pode ter a competência corrigida por aqui —
         // documento de IBR é gerido no fluxo do IBR (zero retrocesso).

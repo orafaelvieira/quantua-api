@@ -597,6 +597,10 @@ model Document {
   nome           String
   tipo           String
   competencia    String?
+  /// Breve explicação do documento (28/07/2026) — pedida no upload de material
+  /// COMPLEMENTAR, que não tem competência nem extração para se explicar
+  /// sozinho ("ata da reunião de sócios de março", "contrato de mútuo").
+  descricao      String?
   moeda          String   @default("BRL")
   status         String   @default("Pendente")
   confianca      Int?
