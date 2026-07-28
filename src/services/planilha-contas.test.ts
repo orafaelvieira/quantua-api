@@ -144,3 +144,58 @@ describe("lerPlanilhaDeContas — quando não dá para ler", () => {
     expect(r.contas).toEqual([]);
   });
 });
+
+/**
+ * PLANILHA DE DRE REAL (28/07/2026) — o caso que falhou na mão do usuário:
+ * cabeçalho na linha 10, coluna do nome chamada "Demonstração de Resultados"
+ * (nenhum rótulo conhecido), código em "Conta Contábil", "Unidade" contendo a
+ * unidade de MEDIDA ([R$]) e meses como DATA de verdade, com colunas-lixo de
+ * 1905 no fim.
+ */
+describe("planilha de DRE com cabeçalho fora do padrão", () => {
+  const vazia = (n: number) => Array.from({ length: n }, () => null);
+  const linhas: unknown[][] = [
+    ...Array.from({ length: 9 }, () => vazia(8)),
+    [null, "✓", null, "Conta Contábil", "Demonstração de Resultados", null, "Unidade",
+      new Date("2027-01-01T03:00:00Z"), new Date("2027-02-01T03:00:00Z"), new Date("2027-03-01T03:00:00Z"),
+      new Date("1905-07-16T03:06:28Z")],
+    vazia(8),
+    [null, null, null, null, "(+) Receita Bruta", null, "[R$]", 300, 300, 300, 9],
+    [null, null, null, "03.1.1.01.003", "Revenda mercadoria - Exportação", null, "[R$]", 100, 100, 100, 1],
+    [null, null, null, "03.1.1.01.006", "Revenda mercadoria - Mercado Interno", null, "[R$]", 200, 200, 200, 2],
+    [null, null, null, null, "(=) Lucro Bruto", null, "[R$]", 300, 300, 300, 3],
+    [null, null, null, "04.1.1.01.002", "Compra de Mercadorias", null, "[R$]", -50, -50, -50, 0],
+  ];
+
+  it("acha o cabeçalho na linha 10 e a coluna do nome pela forma dos dados", () => {
+    const r = lerPlanilhaDeContas(linhas, "2027");
+    expect(r.linhaCabecalho).toBe(10);
+    expect(r.semColunaConta ?? false).toBe(false);
+    expect(r.contas.map((c) => c.nome)).toEqual([
+      "Revenda mercadoria - Exportação",
+      "Revenda mercadoria - Mercado Interno",
+      "Compra de Mercadorias",
+    ]);
+  });
+
+  it("ignora os subtotais da cascata — importá-los somaria a receita duas vezes", () => {
+    const r = lerPlanilhaDeContas(linhas, "2027");
+    expect(r.totaisIgnorados).toEqual(["(+) Receita Bruta", "(=) Lucro Bruto"]);
+  });
+
+  it("lê as datas como meses e descarta a coluna-lixo de 1905", () => {
+    const r = lerPlanilhaDeContas(linhas, "2027");
+    expect(r.meses).toEqual(["2027-01", "2027-02", "2027-03"]);
+    expect(r.contas[0]!.valores).toEqual({ "2027-01": 100, "2027-02": 100, "2027-03": 100 });
+  });
+
+  it('"Unidade" com unidade de MEDIDA não vira filial', () => {
+    const r = lerPlanilhaDeContas(linhas, "2027");
+    expect(r.contas.every((c) => c.unidade === "")).toBe(true);
+  });
+
+  it("o código contábil entra como código da conta", () => {
+    const r = lerPlanilhaDeContas(linhas, "2027");
+    expect(r.contas[0]!.codigo).toBe("03.1.1.01.003");
+  });
+});

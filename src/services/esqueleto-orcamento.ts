@@ -144,10 +144,15 @@ export function contasDoEsqueleto(
   centros: CentroPadrao[] = CENTROS_PADRAO,
 ): Array<{ nome: string; tipo: string; centroCusto: string; destino: string }> {
   return centros.flatMap((cc) => {
-    const alvo = centroEquivalente(cc.nome, centrosDaEmpresa) ?? cc.nome;
+    // Sem centro de custo equivalente na empresa, a conta entra SEM lotação —
+    // mandar o nome do catálogo geraria um "centro de custo não encontrado"
+    // que não é erro nenhum: a empresa simplesmente não trabalha assim.
+    const alvo = centroEquivalente(cc.nome, centrosDaEmpresa) ?? "";
     return cc.contas.map((c) => ({
       // Folha leva o nome do CC no rótulo: "Salários e encargos (Comercial)".
-      nome: c.nome === CONTA_FOLHA ? `${CONTA_FOLHA} (${alvo})` : c.nome,
+      // O sufixo do CC só faz sentido quando ele existe: "Salários e encargos
+      // (Comercial)" com CC; "Salários e encargos" no orçamento único.
+      nome: c.nome === CONTA_FOLHA && alvo ? `${CONTA_FOLHA} (${alvo})` : c.nome,
       tipo: c.tipo, centroCusto: alvo, destino: c.destino ?? "",
     }));
   });

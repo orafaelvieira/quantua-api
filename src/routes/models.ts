@@ -539,15 +539,18 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
     // Nascem SIMPLES — um nó série, valor digitado direto no Orçamento — e cada
     // uma pode virar detalhada por driver (qtd × preço, clientes × ticket) na
     // aba Receitas quando a empresa tiver essa maturidade. Renomear é livre.
+    // Só a Receita 1 herda a âncora, e SÓ quando existe receita no histórico.
+    // Sem histórico o orçamento nasce ZERADO: o template genérico tem um
+    // default de 100 mil/mês que inventaria receita que ninguém orçou —
+    // o usuário viu 100.000 crescendo numa empresa nova (28/07/2026).
+    const temAncoraDeReceita = seed.receitaMensal > 0;
     for (let i = 1; i <= 4; i++) {
+      const herda = i === 1 && temAncoraDeReceita;
       const linha = montarLinhaReceita("generico", `lin${i}`, `Receita ${i}`, {
-        receitaMensal: i === 1 ? seed.receitaMensal : 0,
-        crescimentoAnual: i === 1 ? seed.crescimentoAnual : 0,
+        receitaMensal: herda ? seed.receitaMensal : 0,
+        crescimentoAnual: herda ? seed.crescimentoAnual : 0,
       });
-      // Só a primeira herda a âncora do histórico. As outras nascem ZERADAS —
-      // o template genérico tem um default de 100 mil/mês que aqui inventaria
-      // receita que ninguém orçou (visto no teste de 28/07/2026).
-      if (i > 1) {
+      if (!herda) {
         const raiz = linha.nodes.find((n) => n.id === linha.nodeRaiz);
         if (raiz) raiz.params = { ...raiz.params, valorMensal: 0, crescimentoAnual: 0 };
       }
@@ -2157,58 +2160,41 @@ router.post("/:id/grade/regra", async (req: AuthRequest, res: Response): Promise
   res.json({ ...resultado, mesesAlvo });
 });
 
-// POST /models/:id/esqueleto — COMEÇAR DE ALGUM LUGAR (27/07/2026): cria os
-// centros de custo das áreas (na empresa, se ainda não existirem) e as contas
-// mais comuns de cada uma. Só ACRESCENTA: unidade/CC com o mesmo nome não é
-// recriado e conta repetida é ignorada (o mesmo dedupe da importação).
+// POST /models/:id/esqueleto — CONTAS PADRÃO, sem tocar na estrutura
+// (28/07/2026, corrigido): a versão anterior criava unidade e centros de custo
+// que a empresa não tinha. Estrutura é cadastro do cliente — o botão traz só o
+// CATÁLOGO DE CONTAS e o lota nos centros QUE JÁ EXISTEM (RH ≡ Recursos
+// Humanos, ADM ≡ Administrativo). Empresa sem centro de custo recebe as contas
+// soltas: é o orçamento único, que também é um jeito legítimo de orçar.
 router.post("/:id/esqueleto", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
 
-  const [unidades, centros] = await Promise.all([
-    prisma.unidadeNegocio.findMany({ where: { companyId: model.companyId, ativo: true } }),
-    prisma.centroCusto.findMany({ where: { companyId: model.companyId, ativo: true } }),
-  ]);
-
-  // 1) Unidade: só cria se a empresa não tiver NENHUMA (não mexe em estrutura feita).
-  let unidadeAlvo = unidades.find((u) => u.ehMatriz) ?? unidades[0] ?? null;
-  const criouUnidade = !unidadeAlvo;
-  if (!unidadeAlvo) {
-    unidadeAlvo = await prisma.unidadeNegocio.create({
-      data: { companyId: model.companyId, nome: UNIDADE_PADRAO, ehMatriz: true, ordem: 0 },
-    });
-  }
-
-  // 2) Centros de custo que faltam, na unidade alvo. O que a empresa já tem
-  // com OUTRO nome ("RH" para "Recursos Humanos") não é recriado — as contas
-  // vão para o CC dela (centroEquivalente).
+  const centros = await prisma.centroCusto.findMany({ where: { companyId: model.companyId, ativo: true } });
   const nomesExistentes = centros.map((c) => c.nome);
-  const criados: string[] = [];
-  for (const [i, cc] of CENTROS_PADRAO.entries()) {
-    if (centroEquivalente(cc.nome, nomesExistentes)) continue;
-    await prisma.centroCusto.create({
-      data: { companyId: model.companyId, unidadeId: unidadeAlvo.id, nome: cc.nome, ordem: centros.length + i },
-    });
-    criados.push(cc.nome);
-    nomesExistentes.push(cc.nome);
-  }
+
+  // Áreas do catálogo que a empresa NÃO tem: as contas delas vêm sem lotação
+  // (ficam no grupo sem centro de custo, prontas para o ⇄ quando ele quiser).
+  const semCentro = CENTROS_PADRAO
+    .filter((cc) => !centroEquivalente(cc.nome, nomesExistentes))
+    .map((cc) => cc.nome);
 
   await registrarAuditoria({
-    userId: req.userId!, entity: "financial_model", entityId: model.id, field: "esqueleto do orçamento",
-    after: { unidadeCriada: criouUnidade ? unidadeAlvo.nome : null, centrosCriados: criados },
+    userId: req.userId!, entity: "financial_model", entityId: model.id, field: "contas padrão do orçamento",
+    after: { centrosAproveitados: nomesExistentes, areasSemCentroDeCusto: semCentro },
     source: "models",
   });
 
-  // As CONTAS entram pelo mesmo caminho da importação — o cliente chama
-  // /plano-contas com esta lista, então dedupe, lotação e trilha são um só.
   res.status(201).json({
-    unidade: { id: unidadeAlvo.id, nome: unidadeAlvo.nome, criada: criouUnidade },
-    centrosCriados: criados,
+    // Nada é criado na estrutura — os campos ficam para a tela dizer o que houve.
+    unidade: null,
+    centrosCriados: [],
     centrosReaproveitados: CENTROS_PADRAO
-      .map((cc) => ({ padrao: cc.nome, naEmpresa: centroEquivalente(cc.nome, centros.map((c) => c.nome)) }))
+      .map((cc) => ({ padrao: cc.nome, naEmpresa: centroEquivalente(cc.nome, nomesExistentes) }))
       .filter((x) => x.naEmpresa && x.naEmpresa !== x.padrao)
       .map((x) => `${x.padrao} → ${x.naEmpresa}`),
+    areasSemCentroDeCusto: semCentro,
     contas: contasDoEsqueleto(nomesExistentes),
   });
 });

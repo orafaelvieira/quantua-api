@@ -34,10 +34,14 @@ describe("contasDoEsqueleto", () => {
     expect(contas.some((c) => c.centroCusto === "Recursos Humanos")).toBe(false);
   });
 
-  it("sem estrutura na empresa, usa os nomes do catálogo", () => {
+  it("sem estrutura na empresa, as contas vêm SEM lotação (orçamento único)", () => {
+    // 28/07/2026: antes mandava o nome do catálogo e o importador reclamava de
+    // "centro de custo não encontrado" — mas a empresa só não trabalha por CC.
     const contas = contasDoEsqueleto([]);
-    const ccs = new Set(contas.map((c) => c.centroCusto));
-    expect(ccs).toEqual(new Set(CENTROS_PADRAO.map((c) => c.nome)));
+    expect(new Set(contas.map((c) => c.centroCusto))).toEqual(new Set([""]));
+    // E a folha perde o sufixo do CC, que ali não significaria nada.
+    expect(contas.some((c) => c.nome === "Salários e encargos")).toBe(true);
+    expect(contas.some((c) => /^Salários e encargos \(/.test(c.nome))).toBe(false);
   });
 
   it("toda conta declara tipo válido e nome não vazio", () => {
