@@ -2056,6 +2056,7 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
   if (!calc?.resultado?.dre) { res.status(409).json({ error: "O modelo ainda não tem resultado calculado." }); return; }
   const drePorLinha = new Map(calc.resultado.dre.map((l) => [l.id, l]));
 
+  const folhaAssumida = new Set((calc.resultado.linhasFolhaSubstituidas ?? []).map((l) => l.id));
   const realizado = (model.realizado ?? {}) as unknown as RealizadoComHistorico;
   const refMensalPorLinha = realizado.porLinha ?? {};
   const refAnualReceita = realizado.historicoAnual?.receitaPorLinha ?? {};
@@ -2084,7 +2085,13 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
           // Linha com DE-PARA some da DRE (soma dentro da conta canônica): o
           // valor dela vem de linhasCalculadas, senão a grade mostrava "—" numa
           // conta preenchida (defeito relatado em 27/07/2026).
-          valores: drePorLinha.get(l.id)?.valores ?? calc.resultado.linhasCalculadas?.[l.id] ?? {},
+          // Linha de folha que a aba PESSOAS assumiu: a grade mostra o número
+          // DE LÁ (não o zero do cálculo nem o digitado, que fica guardado).
+          valores: folhaAssumida.has(l.id)
+            ? (calc.resultado.folhaPorCentro?.[String(l.centroCustoId)] ?? {})
+            : drePorLinha.get(l.id)?.valores ?? calc.resultado.linhasCalculadas?.[l.id] ?? {},
+          /** "pessoas" = vem da aba Pessoas; ausente = vale o que está aqui. */
+          origem: folhaAssumida.has(l.id) ? "pessoas" : null,
           // Meses digitados (mês-que-manda): a grade marca o que é FATO digitado.
           digitados: (l.valores && typeof l.valores === "object" ? l.valores : {}) as Record<string, number>,
           refMensal: refMensalPorLinha[l.id] ?? null,

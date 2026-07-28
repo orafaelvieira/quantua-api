@@ -19,7 +19,13 @@
 export interface ContaPadrao { nome: string; tipo: "custo" | "despesa"; destino?: string }
 export interface CentroPadrao { nome: string; contas: ContaPadrao[] }
 
-const FOLHA: ContaPadrao = { nome: "Salários e encargos", tipo: "despesa", destino: "Despesas com Pessoas" };
+/** A conta de FOLHA de cada área nasce com o nome do centro de custo entre
+ *  parênteses — "Salários e encargos (Comercial)". Sem isso, sete contas com o
+ *  mesmo nome conviviam na grade e só o lugar dizia de quem era cada uma
+ *  (28/07/2026). O sufixo é aplicado em contasDoEsqueleto, com o nome REAL do
+ *  CC da empresa (que pode ser "RH" em vez de "Recursos Humanos"). */
+export const CONTA_FOLHA = "Salários e encargos";
+const FOLHA: ContaPadrao = { nome: CONTA_FOLHA, tipo: "despesa", destino: "Despesas com Pessoas" };
 
 export const CENTROS_PADRAO: CentroPadrao[] = [
   {
@@ -86,7 +92,8 @@ export const CENTROS_PADRAO: CentroPadrao[] = [
   {
     nome: "Operações",
     contas: [
-      { nome: "Salários e encargos (operação)", tipo: "custo", destino: "Custos com Pessoas (MOD)" },
+      // Folha da operação é CUSTO (mão de obra direta), não despesa.
+      { nome: CONTA_FOLHA, tipo: "custo", destino: "Custos com Pessoas (MOD)" },
       { nome: "Materiais de consumo", tipo: "custo" },
       { nome: "Manutenção de máquinas e instalações", tipo: "custo" },
       { nome: "Energia (produção)", tipo: "custo" },
@@ -136,6 +143,10 @@ export function contasDoEsqueleto(
 ): Array<{ nome: string; tipo: string; centroCusto: string; destino: string }> {
   return centros.flatMap((cc) => {
     const alvo = centroEquivalente(cc.nome, centrosDaEmpresa) ?? cc.nome;
-    return cc.contas.map((c) => ({ nome: c.nome, tipo: c.tipo, centroCusto: alvo, destino: c.destino ?? "" }));
+    return cc.contas.map((c) => ({
+      // Folha leva o nome do CC no rótulo: "Salários e encargos (Comercial)".
+      nome: c.nome === CONTA_FOLHA ? `${CONTA_FOLHA} (${alvo})` : c.nome,
+      tipo: c.tipo, centroCusto: alvo, destino: c.destino ?? "",
+    }));
   });
 }

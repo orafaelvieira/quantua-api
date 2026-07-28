@@ -35,6 +35,18 @@ function normNomeConta(s: string): string {
   return (s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+/** Contas canônicas de FOLHA — a linha que aponta para uma delas (ou que foi
+ *  marcada como folha) é a que a aba Pessoas substitui quando o centro de custo
+ *  tem posição cadastrada. */
+const CONTAS_DE_FOLHA = ["despesas com pessoas", "custos com pessoas (mod)", "custo com pessoas (mod)"];
+export function ehLinhaDeFolha(l: { folha?: boolean; destino?: { conta: string } | null; nome?: string }): boolean {
+  if (l.folha === true) return true;
+  const alvo = l.destino?.conta;
+  if (alvo && CONTAS_DE_FOLHA.includes(normNomeConta(alvo))) return true;
+  // Sem de-para declarado, o nome resolve: "Salários e encargos (Comercial)".
+  return /^salarios? e encargos/.test(normNomeConta(l.nome ?? ""));
+}
+
 /** Aplica os DESTINOS de um grupo (2026-07-16): linhas COM destino não viram
  *  linha própria — o valor é SOMADO (ou SUBTRAÍDO) na conta canônica-alvo,
  *  criada zerada se ainda não existir no grupo. O total do grupo (soma das
@@ -170,6 +182,15 @@ export interface LinhaCusto {
    *  língua dela; o roll-up para a conta canônica continua via `destino`. Só
    *  identificação/reconciliação — o motor não lê. */
   codigo?: string;
+  /** Declara que a linha É FOLHA: quando o centro de custo dela tiver posição
+   *  cadastrada na aba Pessoas, o valor passa a vir de lá (e o digitado aqui
+   *  fica guardado, fora do cálculo). Ver `ehLinhaDeFolha`. */
+  folha?: boolean;
+  /** ETIQUETAS DIMENSIONAIS (orçamento por unidade/CC). O cálculo da DRE não
+   *  as usa — quem lê são a visão Por unidade, a matriz GMD e a regra de
+   *  precedência da folha. */
+  unidadeId?: string | null;
+  centroCustoId?: string | null;
 }
 
 /** Ativo que a empresa JÁ TEM na largada (das DFs ou informado): imobilizado,
@@ -191,6 +212,12 @@ export interface Posicao {
   nome: string;
   /** Área para agregação (TI, Comercial, Produção…) — livre. */
   area?: string;
+  /** CENTRO DE CUSTO onde a posição mora (28/07/2026). É por ele que a folha
+   *  detalhada SUBSTITUI a linha "Salários e encargos (CC)" digitada na grade:
+   *  CC com posição cadastrada passa a valer pela aba Pessoas; CC sem posição
+   *  continua valendo o valor digitado. Ausente = folha corporativa (não
+   *  substitui linha nenhuma). */
+  centroCustoId?: string | null;
   /** Onde entra na DRE: produção = custo; administrativo/comercial = despesa. */
   classificacao: "custo" | "despesa";
   tipoContrato: "clt" | "pj" | "prolabore" | "estagio";
@@ -674,6 +701,12 @@ export interface ResultadoModelo {
    *  destino soma dentro de outra e some da lista); telas que trabalham POR
    *  LINHA — a grade orçamentária — precisam do número da linha mesmo assim. */
   linhasCalculadas: Record<string, Serie>;
+  /** Linhas de folha que a aba PESSOAS assumiu (o CC tem posição cadastrada):
+   *  saíram do cálculo, mas o valor digitado segue gravado no bloco. */
+  linhasFolhaSubstituidas: Array<{ id: string; nome: string; centroCustoId: string }>;
+  /** Folha calculada por centro de custo — é o número que a grade mostra na
+   *  linha substituída, no lugar do digitado. */
+  folhaPorCentro: Record<string, Serie>;
   kpis: Array<{ id: string; nome: string; valores: Serie }>;
   checks: CheckModelo[];
   erros: string[];
@@ -1663,8 +1696,39 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   // direcionada a "Despesas com Aluguel…" soma NAQUELA linha em vez de abrir
   // uma própria. Total do grupo inalterado (soma/reduz certos). A folha do
   // bloco Pessoas ainda soma na linha canônica DEPOIS (abaixo).
-  const brutasCustos = calcularGrupo("custos");
-  const brutasDespesas = calcularGrupo("despesas");
+  // ── PESSOAS MANDA NA FOLHA DO CENTRO DE CUSTO (28/07/2026) ──────────────
+  // A mesma folha podia ser orçada em dois lugares: digitada na linha
+  // "Salários e encargos (Comercial)" da grade E detalhada por posição na aba
+  // Pessoas — e as duas somavam na DRE (folha em dobro).
+  //
+  // Regra: CENTRO DE CUSTO com posição cadastrada em Pessoas passa a valer POR
+  // ELA; a linha digitada continua GRAVADA (o analista não perde o que
+  // escreveu) mas sai do cálculo. CC sem posição segue valendo o digitado.
+  // Quem foi substituída volta em `linhasFolhaSubstituidas`, para a tela poder
+  // dizer de onde vem cada número.
+  const ccsComPosicao = new Set<string>();
+  for (const pos of blocoFolhaPre?.config.posicoes ?? []) {
+    if (pos.centroCustoId && (pos.salarioMensal > 0 || pos.modoQtd)) ccsComPosicao.add(pos.centroCustoId);
+  }
+  const linhasFolhaSubstituidas: Array<{ id: string; nome: string; centroCustoId: string }> = [];
+  const folhaPorCentro: Record<string, Serie> = {};
+  const zerarFolhaCoberta = (linhas: LinhaComDestino[], origem: LinhaCusto[]): LinhaComDestino[] => {
+    if (ccsComPosicao.size === 0) return linhas;
+    const porId = new Map(origem.map((l) => [l.id, l]));
+    return linhas.map((l) => {
+      const cfg = porId.get(l.id);
+      const cc = cfg?.centroCustoId;
+      if (!cfg || !cc || !ccsComPosicao.has(cc) || !ehLinhaDeFolha(cfg)) return l;
+      linhasFolhaSubstituidas.push({ id: l.id, nome: l.nome, centroCustoId: cc });
+      const zerada: Serie = {};
+      for (const mes of meses) zerada[mes] = 0;
+      return { ...l, valores: zerada };
+    });
+  };
+  const linhasCfgCustos = input.blocks.filter((b) => b.ativo && b.tipo === "custos").flatMap((b) => b.config.linhasCusto ?? []);
+  const linhasCfgDespesas = input.blocks.filter((b) => b.ativo && b.tipo === "despesas").flatMap((b) => b.config.linhasCusto ?? []);
+  const brutasCustos = zerarFolhaCoberta(calcularGrupo("custos"), linhasCfgCustos);
+  const brutasDespesas = zerarFolhaCoberta(calcularGrupo("despesas"), linhasCfgDespesas);
   // Idem para custo/despesa: fotografa antes de o destino engolir a linha.
   for (const l of [...brutasCustos, ...brutasDespesas]) linhasCalculadas[l.id] = l.valores;
   const linhasCustos = aplicarDestinos(brutasCustos, meses);
@@ -1710,6 +1774,12 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
         folhaTotal[mes] += custoPos[mes];
         if (pos.classificacao === "custo") folhaCusto[mes] += custoPos[mes];
         else folhaDespesa[mes] += custoPos[mes];
+        // Folha POR CENTRO DE CUSTO: é este número que a grade mostra na linha
+        // que a aba Pessoas assumiu.
+        if (pos.centroCustoId) {
+          const acc = folhaPorCentro[pos.centroCustoId] ?? (folhaPorCentro[pos.centroCustoId] = {});
+          acc[mes] = (acc[mes] ?? 0) + custoPos[mes];
+        }
       }
       series[`folha_${pos.id}_qtd`] = qtd;
       series[`folha_${pos.id}_custo`] = custoPos;
@@ -2656,5 +2726,5 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   }
   if (churnId) kpis.push({ id: "churn", nome: "Churn mensal de clientes", valores: series[churnId] });
 
-  return { meses, statusMes, series, dre, fc, bp, agregacoes: { anual }, linhasCalculadas, kpis, checks, erros };
+  return { meses, statusMes, series, dre, fc, bp, agregacoes: { anual }, linhasCalculadas, linhasFolhaSubstituidas, folhaPorCentro, kpis, checks, erros };
 }

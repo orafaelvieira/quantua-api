@@ -7,6 +7,7 @@ import { whereEmpresaVisivel } from "../services/escopo-empresa";
 import { deleteFile } from "../services/storage";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
 import { sugerirSetores } from "../services/cnae-b3";
+import { normContaGmd } from "../services/gmd-matricial";
 
 const router = Router();
 
@@ -466,6 +467,18 @@ router.post("/:id/unidades", async (req: AuthRequest, res: Response): Promise<vo
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
   const parsed = unidadeSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  // Mesma regra do centro de custo: nome único na empresa, inativo incluído.
+  const jaExiste = (await prisma.unidadeNegocio.findMany({ where: { companyId: company.id } }))
+    .find((u) => normContaGmd(u.nome) === normContaGmd(parsed.data.nome));
+  if (jaExiste) {
+    res.status(409).json({
+      error: jaExiste.ativo
+        ? `Já existe a unidade "${jaExiste.nome}" nesta empresa.`
+        : `Já existe a unidade "${jaExiste.nome}" nesta empresa, hoje INATIVA — reative-a em vez de criar outra com o mesmo nome.`,
+      unidadeExistente: { id: jaExiste.id, nome: jaExiste.nome, ativo: jaExiste.ativo },
+    });
+    return;
+  }
   const criada = await prisma.unidadeNegocio.create({ data: { ...parsed.data, companyId: company.id } });
   void registrarAuditoria({
     userId: req.userId!, entity: "unidade_negocio", entityId: criada.id, field: "criação da unidade",
@@ -497,6 +510,21 @@ router.post("/:id/centros-custo", async (req: AuthRequest, res: Response): Promi
   if (parsed.data.unidadeId) {
     const dona = await prisma.unidadeNegocio.findFirst({ where: { id: parsed.data.unidadeId, companyId: company.id } });
     if (!dona) { res.status(400).json({ error: "A unidade indicada não é desta empresa." }); return; }
+  }
+  // NOME ÚNICO NA EMPRESA (28/07/2026): dava para desativar "Comercial", criar
+  // outro "Comercial" e reativar o antigo — dois CCs com o mesmo nome, e nem o
+  // analista nem a matriz GMD saberiam qual é qual. O INATIVO conta: a saída é
+  // reativar aquele, não criar um clone.
+  const irmaos = await prisma.centroCusto.findMany({ where: { companyId: company.id } });
+  const colisao = irmaos.find((c) => normContaGmd(c.nome) === normContaGmd(parsed.data.nome));
+  if (colisao) {
+    res.status(409).json({
+      error: colisao.ativo
+        ? `Já existe um centro de custo "${colisao.nome}" nesta empresa.`
+        : `Já existe um centro de custo "${colisao.nome}" nesta empresa, hoje INATIVO — reative-o em vez de criar outro com o mesmo nome.`,
+      centroExistente: { id: colisao.id, nome: colisao.nome, ativo: colisao.ativo, unidadeId: colisao.unidadeId },
+    });
+    return;
   }
   const criado = await prisma.centroCusto.create({
     data: { ...parsed.data, rateio: parsed.data.rateio ?? undefined, companyId: company.id },
