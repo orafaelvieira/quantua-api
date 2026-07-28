@@ -24,6 +24,10 @@ export interface ContaImportada {
   unidade?: string | null;
   /** Conta canônica da DRE em que esta conta soma (o de-para do roll-up). */
   destino?: string | null;
+  /** ORÇAMENTO PRONTO: valores por mês ("2026-01": 15000). Quando a planilha
+   *  do cliente já traz os números (contas nas linhas, meses nas colunas), a
+   *  conta nasce preenchida em vez de vazia. */
+  valores?: Record<string, number> | null;
 }
 
 export interface AlvoDimensional { id: string; nome: string; codigo?: string | null }
@@ -45,6 +49,9 @@ export interface ContaPlanejada {
   destino: string | null;
   /** Nome do CC/unidade onde a conta ficou (ou "não atribuído") — para o resumo. */
   lotacao: string;
+  /** Série mensal saneada (só "YYYY-MM" com número finito); {} quando a
+   *  planilha traz só a estrutura de contas. */
+  valores: Record<string, number>;
 }
 
 export interface PlanoImportacao {
@@ -113,10 +120,17 @@ export function planejarImportacaoPlanoContas(entrada: {
     if ((alvoCc || alvoUn) && !centroCustoId && !unidadeId) semLotacao.push(`${nome} → "${alvoCc || alvoUn}"`);
 
     const destino = (c.destino ?? "").trim() || null;
+    // Série do orçamento pronto: só mês válido e número finito entram.
+    const valores: Record<string, number> = {};
+    for (const [mes, v] of Object.entries(c.valores ?? {})) {
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) continue;
+      const n = Number(v);
+      if (Number.isFinite(n) && n !== 0) valores[mes] = n;
+    }
     criar.push({
       nome, codigo,
       ehCusto: (c.tipo ?? "").toLowerCase().startsWith("cust"),
-      unidadeId, centroCustoId, destino,
+      unidadeId, centroCustoId, destino, valores,
       lotacao: centroCustoId ? nomeDe(centroCustoId, centros) : unidadeId ? nomeDe(unidadeId, unidades) : "não atribuído",
     });
     vistos.add(kNome);

@@ -101,3 +101,23 @@ describe("classificação e de-para", () => {
     expect(r.criar.map((c) => c.nome)).toEqual(["Válida"]);
   });
 });
+
+describe("orçamento pronto (planilha com os meses preenchidos)", () => {
+  it("traz a série mensal para a conta", () => {
+    const r = planejar([{ nome: "Aluguel", centroCusto: "Comercial", valores: { "2026-01": 5000, "2026-02": 5200 } }]);
+    expect(r.criar[0]!.valores).toEqual({ "2026-01": 5000, "2026-02": 5200 });
+  });
+
+  it("descarta mês inválido, valor não numérico e zero (zero não é premissa)", () => {
+    const r = planejar([{
+      nome: "Energia",
+      valores: { "2026-13": 1, "jan": 2, "2026-03": Number.NaN as unknown as number, "2026-04": 0, "2026-05": 900 },
+    }]);
+    expect(r.criar[0]!.valores).toEqual({ "2026-05": 900 });
+  });
+
+  it("planilha só com estrutura (sem meses) cria a conta vazia", () => {
+    const r = planejar([{ nome: "Conta nova", centroCusto: "Comercial" }]);
+    expect(r.criar[0]!.valores).toEqual({});
+  });
+});

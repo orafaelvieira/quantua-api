@@ -17,6 +17,7 @@ import { calcularPorUnidade, decomporFolha, validarEdicaoRestrita, RateioCC, Cen
 import { aplicarRegraGrade, mesesDoAnoNoHorizonte, refAnualDaLinha, RegraGrade } from "../services/grade-orcamentaria";
 import { calcularMatrizGmd } from "../services/gmd-matricial";
 import { planejarImportacaoPlanoContas, ContaImportada } from "../services/plano-contas";
+import { lerPlanilhaDeContas, LeituraPlanilha } from "../services/planilha-contas";
 import { agregarPorPeriodo, recorteJanelaMovel } from "../services/model-safra";
 import { DIVERGENCIAS_BELAGRO, resumoDivergencias } from "../services/model-reconciliacao-belagro";
 import { buscarIndicesEconomicos } from "../services/indices-economicos";
@@ -2086,7 +2087,24 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
 
-  const contas = req.body?.contas as Array<Record<string, unknown>> | undefined;
+  // Duas entradas: a MATRIZ da planilha (o cliente só lê o arquivo; a
+  // interpretação — cabeçalho, meses, formato do número — mora no serviço
+  // testado) ou uma lista de contas já montada.
+  let contas = req.body?.contas as Array<Record<string, unknown>> | undefined;
+  let leitura: LeituraPlanilha | null = null;
+  if (Array.isArray(req.body?.linhas)) {
+    leitura = lerPlanilhaDeContas(req.body.linhas as unknown[][], String(req.body?.ano ?? model.mesInicial.slice(0, 4)));
+    if (leitura.semColunaConta) {
+      res.status(400).json({
+        error: "Não achei a coluna com o NOME DA CONTA nesta planilha.",
+        cabecalhoLido: leitura.cabecalho,
+        linhaCabecalho: leitura.linhaCabecalho,
+        mesesLidos: leitura.meses,
+      });
+      return;
+    }
+    contas = leitura.contas as unknown as Array<Record<string, unknown>>;
+  }
   if (!Array.isArray(contas) || contas.length === 0) { res.status(400).json({ error: "Envie ao menos uma conta" }); return; }
   if (contas.length > 1000) { res.status(400).json({ error: "Máximo de 1.000 contas por importação" }); return; }
 
@@ -2122,13 +2140,17 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       nome: c.nome,
       ...(c.codigo ? { codigo: c.codigo } : {}),
       modo: "serie" as const,
-      valores: {},
+      valores: c.valores,
       ...(c.centroCustoId ? { centroCustoId: c.centroCustoId } : {}),
       ...(c.unidadeId ? { unidadeId: c.unidadeId } : {}),
       ...(c.destino ? { destino: { conta: c.destino, sinal: "soma" as const } } : {}),
     };
     (c.ehCusto ? linhasCusto : linhasDespesa).push(linha);
-    return { codigo: c.codigo, nome: c.nome, tipo: c.ehCusto ? "custo" : "despesa", lotacao: c.lotacao };
+    return {
+      codigo: c.codigo, nome: c.nome, tipo: c.ehCusto ? "custo" : "despesa", lotacao: c.lotacao,
+      meses: Object.keys(c.valores).length,
+      total: Object.values(c.valores).reduce((s, v) => s + v, 0),
+    };
   });
 
   if (criadas.length === 0) {
@@ -2145,8 +2167,30 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     after: { criadas: criadas.length, ignoradas: ignoradas.length, semLotacao: semLotacao.length, amostra: criadas.slice(0, 10).map((x) => `${x.codigo ?? "—"} ${x.nome} (${x.lotacao})`) },
     source: "models",
   });
+  // MÊS FORA DO HORIZONTE: a planilha pode falar de jan/26 num modelo que começa
+  // em jul/26. O valor fica gravado na linha (não se perde), mas não aparece na
+  // grade nem no cálculo — sem este aviso o analista importa e acha que falhou.
+  const mesesDoModelo = new Set<string>();
+  {
+    const [y0, m0] = model.mesInicial.split("-").map(Number);
+    for (let i = 0; i < model.horizonteMeses; i++) {
+      const t = (y0 as number) * 12 + ((m0 as number) - 1) + i;
+      mesesDoModelo.add(`${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`);
+    }
+  }
+  const mesesFora = (leitura?.meses ?? []).filter((m) => !mesesDoModelo.has(m));
+
   const calc = await calcularEGravar(model.id);
-  res.status(201).json({ criadas, ignoradas, semLotacao, resultado: calc?.resultado ?? null });
+  res.status(201).json({
+    criadas, ignoradas, semLotacao,
+    // O que foi entendido da planilha — a UI mostra para o analista conferir.
+    leitura: leitura ? {
+      linhaCabecalho: leitura.linhaCabecalho, cabecalho: leitura.cabecalho,
+      meses: leitura.meses, totaisIgnorados: leitura.totaisIgnorados, mesesFora,
+      horizonte: { de: model.mesInicial, meses: model.horizonteMeses },
+    } : null,
+    resultado: calc?.resultado ?? null,
+  });
 });
 
 // ── F6: PACOTES DE COLETA (um por unidade + corporativo) ────────────────────
