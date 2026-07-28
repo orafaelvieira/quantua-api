@@ -98,12 +98,44 @@ export const CENTROS_PADRAO: CentroPadrao[] = [
 /** Nome da unidade criada quando a empresa ainda não tem nenhuma. */
 export const UNIDADE_PADRAO = "Matriz";
 
+/** APELIDOS DE CENTRO DE CUSTO (27/07/2026): a empresa que já cadastrou "RH" ou
+ *  "TI" não pode ganhar um "Recursos Humanos" duplicado do lado — as contas do
+ *  esqueleto precisam cair NO CC que ela já tem. Chave = nome do catálogo;
+ *  valores = como a casa costuma escrever. */
+const APELIDOS: Record<string, string[]> = {
+  "Comercial": ["comercial", "vendas", "area comercial", "departamento comercial"],
+  "Marketing": ["marketing", "mkt", "comunicacao e marketing"],
+  "Administrativo": ["administrativo", "adm", "administracao", "administrativo e geral", "geral"],
+  "Financeiro": ["financeiro", "financas", "controladoria e financeiro"],
+  "Recursos Humanos": ["recursos humanos", "rh", "gente e gestao", "pessoas", "dp", "departamento pessoal"],
+  "TI": ["ti", "tecnologia", "tecnologia da informacao", "informatica", "sistemas"],
+  "Operações": ["operacoes", "operacional", "producao", "industrial", "logistica e operacoes"],
+};
+
+/** Normalização (sem acento/caixa/pontuação) — a mesma régua de nome de conta. */
+function norm(s: string): string {
+  return (s || "").normalize("NFD").replace(new RegExp("[\\u0300-\\u036f]", "g"), "")
+    .toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Acha, entre os CCs QUE A EMPRESA JÁ TEM, o equivalente a um do catálogo. */
+export function centroEquivalente(nomeCatalogo: string, existentes: string[]): string | null {
+  const alvos = new Set([norm(nomeCatalogo), ...(APELIDOS[nomeCatalogo] ?? []).map(norm)]);
+  return existentes.find((e) => alvos.has(norm(e))) ?? null;
+}
+
 /** O esqueleto no formato da importação de plano de contas — um caminho só de
- *  criação de conta (mesmo dedupe, mesma lotação, mesma trilha). */
-export function contasDoEsqueleto(centros: CentroPadrao[] = CENTROS_PADRAO): Array<{
-  nome: string; tipo: string; centroCusto: string; destino: string;
-}> {
-  return centros.flatMap((cc) =>
-    cc.contas.map((c) => ({ nome: c.nome, tipo: c.tipo, centroCusto: cc.nome, destino: c.destino ?? "" })),
-  );
+ *  criação de conta (mesmo dedupe, mesma lotação, mesma trilha).
+ *
+ *  `centrosDaEmpresa`: os CCs que existem hoje. Quando um deles equivale a um
+ *  do catálogo (RH ≡ Recursos Humanos), as contas apontam para o NOME REAL —
+ *  senão o importador não acharia o CC e jogaria tudo em "não atribuído". */
+export function contasDoEsqueleto(
+  centrosDaEmpresa: string[] = [],
+  centros: CentroPadrao[] = CENTROS_PADRAO,
+): Array<{ nome: string; tipo: string; centroCusto: string; destino: string }> {
+  return centros.flatMap((cc) => {
+    const alvo = centroEquivalente(cc.nome, centrosDaEmpresa) ?? cc.nome;
+    return cc.contas.map((c) => ({ nome: c.nome, tipo: c.tipo, centroCusto: alvo, destino: c.destino ?? "" }));
+  });
 }

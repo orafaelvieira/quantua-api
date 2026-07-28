@@ -16,7 +16,7 @@ import { calcularOrcadoRealizado, congelarOrcamento } from "../services/model-or
 import { calcularPorUnidade, decomporFolha, validarEdicaoRestrita, RateioCC, CentroCustoDim } from "../services/estrutura-dimensional";
 import { aplicarRegraGrade, mesesDoAnoNoHorizonte, refAnualDaLinha, RegraGrade } from "../services/grade-orcamentaria";
 import { calcularMatrizGmd, normContaGmd } from "../services/gmd-matricial";
-import { CENTROS_PADRAO, UNIDADE_PADRAO, contasDoEsqueleto } from "../services/esqueleto-orcamento";
+import { CENTROS_PADRAO, UNIDADE_PADRAO, contasDoEsqueleto, centroEquivalente } from "../services/esqueleto-orcamento";
 import { planejarImportacaoPlanoContas, ContaImportada } from "../services/plano-contas";
 import { lerPlanilhaDeContas, LeituraPlanilha } from "../services/planilha-contas";
 import { agregarPorPeriodo, recorteJanelaMovel } from "../services/model-safra";
@@ -2098,15 +2098,18 @@ router.post("/:id/esqueleto", async (req: AuthRequest, res: Response): Promise<v
     });
   }
 
-  // 2) Centros de custo que faltam, na unidade alvo.
-  const jaTem = new Set(centros.map((c) => normContaGmd(c.nome)));
+  // 2) Centros de custo que faltam, na unidade alvo. O que a empresa já tem
+  // com OUTRO nome ("RH" para "Recursos Humanos") não é recriado — as contas
+  // vão para o CC dela (centroEquivalente).
+  const nomesExistentes = centros.map((c) => c.nome);
   const criados: string[] = [];
   for (const [i, cc] of CENTROS_PADRAO.entries()) {
-    if (jaTem.has(normContaGmd(cc.nome))) continue;
+    if (centroEquivalente(cc.nome, nomesExistentes)) continue;
     await prisma.centroCusto.create({
       data: { companyId: model.companyId, unidadeId: unidadeAlvo.id, nome: cc.nome, ordem: centros.length + i },
     });
     criados.push(cc.nome);
+    nomesExistentes.push(cc.nome);
   }
 
   await registrarAuditoria({
@@ -2120,7 +2123,11 @@ router.post("/:id/esqueleto", async (req: AuthRequest, res: Response): Promise<v
   res.status(201).json({
     unidade: { id: unidadeAlvo.id, nome: unidadeAlvo.nome, criada: criouUnidade },
     centrosCriados: criados,
-    contas: contasDoEsqueleto(),
+    centrosReaproveitados: CENTROS_PADRAO
+      .map((cc) => ({ padrao: cc.nome, naEmpresa: centroEquivalente(cc.nome, centros.map((c) => c.nome)) }))
+      .filter((x) => x.naEmpresa && x.naEmpresa !== x.padrao)
+      .map((x) => `${x.padrao} → ${x.naEmpresa}`),
+    contas: contasDoEsqueleto(nomesExistentes),
   });
 });
 
