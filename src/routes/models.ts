@@ -900,63 +900,13 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const base = model.scenarios.find((s) => s.isBase)!;
   await prisma.financialModel.update({ where: { id: model.id }, data: { cenarioAtivoId: base.id } });
 
-  // ORÇAMENTO NASCE EM PÉ (28/07/2026): "já crie o modelo no estilo DRE". Se a
-  // empresa AINDA NÃO TEM centro de custo nenhum, o modelo já vem com a
-  // estrutura padrão — unidade matriz, os CCs das áreas e as contas mais comuns
-  // de cada uma, zeradas e na ordem da DRE. Empresa que JÁ tem estrutura não é
-  // tocada: ali a grade oferece o mesmo esqueleto num clique, porque inventar
-  // centros de custo por cima do desenho do cliente seria pior que a folha em
-  // branco. Falhar aqui não derruba a criação do modelo.
-  // Só quando o orçamento nasce VAZIO: se veio semeado do IBR, as contas do
-  // histórico SÃO o plano de contas real da empresa — despejar o catálogo
-  // genérico por cima criaria duas listas para o mesmo gasto (a real, em % da
-  // receita, e a do catálogo, zerada), e o analista preencheria a errada.
-  if (ehOrcamento && !usarAberturaCustos) {
-    try {
-      const jaTemEstrutura = await prisma.centroCusto.count({ where: { companyId, ativo: true } });
-      if (jaTemEstrutura === 0) {
-        const unidade = (await prisma.unidadeNegocio.findFirst({ where: { companyId, ativo: true } }))
-          ?? (await prisma.unidadeNegocio.create({ data: { companyId, nome: UNIDADE_PADRAO, ehMatriz: true, ordem: 0 } }));
-        for (const [i, cc] of CENTROS_PADRAO.entries()) {
-          await prisma.centroCusto.create({ data: { companyId, unidadeId: unidade.id, nome: cc.nome, ordem: i } });
-        }
-        const centros = await prisma.centroCusto.findMany({ where: { companyId, ativo: true } });
-        const unidades = await prisma.unidadeNegocio.findMany({ where: { companyId, ativo: true } });
-        const blocos = await prisma.modelBlock.findMany({ where: { modelId: model.id } });
-        const bCusto = blocos.find((b) => b.tipo === "custos")!;
-        const bDesp = blocos.find((b) => b.tipo === "despesas")!;
-        const plano = planejarImportacaoPlanoContas({
-          contas: contasDoEsqueleto(centros.map((c) => c.nome)),
-          unidades: unidades.map((u) => ({ id: u.id, nome: u.nome, codigo: u.codigo })),
-          centros: centros.map((c) => ({ id: c.id, nome: c.nome, codigo: c.codigo })),
-          existentes: [],
-        });
-        const cfgC = bCusto.config as BlocoModelo["config"];
-        const cfgD = bDesp.config as BlocoModelo["config"];
-        const lc = [...(cfgC.linhasCusto ?? [])];
-        const ld = [...(cfgD.linhasCusto ?? [])];
-        plano.criar.forEach((c, i) => {
-          const linha = {
-            id: `esq${i}`, nome: c.nome, modo: "serie" as const, valores: c.valores,
-            ...(c.centroCustoId ? { centroCustoId: c.centroCustoId } : {}),
-            ...(c.destino ? { destino: { conta: c.destino, sinal: "soma" as const } } : {}),
-          };
-          (c.ehCusto ? lc : ld).push(linha);
-        });
-        await prisma.$transaction([
-          prisma.modelBlock.update({ where: { id: bCusto.id }, data: { config: { ...cfgC, linhasCusto: lc } as object } }),
-          prisma.modelBlock.update({ where: { id: bDesp.id }, data: { config: { ...cfgD, linhasCusto: ld } as object } }),
-        ]);
-        await registrarAuditoria({
-          userId: req.userId!, entity: "financial_model", entityId: model.id, field: "estrutura padrão do orçamento",
-          after: { unidade: unidade.nome, centros: CENTROS_PADRAO.map((c) => c.nome), contas: plano.criar.length },
-          source: "models",
-        });
-      }
-    } catch (e) {
-      console.error("[models] esqueleto automático do orçamento falhou:", e);
-    }
-  }
+  // A ESTRUTURA DA EMPRESA É CADASTRO DO ANALISTA (28/07/2026 — corrigido no
+  // mesmo dia): a criação do orçamento chegou a cadastrar unidade e centros de
+  // custo sozinha quando a empresa não tinha nenhum. Errado — centro de custo é
+  // o desenho organizacional do cliente, o sistema não inventa. Quem quiser o
+  // ponto de partida clica em "Trazer estrutura padrão" na própria grade (o
+  // convite aparece enquanto nenhuma conta estiver lotada num CC), e aí a
+  // criação é um ato declarado, com trilha.
 
   await registrarAuditoria({
     userId: req.userId!,
