@@ -34,6 +34,8 @@ export interface AlvoDimensional { id: string; nome: string; codigo?: string | n
 
 /** Linha que já existe no modelo — só o que o dedupe precisa enxergar. */
 export interface LinhaExistente {
+  /** id da linha no bloco — é por ele que a REIMPORTAÇÃO atualiza valores. */
+  id?: string;
   nome: string;
   codigo?: string | null;
   unidadeId?: string | null;
@@ -56,7 +58,12 @@ export interface ContaPlanejada {
 
 export interface PlanoImportacao {
   criar: ContaPlanejada[];
-  /** Já existiam (por código ou por nome+lotação). */
+  /** CONTA EXISTENTE + VALORES na planilha = atualização (28/07/2026): o
+   *  round-trip "baixar modelo → preencher → importar" vive disso. `janela` é
+   *  o conjunto de meses que a planilha COBRE — mês da janela sem valor é
+   *  apagado (célula esvaziada fala), mês fora dela fica intocado. */
+  atualizar: Array<{ id: string; nome: string; valores: Record<string, number>; janela: string[] }>;
+  /** Já existiam E vieram sem valores — nada a fazer. */
   ignoradas: string[];
   /** Traziam CC/unidade que não existe na estrutura — entraram sem lotação. */
   semLotacao: string[];
@@ -89,19 +96,25 @@ export function planejarImportacaoPlanoContas(entrada: {
   existentes: LinhaExistente[];
   unidades: AlvoDimensional[];
   centros: AlvoDimensional[];
+  /** Meses cobertos pela planilha (cabeçalho) — define o alcance da atualização. */
+  janela?: string[];
 }): PlanoImportacao {
   const { contas, existentes, unidades, centros } = entrada;
+  const janela = (entrada.janela ?? []).filter((m) => /^\d{4}-(0[1-9]|1[0-2])$/.test(m));
   const idxCentro = indexar(centros);
   const idxUnidade = indexar(unidades);
   const nomeDe = (id: string | null, lista: AlvoDimensional[]) => lista.find((x) => x.id === id)?.nome ?? "—";
 
-  const vistos = new Set<string>();
+  // Índice dos existentes POR IDENTIDADE (código, senão nome+lotação): é o que
+  // torna a importação idempotente e imune a linha inserida/movida na planilha.
+  const vistos = new Map<string, LinhaExistente>();
   for (const l of existentes) {
-    if (l.codigo) vistos.add(chaveCodigo(l.codigo));
-    vistos.add(chaveNome(l.centroCustoId ?? l.unidadeId ?? null, l.nome));
+    if (l.codigo) vistos.set(chaveCodigo(l.codigo), l);
+    vistos.set(chaveNome(l.centroCustoId ?? l.unidadeId ?? null, l.nome), l);
   }
 
   const criar: ContaPlanejada[] = [];
+  const atualizar: PlanoImportacao["atualizar"] = [];
   const ignoradas: string[] = [];
   const semLotacao: string[] = [];
 
@@ -120,31 +133,39 @@ export function planejarImportacaoPlanoContas(entrada: {
       ? idxUnidade.get(chaveCodigo(alvoUn)) ?? idxUnidade.get(`n:${normContaGmd(alvoUn)}`) ?? null
       : null;
 
-    const kCod = codigo ? chaveCodigo(codigo) : null;
-    const kNome = chaveNome(centroCustoId ?? unidadeId, nome);
-    if ((kCod && vistos.has(kCod)) || vistos.has(kNome)) {
-      ignoradas.push(codigo ? `${codigo} ${nome}` : nome);
-      continue;
-    }
-    if ((alvoCc || alvoUn) && !centroCustoId && !unidadeId) semLotacao.push(`${nome} → "${alvoCc || alvoUn}"`);
-
-    const destino = (c.destino ?? "").trim() || null;
-    // Série do orçamento pronto: só mês válido e número finito entram.
+    // Valores saneados ANTES do dedupe: existente + valores = atualizar.
     const valores: Record<string, number> = {};
     for (const [mes, v] of Object.entries(c.valores ?? {})) {
       if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) continue;
       const n = Number(v);
       if (Number.isFinite(n) && n !== 0) valores[mes] = n;
     }
+
+    const kCod = codigo ? chaveCodigo(codigo) : null;
+    const kNome = chaveNome(centroCustoId ?? unidadeId, nome);
+    const existente = (kCod ? vistos.get(kCod) : undefined) ?? vistos.get(kNome);
+    if (existente) {
+      const temValor = Object.keys(valores).length > 0;
+      if (existente.id && (temValor || janela.length > 0)) {
+        atualizar.push({ id: existente.id, nome: existente.nome, valores, janela });
+      } else {
+        ignoradas.push(codigo ? `${codigo} ${nome}` : nome);
+      }
+      continue;
+    }
+    if ((alvoCc || alvoUn) && !centroCustoId && !unidadeId) semLotacao.push(`${nome} → "${alvoCc || alvoUn}"`);
+
+    const destino = (c.destino ?? "").trim() || null;
     criar.push({
       nome, codigo,
       ehCusto: (c.tipo ?? "").toLowerCase().startsWith("cust"),
       unidadeId, centroCustoId, destino, valores,
       lotacao: centroCustoId ? nomeDe(centroCustoId, centros) : unidadeId ? nomeDe(unidadeId, unidades) : "não atribuído",
     });
-    vistos.add(kNome);
-    if (kCod) vistos.add(kCod);
+    const marcador: LinhaExistente = { nome, codigo, centroCustoId, unidadeId };
+    vistos.set(kNome, marcador);
+    if (kCod) vistos.set(kCod, marcador);
   }
 
-  return { criar, ignoradas, semLotacao };
+  return { criar, atualizar, ignoradas, semLotacao };
 }

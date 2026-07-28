@@ -2215,13 +2215,65 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
 
-  // Duas entradas: a MATRIZ da planilha (o cliente só lê o arquivo; a
-  // interpretação — cabeçalho, meses, formato do número — mora no serviço
-  // testado) ou uma lista de contas já montada.
+  // Estrutura e blocos ANTES da leitura: a resolução de aba→CC precisa deles.
+  const [unidades, centros, blocks] = await Promise.all([
+    prisma.unidadeNegocio.findMany({ where: { companyId: model.companyId, ativo: true } }),
+    prisma.centroCusto.findMany({ where: { companyId: model.companyId, ativo: true } }),
+    prisma.modelBlock.findMany({ where: { modelId: model.id } }),
+  ]);
+  const blocoCusto = blocks.find((b) => b.tipo === "custos");
+  const blocoDespesa = blocks.find((b) => b.tipo === "despesas");
+  if (!blocoCusto || !blocoDespesa) { res.status(409).json({ error: "O modelo precisa dos blocos de custos e despesas." }); return; }
+
+  // Três entradas: ABAS (o modelo multi-aba — uma por centro de custo), a
+  // MATRIZ de uma planilha solta, ou a lista de contas já montada. A
+  // interpretação (cabeçalho, meses, formato) mora no serviço testado.
   let contas = req.body?.contas as Array<Record<string, unknown>> | undefined;
   let leitura: LeituraPlanilha | null = null;
-  if (Array.isArray(req.body?.linhas)) {
-    leitura = lerPlanilhaDeContas(req.body.linhas as unknown[][], String(req.body?.ano ?? model.mesInicial.slice(0, 4)));
+  const abasLidas: Array<{ aba: string; contas: number; linhaCabecalho?: number; ignorada?: string }> = [];
+  let janela: string[] = [];
+  const anoRef = String(req.body?.ano ?? model.mesInicial.slice(0, 4));
+
+  if (Array.isArray(req.body?.abas)) {
+    // MODELO MULTI-ABA (28/07/2026): cada aba com o nome de um centro de custo
+    // carrega as contas dele. Abas de apoio (Consolidado, Leia-me) e abas do
+    // PRÓPRIO analista (rascunhos, memórias) são ignoradas E LISTADAS — o
+    // contrato é: só entra o que casa com a estrutura, e nada some em silêncio.
+    const entradas = (req.body.abas as Array<{ nome?: unknown; linhas?: unknown }>).slice(0, 40);
+    const reservada = (n: string) => /^(consolidado|leia ?-?me|quantua ?-?meta|instru)/.test(normContaGmd(n));
+    const resolveCc = (nomeAba: string) =>
+      centros.find((c) => normContaGmd(c.nome) === normContaGmd(nomeAba)
+        || ((c.codigo ?? "").trim() !== "" && (c.codigo ?? "").trim().toLowerCase() === nomeAba.trim().toLowerCase())) ?? null;
+    const uteis = entradas.filter((a) => !reservada(String(a.nome ?? "")));
+    contas = [];
+    for (const a of entradas) {
+      const nomeAba = String(a.nome ?? "").trim() || "(sem nome)";
+      if (reservada(nomeAba)) { abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "aba de apoio do modelo" }); continue; }
+      if (!Array.isArray(a.linhas)) { abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "sem dados" }); continue; }
+      const cc = resolveCc(nomeAba);
+      // Várias abas úteis e esta não é um CC: é aba do analista — fica de fora.
+      // Uma aba útil só: importa mesmo sem casar (planilha de aba única).
+      if (!cc && uteis.length > 1) {
+        abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "não é um centro de custo da empresa (aba sua — não importada)" });
+        continue;
+      }
+      const li = lerPlanilhaDeContas(a.linhas as unknown[][], anoRef);
+      if (li.semColunaConta) {
+        abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "não achei a coluna com o nome da conta" });
+        continue;
+      }
+      for (const c of li.contas) {
+        contas.push({ ...c, centroCusto: c.centroCusto || (cc ? cc.nome : "") } as unknown as Record<string, unknown>);
+      }
+      janela = [...new Set([...janela, ...li.meses])];
+      abasLidas.push({ aba: nomeAba, contas: li.contas.length, linhaCabecalho: li.linhaCabecalho });
+    }
+    if (contas.length === 0) {
+      res.status(400).json({ error: "Nenhuma aba da planilha pôde ser importada.", abas: abasLidas });
+      return;
+    }
+  } else if (Array.isArray(req.body?.linhas)) {
+    leitura = lerPlanilhaDeContas(req.body.linhas as unknown[][], anoRef);
     if (leitura.semColunaConta) {
       res.status(400).json({
         error: "Não achei a coluna com o NOME DA CONTA nesta planilha.",
@@ -2232,33 +2284,26 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       return;
     }
     contas = leitura.contas as unknown as Array<Record<string, unknown>>;
+    janela = leitura.meses;
   }
   if (!Array.isArray(contas) || contas.length === 0) { res.status(400).json({ error: "Envie ao menos uma conta" }); return; }
   if (contas.length > 1000) { res.status(400).json({ error: "Máximo de 1.000 contas por importação" }); return; }
-
-  const [unidades, centros, blocks] = await Promise.all([
-    prisma.unidadeNegocio.findMany({ where: { companyId: model.companyId, ativo: true } }),
-    prisma.centroCusto.findMany({ where: { companyId: model.companyId, ativo: true } }),
-    prisma.modelBlock.findMany({ where: { modelId: model.id } }),
-  ]);
-  const blocoCusto = blocks.find((b) => b.tipo === "custos");
-  const blocoDespesa = blocks.find((b) => b.tipo === "despesas");
-  if (!blocoCusto || !blocoDespesa) { res.status(409).json({ error: "O modelo precisa dos blocos de custos e despesas." }); return; }
 
   const cfgCusto = blocoCusto.config as BlocoModelo["config"];
   const cfgDespesa = blocoDespesa.config as BlocoModelo["config"];
   const linhasCusto = [...(cfgCusto.linhasCusto ?? [])];
   const linhasDespesa = [...(cfgDespesa.linhasCusto ?? [])];
 
-  // A DECISÃO (casamento de CC/unidade, dedupe, classificação) é pura e tem
+  // A DECISÃO (casamento de CC/unidade, dedupe, criar × atualizar) é pura e tem
   // testes próprios — ver plano-contas.test.ts. Aqui só persistimos o plano.
-  const { criar, ignoradas, semLotacao } = planejarImportacaoPlanoContas({
+  const { criar, atualizar, ignoradas, semLotacao } = planejarImportacaoPlanoContas({
     contas: contas as unknown as ContaImportada[],
     existentes: [...linhasCusto, ...linhasDespesa].map((l) => {
       const x = l as unknown as { unidadeId?: string; centroCustoId?: string };
-      return { nome: l.nome, codigo: l.codigo ?? null, unidadeId: x.unidadeId ?? null, centroCustoId: x.centroCustoId ?? null };
+      return { id: l.id, nome: l.nome, codigo: l.codigo ?? null, unidadeId: x.unidadeId ?? null, centroCustoId: x.centroCustoId ?? null };
     }),
     unidades, centros,
+    janela,
   });
 
   // DE-PARA SUGERIDO (28/07/2026): a planilha do cliente raramente traz a
@@ -2294,20 +2339,34 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     };
   });
 
-  if (criadas.length === 0) {
-    res.status(409).json({ error: "Nenhuma conta nova — todas já existem no modelo.", ignoradas, semLotacao });
+  // ATUALIZAÇÕES (28/07/2026): conta que JÁ existe volta da planilha com
+  // valores → os meses da janela são regravados (vazio na planilha limpa o
+  // mês). Linha detalhada perde o detalhamento (o número importado é o fato);
+  // linha em % vira série. É o que faz o round-trip do modelo funcionar.
+  const atualizadas = atualizar.map((up) => {
+    const linha = linhasCusto.find((l) => l.id === up.id) ?? linhasDespesa.find((l) => l.id === up.id);
+    if (!linha) return null;
+    const vals = { ...(linha.valores ?? {}) } as Record<string, number>;
+    for (const mes of up.janela) {
+      if (up.valores[mes] !== undefined) vals[mes] = up.valores[mes];
+      else delete vals[mes];
+    }
+    for (const [mes, v] of Object.entries(up.valores)) vals[mes] = v;
+    linha.valores = vals;
+    if (linha.modo === "pctReceita") linha.modo = "serie";
+    if (linha.detalhes?.length) delete linha.detalhes;
+    return {
+      nome: up.nome,
+      meses: Object.keys(up.valores).length,
+      total: Object.values(up.valores).reduce((s, v) => s + v, 0),
+    };
+  }).filter((x): x is { nome: string; meses: number; total: number } => x !== null);
+
+  if (criadas.length === 0 && atualizadas.length === 0) {
+    res.status(409).json({ error: "Nada a criar nem atualizar — as contas já existem e a planilha não trouxe valores.", ignoradas, semLotacao, abas: abasLidas });
     return;
   }
 
-  await prisma.$transaction([
-    prisma.modelBlock.update({ where: { id: blocoCusto.id }, data: { config: { ...cfgCusto, linhasCusto } as object } }),
-    prisma.modelBlock.update({ where: { id: blocoDespesa.id }, data: { config: { ...cfgDespesa, linhasCusto: linhasDespesa } as object } }),
-  ]);
-  await registrarAuditoria({
-    userId: req.userId!, entity: "financial_model", entityId: model.id, field: "plano de contas importado",
-    after: { criadas: criadas.length, ignoradas: ignoradas.length, semLotacao: semLotacao.length, amostra: criadas.slice(0, 10).map((x) => `${x.codigo ?? "—"} ${x.nome} (${x.lotacao})`) },
-    source: "models",
-  });
   // MÊS FORA DO HORIZONTE: a planilha pode falar de jan/26 num modelo que começa
   // em jul/26. O valor fica gravado na linha (não se perde), mas não aparece na
   // grade nem no cálculo — sem este aviso o analista importa e acha que falhou.
@@ -2319,21 +2378,50 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       mesesDoModelo.add(`${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`);
     }
   }
-  const mesesFora = (leitura?.meses ?? []).filter((m) => !mesesDoModelo.has(m));
+  const mesesFora = janela.filter((m) => !mesesDoModelo.has(m));
+
+  // SIMULAÇÃO (28/07/2026): a prévia do que a importação faria, sem gravar —
+  // é o diff que os Pacotes (Excel) mostram antes do "Aplicar".
+  if (req.body?.simular === true) {
+    res.json({
+      simulacao: true,
+      criadas, atualizadas, ignoradas, semLotacao,
+      deParaSugerido: sugeridas,
+      abas: abasLidas,
+      mesesFora,
+      horizonte: { de: model.mesInicial, meses: model.horizonteMeses },
+    });
+    return;
+  }
+
+  await prisma.$transaction([
+    prisma.modelBlock.update({ where: { id: blocoCusto.id }, data: { config: { ...cfgCusto, linhasCusto } as object } }),
+    prisma.modelBlock.update({ where: { id: blocoDespesa.id }, data: { config: { ...cfgDespesa, linhasCusto: linhasDespesa } as object } }),
+  ]);
+  await registrarAuditoria({
+    userId: req.userId!, entity: "financial_model", entityId: model.id, field: "plano de contas importado",
+    after: {
+      criadas: criadas.length, atualizadas: atualizadas.length, ignoradas: ignoradas.length, semLotacao: semLotacao.length,
+      abas: abasLidas.map((a) => `${a.aba}${a.ignorada ? ` (${a.ignorada})` : ` (${a.contas})`}`),
+      amostra: criadas.slice(0, 10).map((x) => `${x.codigo ?? "—"} ${x.nome} (${x.lotacao})`),
+    },
+    source: "models",
+  });
 
   const calc = await calcularEGravar(model.id);
   res.status(201).json({
-    criadas, ignoradas, semLotacao,
+    criadas, atualizadas, ignoradas, semLotacao,
     /** De-para proposto pelo sistema (nome → conta canônica) e o que ficou sem:
      *  é o que o analista revisa, em vez de escolher conta a conta. */
     deParaSugerido: sugeridas,
     semDePara: criadas.filter((c) => !c.destino).map((c) => c.nome),
+    abas: abasLidas,
     // O que foi entendido da planilha — a UI mostra para o analista conferir.
     leitura: leitura ? {
       linhaCabecalho: leitura.linhaCabecalho, cabecalho: leitura.cabecalho,
       meses: leitura.meses, totaisIgnorados: leitura.totaisIgnorados, mesesFora,
       horizonte: { de: model.mesInicial, meses: model.horizonteMeses },
-    } : null,
+    } : { linhaCabecalho: null, cabecalho: [], meses: janela, totaisIgnorados: [], mesesFora, horizonte: { de: model.mesInicial, meses: model.horizonteMeses } },
     resultado: calc?.resultado ?? null,
   });
 });

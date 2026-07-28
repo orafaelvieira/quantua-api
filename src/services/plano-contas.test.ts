@@ -121,3 +121,57 @@ describe("orçamento pronto (planilha com os meses preenchidos)", () => {
     expect(r.criar[0]!.valores).toEqual({});
   });
 });
+
+/**
+ * REIMPORTAÇÃO ATUALIZA (28/07/2026) — o round-trip "baixar modelo → preencher
+ * → importar" depende de: conta existente + valores = atualizar POR IDENTIDADE
+ * (código, senão nome+lotação), imune a linha inserida/movida na planilha.
+ */
+describe("reimportação: atualizar em vez de duplicar", () => {
+  const centros = [{ id: "cc1", nome: "Comercial" }];
+  const existentes = [
+    { id: "L1", nome: "Viagens e hospedagem", codigo: null, centroCustoId: "cc1", unidadeId: null },
+    { id: "L2", nome: "Comissões sobre vendas", codigo: "4.1.9", centroCustoId: "cc1", unidadeId: null },
+  ];
+
+  it("conta existente com valores vira ATUALIZAÇÃO, não duplicata", () => {
+    const r = planejarImportacaoPlanoContas({
+      contas: [{ nome: "Viagens e hospedagem", centroCusto: "Comercial", valores: { "2027-01": 5000 } }],
+      existentes, unidades: [], centros,
+      janela: ["2027-01", "2027-02"],
+    });
+    expect(r.criar).toEqual([]);
+    expect(r.atualizar).toEqual([{ id: "L1", nome: "Viagens e hospedagem", valores: { "2027-01": 5000 }, janela: ["2027-01", "2027-02"] }]);
+  });
+
+  it("casa pelo CÓDIGO mesmo se o nome mudou na planilha", () => {
+    const r = planejarImportacaoPlanoContas({
+      contas: [{ codigo: "4.1.9", nome: "Comissões s/ vendas (renomeada)", centroCusto: "Comercial", valores: { "2027-03": 900 } }],
+      existentes, unidades: [], centros, janela: ["2027-03"],
+    });
+    expect(r.criar).toEqual([]);
+    expect(r.atualizar[0]!.id).toBe("L2");
+  });
+
+  it("linha NOVA inserida no meio da planilha vira conta nova — posição não importa", () => {
+    const r = planejarImportacaoPlanoContas({
+      contas: [
+        { nome: "Viagens e hospedagem", centroCusto: "Comercial", valores: { "2027-01": 1 } },
+        { nome: "Patrocínio do rodeio", centroCusto: "Comercial", valores: { "2027-01": 2 } },
+        { nome: "Comissões sobre vendas", centroCusto: "Comercial", valores: { "2027-01": 3 } },
+      ],
+      existentes, unidades: [], centros, janela: ["2027-01"],
+    });
+    expect(r.atualizar.map((a) => a.id).sort()).toEqual(["L1", "L2"]);
+    expect(r.criar.map((c) => c.nome)).toEqual(["Patrocínio do rodeio"]);
+  });
+
+  it("existente SEM id (legado) continua caindo em ignoradas", () => {
+    const r = planejarImportacaoPlanoContas({
+      contas: [{ nome: "Viagens e hospedagem", centroCusto: "Comercial", valores: { "2027-01": 5 } }],
+      existentes: [{ nome: "Viagens e hospedagem", centroCustoId: "cc1" }], unidades: [], centros,
+    });
+    expect(r.atualizar).toEqual([]);
+    expect(r.ignoradas).toEqual(["Viagens e hospedagem"]);
+  });
+});
