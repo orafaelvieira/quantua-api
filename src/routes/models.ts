@@ -532,6 +532,26 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       receitaPorLinha[linhaId] = ab.valores;
       memoriaAbertura.push(`"${ab.conta}": base ${vUlt.toFixed(2)} (${ultimoP ?? "—"}), crescimento ${(cresc * 100).toFixed(1)}% (CAGR ${primeiroP ?? "—"}→${ultimoP ?? "—"}) em FADE até ${(crescTerminal * 100).toFixed(1)}% a.a. (setor) no último ano`);
     });
+  } else if (objetivo === "orcamento") {
+    // ORÇAMENTO (28/07/2026): abre com QUATRO linhas de receita prontas para
+    // digitar (a empresa costuma ter algumas fontes: serviços, insumos, grãos…).
+    // Nascem SIMPLES — um nó série, valor digitado direto no Orçamento — e cada
+    // uma pode virar detalhada por driver (qtd × preço, clientes × ticket) na
+    // aba Receitas quando a empresa tiver essa maturidade. Renomear é livre.
+    for (let i = 1; i <= 4; i++) {
+      const linha = montarLinhaReceita("generico", `lin${i}`, `Receita ${i}`, {
+        receitaMensal: i === 1 ? seed.receitaMensal : 0,
+        crescimentoAnual: i === 1 ? seed.crescimentoAnual : 0,
+      });
+      // Só a primeira herda a âncora do histórico. As outras nascem ZERADAS —
+      // o template genérico tem um default de 100 mil/mês que aqui inventaria
+      // receita que ninguém orçou (visto no teste de 28/07/2026).
+      if (i > 1) {
+        const raiz = linha.nodes.find((n) => n.id === linha.nodeRaiz);
+        if (raiz) raiz.params = { ...raiz.params, valorMensal: 0, crescimentoAnual: 0 };
+      }
+      linhasReceita.push(linha);
+    }
   } else {
     linhasReceita.push(montarLinhaReceita(templateReceita === "historico" ? "generico" : (templateReceita || "generico"), "lin1", "Receita principal", {
       receitaMensal: seed.receitaMensal,
@@ -2041,6 +2061,25 @@ type RealizadoComHistorico = RealizadoModelo & {
 // de referência (mensal quando o balancete acoplou; anual do seed) e o modo de
 // cada linha. Leitura pura: edições seguem pelo PUT de bloco (travas F4 +
 // histórico + trilha num caminho só).
+/** Linha de receita "simples" = um nó série só (o valor é digitado direto).
+ *  Com mais de um nó, há árvore de drivers (qtd × preço, clientes × ticket…) e
+ *  o número passa a vir da aba Receitas. */
+function receitaTemDetalhe(l: Record<string, unknown>): boolean {
+  const nodes = Array.isArray(l.nodes) ? (l.nodes as Array<Record<string, unknown>>) : [];
+  if (nodes.length > 1) return true;
+  const raiz = nodes[0];
+  return !!raiz && raiz.tipo === "formula";
+}
+
+/** Série digitada no nó raiz de uma receita simples (params.valores). */
+function valoresDoNoRaiz(l: Record<string, unknown>): Record<string, number> {
+  const nodes = Array.isArray(l.nodes) ? (l.nodes as Array<Record<string, unknown>>) : [];
+  const raiz = nodes.find((n) => n.id === l.nodeRaiz) ?? nodes[0];
+  const params = (raiz?.params ?? {}) as Record<string, unknown>;
+  const valores = params.valores;
+  return valores && typeof valores === "object" ? (valores as Record<string, number>) : {};
+}
+
 router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
@@ -2081,6 +2120,8 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
           // rola no modelo canônico (o "de-para" que a controladoria cobra).
           codigo: typeof l.codigo === "string" ? l.codigo : null,
           destino: l.destino && typeof l.destino === "object" ? (l.destino as { conta: string; sinal: string }) : null,
+          /** Receita: nó onde o valor digitado mora (a grade escreve nele). */
+          nodeRaiz: typeof l.nodeRaiz === "string" ? l.nodeRaiz : null,
           // O número que o motor gravou — a grade mostra a VERDADE do cálculo.
           // Linha com DE-PARA some da DRE (soma dentro da conta canônica): o
           // valor dela vem de linhasCalculadas, senão a grade mostrava "—" numa
@@ -2090,14 +2131,20 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
           valores: folhaAssumida.has(l.id)
             ? (calc.resultado.folhaPorCentro?.[String(l.centroCustoId)] ?? {})
             : drePorLinha.get(l.id)?.valores ?? calc.resultado.linhasCalculadas?.[l.id] ?? {},
-          /** "pessoas" = vem da aba Pessoas; ausente = vale o que está aqui. */
-          origem: folhaAssumida.has(l.id) ? "pessoas" : null,
+          /** "pessoas" = vem da aba Pessoas; "receitas" = tem detalhe por driver
+           *  na aba Receitas; ausente = vale o que está digitado aqui. */
+          origem: folhaAssumida.has(l.id) ? "pessoas" : (b.tipo === "receitas" && receitaTemDetalhe(l)) ? "receitas" : null,
           // Meses digitados (mês-que-manda): a grade marca o que é FATO digitado.
-          digitados: (l.valores && typeof l.valores === "object" ? l.valores : {}) as Record<string, number>,
+          // Na receita SIMPLES o digitado mora no nó raiz, não em `valores`.
+          digitados: b.tipo === "receitas"
+            ? (valoresDoNoRaiz(l) as Record<string, number>)
+            : ((l.valores && typeof l.valores === "object" ? l.valores : {}) as Record<string, number>),
           refMensal: refMensalPorLinha[l.id] ?? null,
           refAnual,
-          // Receita edita por driver (aba Receitas) até a F7 — na grade é leitura.
-          editavel: b.tipo !== "receitas",
+          // RECEITA (28/07/2026): linha SEM detalhe (um nó série só) se digita
+          // aqui mesmo — é o caso da empresa que ainda não projeta por driver.
+          // Com árvore de drivers, o número vem da aba Receitas e aqui é leitura.
+          editavel: b.tipo !== "receitas" || !receitaTemDetalhe(l),
         }];
       });
       return { blocoId: b.id, tipo: b.tipo, nome: b.nome, linhas };
@@ -2111,6 +2158,14 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
     unidades: unidades.filter((u) => u.ativo),
     centros: centros.filter((c) => c.ativo),
     grupos,
+    // DEDUÇÕES DA RECEITA (descontos, cancelamentos, devoluções): % sobre a
+    // receita bruta. Vive no bloco de receitas e agora também se edita aqui —
+    // "não achei no orçamento" (28/07/2026).
+    deducoes: (() => {
+      const bRec = blocks.find((b) => b.ativo && b.tipo === "receitas");
+      const cfg = (bRec?.config ?? {}) as { deducoesPct?: number; deducoesPctPorAno?: Record<string, number> };
+      return bRec ? { blocoId: bRec.id, pct: cfg.deducoesPct ?? 0, pctPorAno: cfg.deducoesPctPorAno ?? {} } : null;
+    })(),
     mesesRealizados: realizado.meses ?? [],
     geradoEm: new Date().toISOString(),
     fonte: `cenário ${cache?.cenario ?? "Base"} · motor Quantua (determinístico)`,
