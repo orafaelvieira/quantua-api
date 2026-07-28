@@ -38,6 +38,7 @@ import { ConfigReforma } from "../services/reforma-tributaria";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
 import { resolveSectorPremises } from "../services/sector-benchmark";
 import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version";
+import { sugerirContaCanonica } from "../services/sugerir-conta-canonica";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { cicloVidaModel } from "../services/ciclo-vida";
 import { TipoProduto, dataBaseDoModelo } from "../services/produto-empresa";
@@ -2324,8 +2325,20 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     unidades, centros,
   });
 
+  // DE-PARA SUGERIDO (28/07/2026): a planilha do cliente raramente traz a
+  // coluna "conta canônica". Em vez de deixar a conta órfã (e o Orçado ×
+  // Realizado sem par no balancete), o sistema PROPÕE pelo nome — e diz na
+  // resposta quantas foram sugeridas, para o analista revisar em vez de digitar
+  // 36 vezes. O que não casa fica sem de-para, visível, nunca chutado.
+  const dreAtiva = await loadActiveDREModel(model.companyId);
+  const canonicas = dreAtiva.lines.filter((l) => !l.subtotal).map((l) => l.conta);
+  const sugeridas: string[] = [];
+
   const stamp = Date.now().toString(36);
   const criadas = criar.map((c, i) => {
+    const sugestao = c.destino ? null : sugerirContaCanonica(c.nome, canonicas, { grupo: c.ehCusto ? "custo" : "despesa" });
+    const destino = c.destino ?? sugestao?.conta ?? null;
+    if (sugestao) sugeridas.push(`${c.nome} → ${sugestao.conta}`);
     const linha = {
       id: `pc${stamp}_${i}`,
       nome: c.nome,
@@ -2334,13 +2347,14 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       valores: c.valores,
       ...(c.centroCustoId ? { centroCustoId: c.centroCustoId } : {}),
       ...(c.unidadeId ? { unidadeId: c.unidadeId } : {}),
-      ...(c.destino ? { destino: { conta: c.destino, sinal: "soma" as const } } : {}),
+      ...(destino ? { destino: { conta: destino, sinal: "soma" as const } } : {}),
     };
     (c.ehCusto ? linhasCusto : linhasDespesa).push(linha);
     return {
       codigo: c.codigo, nome: c.nome, tipo: c.ehCusto ? "custo" : "despesa", lotacao: c.lotacao,
       meses: Object.keys(c.valores).length,
       total: Object.values(c.valores).reduce((s, v) => s + v, 0),
+      destino, destinoSugerido: !c.destino && !!sugestao,
     };
   });
 
@@ -2374,6 +2388,10 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   const calc = await calcularEGravar(model.id);
   res.status(201).json({
     criadas, ignoradas, semLotacao,
+    /** De-para proposto pelo sistema (nome → conta canônica) e o que ficou sem:
+     *  é o que o analista revisa, em vez de escolher conta a conta. */
+    deParaSugerido: sugeridas,
+    semDePara: criadas.filter((c) => !c.destino).map((c) => c.nome),
     // O que foi entendido da planilha — a UI mostra para o analista conferir.
     leitura: leitura ? {
       linhaCabecalho: leitura.linhaCabecalho, cabecalho: leitura.cabecalho,

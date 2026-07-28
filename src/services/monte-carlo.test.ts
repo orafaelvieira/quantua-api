@@ -34,6 +34,12 @@ function blocos(): BlocoModelo[] {
 
 const VALUATION = { wacc: 0.18, taxaImpostos: 0.34, caixaDataBase: 0, g: 0.03, dlom: 0 };
 
+/** Timeout dos testes de simulação PESADOS (300-400 rodadas do motor cada).
+ *  O default do vitest é 5s: suficiente com o arquivo isolado, curto demais
+ *  quando a suíte inteira roda em paralelo — era a causa do "flaky" de
+ *  28/07/2026 (falha por Test timed out, nunca por número errado). */
+const PESADO = 60_000;
+
 function inputMc(variaveis: McVariavelSpec[], n = 60, seed = 42): McInput {
   return {
     base: { mesInicial: "2026-01", horizonteMeses: 36, blocks: blocos(), realizado: null, indicesMacro: null },
@@ -212,7 +218,7 @@ describe("rodarMonteCarlo", () => {
       return Math.sqrt(xs.reduce((s, x) => s + (x - m) ** 2, 0) / (xs.length - 1));
     };
     expect(desvio(com.equity)).toBeLessThan(desvio(sem.equity) * 0.8);
-  });
+  }, PESADO);
 
   it("correlações inconsistentes são encolhidas com aviso (não quebram)", async () => {
     const vars: McVariavelSpec[] = [
@@ -244,7 +250,7 @@ describe("rodarMonteCarlo", () => {
       return Math.sqrt(xs.reduce((s, x) => s + (x - m) ** 2, 0) / (xs.length - 1));
     };
     expect(desvio(persistente.equity)).toBeGreaterThan(desvio(solto.equity) * 1.1);
-  });
+  }, PESADO);
 
   it("PERT e lognormal mudam a forma (lognormal puxa a cauda p/ a direita)", async () => {
     const mk = (dist: "pert" | "lognormal" | "triangular") =>
@@ -256,7 +262,7 @@ describe("rodarMonteCarlo", () => {
     // lognormal com moda 0: mediana ~base, cauda direita mais longa que a esquerda
     const mLog = mediana(logn.equity);
     expect(Math.max(...logn.equity) - mLog).toBeGreaterThan(mLog - Math.min(...logn.equity));
-  });
+  }, PESADO);
 
   it("tornado: a variável de maior sensibilidade domina a contribuição à variância", async () => {
     const r = await rodarMonteCarlo(inputMc([
