@@ -41,6 +41,7 @@ export const CENTROS_PADRAO: CentroPadrao[] = [
   {
     nome: "Marketing",
     contas: [
+      FOLHA,
       { nome: "Publicidade e propaganda", tipo: "despesa" },
       { nome: "Marketing digital (mídia paga)", tipo: "despesa" },
       { nome: "Agência e produção de conteúdo", tipo: "despesa" },
@@ -83,6 +84,7 @@ export const CENTROS_PADRAO: CentroPadrao[] = [
   {
     nome: "TI",
     contas: [
+      FOLHA,
       { nome: "Licenças e assinaturas de software", tipo: "despesa" },
       { nome: "Serviços de TI e suporte", tipo: "despesa" },
       { nome: "Infraestrutura e nuvem", tipo: "despesa" },

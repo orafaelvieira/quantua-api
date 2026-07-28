@@ -63,7 +63,16 @@ export interface PlanoImportacao {
 }
 
 const chaveCodigo = (c: string) => `c:${c.toLowerCase().trim()}`;
-const chaveNome = (lotacaoId: string | null, nome: string) => `n:${lotacaoId ?? "-"}:${normContaGmd(nome)}`;
+
+/** FOLHA É UMA POR CENTRO DE CUSTO (28/07/2026): "Salários e encargos" e
+ *  "Salários e encargos (Comercial)" são a MESMA conta no mesmo CC. Sem isso, o
+ *  esqueleto rodado duas vezes deixava as duas convivendo na grade — foi o que
+ *  aconteceu ao renomear a conta com o sufixo do centro. */
+const ehNomeDeFolha = (nome: string) => /^salarios? e encargos/.test(normContaGmd(nome));
+const chaveNome = (lotacaoId: string | null, nome: string) =>
+  ehNomeDeFolha(nome)
+    ? `n:${lotacaoId ?? "-"}:__folha`
+    : `n:${lotacaoId ?? "-"}:${normContaGmd(nome)}`;
 
 /** Índice de casamento de um alvo dimensional: por código e por nome normalizado. */
 function indexar(alvos: AlvoDimensional[]): Map<string, string> {

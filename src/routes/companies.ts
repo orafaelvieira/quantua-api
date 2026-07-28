@@ -559,6 +559,57 @@ router.put("/:id/centros-custo/:cid", async (req: AuthRequest, res: Response): P
   res.json(depois);
 });
 
+// DELETE /:id/centros-custo/:cid — EXCLUI de vez, e só quando NADA aponta para
+// ele (28/07/2026). Desativar é a regra da casa porque o CC costuma carregar
+// histórico; um centro criado por engano, que nunca recebeu conta nem posição,
+// não tem por que ficar sujando a lista para sempre. Se houver qualquer
+// vínculo, a resposta diz ONDE está e manda desativar.
+router.delete("/:id/centros-custo/:cid", async (req: AuthRequest, res: Response): Promise<void> => {
+  const company = await companyNoEscopoEstrutura(req.params.id as string, req);
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  const cc = await prisma.centroCusto.findFirst({ where: { id: req.params.cid as string, companyId: company.id } });
+  if (!cc) { res.status(404).json({ error: "Centro de custo não encontrado" }); return; }
+
+  // Varre TODOS os modelos da empresa: linha de custo/receita etiquetada, posição
+  // da folha ou rateio de CSC que cite este CC seguram a exclusão.
+  const modelos = await prisma.financialModel.findMany({
+    where: { companyId: company.id },
+    select: { id: true, nome: true, status: true, blocks: { select: { tipo: true, config: true } } },
+  });
+  const usos: string[] = [];
+  for (const m of modelos) {
+    for (const b of m.blocks) {
+      const cfg = (b.config ?? {}) as {
+        linhasCusto?: Array<{ nome?: string; centroCustoId?: string | null }>;
+        linhasReceita?: Array<{ nome?: string; centroCustoId?: string | null }>;
+        posicoes?: Array<{ nome?: string; centroCustoId?: string | null }>;
+      };
+      const itens = [...(cfg.linhasCusto ?? []), ...(cfg.linhasReceita ?? []), ...(cfg.posicoes ?? [])];
+      const n = itens.filter((x) => x?.centroCustoId === cc.id).length;
+      if (n > 0) usos.push(`${m.nome} (${n} lançamento(s))`);
+    }
+  }
+  const rateios = (await prisma.centroCusto.findMany({ where: { companyId: company.id, id: { not: cc.id } } }))
+    .filter((outro) => JSON.stringify(outro.rateio ?? {}).includes(cc.id))
+    .map((outro) => `rateio do CSC "${outro.nome}"`);
+  const impedimentos = [...new Set([...usos, ...rateios])];
+
+  if (impedimentos.length > 0) {
+    res.status(409).json({
+      error: `"${cc.nome}" já tem dado vinculado e não pode ser excluído — desative-o para tirar da lista sem perder o histórico.`,
+      vinculos: impedimentos.slice(0, 8),
+    });
+    return;
+  }
+
+  await prisma.centroCusto.delete({ where: { id: cc.id } });
+  void registrarAuditoria({
+    userId: req.userId!, entity: "centro_custo", entityId: cc.id, field: "exclusão do centro de custo",
+    before: { nome: cc.nome, unidadeId: cc.unidadeId }, source: "companies",
+  });
+  res.json({ ok: true, excluido: cc.nome });
+});
+
 // ── PACOTES GMD (F10 — gerenciamento matricial de despesas) ─────────────────
 // Grupo de CONTAS que cruza todas as unidades, com um DONO. A dupla checagem:
 // dono do pacote × responsável da unidade — nenhum real fica sem dois olhos.
