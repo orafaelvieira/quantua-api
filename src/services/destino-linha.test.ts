@@ -99,3 +99,40 @@ describe("destino de linha não duplica valor", () => {
     expect(somaGrupo(custosDe(r))).toBeCloseTo(2000 * 0.25, 6);
   });
 });
+
+/**
+ * A linha some da DRE, mas a GRADE precisa dela (defeito de 27/07/2026: conta
+ * com de-para aparecia zerada na grade mesmo com os meses preenchidos, porque a
+ * tela lê o valor pelo id da linha na DRE — e lá ela não existe mais).
+ */
+describe("linhasCalculadas: o valor da linha existe mesmo com destino", () => {
+  it("linha com de-para tem série própria em linhasCalculadas", () => {
+    const r = calcularModelo({
+      mesInicial: "2026-01", horizonteMeses: 2,
+      blocks: modeloCom([
+        { id: "c1", nome: "Custo Operacional", modo: "pctReceita", pct: 0.3 },
+        { id: "c2", nome: "Comissão", modo: "serie", valores: { "2026-01": 10_000, "2026-02": 200_000 } },
+      ]),
+    });
+    // Sem destino a linha já aparecia na DRE; com destino é que sumia.
+    const comDestino = calcularModelo({
+      mesInicial: "2026-01", horizonteMeses: 2,
+      blocks: modeloCom([
+        { id: "c1", nome: "Custo Operacional", modo: "pctReceita", pct: 0.3 },
+        { id: "c2", nome: "Comissão", modo: "serie", valores: { "2026-01": 10_000, "2026-02": 200_000 }, destino: { conta: "Custo Operacional", sinal: "soma" } },
+      ]),
+    });
+    expect(comDestino.dre.find((l) => l.id === "c2")).toBeUndefined(); // sumiu da DRE…
+    expect(comDestino.linhasCalculadas["c2"]).toEqual({ "2026-01": 10_000, "2026-02": 200_000 }); // …mas o número existe
+    expect(r.linhasCalculadas["c2"]).toEqual(comDestino.linhasCalculadas["c2"]); // e é o mesmo com ou sem destino
+  });
+
+  it("cobre também receita e linha em % da receita", () => {
+    const r = calcularModelo({
+      mesInicial: "2026-01", horizonteMeses: 2,
+      blocks: modeloCom([{ id: "c1", nome: "Fretes", modo: "pctReceita", pct: 0.1, destino: { conta: "Custo Operacional", sinal: "soma" } }]),
+    });
+    expect(r.linhasCalculadas["lin1"]).toBeDefined();               // a receita
+    expect(r.linhasCalculadas["c1"]!["2026-01"]).toBeCloseTo(100, 6); // 10% de 1.000
+  });
+});

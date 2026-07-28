@@ -669,6 +669,11 @@ export interface ResultadoModelo {
   /** Balanço projetado (linhas mensais; anual = FIM do ano, é saldo). */
   bp: LinhaDre[];
   agregacoes: { anual: Record<string, Record<string, number>> }; // {linhaId: {"2026": total}}
+  /** Série de CADA linha de receita/custo/despesa pelo id dela, ANTES de os
+   *  destinos serem aplicados. A DRE mostra a conta canônica (uma linha com
+   *  destino soma dentro de outra e some da lista); telas que trabalham POR
+   *  LINHA — a grade orçamentária — precisam do número da linha mesmo assim. */
+  linhasCalculadas: Record<string, Serie>;
   kpis: Array<{ id: string; nome: string; valores: Serie }>;
   checks: CheckModelo[];
   erros: string[];
@@ -1514,6 +1519,10 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
       linhasReceita.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {}, destino: linha.destino });
     }
   }
+  // Série POR LINHA (antes do destino): a grade orçamentária mostra a linha do
+  // analista, que pode estar somando dentro de uma conta canônica.
+  const linhasCalculadas: Record<string, Serie> = {};
+  for (const l of linhasReceita) linhasCalculadas[l.id] = l.valores;
   // DESTINO: linha de receita direcionada SOMA/REDUZ num produto canônico
   // (não vira linha própria). A receita total é a mesma; muda quais linhas aparecem.
   linhasReceita = aplicarDestinos(linhasReceita, meses);
@@ -1654,8 +1663,12 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   // direcionada a "Despesas com Aluguel…" soma NAQUELA linha em vez de abrir
   // uma própria. Total do grupo inalterado (soma/reduz certos). A folha do
   // bloco Pessoas ainda soma na linha canônica DEPOIS (abaixo).
-  const linhasCustos = aplicarDestinos(calcularGrupo("custos"), meses);
-  const linhasDespesas = aplicarDestinos(calcularGrupo("despesas"), meses);
+  const brutasCustos = calcularGrupo("custos");
+  const brutasDespesas = calcularGrupo("despesas");
+  // Idem para custo/despesa: fotografa antes de o destino engolir a linha.
+  for (const l of [...brutasCustos, ...brutasDespesas]) linhasCalculadas[l.id] = l.valores;
+  const linhasCustos = aplicarDestinos(brutasCustos, meses);
+  const linhasDespesas = aplicarDestinos(brutasDespesas, meses);
 
   // ── B4: PESSOAS (folha por posição) ──
   const blocoFolha = input.blocks.find((b) => b.ativo && b.tipo === "folha");
@@ -2643,5 +2656,5 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   }
   if (churnId) kpis.push({ id: "churn", nome: "Churn mensal de clientes", valores: series[churnId] });
 
-  return { meses, statusMes, series, dre, fc, bp, agregacoes: { anual }, kpis, checks, erros };
+  return { meses, statusMes, series, dre, fc, bp, agregacoes: { anual }, linhasCalculadas, kpis, checks, erros };
 }

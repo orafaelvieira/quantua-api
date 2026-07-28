@@ -15,7 +15,8 @@ import { calcularModelo, validarFormula, backfillPremissasAoRecuar, BlocoModelo,
 import { calcularOrcadoRealizado, congelarOrcamento } from "../services/model-orcamento";
 import { calcularPorUnidade, decomporFolha, validarEdicaoRestrita, RateioCC, CentroCustoDim } from "../services/estrutura-dimensional";
 import { aplicarRegraGrade, mesesDoAnoNoHorizonte, refAnualDaLinha, RegraGrade } from "../services/grade-orcamentaria";
-import { calcularMatrizGmd } from "../services/gmd-matricial";
+import { calcularMatrizGmd, normContaGmd } from "../services/gmd-matricial";
+import { CENTROS_PADRAO, UNIDADE_PADRAO, contasDoEsqueleto } from "../services/esqueleto-orcamento";
 import { planejarImportacaoPlanoContas, ContaImportada } from "../services/plano-contas";
 import { lerPlanilhaDeContas, LeituraPlanilha } from "../services/planilha-contas";
 import { agregarPorPeriodo, recorteJanelaMovel } from "../services/model-safra";
@@ -2011,7 +2012,10 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
           codigo: typeof l.codigo === "string" ? l.codigo : null,
           destino: l.destino && typeof l.destino === "object" ? (l.destino as { conta: string; sinal: string }) : null,
           // O número que o motor gravou — a grade mostra a VERDADE do cálculo.
-          valores: drePorLinha.get(l.id)?.valores ?? {},
+          // Linha com DE-PARA some da DRE (soma dentro da conta canônica): o
+          // valor dela vem de linhasCalculadas, senão a grade mostrava "—" numa
+          // conta preenchida (defeito relatado em 27/07/2026).
+          valores: drePorLinha.get(l.id)?.valores ?? calc.resultado.linhasCalculadas?.[l.id] ?? {},
           // Meses digitados (mês-que-manda): a grade marca o que é FATO digitado.
           digitados: (l.valores && typeof l.valores === "object" ? l.valores : {}) as Record<string, number>,
           refMensal: refMensalPorLinha[l.id] ?? null,
@@ -2069,6 +2073,55 @@ router.post("/:id/grade/regra", async (req: AuthRequest, res: Response): Promise
     valorAnual: typeof valorAnual === "number" ? valorAnual : undefined,
   });
   res.json({ ...resultado, mesesAlvo });
+});
+
+// POST /models/:id/esqueleto — COMEÇAR DE ALGUM LUGAR (27/07/2026): cria os
+// centros de custo das áreas (na empresa, se ainda não existirem) e as contas
+// mais comuns de cada uma. Só ACRESCENTA: unidade/CC com o mesmo nome não é
+// recriado e conta repetida é ignorada (o mesmo dedupe da importação).
+router.post("/:id/esqueleto", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
+
+  const [unidades, centros] = await Promise.all([
+    prisma.unidadeNegocio.findMany({ where: { companyId: model.companyId, ativo: true } }),
+    prisma.centroCusto.findMany({ where: { companyId: model.companyId, ativo: true } }),
+  ]);
+
+  // 1) Unidade: só cria se a empresa não tiver NENHUMA (não mexe em estrutura feita).
+  let unidadeAlvo = unidades.find((u) => u.ehMatriz) ?? unidades[0] ?? null;
+  const criouUnidade = !unidadeAlvo;
+  if (!unidadeAlvo) {
+    unidadeAlvo = await prisma.unidadeNegocio.create({
+      data: { companyId: model.companyId, nome: UNIDADE_PADRAO, ehMatriz: true, ordem: 0 },
+    });
+  }
+
+  // 2) Centros de custo que faltam, na unidade alvo.
+  const jaTem = new Set(centros.map((c) => normContaGmd(c.nome)));
+  const criados: string[] = [];
+  for (const [i, cc] of CENTROS_PADRAO.entries()) {
+    if (jaTem.has(normContaGmd(cc.nome))) continue;
+    await prisma.centroCusto.create({
+      data: { companyId: model.companyId, unidadeId: unidadeAlvo.id, nome: cc.nome, ordem: centros.length + i },
+    });
+    criados.push(cc.nome);
+  }
+
+  await registrarAuditoria({
+    userId: req.userId!, entity: "financial_model", entityId: model.id, field: "esqueleto do orçamento",
+    after: { unidadeCriada: criouUnidade ? unidadeAlvo.nome : null, centrosCriados: criados },
+    source: "models",
+  });
+
+  // As CONTAS entram pelo mesmo caminho da importação — o cliente chama
+  // /plano-contas com esta lista, então dedupe, lotação e trilha são um só.
+  res.status(201).json({
+    unidade: { id: unidadeAlvo.id, nome: unidadeAlvo.nome, criada: criouUnidade },
+    centrosCriados: criados,
+    contas: contasDoEsqueleto(),
+  });
 });
 
 // POST /models/:id/plano-contas — IMPORTA O PLANO DE CONTAS DO CLIENTE
