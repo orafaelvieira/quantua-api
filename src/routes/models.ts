@@ -40,6 +40,7 @@ import { resolveSectorPremises } from "../services/sector-benchmark";
 import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version";
 import { sugerirContaCanonica } from "../services/sugerir-conta-canonica";
 import { classificarDeParaOrcamento, opcoesDeParaOrcamento } from "../services/classificar-de-para-orcamento";
+import { TIPOS_CONTA, type TipoConta, ehTipoConta, blocoDoTipo, tipoDaLinha, proximoCodigo, codificarLinhas, tipoDoTextoDaPlanilha } from "../services/classificacao-conta";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { cicloVidaModel } from "../services/ciclo-vida";
 import { TipoProduto, dataBaseDoModelo } from "../services/produto-empresa";
@@ -2056,8 +2057,12 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
   const refAnualReceita = realizado.historicoAnual?.receitaPorLinha ?? {};
   const refAnualCusto = realizado.historicoAnual?.custoPorLinha ?? {};
 
+  // LISTA ÚNICA (29/07/2026): a grade deixou de ser "custos e despesas" e passou
+  // a ser O PLANO DE CONTAS DO ORÇAMENTO — a conta reclassificada como despesa
+  // financeira ou capex continua VISÍVEL (com o tipo declarado na coluna), em
+  // vez de sumir da tela para outra aba.
   const grupos = blocks
-    .filter((b) => b.ativo && ["receitas", "custos", "despesas"].includes(b.tipo))
+    .filter((b) => b.ativo && ["receitas", "custos", "despesas", "despesasNaoOp", "receitasNaoOp", "capex"].includes(b.tipo))
     .map((b) => {
       const cfg = (b.config ?? {}) as { linhasReceita?: Array<Record<string, unknown>>; linhasCusto?: Array<Record<string, unknown>> };
       const linhas = [...(cfg.linhasReceita ?? []), ...(cfg.linhasCusto ?? [])].flatMap((l) => {
@@ -2074,6 +2079,9 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
           // Plano de contas do CLIENTE: código próprio + para onde a conta
           // rola no modelo canônico (o "de-para" que a controladoria cobra).
           codigo: typeof l.codigo === "string" ? l.codigo : null,
+          /** O que o ANALISTA declarou que a conta é (coluna Tipo da grade) —
+           *  derivado do bloco em que ela mora, que é quem manda no cálculo. */
+          tipoConta: tipoDaLinha(b.tipo, l as { codigo?: string | null; nome?: string; destino?: { conta?: string } | null }),
           destino: l.destino && typeof l.destino === "object" ? (l.destino as { conta: string; sinal: string }) : null,
           /** Receita: nó onde o valor digitado mora (a grade escreve nele). */
           nodeRaiz: typeof l.nodeRaiz === "string" ? l.nodeRaiz : null,
@@ -2083,9 +2091,12 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
           // conta preenchida (defeito relatado em 27/07/2026).
           // Linha de folha que a aba PESSOAS assumiu: a grade mostra o número
           // DE LÁ (não o zero do cálculo nem o digitado, que fica guardado).
+          // Capex e não operacionais não vivem na DRE operacional: o último
+          // fallback é o próprio digitado, senão a conta apareceria zerada.
           valores: folhaAssumida.has(l.id)
             ? (calc.resultado.folhaPorCentro?.[String(l.centroCustoId)] ?? {})
-            : drePorLinha.get(l.id)?.valores ?? calc.resultado.linhasCalculadas?.[l.id] ?? {},
+            : drePorLinha.get(l.id)?.valores ?? calc.resultado.linhasCalculadas?.[l.id]
+              ?? ((l.valores && typeof l.valores === "object" ? l.valores : {}) as Record<string, number>),
           /** "pessoas" = vem da aba Pessoas; "receitas" = tem detalhe por driver
            *  na aba Receitas; ausente = vale o que está digitado aqui. */
           origem: folhaAssumida.has(l.id) ? "pessoas" : (b.tipo === "receitas" && receitaTemDetalhe(l)) ? "receitas" : null,
@@ -2328,11 +2339,19 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   const linhasCusto = [...(cfgCusto.linhasCusto ?? [])];
   const linhasDespesa = [...(cfgDespesa.linhasCusto ?? [])];
 
+  // Blocos abaixo do EBITDA e de investimento também guardam CONTAS do
+  // orçamento (desde a coluna Tipo, 29/07/2026): elas entram no dedupe da
+  // importação, senão a conta capex voltaria duplicada como despesa.
+  const blocoNaoOp = blocks.find((b) => b.tipo === "despesasNaoOp");
+  const blocoCapexOrc = blocks.find((b) => b.tipo === "capex");
+  const linhasNaoOp = [...(((blocoNaoOp?.config ?? {}) as BlocoModelo["config"]).linhasCusto ?? [])];
+  const linhasCapex = [...(((blocoCapexOrc?.config ?? {}) as BlocoModelo["config"]).linhasCusto ?? [])];
+
   // A DECISÃO (casamento de CC/unidade, dedupe, criar × atualizar) é pura e tem
   // testes próprios — ver plano-contas.test.ts. Aqui só persistimos o plano.
   const { criar, atualizar, ignoradas, semLotacao } = planejarImportacaoPlanoContas({
     contas: contas as unknown as ContaImportada[],
-    existentes: [...linhasCusto, ...linhasDespesa].map((l) => {
+    existentes: [...linhasCusto, ...linhasDespesa, ...linhasNaoOp, ...linhasCapex].map((l) => {
       const x = l as unknown as { unidadeId?: string; centroCustoId?: string };
       return { id: l.id, nome: l.nome, codigo: l.codigo ?? null, unidadeId: x.unidadeId ?? null, centroCustoId: x.centroCustoId ?? null };
     }),
@@ -2357,25 +2376,49 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   const opcoesSugestao = opcoesDeParaOrcamento(canonicas);
   const sugeridas: string[] = [];
 
+  // CÓDIGO DA CONTA (29/07/2026): conta que entra sem código do cliente ganha o
+  // código interno da família (4.1.xxx custo, 4.2.xxx despesa) — é ele que o
+  // PROCV do analista procura na planilha. Nunca repete.
+  const codigosUsados = new Set<string>();
+  for (const b of blocks) {
+    const cfg = (b.config ?? {}) as { linhasCusto?: Array<{ codigo?: unknown }>; linhasReceita?: Array<{ codigo?: unknown }> };
+    for (const l of [...(cfg.linhasCusto ?? []), ...(cfg.linhasReceita ?? [])]) {
+      if (typeof l?.codigo === "string" && l.codigo.trim()) codigosUsados.add(l.codigo.trim());
+    }
+  }
+
+  // TIPO DECLARADO NA PLANILHA (29/07/2026): o modelo baixado leva a coluna
+  // "Tipo" — na volta, uma conta marcada como capex ou despesa financeira vai
+  // para o BLOCO certo do motor, senão o round-trip rebaixaria capex a despesa.
+  const listaDoTipo = (t: TipoConta) =>
+    t === "custo" ? linhasCusto : t === "despesaFinanceira" ? linhasNaoOp : t === "capex" ? linhasCapex : linhasDespesa;
+
   const stamp = Date.now().toString(36);
   const criadas = criar.map((c, i) => {
+    const tipoDaConta = tipoDoTextoDaPlanilha(c.tipoTexto, c.ehCusto);
     const destinoDeclarado = c.destino ? canonPorNorm.get(normContaGmd(String(c.destino))) ?? null : null;
     const sugestao = destinoDeclarado ? null : sugerirContaCanonica(c.nome, opcoesSugestao, { grupo: c.ehCusto ? "custo" : "despesa" });
-    const destino = destinoDeclarado ?? sugestao?.conta ?? null;
-    if (sugestao) sugeridas.push(`${c.nome} → ${sugestao.conta}`);
+    const destino = tipoDaConta === "capex" ? null : destinoDeclarado ?? sugestao?.conta ?? null;
+    if (sugestao && tipoDaConta !== "capex") sugeridas.push(`${c.nome} → ${sugestao.conta}`);
+    const codigo = c.codigo && !codigosUsados.has(String(c.codigo).trim())
+      ? String(c.codigo).trim()
+      : proximoCodigo(tipoDaConta, codigosUsados);
+    codigosUsados.add(codigo);
     const linha = {
       id: `pc${stamp}_${i}`,
       nome: c.nome,
-      ...(c.codigo ? { codigo: c.codigo } : {}),
+      codigo,
       modo: "serie" as const,
       valores: c.valores,
       ...(c.centroCustoId ? { centroCustoId: c.centroCustoId } : {}),
       ...(c.unidadeId ? { unidadeId: c.unidadeId } : {}),
       ...(destino ? { destino: { conta: destino, sinal: "soma" as const } } : {}),
+      // Capex sem taxa nunca depreciaria — 10% a.a. é o default do catálogo.
+      ...(tipoDaConta === "capex" ? { depreciacaoAnual: 0.1 } : {}),
     };
-    (c.ehCusto ? linhasCusto : linhasDespesa).push(linha);
+    listaDoTipo(tipoDaConta).push(linha);
     return {
-      codigo: c.codigo, nome: c.nome, tipo: c.ehCusto ? "custo" : "despesa", lotacao: c.lotacao,
+      codigo: c.codigo, nome: c.nome, tipo: tipoDaConta, lotacao: c.lotacao,
       meses: Object.keys(c.valores).length,
       total: Object.values(c.valores).reduce((s, v) => s + v, 0),
       destino, destinoSugerido: !destinoDeclarado && !!sugestao,
@@ -2387,7 +2430,8 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   // mês). Linha detalhada perde o detalhamento (o número importado é o fato);
   // linha em % vira série. É o que faz o round-trip do modelo funcionar.
   const atualizadas = atualizar.map((up) => {
-    const linha = linhasCusto.find((l) => l.id === up.id) ?? linhasDespesa.find((l) => l.id === up.id);
+    const linha = linhasCusto.find((l) => l.id === up.id) ?? linhasDespesa.find((l) => l.id === up.id)
+      ?? linhasNaoOp.find((l) => l.id === up.id) ?? linhasCapex.find((l) => l.id === up.id);
     if (!linha) return null;
     const vals = { ...(linha.valores ?? {}) } as Record<string, number>;
     for (const mes of up.janela) {
@@ -2524,6 +2568,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   // pendências visíveis. Só na gravação real (a prévia não gasta token).
   let deParaAuto: Awaited<ReturnType<typeof classificarDeParaOrcamento>> | null = null;
   {
+    // Capex fica de fora do de-para: investimento não soma em conta de DRE.
     const semDestino = [
       ...linhasCusto.filter((l) => !l.destino?.conta).map((l) => ({ id: l.id, nome: l.nome, grupo: "custo" as const })),
       ...linhasDespesa.filter((l) => !l.destino?.conta).map((l) => ({ id: l.id, nome: l.nome, grupo: "despesa" as const })),
@@ -2546,6 +2591,9 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     ...(blocoReceitas && (receitas.criadas.length > 0 || receitas.atualizadas.length > 0)
       ? [prisma.modelBlock.update({ where: { id: blocoReceitas.id }, data: { config: { ...cfgReceitas, linhasReceita } as object } })]
       : []),
+    // Contas que a planilha declarou como financeiras/capex (coluna Tipo).
+    ...(blocoNaoOp ? [prisma.modelBlock.update({ where: { id: blocoNaoOp.id }, data: { config: { ...(blocoNaoOp.config as BlocoModelo["config"]), linhasCusto: linhasNaoOp } as object } })] : []),
+    ...(blocoCapexOrc ? [prisma.modelBlock.update({ where: { id: blocoCapexOrc.id }, data: { config: { ...(blocoCapexOrc.config as BlocoModelo["config"]), linhasCusto: linhasCapex } as object } })] : []),
   ]);
   await registrarAuditoria({
     userId: req.userId!, entity: "financial_model", entityId: model.id, field: "plano de contas importado",
@@ -2585,6 +2633,248 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       horizonte: { de: model.mesInicial, meses: model.horizonteMeses },
     } : { linhaCabecalho: null, cabecalho: [], meses: janela, totaisIgnorados: [], mesesFora, horizonte: { de: model.mesInicial, meses: model.horizonteMeses } },
     resultado: calc?.resultado ?? null,
+  });
+});
+
+// ── CLASSIFICAÇÃO DA CONTA (29/07/2026) ─────────────────────────────────────
+// "como não sabemos se é custo ou despesa, vamos deixar sem esta distinção na
+// relação": a grade virou lista única e QUEM declara a natureza é o analista,
+// numa coluna. O tipo não é rótulo — ele diz em que BLOCO do motor a linha
+// mora, e é o bloco que decide onde o valor entra (acima do Lucro Bruto,
+// abaixo do EBITDA, ou fora do resultado no caso do capex).
+
+/** Linha de custo com os campos que a movimentação precisa preservar. */
+type LinhaQualquer = Record<string, unknown> & { id: string; nome: string };
+
+/** Série de uma linha, seja ela de custo (valores) ou de receita (nó raiz). */
+function serieDaLinha(l: LinhaQualquer): Record<string, number> {
+  if (Array.isArray(l.nodes)) return valoresDoNoRaiz(l);
+  const v = l.valores;
+  return v && typeof v === "object" ? (v as Record<string, number>) : {};
+}
+
+/** Converte a linha para o FORMATO do bloco de destino. Receita mora em árvore
+ *  de drivers (nodes); custo/despesa/capex moram em série (valores). Cruzar a
+ *  fronteira preserva o número — o que se perde (drivers) volta avisado. */
+function converterLinhaParaBloco(l: LinhaQualquer, blocoAlvo: string): { linha: LinhaQualquer; perdeuDrivers: boolean } {
+  const viraReceita = blocoAlvo === "receitas";
+  const jaEhReceita = Array.isArray(l.nodes);
+  if (viraReceita === jaEhReceita) return { linha: l, perdeuDrivers: false };
+
+  const valores = serieDaLinha(l);
+  if (viraReceita) {
+    const raiz = `${l.id}_receita`;
+    const { valores: _v, modo: _m, pct: _p, detalhes: _d, ...resto } = l as Record<string, unknown>;
+    return {
+      linha: {
+        ...resto, id: l.id, nome: l.nome, template: "generico", nodeRaiz: raiz,
+        nodes: [{ id: raiz, tipo: "serie", nome: `Memória de Cálculo — ${l.nome}`, unidade: "R$", params: { modoPreenchimento: "mes", valores, valorMensal: 0, crescimentoAnual: 0 } }],
+      } as LinhaQualquer,
+      perdeuDrivers: false,
+    };
+  }
+  const perdeuDrivers = receitaTemDetalhe(l);
+  const { nodes: _n, nodeRaiz: _r, template: _t, skuDetalhe: _s, ...resto } = l as Record<string, unknown>;
+  return {
+    linha: { ...resto, id: l.id, nome: l.nome, modo: "serie", valores } as LinhaQualquer,
+    perdeuDrivers,
+  };
+}
+
+/** Acha (bloco, lista, índice) da linha em QUALQUER bloco do modelo. */
+function acharLinha(blocks: Array<{ id: string; tipo: string; config: unknown }>, linhaId: string) {
+  for (const b of blocks) {
+    const cfg = (b.config ?? {}) as { linhasCusto?: LinhaQualquer[]; linhasReceita?: LinhaQualquer[] };
+    for (const campo of ["linhasCusto", "linhasReceita"] as const) {
+      const i = (cfg[campo] ?? []).findIndex((l) => l?.id === linhaId);
+      if (i >= 0) return { bloco: b, campo, indice: i, linha: cfg[campo]![i]! };
+    }
+  }
+  return null;
+}
+
+// PUT /models/:id/linhas/:linhaId/classificacao — body { tipo }
+// MOVE a conta para o bloco do tipo escolhido (criando o bloco se o modelo
+// ainda não tiver), convertendo o formato quando cruza a fronteira receita ×
+// gasto. Capex ganha taxa de depreciação padrão (o analista ajusta na aba
+// Investimentos). Código do sistema é reemitido na família nova; código do
+// cliente nunca é mexido.
+router.put("/:id/linhas/:linhaId/classificacao", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
+
+  const tipo = req.body?.tipo;
+  if (!ehTipoConta(tipo)) {
+    res.status(400).json({ error: `tipo inválido — use um de: ${TIPOS_CONTA.map((t) => t.tipo).join(", ")}` });
+    return;
+  }
+  const blocks = await prisma.modelBlock.findMany({ where: { modelId: model.id } });
+  const achado = acharLinha(blocks, req.params.linhaId as string);
+  if (!achado) { res.status(404).json({ error: "Conta não encontrada neste modelo" }); return; }
+
+  const tipoAtual = tipoDaLinha(achado.bloco.tipo, achado.linha as { codigo?: string | null; nome?: string });
+  const blocoAlvoTipo = blocoDoTipo(tipo);
+
+  // Mesmo bloco (financeira × outras receitas dividem receitasNaoOp): só o
+  // código muda de família — nada a mover.
+  const mesmoBloco = achado.bloco.tipo === blocoAlvoTipo;
+  if (mesmoBloco && tipoAtual === tipo) { res.json({ ok: true, semMudanca: true }); return; }
+
+  let blocoAlvo = blocks.find((b) => b.tipo === blocoAlvoTipo);
+  if (!blocoAlvo) {
+    // Modelo antigo pode não ter o bloco (não-op nasce vazio desde julho/26).
+    blocoAlvo = await prisma.modelBlock.create({
+      data: {
+        modelId: model.id, tipo: blocoAlvoTipo,
+        nome: blocoAlvoTipo === "despesasNaoOp" ? "Despesas não operacionais"
+          : blocoAlvoTipo === "receitasNaoOp" ? "Receitas não operacionais"
+            : blocoAlvoTipo === "capex" ? "Investimentos (Capex)" : blocoAlvoTipo,
+        ordem: (blocks.reduce((m, b) => Math.max(m, b.ordem), 0) ?? 0) + 1,
+        config: {} as object,
+      },
+    });
+  }
+
+  const { linha: convertida, perdeuDrivers } = converterLinhaParaBloco(achado.linha, blocoAlvo.tipo);
+  const nova: LinhaQualquer = { ...convertida };
+
+  // CAPEX precisa de taxa para depreciar; sem ela a compra vira ativo que nunca
+  // desce para o resultado. 10% a.a. é o default do catálogo (ajustável).
+  if (tipo === "capex" && typeof nova.depreciacaoAnual !== "number") nova.depreciacaoAnual = 0.1;
+  if (tipo !== "capex") { delete nova.depreciacaoAnual; delete nova.carenciaMeses; delete nova.tipoAtivo; }
+
+  // Código: só reemite o que o SISTEMA gerou (padrão X.Y.NNN de outra família).
+  const codigoAtual = typeof nova.codigo === "string" ? nova.codigo.trim() : "";
+  const prefixoNovo = TIPOS_CONTA.find((t) => t.tipo === tipo)!.prefixo;
+  const geradoPeloSistema = /^\d\.\d\.\d{3}$/.test(codigoAtual);
+  if (!codigoAtual || (geradoPeloSistema && !codigoAtual.startsWith(`${prefixoNovo}.`))) {
+    const usados = new Set<string>();
+    for (const b of blocks) {
+      const cfg = (b.config ?? {}) as { linhasCusto?: LinhaQualquer[]; linhasReceita?: LinhaQualquer[] };
+      for (const l of [...(cfg.linhasCusto ?? []), ...(cfg.linhasReceita ?? [])]) {
+        if (l.id !== nova.id && typeof l.codigo === "string" && l.codigo.trim()) usados.add(l.codigo.trim());
+      }
+    }
+    nova.codigo = proximoCodigo(tipo, usados);
+  }
+
+  // DESTINO (grupo de contas): o de-para agrupa DENTRO do bloco, então ele
+  // precisa acompanhar a mudança de natureza. Capex não é conta de DRE (perde o
+  // de-para); virando financeira/não operacional, um de-para operacional
+  // ("Despesas com Veículos") desenharia essa conta ABAIXO do EBITDA — troca-se
+  // pela canônica de mesmo lado, quando o modelo da empresa tiver uma.
+  if (tipo === "capex") {
+    delete nova.destino;
+  } else if (blocoAlvo.tipo === "custos" || blocoAlvo.tipo === "despesas") {
+    // Voltando ao resultado sem de-para (o caminho de quem passou por capex, que
+    // limpa o campo): o sistema propõe de novo em vez de deixar a conta órfã.
+    if (!(nova.destino as { conta?: string } | undefined)?.conta) {
+      const dre = await loadActiveDREModel(model.companyId);
+      const canon = dre.lines.filter((l) => !l.subtotal).map((l) => l.conta);
+      const s = sugerirContaCanonica(String(nova.nome), opcoesDeParaOrcamento(canon), { grupo: tipo === "custo" ? "custo" : "despesa" });
+      if (s) nova.destino = { conta: s.conta, sinal: "soma" };
+    }
+  } else if (blocoAlvo.tipo === "despesasNaoOp" || blocoAlvo.tipo === "receitasNaoOp") {
+    const dre = await loadActiveDREModel(model.companyId);
+    const idxEbitda = dre.lines.findIndex((l) => l.conta === "EBITDA");
+    const abaixo = dre.lines
+      .map((l, i) => ({ conta: l.conta, i, subtotal: l.subtotal }))
+      .filter((l) => !l.subtotal && idxEbitda >= 0 && l.i > idxEbitda)
+      .map((l) => l.conta);
+    const destinoAtual = (nova.destino as { conta?: string } | undefined)?.conta;
+    if (!destinoAtual || !abaixo.includes(destinoAtual)) {
+      const preferida = tipo === "despesaFinanceira"
+        ? abaixo.find((c) => /despesas? financeir/i.test(c))
+        : tipo === "receitaFinanceira"
+          ? abaixo.find((c) => /receitas? financeir/i.test(c))
+          : abaixo.find((c) => /outras receitas n[aã]o operacionais/i.test(c));
+      if (preferida) nova.destino = { conta: preferida, sinal: "soma" };
+      else delete nova.destino;
+    }
+  }
+
+  const escritas: Array<ReturnType<typeof prisma.modelBlock.update>> = [];
+  // 1) tira do bloco de origem
+  {
+    const cfg = JSON.parse(JSON.stringify(achado.bloco.config ?? {})) as { linhasCusto?: LinhaQualquer[]; linhasReceita?: LinhaQualquer[] };
+    cfg[achado.campo] = (cfg[achado.campo] ?? []).filter((l) => l.id !== nova.id);
+    escritas.push(prisma.modelBlock.update({ where: { id: achado.bloco.id }, data: { config: cfg as object } }));
+  }
+  // 2) põe no bloco alvo (receita mora em linhasReceita; o resto em linhasCusto)
+  {
+    const campoAlvo = blocoAlvo.tipo === "receitas" ? "linhasReceita" : "linhasCusto";
+    const base = achado.bloco.id === blocoAlvo.id ? achado.bloco.config : blocoAlvo.config;
+    const cfg = JSON.parse(JSON.stringify(base ?? {})) as { linhasCusto?: LinhaQualquer[]; linhasReceita?: LinhaQualquer[] };
+    // Origem e destino iguais (troca só de família dentro do não-op): remove
+    // antes de reinserir, senão a conta duplicaria.
+    cfg.linhasCusto = (cfg.linhasCusto ?? []).filter((l) => l.id !== nova.id);
+    cfg.linhasReceita = (cfg.linhasReceita ?? []).filter((l) => l.id !== nova.id);
+    (cfg[campoAlvo] ??= []).push(nova);
+    escritas.push(prisma.modelBlock.update({ where: { id: blocoAlvo.id }, data: { config: cfg as object } }));
+  }
+  await prisma.$transaction(achado.bloco.id === blocoAlvo.id ? [escritas[1]!] : escritas);
+
+  await registrarAuditoria({
+    userId: req.userId!, entity: "financial_model", entityId: model.id, field: "classificação da conta",
+    before: { conta: nova.nome, tipo: tipoAtual, bloco: achado.bloco.tipo },
+    after: { conta: nova.nome, tipo, bloco: blocoAlvo.tipo, codigo: nova.codigo, ...(perdeuDrivers ? { aviso: "detalhamento por driver perdido na conversão" } : {}) },
+    source: "models",
+  });
+
+  const calc = await calcularEGravar(model.id);
+  res.json({
+    ok: true, tipo, codigo: nova.codigo ?? null, bloco: blocoAlvo.tipo,
+    perdeuDrivers,
+    resultado: calc?.resultado ?? null,
+  });
+});
+
+// POST /models/:id/codificar-contas — dá CÓDIGO a quem não tem e desfaz
+// duplicatas (código repetido quebra o PROCV, que é o motivo de o campo
+// existir). Não toca em código que o cliente trouxe do plano dele.
+router.post("/:id/codificar-contas", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
+
+  const blocks = await prisma.modelBlock.findMany({ where: { modelId: model.id } });
+  const alvo = blocks.filter((b) => ["receitas", "custos", "despesas", "despesasNaoOp", "receitasNaoOp", "capex"].includes(b.tipo));
+  const paraCodificar: Array<{ id: string; codigo?: string | null; tipo: TipoConta }> = [];
+  for (const b of alvo) {
+    const cfg = (b.config ?? {}) as { linhasCusto?: LinhaQualquer[]; linhasReceita?: LinhaQualquer[] };
+    for (const l of [...(cfg.linhasReceita ?? []), ...(cfg.linhasCusto ?? [])]) {
+      if (!l?.id || typeof l.nome !== "string") continue;
+      paraCodificar.push({ id: l.id, codigo: typeof l.codigo === "string" ? l.codigo : null, tipo: tipoDaLinha(b.tipo, l as { codigo?: string | null; nome?: string }) });
+    }
+  }
+  const mudancas = codificarLinhas(paraCodificar);
+  if (mudancas.length === 0) { res.json({ ok: true, atribuidos: 0, corrigidos: 0, mudancas: [] }); return; }
+
+  const porId = new Map(mudancas.map((m) => [m.id, m.codigo]));
+  const escritas = [];
+  for (const b of alvo) {
+    const cfg = JSON.parse(JSON.stringify(b.config ?? {})) as { linhasCusto?: LinhaQualquer[]; linhasReceita?: LinhaQualquer[] };
+    let mexeu = false;
+    for (const campo of ["linhasCusto", "linhasReceita"] as const) {
+      for (const l of cfg[campo] ?? []) {
+        const novo = porId.get(String(l?.id));
+        if (novo) { l.codigo = novo; mexeu = true; }
+      }
+    }
+    if (mexeu) escritas.push(prisma.modelBlock.update({ where: { id: b.id }, data: { config: cfg as object } }));
+  }
+  await prisma.$transaction(escritas);
+  await registrarAuditoria({
+    userId: req.userId!, entity: "financial_model", entityId: model.id, field: "códigos das contas",
+    after: { atribuidos: mudancas.filter((m) => m.motivo === "vazio").length, corrigidos: mudancas.filter((m) => m.motivo === "duplicado").length },
+    source: "models",
+  });
+  res.json({
+    ok: true,
+    atribuidos: mudancas.filter((m) => m.motivo === "vazio").length,
+    corrigidos: mudancas.filter((m) => m.motivo === "duplicado").length,
+    mudancas,
   });
 });
 

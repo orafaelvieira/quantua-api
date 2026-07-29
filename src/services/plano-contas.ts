@@ -46,6 +46,9 @@ export interface ContaPlanejada {
   nome: string;
   codigo: string | null;
   ehCusto: boolean;
+  /** Texto CRU da coluna "Tipo" — a rota traduz em custo/despesa/financeira/
+   *  capex (o modelo baixado leva o rótulo em português na volta). */
+  tipoTexto: string | null;
   unidadeId: string | null;
   centroCustoId: string | null;
   destino: string | null;
@@ -159,6 +162,7 @@ export function planejarImportacaoPlanoContas(entrada: {
     criar.push({
       nome, codigo,
       ehCusto: (c.tipo ?? "").toLowerCase().startsWith("cust"),
+      tipoTexto: (c.tipo ?? "").trim() || null,
       unidadeId, centroCustoId, destino, valores,
       lotacao: centroCustoId ? nomeDe(centroCustoId, centros) : unidadeId ? nomeDe(unidadeId, unidades) : "não atribuído",
     });
