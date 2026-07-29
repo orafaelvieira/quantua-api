@@ -2193,6 +2193,11 @@ router.post("/:id/esqueleto", async (req: AuthRequest, res: Response): Promise<v
       .map((x) => `${x.padrao} → ${x.naEmpresa}`),
     areasSemCentroDeCusto: semCentro,
     contas: contasDoEsqueleto(nomesExistentes),
+    // RECEITAS DO PADRÃO (29/07/2026): o orçamento passou a nascer vazio, então
+    // as quatro linhas de receita voltaram para CÁ — quem escolhe tê-las é o
+    // analista, ao pedir a estrutura padrão. Nomes genéricos e renomeáveis: a
+    // empresa costuma ter algumas fontes (serviços, insumos, grãos…).
+    receitas: ["Receita 1", "Receita 2", "Receita 3", "Receita 4"],
   });
 });
 
@@ -2342,7 +2347,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       janela = [...new Set([...janela, ...li.meses])];
       abasLidas.push({ aba: nomeAba, contas: li.contas.length, linhaCabecalho: li.linhaCabecalho });
     }
-    if (contas.length === 0 && contasReceita.length === 0 && memoriaMontada.length === 0) {
+    if (contas.length === 0 && contasReceita.length === 0 && memoriaMontada.length === 0 && !Array.isArray(req.body?.receitas)) {
       res.status(400).json({ error: "Nenhuma aba da planilha pôde ser importada.", abas: abasLidas });
       return;
     }
@@ -2361,7 +2366,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     janela = leitura.meses;
   }
   if (!Array.isArray(contas)) contas = [];
-  if (contas.length === 0 && contasReceita.length === 0 && memoriaMontada.length === 0) { res.status(400).json({ error: "Envie ao menos uma conta" }); return; }
+  if (contas.length === 0 && contasReceita.length === 0 && memoriaMontada.length === 0 && !Array.isArray(req.body?.receitas)) { res.status(400).json({ error: "Envie ao menos uma conta" }); return; }
   if (contas.length > 1000) { res.status(400).json({ error: "Máximo de 1.000 contas por importação" }); return; }
 
   const cfgCusto = blocoCusto.config as BlocoModelo["config"];
@@ -2497,6 +2502,28 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     memoria: [] as Array<{ nome: string; formula: string; variaveis: string[] }>,
     avisos: [] as string[],
   };
+
+  // RECEITAS PEDIDAS PELO CATÁLOGO (29/07/2026): o botão "Utilizar estrutura
+  // padrão" manda os nomes ("Receita 1..4") junto das contas. Nascem zeradas e
+  // só se ainda não existir linha com aquele nome.
+  if (Array.isArray(req.body?.receitas) && blocoReceitas) {
+    const stampR = `pad${Date.now().toString(36)}`;
+    let seqR = 0;
+    for (const bruto of (req.body.receitas as unknown[]).slice(0, 20)) {
+      const nome = String(bruto ?? "").trim().slice(0, 120);
+      if (!nome) continue;
+      if (linhasReceita.some((l) => normContaGmd(l.nome) === normContaGmd(nome))) { receitas.ignoradas.push(`${nome} — já existia`); continue; }
+      const linhaId = `${stampR}_${seqR++}`;
+      linhasReceita.push({
+        id: linhaId, nome, template: "generico", nodeRaiz: `${linhaId}_receita`,
+        nodes: [{
+          id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${nome}`, unidade: "R$",
+          params: { modoPreenchimento: "mes", valores: {}, valorMensal: 0, crescimentoAnual: 0 },
+        }],
+      } as unknown as (typeof linhasReceita)[number]);
+      receitas.criadas.push({ nome, meses: 0, total: 0 });
+    }
+  }
 
   // MEMÓRIA DE CÁLCULO: entra ANTES das receitas simples — a linha de mesmo
   // nome é SUBSTITUÍDA pela árvore (reimportar a planilha atualiza a conta).
