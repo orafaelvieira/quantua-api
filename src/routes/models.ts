@@ -538,28 +538,11 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       memoriaAbertura.push(`"${ab.conta}": base ${vUlt.toFixed(2)} (${ultimoP ?? "—"}), crescimento ${(cresc * 100).toFixed(1)}% (CAGR ${primeiroP ?? "—"}→${ultimoP ?? "—"}) em FADE até ${(crescTerminal * 100).toFixed(1)}% a.a. (setor) no último ano`);
     });
   } else if (objetivo === "orcamento") {
-    // ORÇAMENTO (28/07/2026): abre com QUATRO linhas de receita prontas para
-    // digitar (a empresa costuma ter algumas fontes: serviços, insumos, grãos…).
-    // Nascem SIMPLES — um nó série, valor digitado direto no Orçamento — e cada
-    // uma pode virar detalhada por driver (qtd × preço, clientes × ticket) na
-    // aba Receitas quando a empresa tiver essa maturidade. Renomear é livre.
-    // Só a Receita 1 herda a âncora, e SÓ quando existe receita no histórico.
-    // Sem histórico o orçamento nasce ZERADO: o template genérico tem um
-    // default de 100 mil/mês que inventaria receita que ninguém orçou —
-    // o usuário viu 100.000 crescendo numa empresa nova (28/07/2026).
-    const temAncoraDeReceita = seed.receitaMensal > 0;
-    for (let i = 1; i <= 4; i++) {
-      const herda = i === 1 && temAncoraDeReceita;
-      const linha = montarLinhaReceita("generico", `lin${i}`, `Receita ${i}`, {
-        receitaMensal: herda ? seed.receitaMensal : 0,
-        crescimentoAnual: herda ? seed.crescimentoAnual : 0,
-      });
-      if (!herda) {
-        const raiz = linha.nodes.find((n) => n.id === linha.nodeRaiz);
-        if (raiz) raiz.params = { ...raiz.params, valorMensal: 0, crescimentoAnual: 0 };
-      }
-      linhasReceita.push(linha);
-    }
+    // ORÇAMENTO NASCE 100% VAZIO (29/07/2026, decisão do usuário): nem receita,
+    // nem custo, nem despesa. As quatro linhas "Receita 1..4" que existiam aqui
+    // eram estrutura que o sistema escolhia pelo analista — e o pedido da casa é
+    // o oposto: quem desenha o orçamento é ele. A grade abre com os caminhos à
+    // mão (usar a estrutura padrão · baixar o modelo · importar preenchido).
   } else {
     linhasReceita.push(montarLinhaReceita(templateReceita === "historico" ? "generico" : (templateReceita || "generico"), "lin1", "Receita principal", {
       receitaMensal: seed.receitaMensal,
