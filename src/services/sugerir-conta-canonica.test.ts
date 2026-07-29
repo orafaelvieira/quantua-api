@@ -75,6 +75,48 @@ describe("sugerirContaCanonica", () => {
     expect(a).toEqual(b);
   });
 
+  // Os casos que o usuário flagrou no modelo baixado (28/07/2026): contas do
+  // catálogo padrão sem de-para ou com de-para ERRADO. Canônicas do DRE real.
+  const DRE_REAL = [
+    "Custo Operacional", "Custos com Pessoas (MOD)", "Despesas com Pessoas",
+    "Despesas Gerais e Administrativas", "Despesas com Aluguel, Condomínio e IPTU",
+    "Despesas com Energia, Água, Telefone e Internet", "Despesas com Sistemas e Softwares",
+    "Despesas com Limpeza, Manutenção e Reparos", "Despesas com Viagens e Estadias",
+    "Despesas com Veículos", "Despesas com Seguros", "Despesas com Fretes",
+    "Despesas Taxas, Tributos e Contribuições", "Despesas com Terceiros",
+    "Despesas com Vendas", "Despesas com Marketing", "Despesas com P&D",
+    "Despesas Financeiras",
+  ];
+
+  it("'Despesas com cobrança' NUNCA cai em P&D pelo {despesas} — vai para Financeiras", () => {
+    const s = sugerirContaCanonica("Despesas com cobrança", DRE_REAL);
+    expect(s?.conta).not.toBe("Despesas com P&D");
+    expect(s?.conta).toBe("Despesas Financeiras");
+  });
+
+  it("contas do Financeiro que ficavam sem de-para vão para Despesas Financeiras", () => {
+    expect(sugerirContaCanonica("Tarifas bancárias", DRE_REAL)?.conta).toBe("Despesas Financeiras");
+    expect(sugerirContaCanonica("Taxas de cartão e meios de pagamento", DRE_REAL)?.conta).toBe("Despesas Financeiras");
+  });
+
+  it("brindes, agência de conteúdo e medicina do trabalho ganham de-para", () => {
+    expect(sugerirContaCanonica("Brindes e amostras", DRE_REAL)?.conta).toBe("Despesas com Marketing");
+    expect(sugerirContaCanonica("Agência e produção de conteúdo", DRE_REAL)?.conta).toBe("Despesas com Marketing");
+    expect(sugerirContaCanonica("Medicina e segurança do trabalho", DRE_REAL)?.conta).toBe("Despesas com Pessoas");
+  });
+
+  it("agregados genéricos dos modelos antigos resolvem por regra, não por IA", () => {
+    expect(sugerirContaCanonica("Custos sobre a receita", DRE_REAL, { grupo: "custo" })?.conta).toBe("Custo Operacional");
+    expect(sugerirContaCanonica("Despesas operacionais", DRE_REAL)?.conta).toBe("Despesas Gerais e Administrativas");
+  });
+
+  it("comissão sem canônica própria cai em Despesas com Vendas; veículos vence manutenção", () => {
+    expect(sugerirContaCanonica("Comissões sobre vendas", DRE_REAL)?.conta).toBe("Despesas com Vendas");
+    // "Veículos (combustível e manutenção)" é frota — a regra de manutenção não
+    // pode atropelar (a ordem das regras decide).
+    expect(sugerirContaCanonica("Veículos (combustível e manutenção)", DRE_REAL)?.conta).toBe("Despesas com Veículos");
+  });
+
   it("ignora acento e caixa", () => {
     const a = sugerirContaCanonica("ENERGIA ELETRICA", CANONICAS);
     const b = sugerirContaCanonica("energia elétrica", CANONICAS);

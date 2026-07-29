@@ -22,8 +22,11 @@ function norm(s: string): string {
     .toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
-/** Palavras que não ajudam a distinguir conta (ruído em quase todo nome). */
-const VAZIAS = new Set(["de", "da", "do", "das", "dos", "e", "com", "sobre", "para", "em", "a", "o", "as", "os", "the", "gerais", "geral", "diversos", "diversas", "outros", "outras"]);
+/** Palavras que não ajudam a distinguir conta (ruído em quase todo nome).
+ *  "despesa(s)"/"custo(s)" entram aqui (28/07/2026) porque estão em QUASE TODA
+ *  canônica: sem isso, "Despesas com cobrança" casava "Despesas com P&D" só
+ *  pelo {despesas} — o mesmo bug já corrigido no account-mapper. */
+const VAZIAS = new Set(["de", "da", "do", "das", "dos", "e", "com", "sobre", "para", "em", "a", "o", "as", "os", "the", "gerais", "geral", "diversos", "diversas", "outros", "outras", "despesa", "despesas", "custo", "custos"]);
 
 const tokens = (s: string) => norm(s).split(" ").filter((t) => t.length > 2 && !VAZIAS.has(t));
 
@@ -38,19 +41,31 @@ const VOCABULARIO: Array<{ gatilhos: RegExp; pista: RegExp; porque: string }> = 
   { gatilhos: /\b(aluguel|condominio|iptu|locacao)\w*/, pista: /aluguel|condominio|iptu|ocupac/, porque: "ocupação" },
   { gatilhos: /\b(energia|eletric|agua|esgoto|saneament|telefon|internet|link|utilidade)\w*/, pista: /utilidade|energia|agua|telefon/, porque: "utilidades" },
   { gatilhos: /\b(frete|transporte|logistic|entrega|carreto)\w*/, pista: /frete|transporte|logistic/, porque: "frete e logística" },
-  { gatilhos: /\b(comissa|comission)\w*/, pista: /comiss/, porque: "comissão de vendas" },
+  // Comissão sem canônica própria cai em "Despesas com Vendas" — é onde ela
+  // mora no DRE_TEMPLATE (flagrado pelo usuário: ficava sem de-para).
+  { gatilhos: /\b(comissa|comission)\w*/, pista: /comiss|com vendas/, porque: "comissão de vendas" },
   { gatilhos: /\b(viagem|viagens|hospedag|passage|diaria)\w*/, pista: /viage|deslocament/, porque: "viagens" },
-  { gatilhos: /\b(marketing|publicidade|propaganda|midia|patrocin|feira|evento)\w*/, pista: /marketing|publicidade|propaganda|comercial/, porque: "marketing" },
+  { gatilhos: /\b(marketing|publicidade|propaganda|midia|patrocin|feira|evento|brinde|amostra|agencia|conteudo|influenc)\w*/, pista: /marketing|publicidade|propaganda|comercial/, porque: "marketing" },
   { gatilhos: /\b(software|licenca|sistema|nuvem|cloud|ti|tecnologia|informatica)\w*/, pista: /software|licenc|tecnolog|informatic|ti\b/, porque: "tecnologia" },
   { gatilhos: /\b(honorari|advocat|juridic|contabil|auditoria|consultor|assessor)\w*/, pista: /honorari|servico de terceiro|terceiro|juridic|contabil/, porque: "serviços profissionais" },
   { gatilhos: /\b(seguro|apolice)\w*/, pista: /seguro/, porque: "seguros" },
-  { gatilhos: /\b(manutenc|reparo|conserto|peca)\w*/, pista: /manutenc|reparo/, porque: "manutenção" },
+  // Veículos ANTES de manutenção: "Veículos (combustível e manutenção)" é conta
+  // de frota — caía em "Limpeza, Manutenção e Reparos" porque manutenção vinha
+  // primeiro e a ordem das regras decide.
   { gatilhos: /\b(combustivel|veiculo|frota|pedagio)\w*/, pista: /veiculo|frota|combustivel/, porque: "frota" },
+  { gatilhos: /\b(manutenc|reparo|conserto|peca)\w*/, pista: /manutenc|reparo/, porque: "manutenção" },
   { gatilhos: /\b(materia prima|insumo|mercadoria|cmv|custo da mercadoria|materiais?)\w*/, pista: /custo operacional|mercadoria|materia prima|cmv|insumo/, porque: "consumo de material" },
+  // Agregados genéricos dos modelos antigos: melhor a regra do que deixar a IA
+  // filosofar ("Custos sobre a receita" virou Impostos s/ Faturamento num teste).
+  { gatilhos: /\bcustos? sobre (a )?receita\b|\bcusto das? (vendas|mercadorias)\b|\bcpv\b|\bcsv\b/, pista: /custo operacional/, porque: "custo da operação" },
+  { gatilhos: /\bdespesas? (operacionais|gerais|administrativas)\b/, pista: /gerais e administrativ/, porque: "despesa geral/administrativa" },
   { gatilhos: /\b(deprecia|amortiza)\w*/, pista: /deprecia|amortiza/, porque: "depreciação/amortização" },
-  { gatilhos: /\b(juros|financeir|tarifa bancaria|iof|banco)\w*/, pista: /financeir|juros|tarifa/, porque: "despesa financeira" },
+  // "tarifas? bancaria": o singular puro não casava "Tarifas bancárias" (o \w*
+  // do grupo não cobre o S no meio) — era um dos sem-de-para do usuário.
+  { gatilhos: /\b(juros|financeir|tarifas? bancaria|iof|banco|cobranca|taxas? de cartao|meios de pagamento|adquirencia|antecipacao de recebiv)\w*/, pista: /financeir|juros|tarifa/, porque: "despesa financeira" },
   { gatilhos: /\b(imposto|tributo|icms|iss|pis|cofins|simples)\w*/, pista: /imposto|tributo/, porque: "tributos" },
-  { gatilhos: /\b(treinament|capacitac|curso|recrutament|selecao)\w*/, pista: /treinament|pessoa|recursos humanos/, porque: "desenvolvimento de pessoas" },
+  // SST/ASO são siglas — palavra inteira, senão casariam dentro de outras.
+  { gatilhos: /\b(treinament|capacitac|curso|recrutament|selecao|medicina|seguranca do trabalho|ocupacional)\w*|\bsst\b|\baso\b/, pista: /treinament|pessoa|recursos humanos/, porque: "desenvolvimento de pessoas" },
   { gatilhos: /\b(escritorio|copa|limpeza|papelaria|consumo)\w*/, pista: /material|escritorio|administrativ/, porque: "consumo administrativo" },
 ];
 

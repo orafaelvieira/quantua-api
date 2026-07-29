@@ -27,48 +27,54 @@ export interface CentroPadrao { nome: string; contas: ContaPadrao[] }
 export const CONTA_FOLHA = "Salários e encargos";
 const FOLHA: ContaPadrao = { nome: CONTA_FOLHA, tipo: "despesa", destino: "Despesas com Pessoas" };
 
+// TODA conta do catálogo tem `destino` (28/07/2026): o catálogo é NOSSO, então o
+// de-para dele é decisão de produto, não adivinhação — o usuário flagrou contas
+// padrão nascendo sem canônica ("Tarifas bancárias") ou com canônica errada
+// ("Despesas com cobrança" caiu em P&D pela heurística). Os nomes são os do
+// DRE_TEMPLATE; se o modelo da empresa não tiver a conta, o importador descarta
+// o destino e cai na sugestão (nunca grava de-para para conta que não existe).
 export const CENTROS_PADRAO: CentroPadrao[] = [
   {
     nome: "Comercial",
     contas: [
       FOLHA,
-      { nome: "Comissões sobre vendas", tipo: "despesa" },
-      { nome: "Viagens e hospedagem", tipo: "despesa" },
-      { nome: "Fretes sobre vendas", tipo: "despesa" },
-      { nome: "Brindes e amostras", tipo: "despesa" },
+      { nome: "Comissões sobre vendas", tipo: "despesa", destino: "Despesas com Vendas" },
+      { nome: "Viagens e hospedagem", tipo: "despesa", destino: "Despesas com Viagens e Estadias" },
+      { nome: "Fretes sobre vendas", tipo: "despesa", destino: "Despesas com Fretes" },
+      { nome: "Brindes e amostras", tipo: "despesa", destino: "Despesas com Marketing" },
     ],
   },
   {
     nome: "Marketing",
     contas: [
       FOLHA,
-      { nome: "Publicidade e propaganda", tipo: "despesa" },
-      { nome: "Marketing digital (mídia paga)", tipo: "despesa" },
-      { nome: "Agência e produção de conteúdo", tipo: "despesa" },
-      { nome: "Feiras e eventos", tipo: "despesa" },
+      { nome: "Publicidade e propaganda", tipo: "despesa", destino: "Despesas com Marketing" },
+      { nome: "Marketing digital (mídia paga)", tipo: "despesa", destino: "Despesas com Marketing" },
+      { nome: "Agência e produção de conteúdo", tipo: "despesa", destino: "Despesas com Marketing" },
+      { nome: "Feiras e eventos", tipo: "despesa", destino: "Despesas com Marketing" },
     ],
   },
   {
     nome: "Administrativo",
     contas: [
       FOLHA,
-      { nome: "Aluguel, condomínio e IPTU", tipo: "despesa" },
-      { nome: "Energia elétrica", tipo: "despesa" },
-      { nome: "Água e esgoto", tipo: "despesa" },
-      { nome: "Telefonia e internet", tipo: "despesa" },
-      { nome: "Material de escritório e copa", tipo: "despesa" },
-      { nome: "Seguros", tipo: "despesa" },
-      { nome: "Honorários contábeis e jurídicos", tipo: "despesa" },
-      { nome: "Veículos (combustível e manutenção)", tipo: "despesa" },
+      { nome: "Aluguel, condomínio e IPTU", tipo: "despesa", destino: "Despesas com Aluguel, Condomínio e IPTU" },
+      { nome: "Energia elétrica", tipo: "despesa", destino: "Despesas com Energia, Água, Telefone e Internet" },
+      { nome: "Água e esgoto", tipo: "despesa", destino: "Despesas com Energia, Água, Telefone e Internet" },
+      { nome: "Telefonia e internet", tipo: "despesa", destino: "Despesas com Energia, Água, Telefone e Internet" },
+      { nome: "Material de escritório e copa", tipo: "despesa", destino: "Despesas Gerais e Administrativas" },
+      { nome: "Seguros", tipo: "despesa", destino: "Despesas com Seguros" },
+      { nome: "Honorários contábeis e jurídicos", tipo: "despesa", destino: "Despesas com Terceiros" },
+      { nome: "Veículos (combustível e manutenção)", tipo: "despesa", destino: "Despesas com Veículos" },
     ],
   },
   {
     nome: "Financeiro",
     contas: [
       FOLHA,
-      { nome: "Tarifas bancárias", tipo: "despesa" },
-      { nome: "Despesas com cobrança", tipo: "despesa" },
-      { nome: "Taxas de cartão e meios de pagamento", tipo: "despesa" },
+      { nome: "Tarifas bancárias", tipo: "despesa", destino: "Despesas Financeiras" },
+      { nome: "Despesas com cobrança", tipo: "despesa", destino: "Despesas Financeiras" },
+      { nome: "Taxas de cartão e meios de pagamento", tipo: "despesa", destino: "Despesas Financeiras" },
     ],
   },
   {
@@ -76,19 +82,19 @@ export const CENTROS_PADRAO: CentroPadrao[] = [
     contas: [
       FOLHA,
       { nome: "Benefícios (VT, VR e saúde)", tipo: "despesa", destino: "Despesas com Pessoas" },
-      { nome: "Treinamento e desenvolvimento", tipo: "despesa" },
-      { nome: "Recrutamento e seleção", tipo: "despesa" },
-      { nome: "Medicina e segurança do trabalho", tipo: "despesa" },
+      { nome: "Treinamento e desenvolvimento", tipo: "despesa", destino: "Despesas com Pessoas" },
+      { nome: "Recrutamento e seleção", tipo: "despesa", destino: "Despesas com Pessoas" },
+      { nome: "Medicina e segurança do trabalho", tipo: "despesa", destino: "Despesas com Pessoas" },
     ],
   },
   {
     nome: "TI",
     contas: [
       FOLHA,
-      { nome: "Licenças e assinaturas de software", tipo: "despesa" },
-      { nome: "Serviços de TI e suporte", tipo: "despesa" },
-      { nome: "Infraestrutura e nuvem", tipo: "despesa" },
-      { nome: "Equipamentos e manutenção", tipo: "despesa" },
+      { nome: "Licenças e assinaturas de software", tipo: "despesa", destino: "Despesas com Sistemas e Softwares" },
+      { nome: "Serviços de TI e suporte", tipo: "despesa", destino: "Despesas com Sistemas e Softwares" },
+      { nome: "Infraestrutura e nuvem", tipo: "despesa", destino: "Despesas com Sistemas e Softwares" },
+      { nome: "Equipamentos e manutenção", tipo: "despesa", destino: "Despesas com Limpeza, Manutenção e Reparos" },
     ],
   },
   {
@@ -96,10 +102,10 @@ export const CENTROS_PADRAO: CentroPadrao[] = [
     contas: [
       // Folha da operação é CUSTO (mão de obra direta), não despesa.
       { nome: CONTA_FOLHA, tipo: "custo", destino: "Custos com Pessoas (MOD)" },
-      { nome: "Materiais de consumo", tipo: "custo" },
-      { nome: "Manutenção de máquinas e instalações", tipo: "custo" },
-      { nome: "Energia (produção)", tipo: "custo" },
-      { nome: "Fretes e logística", tipo: "custo" },
+      { nome: "Materiais de consumo", tipo: "custo", destino: "Custo Operacional" },
+      { nome: "Manutenção de máquinas e instalações", tipo: "custo", destino: "Custo Operacional" },
+      { nome: "Energia (produção)", tipo: "custo", destino: "Custo Operacional" },
+      { nome: "Fretes e logística", tipo: "custo", destino: "Custo Operacional" },
     ],
   },
 ];

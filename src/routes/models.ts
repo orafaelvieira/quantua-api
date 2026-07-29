@@ -39,6 +39,7 @@ import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
 import { resolveSectorPremises } from "../services/sector-benchmark";
 import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version";
 import { sugerirContaCanonica } from "../services/sugerir-conta-canonica";
+import { classificarDeParaOrcamento, opcoesDeParaOrcamento } from "../services/classificar-de-para-orcamento";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { cicloVidaModel } from "../services/ciclo-vida";
 import { TipoProduto, dataBaseDoModelo } from "../services/produto-empresa";
@@ -2232,6 +2233,9 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   let leitura: LeituraPlanilha | null = null;
   const abasLidas: Array<{ aba: string; contas: number; linhaCabecalho?: number; ignorada?: string }> = [];
   let janela: string[] = [];
+  // Linhas da aba "Receitas" do modelo multi-aba — processadas à parte, porque
+  // receita mora no bloco de receitas (linhas com driver), não no plano de contas.
+  let contasReceita: Array<{ nome: string; valores: Record<string, number> }> = [];
   const anoRef = String(req.body?.ano ?? model.mesInicial.slice(0, 4));
 
   if (Array.isArray(req.body?.abas)) {
@@ -2241,19 +2245,43 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     // contrato é: só entra o que casa com a estrutura, e nada some em silêncio.
     const entradas = (req.body.abas as Array<{ nome?: unknown; linhas?: unknown }>).slice(0, 40);
     const reservada = (n: string) => /^(consolidado|leia ?-?me|quantua ?-?meta|instru)/.test(normContaGmd(n));
+    // Aba "Receitas" (28/07/2026): as linhas de receita do modelo baixado voltam
+    // por ela — não é CC nem conta de gasto, então sai da contagem de "úteis"
+    // (senão a planilha sem estrutura, com Receitas + Orçamento, deixava de ser
+    // "aba única" e descartava a de contas).
+    const ehAbaReceitas = (n: string) => /^receitas?\b/.test(normContaGmd(n));
+    // Aba "Geral" do modelo baixado = contas SEM lotação. Ela volta importada
+    // (identidade nome+sem-lotação casa as soltas) — antes era descartada e a
+    // edição do analista nessa aba se perdia.
+    const ehAbaGeral = (n: string) => /^geral\b/.test(normContaGmd(n));
     const resolveCc = (nomeAba: string) =>
       centros.find((c) => normContaGmd(c.nome) === normContaGmd(nomeAba)
         || ((c.codigo ?? "").trim() !== "" && (c.codigo ?? "").trim().toLowerCase() === nomeAba.trim().toLowerCase())) ?? null;
-    const uteis = entradas.filter((a) => !reservada(String(a.nome ?? "")));
+    const uteis = entradas.filter((a) => !reservada(String(a.nome ?? "")) && !ehAbaReceitas(String(a.nome ?? "")) && !ehAbaGeral(String(a.nome ?? "")));
+    // Pacote de unidade manda `unidadeGeral` (do carimbo quantua-meta): a aba
+    // "Geral" dele são as contas DIRETAS da unidade — sem isso a identidade
+    // (nome + lotação) não casaria e a volta criaria duplicata solta.
+    const unidadeGeralNome = typeof req.body?.unidadeGeral === "string" && req.body.unidadeGeral
+      ? unidades.find((u) => u.id === req.body.unidadeGeral)?.nome ?? null
+      : null;
     contas = [];
     for (const a of entradas) {
       const nomeAba = String(a.nome ?? "").trim() || "(sem nome)";
       if (reservada(nomeAba)) { abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "aba de apoio do modelo" }); continue; }
       if (!Array.isArray(a.linhas)) { abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "sem dados" }); continue; }
+      if (ehAbaReceitas(nomeAba)) {
+        const li = lerPlanilhaDeContas(a.linhas as unknown[][], anoRef);
+        if (li.semColunaConta) { abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "não achei a coluna com o nome da conta" }); continue; }
+        contasReceita = li.contas.map((c) => ({ nome: c.nome, valores: (c.valores ?? {}) as Record<string, number> }));
+        janela = [...new Set([...janela, ...li.meses])];
+        abasLidas.push({ aba: nomeAba, contas: li.contas.length, linhaCabecalho: li.linhaCabecalho });
+        continue;
+      }
       const cc = resolveCc(nomeAba);
       // Várias abas úteis e esta não é um CC: é aba do analista — fica de fora.
       // Uma aba útil só: importa mesmo sem casar (planilha de aba única).
-      if (!cc && uteis.length > 1) {
+      // "Geral" é a aba das contas sem lotação do modelo — importa com cc nulo.
+      if (!cc && uteis.length > 1 && !ehAbaGeral(nomeAba)) {
         abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "não é um centro de custo da empresa (aba sua — não importada)" });
         continue;
       }
@@ -2262,13 +2290,18 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "não achei a coluna com o nome da conta" });
         continue;
       }
+      const ehGeralDeUnidade = !cc && ehAbaGeral(nomeAba) && unidadeGeralNome;
       for (const c of li.contas) {
-        contas.push({ ...c, centroCusto: c.centroCusto || (cc ? cc.nome : "") } as unknown as Record<string, unknown>);
+        contas.push({
+          ...c,
+          centroCusto: c.centroCusto || (cc ? cc.nome : ""),
+          ...(ehGeralDeUnidade ? { unidade: (c as { unidade?: string }).unidade || unidadeGeralNome } : {}),
+        } as unknown as Record<string, unknown>);
       }
       janela = [...new Set([...janela, ...li.meses])];
       abasLidas.push({ aba: nomeAba, contas: li.contas.length, linhaCabecalho: li.linhaCabecalho });
     }
-    if (contas.length === 0) {
+    if (contas.length === 0 && contasReceita.length === 0) {
       res.status(400).json({ error: "Nenhuma aba da planilha pôde ser importada.", abas: abasLidas });
       return;
     }
@@ -2286,7 +2319,8 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     contas = leitura.contas as unknown as Array<Record<string, unknown>>;
     janela = leitura.meses;
   }
-  if (!Array.isArray(contas) || contas.length === 0) { res.status(400).json({ error: "Envie ao menos uma conta" }); return; }
+  if (!Array.isArray(contas)) contas = [];
+  if (contas.length === 0 && contasReceita.length === 0) { res.status(400).json({ error: "Envie ao menos uma conta" }); return; }
   if (contas.length > 1000) { res.status(400).json({ error: "Máximo de 1.000 contas por importação" }); return; }
 
   const cfgCusto = blocoCusto.config as BlocoModelo["config"];
@@ -2313,12 +2347,21 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   // 36 vezes. O que não casa fica sem de-para, visível, nunca chutado.
   const dreAtiva = await loadActiveDREModel(model.companyId);
   const canonicas = dreAtiva.lines.filter((l) => !l.subtotal).map((l) => l.conta);
+  // Destino declarado (planilha/catálogo) só vale se a conta EXISTE no modelo
+  // DRE da empresa — de-para para conta inexistente é órfão silencioso; melhor
+  // descartar e deixar a sugestão (ou a pendência visível) assumir.
+  const canonPorNorm = new Map(canonicas.map((c) => [normContaGmd(c), c] as const));
+  // A sugestão só enxerga canônicas de SAÍDA — conta de custo/despesa nunca é
+  // sugerida para "Receita Bruta" (o destino DECLARADO continua validado contra
+  // a lista completa: quem declara sabe o que quer).
+  const opcoesSugestao = opcoesDeParaOrcamento(canonicas);
   const sugeridas: string[] = [];
 
   const stamp = Date.now().toString(36);
   const criadas = criar.map((c, i) => {
-    const sugestao = c.destino ? null : sugerirContaCanonica(c.nome, canonicas, { grupo: c.ehCusto ? "custo" : "despesa" });
-    const destino = c.destino ?? sugestao?.conta ?? null;
+    const destinoDeclarado = c.destino ? canonPorNorm.get(normContaGmd(String(c.destino))) ?? null : null;
+    const sugestao = destinoDeclarado ? null : sugerirContaCanonica(c.nome, opcoesSugestao, { grupo: c.ehCusto ? "custo" : "despesa" });
+    const destino = destinoDeclarado ?? sugestao?.conta ?? null;
     if (sugestao) sugeridas.push(`${c.nome} → ${sugestao.conta}`);
     const linha = {
       id: `pc${stamp}_${i}`,
@@ -2335,7 +2378,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       codigo: c.codigo, nome: c.nome, tipo: c.ehCusto ? "custo" : "despesa", lotacao: c.lotacao,
       meses: Object.keys(c.valores).length,
       total: Object.values(c.valores).reduce((s, v) => s + v, 0),
-      destino, destinoSugerido: !c.destino && !!sugestao,
+      destino, destinoSugerido: !destinoDeclarado && !!sugestao,
     };
   });
 
@@ -2362,7 +2405,87 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     };
   }).filter((x): x is { nome: string; meses: number; total: number } => x !== null);
 
-  if (criadas.length === 0 && atualizadas.length === 0) {
+  // RECEITAS DA PLANILHA (28/07/2026): a aba "Receitas" volta com as linhas de
+  // receita — mesma identidade por NOME, mesma janela de meses das contas.
+  // Linha existente vira SÉRIE com os meses da planilha (linha detalhada por
+  // driver perde o detalhe — o número importado é o fato, como nas contas);
+  // nome novo com valor vira linha nova. Nome novo sem valor algum é ignorado
+  // (e listado): não se cria linha de receita vazia por rascunho.
+  const blocoReceitas = blocks.find((b) => b.tipo === "receitas");
+  const cfgReceitas = (blocoReceitas?.config ?? {}) as BlocoModelo["config"];
+  const linhasReceita = [...(cfgReceitas.linhasReceita ?? [])];
+  const receitas = {
+    criadas: [] as Array<{ nome: string; meses: number; total: number }>,
+    atualizadas: [] as Array<{ nome: string; meses: number; total: number }>,
+    detalhamentoPerdido: [] as string[],
+    ignoradas: [] as string[],
+  };
+  if (contasReceita.length > 0 && blocoReceitas) {
+    const stampR = Date.now().toString(36);
+    let seqR = 0;
+    for (const cr of contasReceita.slice(0, 100)) {
+      if (!cr.nome) continue;
+      const valores: Record<string, number> = {};
+      for (const [mes, v] of Object.entries(cr.valores ?? {})) {
+        if (/^\d{4}-\d{2}$/.test(mes) && Number.isFinite(Number(v))) valores[mes] = Number(v);
+      }
+      const idx = linhasReceita.findIndex((l) => normContaGmd(l.nome) === normContaGmd(cr.nome));
+      if (idx >= 0) {
+        const alvo = linhasReceita[idx]!;
+        const noRaiz = (alvo.nodes ?? []).find((n) => n.id === alvo.nodeRaiz);
+        const ehSerie = alvo.template === "generico" && !!noRaiz && noRaiz.tipo === "serie";
+        const antigos = (ehSerie ? (noRaiz!.params as { valores?: Record<string, number> })?.valores : undefined) ?? {};
+        const vals = { ...antigos };
+        for (const mes of janela) {
+          if (valores[mes] !== undefined) vals[mes] = valores[mes]!;
+          else delete vals[mes];
+        }
+        for (const [mes, v] of Object.entries(valores)) vals[mes] = v;
+        if (ehSerie) {
+          linhasReceita[idx] = {
+            ...alvo,
+            nodes: (alvo.nodes ?? []).map((n) => n.id === alvo.nodeRaiz
+              ? { ...n, params: { ...(n.params ?? {}), modoPreenchimento: "mes", valores: vals } }
+              : n),
+          };
+        } else {
+          receitas.detalhamentoPerdido.push(alvo.nome);
+          linhasReceita[idx] = {
+            ...alvo,
+            template: "generico",
+            nodeRaiz: `${alvo.id}_receita`,
+            nodes: [{
+              id: `${alvo.id}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${alvo.nome}`, unidade: "R$",
+              params: { modoPreenchimento: "mes", valores: vals, valorMensal: 0, crescimentoAnual: 0 },
+            }],
+          };
+        }
+        receitas.atualizadas.push({
+          nome: alvo.nome,
+          meses: Object.keys(valores).length,
+          total: Object.values(valores).reduce((s, v) => s + v, 0),
+        });
+      } else if (Object.keys(valores).length > 0) {
+        const linhaId = `lin${stampR}r${seqR++}`;
+        linhasReceita.push({
+          id: linhaId, nome: cr.nome, template: "generico", nodeRaiz: `${linhaId}_receita`,
+          nodes: [{
+            id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${cr.nome}`, unidade: "R$",
+            params: { modoPreenchimento: "mes", valores, valorMensal: 0, crescimentoAnual: 0 },
+          }],
+        });
+        receitas.criadas.push({
+          nome: cr.nome,
+          meses: Object.keys(valores).length,
+          total: Object.values(valores).reduce((s, v) => s + v, 0),
+        });
+      } else {
+        receitas.ignoradas.push(`${cr.nome} — linha nova sem nenhum valor`);
+      }
+    }
+  }
+
+  if (criadas.length === 0 && atualizadas.length === 0 && receitas.criadas.length === 0 && receitas.atualizadas.length === 0) {
     res.status(409).json({ error: "Nada a criar nem atualizar — as contas já existem e a planilha não trouxe valores.", ignoradas, semLotacao, abas: abasLidas });
     return;
   }
@@ -2386,6 +2509,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     res.json({
       simulacao: true,
       criadas, atualizadas, ignoradas, semLotacao,
+      receitas,
       deParaSugerido: sugeridas,
       abas: abasLidas,
       mesesFora,
@@ -2394,16 +2518,48 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     return;
   }
 
+  // DE-PARA AUTOMÁTICO NA IMPORTAÇÃO (28/07/2026): o que a regra não resolveu
+  // vai para a IA em lote ANTES de gravar — o analista não precisa saber o que
+  // é conta canônica. Best-effort: IA fora do ar = importa igual, com as
+  // pendências visíveis. Só na gravação real (a prévia não gasta token).
+  let deParaAuto: Awaited<ReturnType<typeof classificarDeParaOrcamento>> | null = null;
+  {
+    const semDestino = [
+      ...linhasCusto.filter((l) => !l.destino?.conta).map((l) => ({ id: l.id, nome: l.nome, grupo: "custo" as const })),
+      ...linhasDespesa.filter((l) => !l.destino?.conta).map((l) => ({ id: l.id, nome: l.nome, grupo: "despesa" as const })),
+    ];
+    if (semDestino.length > 0) {
+      try {
+        deParaAuto = await classificarDeParaOrcamento(semDestino, canonicas);
+        const porId = new Map(deParaAuto.classificadas.map((c) => [c.id, c]));
+        for (const l of [...linhasCusto, ...linhasDespesa]) {
+          const hit = porId.get(l.id);
+          if (hit) l.destino = { conta: hit.conta, sinal: "soma" };
+        }
+      } catch { /* segue sem IA — pendência fica visível na grade */ }
+    }
+  }
+
   await prisma.$transaction([
     prisma.modelBlock.update({ where: { id: blocoCusto.id }, data: { config: { ...cfgCusto, linhasCusto } as object } }),
     prisma.modelBlock.update({ where: { id: blocoDespesa.id }, data: { config: { ...cfgDespesa, linhasCusto: linhasDespesa } as object } }),
+    ...(blocoReceitas && (receitas.criadas.length > 0 || receitas.atualizadas.length > 0)
+      ? [prisma.modelBlock.update({ where: { id: blocoReceitas.id }, data: { config: { ...cfgReceitas, linhasReceita } as object } })]
+      : []),
   ]);
   await registrarAuditoria({
     userId: req.userId!, entity: "financial_model", entityId: model.id, field: "plano de contas importado",
     after: {
       criadas: criadas.length, atualizadas: atualizadas.length, ignoradas: ignoradas.length, semLotacao: semLotacao.length,
+      receitas: { criadas: receitas.criadas.length, atualizadas: receitas.atualizadas.length },
       abas: abasLidas.map((a) => `${a.aba}${a.ignorada ? ` (${a.ignorada})` : ` (${a.contas})`}`),
       amostra: criadas.slice(0, 10).map((x) => `${x.codigo ?? "—"} ${x.nome} (${x.lotacao})`),
+      // Registro do custo de IA da etapa ([[registrar-custo-ia]]).
+      ...(deParaAuto ? {
+        deParaAutomatico: deParaAuto.classificadas.map((c) => `${c.nome} → ${c.conta} (${c.via})`),
+        deParaSemSugestao: deParaAuto.semSugestao,
+        custoIaUsd: deParaAuto.custo?.usd ?? 0,
+      } : {}),
     },
     source: "models",
   });
@@ -2411,10 +2567,16 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   const calc = await calcularEGravar(model.id);
   res.status(201).json({
     criadas, atualizadas, ignoradas, semLotacao,
+    receitas,
     /** De-para proposto pelo sistema (nome → conta canônica) e o que ficou sem:
      *  é o que o analista revisa, em vez de escolher conta a conta. */
     deParaSugerido: sugeridas,
-    semDePara: criadas.filter((c) => !c.destino).map((c) => c.nome),
+    deParaAuto: deParaAuto ? {
+      classificadas: deParaAuto.classificadas.map((c) => ({ nome: c.nome, conta: c.conta, via: c.via, porque: c.porque })),
+      semSugestao: deParaAuto.semSugestao,
+      custoUsd: deParaAuto.custo?.usd ?? 0,
+    } : null,
+    semDePara: [...linhasCusto, ...linhasDespesa].filter((l) => !l.destino?.conta).map((l) => l.nome),
     abas: abasLidas,
     // O que foi entendido da planilha — a UI mostra para o analista conferir.
     leitura: leitura ? {
@@ -2422,6 +2584,99 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       meses: leitura.meses, totaisIgnorados: leitura.totaisIgnorados, mesesFora,
       horizonte: { de: model.mesInicial, meses: model.horizonteMeses },
     } : { linhaCabecalho: null, cabecalho: [], meses: janela, totaisIgnorados: [], mesesFora, horizonte: { de: model.mesInicial, meses: model.horizonteMeses } },
+    resultado: calc?.resultado ?? null,
+  });
+});
+
+// POST /models/:id/classificar-de-para — A FERRAMENTA DO DE-PARA (28/07/2026):
+// "o analista não vai saber preencher a conta canônica". Num clique:
+//   1. CORRIGE conta do catálogo padrão cujo de-para diverge do oficial (pega o
+//      legado classificado pela heurística antiga — ex.: "Despesas com
+//      cobrança" que caiu em P&D);
+//   2. classifica o que está SEM de-para (ou apontando para canônica que não
+//      existe no modelo da empresa): regra determinística primeiro, IA em lote
+//      (opções fechadas) para o resto;
+//   3. o que nem a IA resolve volta listado — pendência visível, nunca chutada.
+// Custo de IA registrado na trilha de auditoria ([[registrar-custo-ia]]).
+router.post("/:id/classificar-de-para", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
+
+  const blocks = await prisma.modelBlock.findMany({ where: { modelId: model.id } });
+  const blocoCusto = blocks.find((b) => b.tipo === "custos");
+  const blocoDespesa = blocks.find((b) => b.tipo === "despesas");
+  if (!blocoCusto || !blocoDespesa) { res.status(409).json({ error: "O modelo precisa dos blocos de custos e despesas." }); return; }
+  const cfgCusto = blocoCusto.config as BlocoModelo["config"];
+  const cfgDespesa = blocoDespesa.config as BlocoModelo["config"];
+  const linhasCusto = [...(cfgCusto.linhasCusto ?? [])];
+  const linhasDespesa = [...(cfgDespesa.linhasCusto ?? [])];
+
+  const dreAtiva = await loadActiveDREModel(model.companyId);
+  const canonicas = dreAtiva.lines.filter((l) => !l.subtotal).map((l) => l.conta);
+  const canonPorNorm = new Map(canonicas.map((c) => [normContaGmd(c), c] as const));
+
+  // De-para OFICIAL do catálogo de contas padrão — para conta com esse nome, o
+  // catálogo manda (só quando a canônica oficial existe no modelo da empresa).
+  const catalogoOficial = new Map<string, string>();
+  for (const cc of CENTROS_PADRAO) {
+    for (const c of cc.contas) if (c.destino) catalogoOficial.set(normContaGmd(c.nome), c.destino);
+  }
+
+  const corrigidas: Array<{ nome: string; de: string | null; para: string }> = [];
+  const semDestino: Array<{ id: string; nome: string; grupo: "custo" | "despesa" }> = [];
+  const revisar = (linhas: typeof linhasCusto, grupo: "custo" | "despesa") => {
+    for (const l of linhas) {
+      const oficial = catalogoOficial.get(normContaGmd(l.nome));
+      const oficialNoModelo = oficial ? canonPorNorm.get(normContaGmd(oficial)) ?? null : null;
+      if (oficialNoModelo) {
+        if (l.destino?.conta !== oficialNoModelo) {
+          corrigidas.push({ nome: l.nome, de: l.destino?.conta ?? null, para: oficialNoModelo });
+          l.destino = { conta: oficialNoModelo, sinal: "soma" };
+        }
+        continue;
+      }
+      // Sem de-para, ou apontando para conta que não existe no modelo = órfã.
+      const destinoValido = l.destino?.conta ? canonPorNorm.has(normContaGmd(l.destino.conta)) : false;
+      if (!destinoValido) semDestino.push({ id: l.id, nome: l.nome, grupo });
+    }
+  };
+  revisar(linhasCusto, "custo");
+  revisar(linhasDespesa, "despesa");
+
+  const r = await classificarDeParaOrcamento(semDestino, canonicas);
+  const porId = new Map(r.classificadas.map((c) => [c.id, c]));
+  for (const l of [...linhasCusto, ...linhasDespesa]) {
+    const hit = porId.get(l.id);
+    if (hit) l.destino = { conta: hit.conta, sinal: "soma" };
+  }
+
+  if (corrigidas.length === 0 && r.classificadas.length === 0) {
+    res.json({ classificadas: [], corrigidas: [], semSugestao: r.semSugestao, custoUsd: r.custo?.usd ?? 0, resultado: null });
+    return;
+  }
+
+  await prisma.$transaction([
+    prisma.modelBlock.update({ where: { id: blocoCusto.id }, data: { config: { ...cfgCusto, linhasCusto } as object } }),
+    prisma.modelBlock.update({ where: { id: blocoDespesa.id }, data: { config: { ...cfgDespesa, linhasCusto: linhasDespesa } as object } }),
+  ]);
+  await registrarAuditoria({
+    userId: req.userId!, entity: "financial_model", entityId: model.id, field: "de-para classificado automaticamente",
+    after: {
+      corrigidasPeloCatalogo: corrigidas.map((c) => `${c.nome}: ${c.de ?? "(sem de-para)"} → ${c.para}`),
+      classificadas: r.classificadas.map((c) => `${c.nome} → ${c.conta} (${c.via})`),
+      semSugestao: r.semSugestao,
+      custoIaUsd: r.custo?.usd ?? 0, // [[registrar-custo-ia]]
+    },
+    source: "models",
+  });
+
+  const calc = await calcularEGravar(model.id);
+  res.json({
+    classificadas: r.classificadas.map((c) => ({ nome: c.nome, conta: c.conta, via: c.via, porque: c.porque })),
+    corrigidas,
+    semSugestao: r.semSugestao,
+    custoUsd: r.custo?.usd ?? 0,
     resultado: calc?.resultado ?? null,
   });
 });
