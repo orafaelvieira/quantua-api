@@ -1,4 +1,4 @@
-/**
+﻿/**
  * MODELOS FINANCEIROS — rotas do produto Projeções/Orçamento/Valuation (F1).
  *
  * Determinístico de ponta a ponta (zero IA nesta fase → zero custo a registrar).
@@ -41,6 +41,8 @@ import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version
 import { sugerirContaCanonica } from "../services/sugerir-conta-canonica";
 import { classificarDeParaOrcamento, opcoesDeParaOrcamento } from "../services/classificar-de-para-orcamento";
 import { TIPOS_CONTA, type TipoConta, ehTipoConta, blocoDoTipo, tipoDaLinha, proximoCodigo, codificarLinhas, tipoDoTextoDaPlanilha } from "../services/classificacao-conta";
+import { montarReceitasDeMemoria, type LinhaReceitaMontada } from "../services/memoria-calculo-receita";
+import { aliquotaEfetivaSimples } from "../services/model-engine";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { cicloVidaModel } from "../services/ciclo-vida";
 import { TipoProduto, dataBaseDoModelo } from "../services/produto-empresa";
@@ -2247,7 +2249,32 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   // Linhas da aba "Receitas" do modelo multi-aba — processadas à parte, porque
   // receita mora no bloco de receitas (linhas com driver), não no plano de contas.
   let contasReceita: Array<{ nome: string; valores: Record<string, number> }> = [];
+  // MEMÓRIA DE CÁLCULO (29/07/2026): linhas de receita cuja conta veio pronta
+  // da planilha — o sistema reproduz a FÓRMULA do analista como árvore de
+  // drivers, em vez de guardar só o número que o Excel calculou.
+  let memoriaMontada: LinhaReceitaMontada[] = [];
+  const avisosMemoria: string[] = [];
   const anoRef = String(req.body?.ano ?? model.mesInicial.slice(0, 4));
+
+  /** Alíquota da EMPRESA para a linha de imposto que a planilha deixou vazia. */
+  const aliquotaDaEmpresa = (): number | null => {
+    const cfg = (blocks.find((b) => b.tipo === "impostos")?.config ?? {}) as { impostos?: Record<string, unknown> };
+    const imp = cfg.impostos;
+    if (!imp || !imp.regime || imp.regime === "nenhum") return null;
+    if (imp.regime === "simples") {
+      const rbt12 = Number(imp.rbt12Inicial) || 0;
+      const anexo = (typeof imp.anexo === "string" ? imp.anexo : "III") as "I" | "II" | "III" | "IV" | "V";
+      return rbt12 > 0 ? aliquotaEfetivaSimples(rbt12, anexo) : null;
+    }
+    // MESMOS DEFAULTS DO MOTOR (model-engine): presumido sem percentual digitado
+    // já cobra PIS/COFINS de 3,65% (real, 9,25%) — a alíquota "da empresa" tem
+    // de ser a que o cálculo usa, não zero.
+    const pisCofins = Number.isFinite(Number(imp.pisCofinsPct)) && Number(imp.pisCofinsPct) > 0
+      ? Number(imp.pisCofinsPct)
+      : (imp.regime === "presumido" ? 0.0365 : 0.0925);
+    const soma = pisCofins + (Number(imp.issPct) || 0) + (Number(imp.icmsPct) || 0);
+    return soma > 0 ? soma : null;
+  };
 
   if (Array.isArray(req.body?.abas)) {
     // MODELO MULTI-ABA (28/07/2026): cada aba com o nome de um centro de custo
@@ -2281,11 +2308,31 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       if (reservada(nomeAba)) { abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "aba de apoio do modelo" }); continue; }
       if (!Array.isArray(a.linhas)) { abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "sem dados" }); continue; }
       if (ehAbaReceitas(nomeAba)) {
+        // 1) MEMÓRIA DE CÁLCULO: as linhas com FÓRMULA viram receita por driver
+        // (a conta do analista, reproduzida). As variáveis que a fórmula usa
+        // saem da lista de contas simples — senão "Ticket Médio" viraria linha
+        // de receita sozinha, somando duas vezes.
+        const formulasDaAba = Array.isArray((a as { formulas?: unknown }).formulas)
+          ? ((a as { formulas?: Array<Array<string | null>> }).formulas)
+          : undefined;
+        const mem = montarReceitasDeMemoria(a.linhas as unknown[][], formulasDaAba, {
+          anoRef, idBase: `mem${Date.now().toString(36)}`, aliquotaImpostos: aliquotaDaEmpresa(),
+        });
+        memoriaMontada = mem.linhas;
+        avisosMemoria.push(...mem.avisos);
+        const consumidos = new Set<string>();
+        for (const l of mem.linhas) {
+          consumidos.add(normContaGmd(l.nome));
+          for (const v of l.variaveis) consumidos.add(normContaGmd(v));
+        }
+
         const li = lerPlanilhaDeContas(a.linhas as unknown[][], anoRef);
-        if (li.semColunaConta) { abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "não achei a coluna com o nome da conta" }); continue; }
-        contasReceita = li.contas.map((c) => ({ nome: c.nome, valores: (c.valores ?? {}) as Record<string, number> }));
+        if (li.semColunaConta && mem.linhas.length === 0) { abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "não achei a coluna com o nome da conta" }); continue; }
+        contasReceita = li.contas
+          .filter((c) => !consumidos.has(normContaGmd(c.nome)))
+          .map((c) => ({ nome: c.nome, valores: (c.valores ?? {}) as Record<string, number> }));
         janela = [...new Set([...janela, ...li.meses])];
-        abasLidas.push({ aba: nomeAba, contas: li.contas.length, linhaCabecalho: li.linhaCabecalho });
+        abasLidas.push({ aba: nomeAba, contas: contasReceita.length + mem.linhas.length, linhaCabecalho: li.linhaCabecalho });
         continue;
       }
       const cc = resolveCc(nomeAba);
@@ -2312,7 +2359,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       janela = [...new Set([...janela, ...li.meses])];
       abasLidas.push({ aba: nomeAba, contas: li.contas.length, linhaCabecalho: li.linhaCabecalho });
     }
-    if (contas.length === 0 && contasReceita.length === 0) {
+    if (contas.length === 0 && contasReceita.length === 0 && memoriaMontada.length === 0) {
       res.status(400).json({ error: "Nenhuma aba da planilha pôde ser importada.", abas: abasLidas });
       return;
     }
@@ -2331,7 +2378,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     janela = leitura.meses;
   }
   if (!Array.isArray(contas)) contas = [];
-  if (contas.length === 0 && contasReceita.length === 0) { res.status(400).json({ error: "Envie ao menos uma conta" }); return; }
+  if (contas.length === 0 && contasReceita.length === 0 && memoriaMontada.length === 0) { res.status(400).json({ error: "Envie ao menos uma conta" }); return; }
   if (contas.length > 1000) { res.status(400).json({ error: "Máximo de 1.000 contas por importação" }); return; }
 
   const cfgCusto = blocoCusto.config as BlocoModelo["config"];
@@ -2463,7 +2510,45 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     atualizadas: [] as Array<{ nome: string; meses: number; total: number }>,
     detalhamentoPerdido: [] as string[],
     ignoradas: [] as string[],
+    /** Linhas cuja FÓRMULA do Excel virou árvore de drivers (proveniência). */
+    memoria: [] as Array<{ nome: string; formula: string; variaveis: string[] }>,
+    avisos: [] as string[],
   };
+
+  // MEMÓRIA DE CÁLCULO: entra ANTES das receitas simples — a linha de mesmo
+  // nome é SUBSTITUÍDA pela árvore (reimportar a planilha atualiza a conta).
+  if (memoriaMontada.length > 0 && blocoReceitas) {
+    for (const nova of memoriaMontada) {
+      const idx = linhasReceita.findIndex((l) => normContaGmd(l.nome) === normContaGmd(nova.nome));
+      const linha = {
+        // Mantém o ID da linha existente: cenários, rateios e o Orçado ×
+        // Realizado apontam para ele.
+        id: idx >= 0 ? linhasReceita[idx]!.id : nova.id,
+        nome: nova.nome,
+        template: "excel",
+        nodeRaiz: nova.nodeRaiz,
+        nodes: nova.nodes,
+        // Lotação (unidade/CC) da linha antiga é preservada — a planilha traz o
+        // cálculo, não a estrutura.
+        ...(idx >= 0 ? (() => {
+          const ant = linhasReceita[idx] as unknown as { unidadeId?: string | null; centroCustoId?: string | null };
+          return {
+            ...(ant.unidadeId ? { unidadeId: ant.unidadeId } : {}),
+            ...(ant.centroCustoId ? { centroCustoId: ant.centroCustoId } : {}),
+          };
+        })() : {}),
+      } as unknown as (typeof linhasReceita)[number];
+      if (idx >= 0) { linhasReceita[idx] = linha; receitas.atualizadas.push({ nome: nova.nome, meses: 0, total: 0 }); }
+      else { linhasReceita.push(linha); receitas.criadas.push({ nome: nova.nome, meses: 0, total: 0 }); }
+      receitas.memoria.push({ nome: nova.nome, formula: nova.formulaOriginal, variaveis: nova.variaveis });
+      // O modelo calcula imposto sobre a receita na aba Impostos: se a fórmula
+      // TAMBÉM desconta, o número entra líquido e o imposto pesa duas vezes.
+      if (nova.temFatorImposto && aliquotaDaEmpresa() !== null) {
+        receitas.avisos.push(`A fórmula de "${nova.nome}" já desconta imposto E o modelo calcula imposto sobre a receita na aba Impostos — confira para não contar duas vezes (ou deixe o regime como "nenhum").`);
+      }
+    }
+    receitas.avisos.push(...avisosMemoria);
+  }
   if (contasReceita.length > 0 && blocoReceitas) {
     const stampR = Date.now().toString(36);
     let seqR = 0;
