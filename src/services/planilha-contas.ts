@@ -212,7 +212,12 @@ export function lerPlanilhaDeContas(linhas: unknown[][], anoExercicio: string): 
     // (28/07/2026). Só é subtotal quando NÃO tem código: conta analítica de
     // verdade pode legitimamente começar com "(-)".
     const marcadorCascata = /^[(\[]?\s*[+=\-−]\s*[)\]]/.test(nome);
-    if (ehLinhaDeTotal(nome) || (!codigoDaLinha && marcadorCascata)) {
+    // A LINHA DE DEDUÇÕES DA RECEITA (30/07/2026) é NOSSA: o modelo baixado a
+    // leva como "(-) Deduções da receita" sem código — o prefixo a fazia cair
+    // aqui como subtotal e a volta perdia os valores em silêncio. Ela PASSA;
+    // quem importa a direciona para a linha própria do bloco (nunca vira conta).
+    const ehDeducaoReceita = /^deducoes?\b.*receita/.test(norm(nome).replace(/^[(\[]?\s*[+=\-−]\s*[)\]]\s*/, ""));
+    if (ehLinhaDeTotal(nome) || (!codigoDaLinha && marcadorCascata && !ehDeducaoReceita)) {
       totaisIgnorados.push(nome);
       continue;
     }

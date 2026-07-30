@@ -437,6 +437,10 @@ export interface BlocoModelo {
      *  abatimentos) como % da receita BRUTA — flat + por ano calendário. */
     deducoesPct?: number;
     deducoesPorAno?: Record<string, number>;
+    /** DEDUÇÕES DIGITADAS (30/07/2026): série mensal em R$ — mês digitado é
+     *  FATO e vence o % naquele mês (mês-que-manda, como nas contas). Vem da
+     *  grade (célula/regra) ou da linha "Deduções da receita" da planilha. */
+    deducoesValores?: Serie;
     /** Só em bloco CAPEX: imobilizado que a empresa JÁ TEM na largada… */
     saldoInicialImobilizado?: number;
     /** …e a taxa de depreciação linear dele (a.a.). */
@@ -2075,14 +2079,23 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   const cfgReceitasBloco = input.blocks.find((b) => b.ativo && b.tipo === "receitas")?.config;
   const deducoesFlat = Math.max(0, Math.min(0.9, num(cfgReceitasBloco?.deducoesPct)));
   const deducoesPorAnoCfg = cfgReceitasBloco?.deducoesPorAno;
+  // MÊS DIGITADO MANDA (30/07/2026): a linha de deduções se comporta como as
+  // outras contas — valor mensal digitado (grade/planilha) é FATO e vence o %
+  // naquele mês; nos demais o % (por ano, senão flat) segue vivo com a receita.
+  const deducoesDigitadas = cfgReceitasBloco?.deducoesValores;
   const deducoes: Serie = {};
   let temDeducoes = false;
   for (const mes of meses) {
     const ano = mes.slice(0, 4);
-    const pct = typeof deducoesPorAnoCfg?.[ano] === "number"
-      ? Math.max(0, Math.min(0.9, deducoesPorAnoCfg[ano]))
-      : deducoesFlat;
-    deducoes[mes] = Math.max(0, receitaTotal[mes] ?? 0) * pct;
+    const digitado = deducoesDigitadas?.[mes];
+    if (typeof digitado === "number" && Number.isFinite(digitado)) {
+      deducoes[mes] = Math.max(0, digitado);
+    } else {
+      const pct = typeof deducoesPorAnoCfg?.[ano] === "number"
+        ? Math.max(0, Math.min(0.9, deducoesPorAnoCfg[ano]))
+        : deducoesFlat;
+      deducoes[mes] = Math.max(0, receitaTotal[mes] ?? 0) * pct;
+    }
     if (deducoes[mes] !== 0) temDeducoes = true;
   }
   // Base fiscal = bruta − deduções (usada por TODOS os regimes e pela reforma).

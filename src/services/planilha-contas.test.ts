@@ -126,6 +126,21 @@ describe("linhas de TOTAL não viram conta", () => {
     expect(r.contas.map((c) => c.nome)).toEqual(["Manutenção total da frota", "Totalizadores fiscais"]);
     expect(r.totaisIgnorados).toEqual([]);
   });
+
+  it('"(-) Deduções da receita" SEM código passa — é a linha do modelo baixado, não subtotal (30/07/2026)', () => {
+    // O prefixo "(-)" sem código caía no descarte de cascata e a volta do
+    // modelo perdia as deduções em silêncio (defeito real, TESTE modelo v4).
+    const m: unknown[][] = [
+      ["Conta", "jan/27", "fev/27"],
+      ["Receita 1", 120000, 120010],
+      ["(-) Deduções da receita", 7000, 7100],
+      ["(=) Receita Líquida", 113000, 112910],
+    ];
+    const r = lerPlanilhaDeContas(m, "2027");
+    expect(r.contas.map((c) => c.nome)).toEqual(["Receita 1", "(-) Deduções da receita"]);
+    expect(r.contas[1]!.valores).toEqual({ "2027-01": 7000, "2027-02": 7100 });
+    expect(r.totaisIgnorados).toEqual(["(=) Receita Líquida"]);
+  });
 });
 
 describe("lerPlanilhaDeContas — quando não dá para ler", () => {

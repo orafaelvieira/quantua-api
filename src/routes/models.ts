@@ -2114,8 +2114,14 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
     // "não achei no orçamento" (28/07/2026).
     deducoes: (() => {
       const bRec = blocks.find((b) => b.ativo && b.tipo === "receitas");
-      const cfg = (bRec?.config ?? {}) as { deducoesPct?: number; deducoesPctPorAno?: Record<string, number> };
-      return bRec ? { blocoId: bRec.id, pct: cfg.deducoesPct ?? 0, pctPorAno: cfg.deducoesPctPorAno ?? {} } : null;
+      // O campo por-ano do MOTOR é `deducoesPorAno` — a grade lia
+      // "deducoesPctPorAno" (não existe) e o % por ano nunca chegava à tela.
+      const cfg = (bRec?.config ?? {}) as { deducoesPct?: number; deducoesPorAno?: Record<string, number>; deducoesValores?: Record<string, number> };
+      return bRec ? {
+        blocoId: bRec.id, pct: cfg.deducoesPct ?? 0, pctPorAno: cfg.deducoesPorAno ?? {},
+        /** Meses DIGITADOS (R$) — fato; vence o % no mês (mês-que-manda). */
+        valores: cfg.deducoesValores ?? {},
+      } : null;
     })(),
     mesesRealizados: realizado.meses ?? [],
     geradoEm: new Date().toISOString(),
@@ -2251,6 +2257,8 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   // Linhas da aba "Receitas" do modelo multi-aba — processadas à parte, porque
   // receita mora no bloco de receitas (linhas com driver), não no plano de contas.
   let contasReceita: Array<{ nome: string; valores: Record<string, number> }> = [];
+  /** Linha "Deduções da receita" da planilha → série mensal do bloco (não é conta). */
+  let deducoesDaPlanilha: Record<string, number> | null = null;
   // MEMÓRIA DE CÁLCULO (29/07/2026): linhas de receita cuja conta veio pronta
   // da planilha — o sistema reproduz a FÓRMULA do analista como árvore de
   // drivers, em vez de guardar só o número que o Excel calculou.
@@ -2353,8 +2361,29 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
 
         const li = lerPlanilhaDeContas(a.linhas as unknown[][], anoRef);
         if (li.semColunaConta && mem.linhas.length === 0) { abasLidas.push({ aba: nomeAba, contas: 0, ignorada: "não achei a coluna com o nome da conta" }); continue; }
+        // DEDUÇÕES DA RECEITA NA PLANILHA (30/07/2026): o modelo baixado leva a
+        // linha "(-) Deduções da receita" projetada — na volta ela preenche a
+        // LINHA de deduções do bloco (deducoesValores), nunca vira conta (era
+        // o caminho para duplicar). Valor negativo da planilha entra em módulo:
+        // dedução é guardada positiva e o motor subtrai.
+        for (const c of li.contas) {
+          const k = normContaGmd(c.nome);
+          if (!(/^deducoes?\b/.test(k) && k.includes("receita"))) continue;
+          if (modoRealizado) {
+            avisosMemoria.push(`"${c.nome}" não foi importada: o realizado das deduções ainda não tem série própria — informe as deduções realizadas dentro das contas.`);
+            continue;
+          }
+          deducoesDaPlanilha ??= {};
+          for (const [mes, v] of Object.entries(c.valores ?? {})) {
+            const n = Number(v);
+            if (/^\d{4}-(0[1-9]|1[0-2])$/.test(mes) && Number.isFinite(n) && n !== 0) {
+              deducoesDaPlanilha[mes] = (deducoesDaPlanilha[mes] ?? 0) + Math.abs(n);
+            }
+          }
+        }
+        const ehDeducao = (nome: string) => { const k = normContaGmd(nome); return /^deducoes?\b/.test(k) && k.includes("receita"); };
         contasReceita = li.contas
-          .filter((c) => !consumidos.has(normContaGmd(c.nome)))
+          .filter((c) => !consumidos.has(normContaGmd(c.nome)) && !ehDeducao(c.nome))
           .map((c) => ({ nome: c.nome, valores: (c.valores ?? {}) as Record<string, number> }));
         janela = [...new Set([...janela, ...li.meses])];
         abasLidas.push({ aba: nomeAba, contas: contasReceita.length + mem.linhas.length, linhaCabecalho: li.linhaCabecalho });
@@ -2831,11 +2860,23 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     return { ...atual, meses, porLinha, porGrupo } as object;
   })();
 
+  // DEDUÇÕES DA PLANILHA: a janela regrava os meses digitados — mês da janela
+  // SEM valor devolve o mês ao % vivo (não zera: vazio aqui é "sem fato").
+  const deducoesNovas = (() => {
+    if (!deducoesDaPlanilha || modoRealizado) return null;
+    const atual = { ...((cfgReceitas as { deducoesValores?: Record<string, number> }).deducoesValores ?? {}) };
+    for (const mes of janela) {
+      if (deducoesDaPlanilha[mes] !== undefined) atual[mes] = deducoesDaPlanilha[mes];
+      else delete atual[mes];
+    }
+    return atual;
+  })();
+
   await prisma.$transaction([
     prisma.modelBlock.update({ where: { id: blocoCusto.id }, data: { config: { ...cfgCusto, linhasCusto } as object } }),
     prisma.modelBlock.update({ where: { id: blocoDespesa.id }, data: { config: { ...cfgDespesa, linhasCusto: linhasDespesa } as object } }),
-    ...(blocoReceitas && (receitas.criadas.length > 0 || receitas.atualizadas.length > 0)
-      ? [prisma.modelBlock.update({ where: { id: blocoReceitas.id }, data: { config: { ...cfgReceitas, linhasReceita } as object } })]
+    ...(blocoReceitas && (receitas.criadas.length > 0 || receitas.atualizadas.length > 0 || deducoesNovas)
+      ? [prisma.modelBlock.update({ where: { id: blocoReceitas.id }, data: { config: { ...cfgReceitas, linhasReceita, ...(deducoesNovas ? { deducoesValores: deducoesNovas } : {}) } as object } })]
       : []),
     // Contas que a planilha declarou como financeiras/capex (coluna Tipo).
     ...(blocoNaoOp ? [prisma.modelBlock.update({ where: { id: blocoNaoOp.id }, data: { config: { ...(blocoNaoOp.config as BlocoModelo["config"]), linhasCusto: linhasNaoOp } as object } })] : []),
@@ -2871,6 +2912,9 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     /** Mesmo nome, códigos diferentes = contas SEPARADAS (o plano do cliente
      *  manda) — a grade mostra duas linhas homônimas e a tela explica por quê. */
     mesmoNomeContasDistintas,
+    /** Linha "Deduções da receita" da planilha → preencheu a linha de deduções
+     *  do bloco (meses digitados), sem criar conta. */
+    deducoesImportadas: deducoesNovas ? Object.keys(deducoesDaPlanilha ?? {}).length : 0,
     receitas,
     /** De-para proposto pelo sistema (nome → conta canônica) e o que ficou sem:
      *  é o que o analista revisa, em vez de escolher conta a conta. */
