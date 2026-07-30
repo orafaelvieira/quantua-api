@@ -2157,6 +2157,20 @@ router.post("/:id/grade/regra", async (req: AuthRequest, res: Response): Promise
   res.json({ ...resultado, mesesAlvo });
 });
 
+// GET /models/:id/catalogo — o MESMO catálogo do "Utilizar estrutura padrão",
+// só que para LER (não cria nada, não deixa trilha). Serve ao modelo Excel de
+// um orçamento ainda vazio: sem isso o analista baixava uma planilha com o
+// cabeçalho e nada para preencher (29/07/2026).
+router.get("/:id/catalogo", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const centros = await prisma.centroCusto.findMany({ where: { companyId: model.companyId, ativo: true } });
+  res.json({
+    receitas: ["Receita 1", "Receita 2", "Receita 3", "Receita 4"],
+    contas: contasDoEsqueleto(centros.map((c) => c.nome)),
+  });
+});
+
 // POST /models/:id/esqueleto — CONTAS PADRÃO, sem tocar na estrutura
 // (28/07/2026, corrigido): a versão anterior criava unidade e centros de custo
 // que a empresa não tinha. Estrutura é cadastro do cliente — o botão traz só o
@@ -2244,6 +2258,25 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   const avisosMemoria: string[] = [];
   const anoRef = String(req.body?.ano ?? model.mesInicial.slice(0, 4));
 
+  // MODO REALIZADO (30/07/2026): a MESMA planilha modelo também traz o PASSADO.
+  // body.modo === "realizado" + body.ano = o ano informado pelo analista. Nada
+  // aqui mexe nos valores ORÇADOS: o que a planilha traz vai para
+  // `realizado.porLinha` do modelo (é o que alimenta REAL ANT./Δ% da grade e o
+  // Orçado × Realizado). Conta do realizado que não existe no orçamento é
+  // criada ZERADA — orçado e realizado compartilham o MESMO plano de contas
+  // (conciliação de estrutura, pedido do usuário).
+  const modoRealizado = req.body?.modo === "realizado";
+  if (modoRealizado) {
+    const anoNum = Number(anoRef);
+    const anoExercicio = Number(model.mesInicial.slice(0, 4));
+    if (!/^\d{4}$/.test(anoRef) || !Number.isFinite(anoNum) || anoNum >= anoExercicio) {
+      res.status(400).json({ error: `Realizado é passado: o ano informado (${anoRef}) precisa ser anterior ao exercício do orçamento (${anoExercicio}).` });
+      return;
+    }
+  }
+  /** Séries do realizado a gravar por linha (id → meses do ano informado). */
+  const realPorLinha = new Map<string, { valores: Record<string, number>; grupo: "receita" | "custos" | "despesas" | "outros" }>();
+
   /** Alíquota da EMPRESA para a linha de imposto que a planilha deixou vazia. */
   const aliquotaDaEmpresa = (): number | null => {
     const cfg = (blocks.find((b) => b.tipo === "impostos")?.config ?? {}) as { impostos?: Record<string, unknown> };
@@ -2303,9 +2336,13 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         const formulasDaAba = Array.isArray((a as { formulas?: unknown }).formulas)
           ? ((a as { formulas?: Array<Array<string | null>> }).formulas)
           : undefined;
-        const mem = montarReceitasDeMemoria(a.linhas as unknown[][], formulasDaAba, {
-          anoRef, idBase: `mem${Date.now().toString(36)}`, aliquotaImpostos: aliquotaDaEmpresa(),
-        });
+        // REALIZADO não tem memória de cálculo: o passado é FATO observado —
+        // fórmula na planilha é conta do analista, e o que entra é o número.
+        const mem = modoRealizado
+          ? { linhas: [], avisos: [] } as ReturnType<typeof montarReceitasDeMemoria>
+          : montarReceitasDeMemoria(a.linhas as unknown[][], formulasDaAba, {
+            anoRef, idBase: `mem${Date.now().toString(36)}`, aliquotaImpostos: aliquotaDaEmpresa(),
+          });
         memoriaMontada = mem.linhas;
         avisosMemoria.push(...mem.avisos);
         const consumidos = new Set<string>();
@@ -2382,6 +2419,25 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   const linhasNaoOp = [...(((blocoNaoOp?.config ?? {}) as BlocoModelo["config"]).linhasCusto ?? [])];
   const linhasCapex = [...(((blocoCapexOrc?.config ?? {}) as BlocoModelo["config"]).linhasCusto ?? [])];
 
+  // VALIDAÇÃO DE DATAS DO REALIZADO (30/07/2026): o analista declarou o ANO —
+  // mês de outro ano na planilha é sinal de arquivo trocado ou seleção errada,
+  // e realizado errado contamina TODAS as variações (YoY, Δ%). Erro duro, com
+  // os meses listados; nada entra pela metade.
+  if (modoRealizado) {
+    const foraDoAno = janela.filter((m) => !m.startsWith(`${anoRef}-`));
+    if (foraDoAno.length > 0) {
+      res.status(400).json({
+        error: `A planilha traz meses fora de ${anoRef} (${foraDoAno.join(", ")}) — você pediu o realizado de ${anoRef}. Confira o ano selecionado ou o arquivo.`,
+        mesesForaDoAno: foraDoAno,
+      });
+      return;
+    }
+    if (janela.length === 0) {
+      res.status(400).json({ error: `Nenhum mês de ${anoRef} foi reconhecido no cabeçalho da planilha — os meses precisam estar em colunas (jan/${anoRef.slice(2)}, fev/${anoRef.slice(2)}…).` });
+      return;
+    }
+  }
+
   // A DECISÃO (casamento de CC/unidade, dedupe, criar × atualizar) é pura e tem
   // testes próprios — ver plano-contas.test.ts. Aqui só persistimos o plano.
   const { criar, atualizar, ignoradas, semLotacao } = planejarImportacaoPlanoContas({
@@ -2444,7 +2500,9 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       nome: c.nome,
       codigo,
       modo: "serie" as const,
-      valores: c.valores,
+      // REALIZADO: a conta entra no ORÇAMENTO zerada (conciliação de estrutura)
+      // e os números da planilha vão para realizado.porLinha, não para cá.
+      valores: modoRealizado ? {} : c.valores,
       ...(c.centroCustoId ? { centroCustoId: c.centroCustoId } : {}),
       ...(c.unidadeId ? { unidadeId: c.unidadeId } : {}),
       ...(destino ? { destino: { conta: destino, sinal: "soma" as const } } : {}),
@@ -2452,6 +2510,12 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       ...(tipoDaConta === "capex" ? { depreciacaoAnual: 0.1 } : {}),
     };
     listaDoTipo(tipoDaConta).push(linha);
+    if (modoRealizado) {
+      realPorLinha.set(linha.id, {
+        valores: c.valores,
+        grupo: tipoDaConta === "custo" ? "custos" : tipoDaConta === "despesa" ? "despesas" : "outros",
+      });
+    }
     return {
       codigo: c.codigo, nome: c.nome, tipo: tipoDaConta, lotacao: c.lotacao,
       meses: Object.keys(c.valores).length,
@@ -2468,15 +2532,24 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     const linha = linhasCusto.find((l) => l.id === up.id) ?? linhasDespesa.find((l) => l.id === up.id)
       ?? linhasNaoOp.find((l) => l.id === up.id) ?? linhasCapex.find((l) => l.id === up.id);
     if (!linha) return null;
-    const vals = { ...(linha.valores ?? {}) } as Record<string, number>;
-    for (const mes of up.janela) {
-      if (up.valores[mes] !== undefined) vals[mes] = up.valores[mes];
-      else delete vals[mes];
+    if (modoRealizado) {
+      // O ORÇADO da linha fica intacto: só o realizado daquele ano é regravado.
+      realPorLinha.set(linha.id, {
+        valores: up.valores,
+        grupo: linhasCusto.some((l) => l.id === linha.id) ? "custos"
+          : linhasDespesa.some((l) => l.id === linha.id) ? "despesas" : "outros",
+      });
+    } else {
+      const vals = { ...(linha.valores ?? {}) } as Record<string, number>;
+      for (const mes of up.janela) {
+        if (up.valores[mes] !== undefined) vals[mes] = up.valores[mes];
+        else delete vals[mes];
+      }
+      for (const [mes, v] of Object.entries(up.valores)) vals[mes] = v;
+      linha.valores = vals;
+      if (linha.modo === "pctReceita") linha.modo = "serie";
+      if (linha.detalhes?.length) delete linha.detalhes;
     }
-    for (const [mes, v] of Object.entries(up.valores)) vals[mes] = v;
-    linha.valores = vals;
-    if (linha.modo === "pctReceita") linha.modo = "serie";
-    if (linha.detalhes?.length) delete linha.detalhes;
     return {
       nome: up.nome,
       meses: Object.keys(up.valores).length,
@@ -2569,6 +2642,38 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         if (/^\d{4}-\d{2}$/.test(mes) && Number.isFinite(Number(v))) valores[mes] = Number(v);
       }
       const idx = linhasReceita.findIndex((l) => normContaGmd(l.nome) === normContaGmd(cr.nome));
+      if (modoRealizado) {
+        // REALIZADO da receita: linha existente recebe a série em
+        // realizado.porLinha (a árvore de drivers do orçamento fica intacta);
+        // nome novo com valor vira linha ZERADA + realizado — mesma conciliação
+        // de estrutura das contas de gasto.
+        if (idx >= 0) {
+          realPorLinha.set(linhasReceita[idx]!.id, { valores, grupo: "receita" });
+          receitas.atualizadas.push({
+            nome: linhasReceita[idx]!.nome,
+            meses: Object.keys(valores).length,
+            total: Object.values(valores).reduce((s, v) => s + v, 0),
+          });
+        } else if (Object.keys(valores).length > 0) {
+          const linhaId = `lin${stampR}r${seqR++}`;
+          linhasReceita.push({
+            id: linhaId, nome: cr.nome, template: "generico", nodeRaiz: `${linhaId}_receita`,
+            nodes: [{
+              id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${cr.nome}`, unidade: "R$",
+              params: { modoPreenchimento: "mes", valores: {}, valorMensal: 0, crescimentoAnual: 0 },
+            }],
+          });
+          realPorLinha.set(linhaId, { valores, grupo: "receita" });
+          receitas.criadas.push({
+            nome: cr.nome,
+            meses: Object.keys(valores).length,
+            total: Object.values(valores).reduce((s, v) => s + v, 0),
+          });
+        } else {
+          receitas.ignoradas.push(`${cr.nome} — linha nova sem nenhum valor`);
+        }
+        continue;
+      }
       if (idx >= 0) {
         const alvo = linhasReceita[idx]!;
         const noRaiz = (alvo.nodes ?? []).find((n) => n.id === alvo.nodeRaiz);
@@ -2640,13 +2745,17 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       mesesDoModelo.add(`${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`);
     }
   }
-  const mesesFora = janela.filter((m) => !mesesDoModelo.has(m));
+  // Realizado é passado: os meses dele estão fora do horizonte POR DEFINIÇÃO —
+  // o aviso de "mês fora" só vale para o orçamento.
+  const mesesFora = modoRealizado ? [] : janela.filter((m) => !mesesDoModelo.has(m));
 
   // SIMULAÇÃO (28/07/2026): a prévia do que a importação faria, sem gravar —
   // é o diff que os Pacotes (Excel) mostram antes do "Aplicar".
   if (req.body?.simular === true) {
     res.json({
       simulacao: true,
+      modo: modoRealizado ? "realizado" : "orcamento",
+      ...(modoRealizado ? { anoRealizado: anoRef } : {}),
       criadas, atualizadas, ignoradas, semLotacao,
       receitas,
       deParaSugerido: sugeridas,
@@ -2680,6 +2789,48 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     }
   }
 
+  // GRAVAÇÃO DO REALIZADO (30/07/2026): série mensal por linha no JSON
+  // `realizado` do modelo — a MESMA referência que a grade (REAL ANT./Δ%), as
+  // regras rápidas ("repetir ano anterior") e o Orçado × Realizado já leem.
+  // Mês na janela sem valor na planilha = mês sem informação (sai da série);
+  // anos anteriores já gravados ficam intactos (só a janela importada regrava).
+  const realizadoUpdate = (() => {
+    if (!modoRealizado || realPorLinha.size === 0) return null;
+    const atual = (model.realizado ?? {}) as {
+      meses?: string[]; porLinha?: Record<string, Record<string, number>>;
+      porGrupo?: { receita?: Record<string, number>; custos?: Record<string, number>; despesas?: Record<string, number> };
+    } & Record<string, unknown>;
+    const porLinha = { ...(atual.porLinha ?? {}) };
+    const soma: Record<"receita" | "custos" | "despesas", Record<string, number>> = { receita: {}, custos: {}, despesas: {} };
+    for (const [id, info] of realPorLinha) {
+      const serie = { ...(porLinha[id] ?? {}) };
+      for (const mes of janela) {
+        if (info.valores[mes] !== undefined) serie[mes] = info.valores[mes];
+        else delete serie[mes];
+      }
+      porLinha[id] = serie;
+      if (info.grupo !== "outros") {
+        for (const mes of janela) {
+          const v = info.valores[mes];
+          if (v !== undefined) soma[info.grupo][mes] = (soma[info.grupo][mes] ?? 0) + v;
+        }
+      }
+    }
+    // Totais por grupo dos meses importados: soma das contas do plano — é o
+    // fallback de quem compara por grupo quando a linha não tem par direto.
+    const porGrupo = { ...(atual.porGrupo ?? {}) };
+    for (const g of ["receita", "custos", "despesas"] as const) {
+      const serie = { ...(porGrupo[g] ?? {}) };
+      for (const mes of janela) {
+        if (soma[g][mes] !== undefined) serie[mes] = soma[g][mes];
+        else delete serie[mes];
+      }
+      porGrupo[g] = serie;
+    }
+    const meses = [...new Set([...(atual.meses ?? []), ...janela])].sort();
+    return { ...atual, meses, porLinha, porGrupo } as object;
+  })();
+
   await prisma.$transaction([
     prisma.modelBlock.update({ where: { id: blocoCusto.id }, data: { config: { ...cfgCusto, linhasCusto } as object } }),
     prisma.modelBlock.update({ where: { id: blocoDespesa.id }, data: { config: { ...cfgDespesa, linhasCusto: linhasDespesa } as object } }),
@@ -2689,9 +2840,11 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     // Contas que a planilha declarou como financeiras/capex (coluna Tipo).
     ...(blocoNaoOp ? [prisma.modelBlock.update({ where: { id: blocoNaoOp.id }, data: { config: { ...(blocoNaoOp.config as BlocoModelo["config"]), linhasCusto: linhasNaoOp } as object } })] : []),
     ...(blocoCapexOrc ? [prisma.modelBlock.update({ where: { id: blocoCapexOrc.id }, data: { config: { ...(blocoCapexOrc.config as BlocoModelo["config"]), linhasCusto: linhasCapex } as object } })] : []),
+    ...(realizadoUpdate ? [prisma.financialModel.update({ where: { id: model.id }, data: { realizado: realizadoUpdate } })] : []),
   ]);
   await registrarAuditoria({
-    userId: req.userId!, entity: "financial_model", entityId: model.id, field: "plano de contas importado",
+    userId: req.userId!, entity: "financial_model", entityId: model.id,
+    field: modoRealizado ? `realizado ${anoRef} importado (planilha modelo)` : "plano de contas importado",
     after: {
       criadas: criadas.length, atualizadas: atualizadas.length, ignoradas: ignoradas.length, semLotacao: semLotacao.length,
       receitas: { criadas: receitas.criadas.length, atualizadas: receitas.atualizadas.length },
@@ -2709,6 +2862,8 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
 
   const calc = await calcularEGravar(model.id);
   res.status(201).json({
+    modo: modoRealizado ? "realizado" : "orcamento",
+    ...(modoRealizado ? { anoRealizado: anoRef } : {}),
     criadas, atualizadas, ignoradas, semLotacao,
     receitas,
     /** De-para proposto pelo sistema (nome → conta canônica) e o que ficou sem:
