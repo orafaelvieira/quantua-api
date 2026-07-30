@@ -2256,7 +2256,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   let janela: string[] = [];
   // Linhas da aba "Receitas" do modelo multi-aba — processadas à parte, porque
   // receita mora no bloco de receitas (linhas com driver), não no plano de contas.
-  let contasReceita: Array<{ nome: string; valores: Record<string, number> }> = [];
+  let contasReceita: Array<{ nome: string; codigo?: string; valores: Record<string, number> }> = [];
   /** Linha "Deduções da receita" da planilha → série mensal do bloco (não é conta). */
   let deducoesDaPlanilha: Record<string, number> | null = null;
   // MEMÓRIA DE CÁLCULO (29/07/2026): linhas de receita cuja conta veio pronta
@@ -2382,9 +2382,12 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
           }
         }
         const ehDeducao = (nome: string) => { const k = normContaGmd(nome); return /^deducoes?\b/.test(k) && k.includes("receita"); };
+        // O CÓDIGO DA RECEITA VIAJA JUNTO (30/07/2026): a aba Receitas tem a
+        // coluna Código como a de gastos, mas o mapeamento a jogava fora — as
+        // linhas entravam com "—" e o PROCV do analista não achava nada.
         contasReceita = li.contas
           .filter((c) => !consumidos.has(normContaGmd(c.nome)) && !ehDeducao(c.nome))
-          .map((c) => ({ nome: c.nome, valores: (c.valores ?? {}) as Record<string, number> }));
+          .map((c) => ({ nome: c.nome, codigo: (c.codigo ?? "").trim(), valores: (c.valores ?? {}) as Record<string, number> }));
         janela = [...new Set([...janela, ...li.meses])];
         abasLidas.push({ aba: nomeAba, contas: contasReceita.length + mem.linhas.length, linhaCabecalho: li.linhaCabecalho });
         continue;
@@ -2670,7 +2673,21 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       for (const [mes, v] of Object.entries(cr.valores ?? {})) {
         if (/^\d{4}-\d{2}$/.test(mes) && Number.isFinite(Number(v))) valores[mes] = Number(v);
       }
-      const idx = linhasReceita.findIndex((l) => normContaGmd(l.nome) === normContaGmd(cr.nome));
+      // IDENTIDADE DA RECEITA = CÓDIGO, senão nome (30/07/2026) — a mesma régua
+      // das contas de gasto (ver plano-contas.ts): duas receitas homônimas com
+      // códigos diferentes são contas diferentes, e o código casa a linha
+      // mesmo quando o analista renomeia a conta na planilha.
+      const codCr = (cr.codigo ?? "").trim();
+      const idxPorCodigo = codCr
+        ? linhasReceita.findIndex((l) => ((l as { codigo?: string }).codigo ?? "").trim().toLowerCase() === codCr.toLowerCase())
+        : -1;
+      const idxPorNome = linhasReceita.findIndex((l) => {
+        if (normContaGmd(l.nome) !== normContaGmd(cr.nome)) return false;
+        const codL = ((l as { codigo?: string }).codigo ?? "").trim();
+        // Códigos declarados nos DOIS lados e diferentes = contas diferentes.
+        return !(codCr && codL && codL.toLowerCase() !== codCr.toLowerCase());
+      });
+      const idx = idxPorCodigo >= 0 ? idxPorCodigo : idxPorNome;
       if (modoRealizado) {
         // REALIZADO da receita: linha existente recebe a série em
         // realizado.porLinha (a árvore de drivers do orçamento fica intacta);
@@ -2683,23 +2700,25 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
             meses: Object.keys(valores).length,
             total: Object.values(valores).reduce((s, v) => s + v, 0),
           });
-        } else if (Object.keys(valores).length > 0) {
+        } else {
+          // Conciliação: a conta do realizado que não existe no orçamento nasce
+          // ZERADA nele — inclusive quando a planilha traz só a estrutura.
           const linhaId = `lin${stampR}r${seqR++}`;
+          const codigoNovo = codCr && !codigosUsados.has(codCr) ? codCr : proximoCodigo("receitaOperacional", codigosUsados);
+          codigosUsados.add(codigoNovo);
           linhasReceita.push({
-            id: linhaId, nome: cr.nome, template: "generico", nodeRaiz: `${linhaId}_receita`,
+            id: linhaId, nome: cr.nome, codigo: codigoNovo, template: "generico", nodeRaiz: `${linhaId}_receita`,
             nodes: [{
               id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${cr.nome}`, unidade: "R$",
               params: { modoPreenchimento: "mes", valores: {}, valorMensal: 0, crescimentoAnual: 0 },
             }],
-          });
-          realPorLinha.set(linhaId, { valores, grupo: "receita" });
+          } as unknown as (typeof linhasReceita)[number]);
+          if (Object.keys(valores).length > 0) realPorLinha.set(linhaId, { valores, grupo: "receita" });
           receitas.criadas.push({
             nome: cr.nome,
             meses: Object.keys(valores).length,
             total: Object.values(valores).reduce((s, v) => s + v, 0),
           });
-        } else {
-          receitas.ignoradas.push(`${cr.nome} — linha nova sem nenhum valor`);
         }
         continue;
       }
@@ -2733,27 +2752,39 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
             }],
           };
         }
+        // Código do cliente que chega numa linha que ainda não tem: adota (é a
+        // chave do PROCV). Código já ocupado por OUTRA linha não é sobrescrito.
+        if (codCr && !((linhasReceita[idx] as { codigo?: string }).codigo ?? "").trim()
+            && !codigosUsados.has(codCr)) {
+          linhasReceita[idx] = { ...linhasReceita[idx]!, codigo: codCr } as (typeof linhasReceita)[number];
+          codigosUsados.add(codCr);
+        }
         receitas.atualizadas.push({
           nome: alvo.nome,
           meses: Object.keys(valores).length,
           total: Object.values(valores).reduce((s, v) => s + v, 0),
         });
-      } else if (Object.keys(valores).length > 0) {
+      } else {
+        // CONTA DE RECEITA SEM VALOR TAMBÉM ENTRA (30/07/2026): a grade É o
+        // plano de contas do orçamento, e do lado dos gastos a planilha só com
+        // estrutura já criava a conta vazia. Na receita ela era descartada
+        // ("linha nova sem nenhum valor") — o plano do cliente chegava
+        // incompleto: das 5 receitas do MOVE FARMA só 2 entravam.
         const linhaId = `lin${stampR}r${seqR++}`;
+        const codigoNovo = codCr && !codigosUsados.has(codCr) ? codCr : proximoCodigo("receitaOperacional", codigosUsados);
+        codigosUsados.add(codigoNovo);
         linhasReceita.push({
-          id: linhaId, nome: cr.nome, template: "generico", nodeRaiz: `${linhaId}_receita`,
+          id: linhaId, nome: cr.nome, codigo: codigoNovo, template: "generico", nodeRaiz: `${linhaId}_receita`,
           nodes: [{
             id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${cr.nome}`, unidade: "R$",
             params: { modoPreenchimento: "mes", valores, valorMensal: 0, crescimentoAnual: 0 },
           }],
-        });
+        } as unknown as (typeof linhasReceita)[number]);
         receitas.criadas.push({
           nome: cr.nome,
           meses: Object.keys(valores).length,
           total: Object.values(valores).reduce((s, v) => s + v, 0),
         });
-      } else {
-        receitas.ignoradas.push(`${cr.nome} — linha nova sem nenhum valor`);
       }
     }
   }
