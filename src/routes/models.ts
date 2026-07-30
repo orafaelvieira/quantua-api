@@ -2440,7 +2440,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
 
   // A DECISÃO (casamento de CC/unidade, dedupe, criar × atualizar) é pura e tem
   // testes próprios — ver plano-contas.test.ts. Aqui só persistimos o plano.
-  const { criar, atualizar, ignoradas, semLotacao } = planejarImportacaoPlanoContas({
+  const { criar, atualizar, ignoradas, semLotacao, duplicadasNaPlanilha, mesmoNomeContasDistintas } = planejarImportacaoPlanoContas({
     contas: contas as unknown as ContaImportada[],
     existentes: [...linhasCusto, ...linhasDespesa, ...linhasNaoOp, ...linhasCapex].map((l) => {
       const x = l as unknown as { unidadeId?: string; centroCustoId?: string };
@@ -2756,7 +2756,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       simulacao: true,
       modo: modoRealizado ? "realizado" : "orcamento",
       ...(modoRealizado ? { anoRealizado: anoRef } : {}),
-      criadas, atualizadas, ignoradas, semLotacao,
+      criadas, atualizadas, ignoradas, semLotacao, duplicadasNaPlanilha, mesmoNomeContasDistintas,
       receitas,
       deParaSugerido: sugeridas,
       abas: abasLidas,
@@ -2865,6 +2865,12 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     modo: modoRealizado ? "realizado" : "orcamento",
     ...(modoRealizado ? { anoRealizado: anoRef } : {}),
     criadas, atualizadas, ignoradas, semLotacao,
+    /** Linhas que caíram na MESMA conta (nome repetido sem código que distinga):
+     *  o mês vazio foi completado, o mês em conflito voltou aqui. */
+    duplicadasNaPlanilha,
+    /** Mesmo nome, códigos diferentes = contas SEPARADAS (o plano do cliente
+     *  manda) — a grade mostra duas linhas homônimas e a tela explica por quê. */
+    mesmoNomeContasDistintas,
     receitas,
     /** De-para proposto pelo sistema (nome → conta canônica) e o que ficou sem:
      *  é o que o analista revisa, em vez de escolher conta a conta. */

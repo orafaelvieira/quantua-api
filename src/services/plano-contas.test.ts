@@ -81,6 +81,90 @@ describe("dedupe (a regra que impede dobrar a despesa)", () => {
   });
 });
 
+/** CASO REAL (30/07/2026 — planilha MOVE FARMA · v1): jan/27 fechou 896.709,51
+ *  no sistema contra 912.109,51 na planilha. Faltavam 15.400,00 — a conta
+ *  "Combustíveis" existe TRÊS vezes no plano do cliente, com CÓDIGOS
+ *  DIFERENTES (04.1.1.01.015 custo · 04.2.1.99.018 despesa · e uma terceira), e
+ *  só a do meio tinha valor. O dedupe por NOME colapsou as três na primeira
+ *  (zerada) e o valor da segunda foi descartado — pior: reportado como "já
+ *  existia sem valores novos". No plano de contas o CÓDIGO é a identidade:
+ *  códigos diferentes = contas diferentes. */
+describe("mesmo nome, CÓDIGOS diferentes = contas diferentes (plano do cliente)", () => {
+  it("as três Combustíveis do plano MOVE FARMA entram, e o valor não se perde", () => {
+    const r = planejar([
+      { codigo: "04.1.1.01.015", nome: "Combustíveis", tipo: "custo", valores: {} },
+      { codigo: "04.2.1.99.018", nome: "Combustíveis", tipo: "despesa", valores: { "2027-01": 15400 } },
+      { codigo: "0", nome: "Combustíveis", valores: {} },
+    ]);
+    expect(r.criar).toHaveLength(3);
+    const comValor = r.criar.filter((c) => Object.keys(c.valores).length > 0);
+    expect(comValor).toHaveLength(1);
+    expect(comValor[0]!.codigo).toBe("04.2.1.99.018");
+    expect(comValor[0]!.valores["2027-01"]).toBe(15400);
+    // A soma da planilha tem de sobreviver à importação — é o defeito relatado.
+    expect(r.criar.reduce((s, c) => s + (c.valores["2027-01"] ?? 0), 0)).toBe(15400);
+    // E a tela precisa poder explicar por que há três linhas de mesmo nome.
+    expect(r.mesmoNomeContasDistintas).toEqual([
+      { nome: "Combustíveis", codigos: ["04.1.1.01.015", "04.2.1.99.018", "0"] },
+    ]);
+  });
+
+  it("código diferente do EXISTENTE também é conta nova (não vira atualização)", () => {
+    const r = planejar(
+      [{ codigo: "04.2.1.99.018", nome: "Combustíveis", valores: { "2027-01": 15400 } }],
+      [{ id: "l1", nome: "Combustíveis", codigo: "04.1.1.01.015", centroCustoId: null, unidadeId: null }],
+    );
+    expect(r.atualizar).toEqual([]);
+    expect(r.criar).toHaveLength(1);
+    expect(r.criar[0]!.codigo).toBe("04.2.1.99.018");
+  });
+
+  it("existente SEM código continua casando por nome (o cliente traz o código dele)", () => {
+    // Não pode regredir: é o round-trip de quem cadastrou a conta na mão e
+    // depois passou a usar o código do plano do cliente.
+    const r = planejar(
+      [{ codigo: "9.9.9", nome: "Despesas com Viagens", valores: { "2027-01": 100 } }],
+      [{ id: "l9", nome: "Despesas com Viagens", centroCustoId: null, unidadeId: null }],
+    );
+    expect(r.criar).toEqual([]);
+    expect(r.atualizar).toHaveLength(1);
+    expect(r.atualizar[0]!.id).toBe("l9");
+  });
+
+  it("MESMO código repetido na planilha continua sendo uma conta só", () => {
+    const r = planejar([
+      { codigo: "04.2.1.99.018", nome: "Combustíveis", valores: { "2027-01": 15400 } },
+      { codigo: "04.2.1.99.018", nome: "Combustíveis (frota)", valores: { "2027-01": 900 } },
+    ]);
+    expect(r.criar).toHaveLength(1);
+    expect(r.criar[0]!.valores["2027-01"]).toBe(15400);
+  });
+});
+
+/** "NADA SOME EM SILÊNCIO" (regra da casa): quando duas linhas caem MESMO na
+ *  mesma conta, o valor da repetida não pode desaparecer sem aviso — foi isso
+ *  que escondeu o defeito das Combustíveis por uma tela inteira. */
+describe("linha repetida COM valor: aproveita o mês vazio e denuncia o conflito", () => {
+  it("mês vazio na primeira é preenchido pela repetida (nada se perde)", () => {
+    const r = planejar([
+      { nome: "Fretes", valores: { "2027-01": 1000 } },
+      { nome: "fretes", valores: { "2027-02": 2000 } },
+    ]);
+    expect(r.criar).toHaveLength(1);
+    expect(r.criar[0]!.valores).toEqual({ "2027-01": 1000, "2027-02": 2000 });
+    expect(r.duplicadasNaPlanilha[0]!.mesesAproveitados).toEqual(["2027-02"]);
+  });
+
+  it("mês com valor nas DUAS não é somado (dobraria) — volta como conflito", () => {
+    const r = planejar([
+      { nome: "Fretes", valores: { "2027-01": 1000 } },
+      { nome: "Fretes", valores: { "2027-01": 2000 } },
+    ]);
+    expect(r.criar[0]!.valores["2027-01"]).toBe(1000);
+    expect(r.duplicadasNaPlanilha[0]!.conflitos).toEqual([{ mes: "2027-01", ficou: 1000, ignorado: 2000 }]);
+  });
+});
+
 describe("classificação e de-para", () => {
   it("tipo 'custo' vai para o bloco de custos; o resto é despesa", () => {
     const r = planejar([

@@ -70,6 +70,21 @@ export interface PlanoImportacao {
   ignoradas: string[];
   /** Traziam CC/unidade que não existe na estrutura — entraram sem lotação. */
   semLotacao: string[];
+  /** LINHAS QUE CAÍRAM NA MESMA CONTA (30/07/2026): nome repetido na planilha
+   *  sem código que as distinga. O mês vazio da primeira é preenchido pela
+   *  repetida (nada se perde); mês com valor nas DUAS não é somado — dobraria a
+   *  despesa — e volta aqui para o analista decidir. Antes esse caso ia para
+   *  `ignoradas` como "já existia sem valores novos": o valor sumia em silêncio
+   *  e ainda mentia sobre o motivo. */
+  duplicadasNaPlanilha: Array<{
+    nome: string;
+    mesesAproveitados: string[];
+    conflitos: Array<{ mes: string; ficou: number; ignorado: number }>;
+  }>;
+  /** O CONTRÁRIO do de cima: mesmo nome, códigos DIFERENTES → contas separadas
+   *  (é o plano do cliente que manda). Volta listado porque a grade passa a
+   *  mostrar duas linhas com o mesmo nome, e isso tem de ter explicação. */
+  mesmoNomeContasDistintas: Array<{ nome: string; codigos: string[] }>;
 }
 
 const chaveCodigo = (c: string) => `c:${c.toLowerCase().trim()}`;
@@ -110,7 +125,10 @@ export function planejarImportacaoPlanoContas(entrada: {
 
   // Índice dos existentes POR IDENTIDADE (código, senão nome+lotação): é o que
   // torna a importação idempotente e imune a linha inserida/movida na planilha.
-  const vistos = new Map<string, LinhaExistente>();
+  // `criada` só existe nos marcadores das contas nascidas NESTA importação — é
+  // por ele que a linha repetida completa os meses em vez de perder o valor.
+  type Candidato = LinhaExistente & { criada?: ContaPlanejada };
+  const vistos = new Map<string, Candidato>();
   for (const l of existentes) {
     if (l.codigo) vistos.set(chaveCodigo(l.codigo), l);
     vistos.set(chaveNome(l.centroCustoId ?? l.unidadeId ?? null, l.nome), l);
@@ -120,6 +138,7 @@ export function planejarImportacaoPlanoContas(entrada: {
   const atualizar: PlanoImportacao["atualizar"] = [];
   const ignoradas: string[] = [];
   const semLotacao: string[] = [];
+  const duplicadasNaPlanilha: PlanoImportacao["duplicadasNaPlanilha"] = [];
 
   for (const c of contas) {
     const nome = (c.nome ?? "").trim().slice(0, 160);
@@ -146,30 +165,80 @@ export function planejarImportacaoPlanoContas(entrada: {
 
     const kCod = codigo ? chaveCodigo(codigo) : null;
     const kNome = chaveNome(centroCustoId ?? unidadeId, nome);
-    const existente = (kCod ? vistos.get(kCod) : undefined) ?? vistos.get(kNome);
+
+    // NO PLANO DE CONTAS, O CÓDIGO É A IDENTIDADE (30/07/2026 — planilha do
+    // MOVE FARMA): "Combustíveis" existe lá DUAS vezes de propósito, uma como
+    // CUSTO (04.1.1.01.015) e uma como DESPESA (04.2.1.99.018). O dedupe por
+    // NOME colapsava as duas na primeira (zerada) e o valor da segunda ia para
+    // o lixo — jan/27 fechou 896.709,51 no sistema contra 912.109,51 na
+    // planilha, exatamente os 15.400,00 dessa linha.
+    //
+    // Regra: dois lados que DECLARAM códigos e declaram códigos DIFERENTES são
+    // contas diferentes — nome igual é coincidência. Quando um dos lados NÃO
+    // tem código, o nome continua mandando: é assim que a conta cadastrada à
+    // mão recebe o código do plano do cliente na reimportação (e é a trava que
+    // impede o orçamento de dobrar — ver plano-contas.test.ts).
+    //
+    // EXCEÇÃO: folha é UMA por centro de custo (ver `chaveNome`) — decisão de
+    // produto que vale mesmo com códigos diferentes.
+    const candidatoPorNome = vistos.get(kNome);
+    const codigosDivergem = !!kCod && !!candidatoPorNome?.codigo
+      && chaveCodigo(candidatoPorNome.codigo) !== kCod && !ehNomeDeFolha(nome);
+    const existente = (kCod ? vistos.get(kCod) : undefined)
+      ?? (codigosDivergem ? undefined : candidatoPorNome);
     if (existente) {
       const temValor = Object.keys(valores).length > 0;
       if (existente.id && (temValor || janela.length > 0)) {
         atualizar.push({ id: existente.id, nome: existente.nome, valores, janela });
-      } else {
-        ignoradas.push(codigo ? `${codigo} ${nome}` : nome);
+        continue;
       }
+      // Repetida DENTRO da planilha trazendo valor: completa os meses que a
+      // primeira deixou vazios e denuncia o mês preenchido nas duas (somar
+      // dobraria a despesa; escolher em silêncio esconderia o problema).
+      if (existente.criada && temValor) {
+        const mesesAproveitados: string[] = [];
+        const conflitos: PlanoImportacao["duplicadasNaPlanilha"][number]["conflitos"] = [];
+        for (const [mes, v] of Object.entries(valores)) {
+          const atual = existente.criada.valores[mes];
+          if (atual === undefined) { existente.criada.valores[mes] = v; mesesAproveitados.push(mes); }
+          else if (atual !== v) conflitos.push({ mes, ficou: atual, ignorado: v });
+        }
+        if (mesesAproveitados.length > 0 || conflitos.length > 0) {
+          duplicadasNaPlanilha.push({ nome, mesesAproveitados, conflitos });
+          continue;
+        }
+      }
+      ignoradas.push(codigo ? `${codigo} ${nome}` : nome);
       continue;
     }
     if ((alvoCc || alvoUn) && !centroCustoId && !unidadeId) semLotacao.push(`${nome} → "${alvoCc || alvoUn}"`);
 
     const destino = (c.destino ?? "").trim() || null;
-    criar.push({
+    const nova: ContaPlanejada = {
       nome, codigo,
       ehCusto: (c.tipo ?? "").toLowerCase().startsWith("cust"),
       tipoTexto: (c.tipo ?? "").trim() || null,
       unidadeId, centroCustoId, destino, valores,
       lotacao: centroCustoId ? nomeDe(centroCustoId, centros) : unidadeId ? nomeDe(unidadeId, unidades) : "não atribuído",
-    });
-    const marcador: LinhaExistente = { nome, codigo, centroCustoId, unidadeId };
+    };
+    criar.push(nova);
+    const marcador: Candidato = { nome, codigo, centroCustoId, unidadeId, criada: nova };
     vistos.set(kNome, marcador);
     if (kCod) vistos.set(kCod, marcador);
   }
 
-  return { criar, atualizar, ignoradas, semLotacao };
+  // Mesmo nome em contas SEPARADAS (porque os códigos divergem): agrupa para a
+  // tela poder dizer "são duas contas do seu plano, não uma duplicada".
+  const porNomeCriado = new Map<string, string[]>();
+  for (const c of criar) {
+    const k = normContaGmd(c.nome);
+    if (!porNomeCriado.has(k)) porNomeCriado.set(k, []);
+    porNomeCriado.get(k)!.push(c.codigo ?? "—");
+  }
+  const mesmoNomeContasDistintas = criar
+    .filter((c, i) => criar.findIndex((x) => normContaGmd(x.nome) === normContaGmd(c.nome)) === i)
+    .filter((c) => (porNomeCriado.get(normContaGmd(c.nome)) ?? []).length > 1)
+    .map((c) => ({ nome: c.nome, codigos: porNomeCriado.get(normContaGmd(c.nome))! }));
+
+  return { criar, atualizar, ignoradas, semLotacao, duplicadasNaPlanilha, mesmoNomeContasDistintas };
 }
