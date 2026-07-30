@@ -37,7 +37,10 @@ const tokens = (s: string) => norm(s).split(" ").filter((t) => t.length > 2 && !
  */
 const VOCABULARIO: Array<{ gatilhos: RegExp; pista: RegExp; porque: string }> = [
   { gatilhos: /\b(salari|ordenad|folha|encargo|inss|fgts|13|ferias|rescis|pro labore|prolabore)\w*/, pista: /pessoa|folha|salari/, porque: "remuneração e encargos" },
-  { gatilhos: /\b(vale|beneficio|vr|va|vt|plano de saude|odontolog|convenio medico)\w*/, pista: /pessoa|beneficio/, porque: "benefício de pessoal" },
+  // VR/VA/VT são SIGLAS — palavra inteira (30/07/2026): "va\w*" engolia
+  // "Variação Cambial Ativa" e a mandava para Despesas com Pessoas (defeito
+  // real do plano MOVE FARMA).
+  { gatilhos: /\b(vale|beneficio|plano de saude|odontolog|convenio medico)\w*|\bvr\b|\bva\b|\bvt\b/, pista: /pessoa|beneficio/, porque: "benefício de pessoal" },
   { gatilhos: /\b(aluguel|condominio|iptu|locacao)\w*/, pista: /aluguel|condominio|iptu|ocupac/, porque: "ocupação" },
   { gatilhos: /\b(energia|eletric|agua|esgoto|saneament|telefon|internet|link|utilidade)\w*/, pista: /utilidade|energia|agua|telefon/, porque: "utilidades" },
   { gatilhos: /\b(frete|transporte|logistic|entrega|carreto)\w*/, pista: /frete|transporte|logistic/, porque: "frete e logística" },
@@ -62,8 +65,14 @@ const VOCABULARIO: Array<{ gatilhos: RegExp; pista: RegExp; porque: string }> = 
   { gatilhos: /\b(deprecia|amortiza)\w*/, pista: /deprecia|amortiza/, porque: "depreciação/amortização" },
   // "tarifas? bancaria": o singular puro não casava "Tarifas bancárias" (o \w*
   // do grupo não cobre o S no meio) — era um dos sem-de-para do usuário.
+  // RESULTADO CAMBIAL/FINANCEIRO (30/07/2026 — plano MOVE FARMA): "Variação
+  // Cambial Ativa" caía na IA e virou "Despesas com Pessoas"; rendimento de
+  // aplicação ficava sem sugestão. Regra determinística ANTES da IA.
+  { gatilhos: /\bcambia(l|is)\b|\bhedge\b|\bswap\b/, pista: /financeir|cambial/, porque: "resultado cambial/financeiro" },
+  { gatilhos: /\brendimentos? de aplicac\w*|\baplicac\w* financeir\w*|\bjuros ativ\w*/, pista: /financeir/, porque: "resultado financeiro" },
   { gatilhos: /\b(juros|financeir|tarifas? bancaria|iof|banco|cobranca|taxas? de cartao|meios de pagamento|adquirencia|antecipacao de recebiv)\w*/, pista: /financeir|juros|tarifa/, porque: "despesa financeira" },
-  { gatilhos: /\b(imposto|tributo|icms|iss|pis|cofins|simples)\w*/, pista: /imposto|tributo/, porque: "tributos" },
+  // "isqn" é grafia corrente de ISSQN (o \w* de "iss" não cobre o Q no meio).
+  { gatilhos: /\b(imposto|tributo|icms|iss|isqn|pis|cofins|simples)\w*/, pista: /imposto|tributo/, porque: "tributos" },
   // SST/ASO são siglas — palavra inteira, senão casariam dentro de outras.
   { gatilhos: /\b(treinament|capacitac|curso|recrutament|selecao|medicina|seguranca do trabalho|ocupacional)\w*|\bsst\b|\baso\b/, pista: /treinament|pessoa|recursos humanos/, porque: "desenvolvimento de pessoas" },
   { gatilhos: /\b(escritorio|copa|limpeza|papelaria|consumo)\w*/, pista: /material|escritorio|administrativ/, porque: "consumo administrativo" },
