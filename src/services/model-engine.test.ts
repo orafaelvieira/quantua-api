@@ -1742,3 +1742,57 @@ describe("salário por ano", () => {
     expect(c["2029-06"]).toBeCloseTo(2_200, 4);
   });
 });
+
+describe("motor × planilha importada: componentes desligados (30/07/2026)", () => {
+  const receita100k = () => blocoReceitaSerie({ valorMensal: 100_000 });
+  const impostosPresumido = (desativados?: string[]): BlocoModelo => ({
+    id: "b10", tipo: "impostos", nome: "Impostos", ativo: true,
+    config: { impostos: { regime: "presumido", presuncaoIRPJ: 0.32, presuncaoCSLL: 0.32, pisCofinsPct: 0.0365, issPct: 0.02, icmsPct: 0.05, ...(desativados ? { desativados } : {}) } } as BlocoModelo["config"],
+  });
+
+  it("ICMS desligado: sai da soma (a conta importada é quem carrega o imposto)", () => {
+    const com = calcularModelo({ mesInicial: "2026-01", horizonteMeses: 12, blocks: [receita100k(), impostosPresumido()] });
+    const sem = calcularModelo({ mesInicial: "2026-01", horizonteMeses: 12, blocks: [receita100k(), impostosPresumido(["icms"])] });
+    expect(com.series["impostos_receita_total"]["2026-06"]).toBeCloseTo(100_000 * (0.0365 + 0.02 + 0.05), 2);
+    expect(sem.series["impostos_receita_total"]["2026-06"]).toBeCloseTo(100_000 * (0.0365 + 0.02), 2);
+    expect(sem.series["impostos_icms"]).toBeUndefined();
+  });
+
+  it("IRPJ/CSLL desligado: a provisao vem das contas importadas — motor zera", () => {
+    const r = calcularModelo({ mesInicial: "2026-01", horizonteMeses: 12, blocks: [receita100k(), impostosPresumido(["irCsll"])] });
+    const linhaIr = r.dre.find((l) => l.id === "irpj-csll")!;
+    expect(linhaIr.valores["2026-06"]).toBe(0);
+    const lair = r.dre.find((l) => l.id === "lair")!;
+    const ll = r.dre.find((l) => l.id === "lucro-liquido")!;
+    expect(ll.valores["2026-06"]).toBeCloseTo(lair.valores["2026-06"], 2);
+  });
+
+  it("DAS do Simples desligado: impostos sobre a receita zeram e a prova explica", () => {
+    const r = calcularModelo({
+      mesInicial: "2026-01", horizonteMeses: 12,
+      blocks: [receita100k(), {
+        id: "b10", tipo: "impostos", nome: "Impostos", ativo: true,
+        config: { impostos: { regime: "simples", anexo: "III", rbt12Inicial: 1_200_000, desativados: ["simples"] } } as BlocoModelo["config"],
+      }],
+    });
+    expect(r.series["impostos_receita_total"]["2026-06"]).toBe(0);
+  });
+
+  it("depreciarCapex=false: linhas capex nao depreciam; o legado segue normal", () => {
+    const capex = (flag: boolean | undefined): BlocoModelo => ({
+      id: "b6", tipo: "capex", nome: "Investimentos", ativo: true,
+      config: {
+        linhasCusto: [{ id: "cx", nome: "Maquinas novas", modo: "fixoReajuste", valorMensal: 12_000, depreciacaoAnual: 0.12 }],
+        ativosExistentes: [{ id: "a1", nome: "Imobilizado existente", valor: 120_000, taxaAnual: 0.1 }],
+        ...(flag === false ? { depreciarCapex: false } : {}),
+      } as BlocoModelo["config"],
+    });
+    const com = calcularModelo({ mesInicial: "2026-01", horizonteMeses: 12, blocks: [receita100k(), capex(undefined)] });
+    const sem = calcularModelo({ mesInicial: "2026-01", horizonteMeses: 12, blocks: [receita100k(), capex(false)] });
+    // Legado: 120.000 × 10% a.a. = 1.000/mes — e SO isso quando o check esta desmarcado.
+    expect(sem.series["depreciacao_total"]["2026-06"]).toBeCloseTo(1_000, 2);
+    expect(com.series["depreciacao_total"]["2026-06"]).toBeGreaterThan(1_000);
+    // O capex em si continua saindo no fluxo de investimento (nada some do FCI).
+    expect(sem.series["capex_total"]["2026-06"]).toBeCloseTo(12_000, 2);
+  });
+});

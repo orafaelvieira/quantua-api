@@ -2906,6 +2906,49 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     return { ...atual, meses, porLinha, porGrupo } as object;
   })();
 
+  // ── MOTOR × PLANILHA (30/07/2026, pedido do usuário): a planilha importada
+  // pode JÁ trazer o cálculo dos impostos (ICMS/PIS/COFINS/ISS, provisão de
+  // IRPJ/CSLL) e a depreciação do capex como CONTAS. Se o motor também
+  // calculasse, contaria DUAS VEZES — a importação detecta e DESLIGA o
+  // componente correspondente (checks nas abas Impostos/Investimentos; o
+  // analista pode religar — considerar os dois é decisão dele).
+  const motorAjustado = { impostosDesativados: [] as string[], depreciacaoCapexDesligada: false };
+  if (!modoRealizado) {
+    const componentes = new Set<string>();
+    let temContaDepreciacao = false;
+    const detectar = (nome: string) => {
+      const k = normContaGmd(nome);
+      if (/\bicms\b/.test(k) && !/compra/.test(k)) componentes.add("icms");
+      if (/\bpis\b|\bcofins\b/.test(k)) componentes.add("pisCofins");
+      if (/\biss\b|\bissqn\b|\bisqn\b/.test(k)) componentes.add("iss");
+      if (/\bsimples nacional\b|\bdas\b/.test(k)) componentes.add("simples");
+      if (/\birpj\b|\bcsll\b|imposto de renda|contribuicao social/.test(k)) componentes.add("irCsll");
+      if (/^deprecia|^amortizac|\bdepreciacao\b|\bamortizacao\b/.test(k)) temContaDepreciacao = true;
+    };
+    for (const c of criadas) detectar(c.nome);
+    for (const a of atualizadas) detectar(a.nome);
+
+    const blocoImp = blocks.find((b) => b.tipo === "impostos");
+    if (componentes.size > 0 && blocoImp) {
+      const cfgI = (blocoImp.config ?? {}) as { impostos?: { desativados?: string[] } };
+      const atuais = new Set(cfgI.impostos?.desativados ?? []);
+      const novos = [...componentes].filter((c) => !atuais.has(c));
+      if (novos.length > 0) {
+        motorAjustado.impostosDesativados = novos;
+        await prisma.modelBlock.update({
+          where: { id: blocoImp.id },
+          data: { config: { ...(blocoImp.config as object), impostos: { ...(cfgI.impostos ?? {}), desativados: [...atuais, ...novos] } } as object },
+        });
+      }
+    }
+    // Depreciação importada + capex no orçamento = a derivada do motor sai.
+    if (temContaDepreciacao && blocoCapexOrc && linhasCapex.length > 0
+        && (blocoCapexOrc.config as { depreciarCapex?: boolean }).depreciarCapex !== false) {
+      motorAjustado.depreciacaoCapexDesligada = true;
+      (blocoCapexOrc.config as { depreciarCapex?: boolean }).depreciarCapex = false;
+    }
+  }
+
   // DEDUÇÕES DA PLANILHA: a janela regrava os meses digitados — mês da janela
   // SEM valor devolve o mês ao % vivo (não zera: vazio aqui é "sem fato").
   const deducoesNovas = (() => {
@@ -2935,6 +2978,8 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     after: {
       criadas: criadas.length, atualizadas: atualizadas.length, ignoradas: ignoradas.length, semLotacao: semLotacao.length,
       receitas: { criadas: receitas.criadas.length, atualizadas: receitas.atualizadas.length },
+      ...(motorAjustado.impostosDesativados.length > 0 || motorAjustado.depreciacaoCapexDesligada
+        ? { motorAjustado } : {}),
       abas: abasLidas.map((a) => `${a.aba}${a.ignorada ? ` (${a.ignorada})` : ` (${a.contas})`}`),
       amostra: criadas.slice(0, 10).map((x) => `${x.codigo ?? "—"} ${x.nome} (${x.lotacao})`),
       // Registro do custo de IA da etapa ([[registrar-custo-ia]]).
@@ -2958,6 +3003,9 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     /** Mesmo nome, códigos diferentes = contas SEPARADAS (o plano do cliente
      *  manda) — a grade mostra duas linhas homônimas e a tela explica por quê. */
     mesmoNomeContasDistintas,
+    /** O que a importação DESLIGOU no motor para não contar duas vezes
+     *  (impostos que vieram como conta; depreciação do capex importada). */
+    motorAjustado,
     /** Linha "Deduções da receita" da planilha → preencheu a linha de deduções
      *  do bloco (meses digitados), sem criar conta. */
     deducoesImportadas: deducoesNovas ? Object.keys(deducoesDaPlanilha ?? {}).length : 0,

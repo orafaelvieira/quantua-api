@@ -348,6 +348,12 @@ export interface ConfigImpostos {
   issPct?: number;
   /** ICMS líquido sobre a receita (comércio/indústria) — simplificação (débito−crédito). */
   icmsPct?: number;
+  /** COMPONENTES DESLIGADOS (30/07/2026): a planilha importada já traz a conta
+   *  do imposto — o motor NÃO calcula o componente, senão contaria duas vezes.
+   *  A importação desmarca sozinha ao detectar as contas; o analista pode
+   *  religar na aba Impostos (decisão dele considerar os dois).
+   *  Valores: "simples" | "pisCofins" | "iss" | "icms" | "irCsll". */
+  desativados?: string[];
 }
 
 /** TABELAS DO SIMPLES NACIONAL (LC 123/2006, redação da LC 155/2016 — vigentes
@@ -452,6 +458,12 @@ export interface BlocoModelo {
      *  BP v3 do IBR — o balanço projetado CONTINUA os saldos brutos e as
      *  redutoras "(-) Depreciação"/"(-) Amortização" do histórico. */
     aberturaSegregada?: { imobilizadoBruto?: number; depreciacaoAcumulada?: number; intangivelBruto?: number; amortizacaoAcumulada?: number };
+    /** Só em bloco CAPEX (30/07/2026): false = o motor NÃO deprecia as linhas
+     *  de capex do orçamento — a planilha importada já traz a conta de
+     *  depreciação e calcular aqui somaria duas vezes. A importação desliga
+     *  sozinha ao detectar as duas coisas; o analista religa na aba
+     *  Investimentos. Legado/ativos existentes seguem depreciando normalmente. */
+    depreciarCapex?: boolean;
     /** Só em bloco GIRO (capital de giro): dias de PMR/PME/PMP — flat + por ano
      *  (ano sem valor repete o vigente, como os %s dos custos). */
     pmr?: number;
@@ -1864,8 +1876,12 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     const taxaPorLinha = new Map<string, number>();
     const carenciaPorLinha = new Map<string, number>();
     const naturezaPorLinha = new Map<string, "imob" | "intang">();
+    // depreciarCapex === false: a depreciação já vem como CONTA da planilha
+    // importada — taxa 0 nas linhas do orçamento (o capex continua no FCI e no
+    // BP; só a derivação da despesa sai). Legado deprecia normalmente.
+    const depreciarLinhas = blocoCapex!.config.depreciarCapex !== false;
     for (const l of [...(blocoCapex!.config.linhasCusto ?? []), ...(blocoCapex!.config.linhasReceita ?? [])]) {
-      taxaPorLinha.set(l.id, num(l.depreciacaoAnual, 0.1));
+      taxaPorLinha.set(l.id, depreciarLinhas ? num(l.depreciacaoAnual, 0.1) : 0);
       carenciaPorLinha.set(l.id, Math.max(0, Math.round(num(l.carenciaMeses))));
       naturezaPorLinha.set(l.id, ehIntangivel((l as { tipoAtivo?: string }).tipoAtivo, l.nome) ? "intang" : "imob");
     }
@@ -2114,7 +2130,13 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   const impostosReceita: Serie = {};
   const estourosSimples: string[] = [];
   let provaImpostos = "";
-  if (regime === "simples") {
+  // COMPONENTE DESLIGADO (30/07/2026): o imposto já veio como CONTA na planilha
+  // importada — calcular aqui somaria duas vezes. O check fica na aba Impostos.
+  const impDesligado = new Set(Array.isArray(cfgImp?.desativados) ? cfgImp!.desativados : []);
+  if (regime === "simples" && impDesligado.has("simples")) {
+    for (const mes of meses) impostosReceita[mes] = 0;
+    provaImpostos = "DAS do Simples DESLIGADO na aba Impostos — o imposto entra pelas contas do orçamento (planilha importada)";
+  } else if (regime === "simples") {
     const anexoBase = cfgImp!.anexo ?? "III";
     const rbt12Inicial = Math.max(0, num(cfgImp!.rbt12Inicial));
     const rbt12Serie: Serie = {};
@@ -2143,9 +2165,9 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     series["aliquota_efetiva_simples"] = aliqSerie;
     provaImpostos = `Simples anexo ${anexoBase}${cfgImp!.usarFatorR ? " (fator R automático)" : ""}: alíquota efetiva de ${(aliqSerie[meses[0]] * 100).toFixed(2)}% (1º mês) a ${(aliqSerie[meses[meses.length - 1]] * 100).toFixed(2)}% (último)`;
   } else if (regime) {
-    const pisCofins = Math.max(0, num(cfgImp!.pisCofinsPct, regime === "presumido" ? 0.0365 : 0.0925));
-    const iss = Math.max(0, num(cfgImp!.issPct));
-    const icms = Math.max(0, num(cfgImp!.icmsPct));
+    const pisCofins = impDesligado.has("pisCofins") ? 0 : Math.max(0, num(cfgImp!.pisCofinsPct, regime === "presumido" ? 0.0365 : 0.0925));
+    const iss = impDesligado.has("iss") ? 0 : Math.max(0, num(cfgImp!.issPct));
+    const icms = impDesligado.has("icms") ? 0 : Math.max(0, num(cfgImp!.icmsPct));
     // Componentes ABERTOS (o resumo da aba e o Excel detalham a composição).
     const sPisCofins: Serie = {};
     const sIss: Serie = {};
@@ -2161,6 +2183,7 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     if (iss > 0) series["impostos_iss"] = sIss;
     if (icms > 0) series["impostos_icms"] = sIcms;
     provaImpostos = `${regime === "presumido" ? "Presumido" : "Real"}: ${((pisCofins + iss + icms) * 100).toFixed(2)}% sobre a receita (PIS/COFINS${iss ? " + ISS" : ""}${icms ? " + ICMS" : ""}) + IRPJ/CSLL abaixo do resultado`;
+    if (impDesligado.size > 0) provaImpostos += ` · componente(s) DESLIGADO(S) na aba Impostos (o imposto entra pelas contas importadas): ${[...impDesligado].join(", ")}`;
     // ELEGIBILIDADE do Presumido: receita ANUAL acima de R$ 78 mi obriga o
     // Lucro Real no ano seguinte (art. 13 da Lei 9.718). A presunção NÃO muda
     // com o faturamento — o check aponta a migração, sem alterar a conta.
@@ -2197,7 +2220,9 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
           .filter((l) => l.id !== "folha-custos" && l.id !== "folha-despesas")
           .reduce((s, l) => s + Math.max(0, l.valores[mes] ?? 0), 0);
     }
-    const pisCofinsAtual = Math.max(0, num(cfgImp!.pisCofinsPct, regime === "presumido" ? 0.0365 : 0.0925));
+    // Componente desligado fica fora TAMBÉM no mundo reforma (o imposto veio
+    // pelas contas importadas — a régua é a mesma nos dois mundos).
+    const pisCofinsAtual = impDesligado.has("pisCofins") ? 0 : Math.max(0, num(cfgImp!.pisCofinsPct, regime === "presumido" ? 0.0365 : 0.0925));
     const r = calcularImpostosReforma({
       meses,
       receita: receitaBase, // vendas canceladas também ficam fora do IBS/CBS
@@ -2205,7 +2230,8 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
       capex: series["capex_total"] ?? {},
       cfg: input.reforma,
       pisCofinsPct: pisCofinsAtual,
-      icmsIssPct: Math.max(0, num(cfgImp!.issPct)) + Math.max(0, num(cfgImp!.icmsPct)),
+      icmsIssPct: (impDesligado.has("iss") ? 0 : Math.max(0, num(cfgImp!.issPct)))
+        + (impDesligado.has("icms") ? 0 : Math.max(0, num(cfgImp!.icmsPct))),
     });
     for (const mes of meses) impostosReceita[mes] = r.impostosConsumo[mes] ?? 0;
     // No mundo reforma os componentes atuais não somam ao total novo — saem
@@ -2341,7 +2367,12 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   // Simples: já está no DAS — vai direto ao lucro líquido.
   if (regime) {
     const irpjCsll: Serie = {};
-    if (regime === "presumido") {
+    if (impDesligado.has("irCsll")) {
+      // Provisão de IRPJ/CSLL veio como CONTA na planilha importada — o motor
+      // não recalcula (senão contaria duas vezes). Check na aba Impostos.
+      for (const mes of meses) irpjCsll[mes] = 0;
+      provaImpostos += " · IRPJ/CSLL DESLIGADO na aba Impostos (a provisão entra pelas contas importadas)";
+    } else if (regime === "presumido") {
       const pIr = Math.max(0, num(cfgImp!.presuncaoIRPJ, 0.08));
       const pCs = Math.max(0, num(cfgImp!.presuncaoCSLL, 0.12));
       // LC 224/2025 (26/12/2025, efeitos desde jan/2026): a presunção sobe 10%
