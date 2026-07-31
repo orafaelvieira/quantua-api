@@ -67,18 +67,75 @@ function opcoesBPDoGrupo(grupoDoc: string): string[] {
     .map((l) => l.conta);
 }
 
+/** Itens por chamada: a RESPOSTA (JSON com justificativas) precisa caber FOLGADA em
+ *  max_tokens. Lote de balancete grande (caso Belagro: >60 não-mapeadas) estourava o
+ *  teto → JSON truncado → parse falhava → ZERO sugestões, silenciosamente. */
+const LOTE_MAX = 25;
+
+/** Parser tolerante a TRUNCAMENTO: recupera os objetos COMPLETOS de um array JSON
+ *  cortado no meio (resposta que bateu em max_tokens) — o rabo incompleto é
+ *  descartado, o resto vale. Respeita strings/escapes. Exportado p/ teste. */
+export function parseArrayTolerante(txt: string): any[] {
+  try { const v = JSON.parse(txt); return Array.isArray(v) ? v : []; } catch { /* segue p/ resgate */ }
+  const ini = txt.indexOf("[");
+  if (ini < 0) return [];
+  const out: any[] = [];
+  let depth = 0, emStr = false, esc = false, objIni = -1;
+  for (let i = ini + 1; i < txt.length; i++) {
+    const c = txt[i];
+    if (emStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') emStr = false;
+      continue;
+    }
+    if (c === '"') { emStr = true; continue; }
+    if (c === "{") { if (depth === 0) objIni = i; depth++; }
+    else if (c === "}") {
+      depth--;
+      if (depth === 0 && objIni >= 0) {
+        try { out.push(JSON.parse(txt.slice(objIni, i + 1))); } catch { /* objeto quebrado — ignora */ }
+        objIni = -1;
+      }
+    } else if (c === "]" && depth === 0) break;
+  }
+  return out;
+}
+
 /**
  * Gera sugestões para o lote de não-mapeadas. Best-effort: em erro, retorna mapa
- * vazio (a tela fica sem dica, nunca quebra o processamento).
+ * vazio (a tela fica sem dica, nunca quebra o processamento). Lotes grandes são
+ * fatiados em chamadas de LOTE_MAX itens — a falha de uma fatia não derruba as
+ * demais (melhor sugestão parcial que nenhuma).
  */
 export async function sugerirClassificacoesIA(
   naoMapeados: NaoMapeado[],
   ctx: { setor?: string | null; receitaUltimoAno?: number | null },
   dreInputs: string[],
 ): Promise<{ sugestoes: Record<string, SugestaoIA>; custo: CustoIA | null }> {
-  const itens = naoMapeados.filter((nm) => nm.nome && typeof nm.valor === "number");
-  if (itens.length === 0) return { sugestoes: {}, custo: null };
+  const todos = naoMapeados.filter((nm) => nm.nome && typeof nm.valor === "number");
+  if (todos.length === 0) return { sugestoes: {}, custo: null };
 
+  const sugestoes: Record<string, SugestaoIA> = {};
+  let inTok = 0, outTok = 0, chamou = false;
+  for (let i = 0; i < todos.length; i += LOTE_MAX) {
+    const fatia = todos.slice(i, i + LOTE_MAX);
+    const r = await sugerirFatia(fatia, ctx, dreInputs);
+    if (r) {
+      Object.assign(sugestoes, r.sugestoes);
+      inTok += r.inputTokens; outTok += r.outputTokens; chamou = true;
+    }
+  }
+  return { sugestoes, custo: chamou ? calcCusto(MODELO_SUGESTAO, inTok, outTok) : null };
+}
+
+/** UMA chamada Haiku para uma fatia de até LOTE_MAX itens. null em erro (a fatia
+ *  fica sem dica; as demais seguem). */
+async function sugerirFatia(
+  itens: NaoMapeado[],
+  ctx: { setor?: string | null; receitaUltimoAno?: number | null },
+  dreInputs: string[],
+): Promise<{ sugestoes: Record<string, SugestaoIA>; inputTokens: number; outputTokens: number } | null> {
   const linhas = itens.map((nm, i) => {
     const opcoes = nm.tipo === "BP"
       ? opcoesBPDoGrupo(nm.grupo)
@@ -110,10 +167,9 @@ Responda APENAS JSON: [{"i":1,"sugestao":"...","justificativa":"...","confianca"
     });
     let txt = msg.content?.[0]?.type === "text" ? msg.content[0].text.trim() : "";
     if (txt.startsWith("```")) txt = txt.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
-    let arr: any[] = [];
-    try { arr = JSON.parse(txt); } catch {
-      const ini = txt.indexOf("["), fim = txt.lastIndexOf("]");
-      if (ini >= 0 && fim > ini) { try { arr = JSON.parse(txt.slice(ini, fim + 1)); } catch { arr = []; } }
+    const arr = parseArrayTolerante(txt);
+    if (msg.stop_reason === "max_tokens") {
+      console.warn(`[sugestoes] resposta truncada em max_tokens (${itens.length} itens na fatia) — ${arr.length} objetos resgatados`);
     }
     const sugestoes: Record<string, SugestaoIA> = {};
     for (const r of arr) {
@@ -130,10 +186,9 @@ Responda APENAS JSON: [{"i":1,"sugestao":"...","justificativa":"...","confianca"
         ...(r.verificar ? { verificar: String(r.verificar).slice(0, 300) } : {}),
       };
     }
-    const custo = calcCusto(MODELO_SUGESTAO, msg.usage?.input_tokens ?? 0, msg.usage?.output_tokens ?? 0);
-    return { sugestoes, custo };
+    return { sugestoes, inputTokens: msg.usage?.input_tokens ?? 0, outputTokens: msg.usage?.output_tokens ?? 0 };
   } catch (e: any) {
-    console.warn(`[sugestoes] falhou (segue sem dica): ${e?.message ?? e}`);
-    return { sugestoes: {}, custo: null };
+    console.warn(`[sugestoes] fatia falhou (segue sem dica): ${e?.message ?? e}`);
+    return null;
   }
 }
