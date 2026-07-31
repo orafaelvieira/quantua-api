@@ -65,14 +65,18 @@ jobs:
             echo "::error::Segredo ANTHROPIC_API_KEY ausente no repositório — rode: gh secret set ANTHROPIC_API_KEY -R orafaelvieira/quantua-api"
             exit 1
           fi
-          # A chave ANTIGA estava mapeada do Secret Manager (mesmo nome) — o
-          # --remove-secrets desfaz o mapeamento para a env var poder assumir.
-          # Idempotente: com o mapeamento já removido, o flag vira no-op.
+          # A chave ANTIGA estava mapeada do Secret Manager (mesmo nome), e o
+          # gcloud recusa remover o mapeamento E definir a env var no MESMO
+          # comando ("Cannot update environment variable ... different type").
+          # Duas fases: 1) desfaz o mapeamento (vira no-op com "|| true" quando
+          # já não existe); 2) o deploy define a env var declarada.
+          gcloud run services update quantua-api \
+            --region=southamerica-east1 \
+            --remove-secrets=ANTHROPIC_API_KEY || true
           gcloud run deploy quantua-api \
             --image=southamerica-east1-docker.pkg.dev/quantua/quantua/quantua-api:${{ github.sha }} \
             --region=southamerica-east1 \
             --timeout=1800 \
             --min-instances=1 \
             --max-instances=1 \
-            --remove-secrets=ANTHROPIC_API_KEY \
             --update-env-vars=ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
