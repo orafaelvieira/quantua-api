@@ -36,28 +36,34 @@ const tokens = (s: string) => norm(s).split(" ").filter((t) => t.length > 2 && !
  * modelo não tiver aquela conta, a regra simplesmente não se aplica.
  */
 const VOCABULARIO: Array<{ gatilhos: RegExp; pista: RegExp; porque: string }> = [
-  { gatilhos: /\b(salari|ordenad|folha|encargo|inss|fgts|13|ferias|rescis|pro labore|prolabore)\w*/, pista: /pessoa|folha|salari/, porque: "remuneração e encargos" },
+  // FOLHA (30/07/2026 — plano MOVE FARMA): horas extras, gratificações, PPR e
+  // companhia ficavam SEM regra e caíam na IA (ou em nada).
+  { gatilhos: /\b(salari|ordenad|folha|encargo|inss|fgts|13|ferias|rescis|pro labore|prolabore|gratificac|abono)\w*|\bhoras? extras?\b|\badicional noturno\b|\bppr\b|\bplr\b|participacao nos resultados/, pista: /pessoa|folha|salari/, porque: "remuneração e encargos" },
   // VR/VA/VT são SIGLAS — palavra inteira (30/07/2026): "va\w*" engolia
   // "Variação Cambial Ativa" e a mandava para Despesas com Pessoas (defeito
   // real do plano MOVE FARMA).
-  { gatilhos: /\b(vale|beneficio|plano de saude|odontolog|convenio medico)\w*|\bvr\b|\bva\b|\bvt\b/, pista: /pessoa|beneficio/, porque: "benefício de pessoal" },
+  { gatilhos: /\b(vale|beneficio|plano de saude|odontolog|convenio medico|alimentac|refeic|cesta basica|uniforme|admissional|demissional|confraternizac)\w*|\bvr\b|\bva\b|\bvt\b|\bepi\b|equipamentos? e protecao|assistencia medica|assistencia social|ajuda de custo|reembolso (de )?despesas|despesas? medicas/, pista: /pessoa|beneficio/, porque: "benefício de pessoal" },
   { gatilhos: /\b(aluguel|condominio|iptu|locacao)\w*/, pista: /aluguel|condominio|iptu|ocupac/, porque: "ocupação" },
-  { gatilhos: /\b(energia|eletric|agua|esgoto|saneament|telefon|internet|link|utilidade)\w*/, pista: /utilidade|energia|agua|telefon/, porque: "utilidades" },
+  { gatilhos: /\b(energia|eletric|agua|esgoto|saneament|telefon|internet|link|utilidade|comunicacao)\w*/, pista: /utilidade|energia|agua|telefon/, porque: "utilidades" },
   { gatilhos: /\b(frete|transporte|logistic|entrega|carreto)\w*/, pista: /frete|transporte|logistic/, porque: "frete e logística" },
   // Comissão sem canônica própria cai em "Despesas com Vendas" — é onde ela
   // mora no DRE_TEMPLATE (flagrado pelo usuário: ficava sem de-para).
-  { gatilhos: /\b(comissa|comission)\w*/, pista: /comiss|com vendas/, porque: "comissão de vendas" },
-  { gatilhos: /\b(viagem|viagens|hospedag|passage|diaria)\w*/, pista: /viage|deslocament/, porque: "viagens" },
+  { gatilhos: /\b(comissa|comission|corretag)\w*/, pista: /comiss|com vendas/, porque: "comissão/corretagem de vendas" },
+  { gatilhos: /\b(viagem|viagens|hospedag|passage|diaria|conducao)\w*|\btaxi\b|\buber\b/, pista: /viage|deslocament/, porque: "viagens e deslocamento" },
   { gatilhos: /\b(marketing|publicidade|propaganda|midia|patrocin|feira|evento|brinde|amostra|agencia|conteudo|influenc)\w*/, pista: /marketing|publicidade|propaganda|comercial/, porque: "marketing" },
   { gatilhos: /\b(software|licenca|sistema|nuvem|cloud|ti|tecnologia|informatica)\w*/, pista: /software|licenc|tecnolog|informatic|ti\b/, porque: "tecnologia" },
-  { gatilhos: /\b(honorari|advocat|juridic|contabil|auditoria|consultor|assessor)\w*/, pista: /honorari|servico de terceiro|terceiro|juridic|contabil/, porque: "serviços profissionais" },
+  { gatilhos: /\b(honorari|advocat|juridic|contabil|auditoria|consultor|assessor|vigilancia|portaria)\w*|servicos? de terceiros?|prestadores? de servicos?/, pista: /honorari|servico de terceiro|terceiro|juridic|contabil/, porque: "serviços de terceiros" },
   { gatilhos: /\b(seguro|apolice)\w*/, pista: /seguro/, porque: "seguros" },
   // Veículos ANTES de manutenção: "Veículos (combustível e manutenção)" é conta
   // de frota — caía em "Limpeza, Manutenção e Reparos" porque manutenção vinha
   // primeiro e a ordem das regras decide.
-  { gatilhos: /\b(combustivel|veiculo|frota|pedagio)\w*/, pista: /veiculo|frota|combustivel/, porque: "frota" },
+  { gatilhos: /\b(combustivel|veiculo|frota|pedagio|licenciamento|aeronave)\w*|\bipva\b/, pista: /veiculo|frota|combustivel/, porque: "frota" },
   { gatilhos: /\b(manutenc|reparo|conserto|peca)\w*/, pista: /manutenc|reparo/, porque: "manutenção" },
-  { gatilhos: /\b(materia prima|insumo|mercadoria|cmv|custo da mercadoria|materiais?)\w*/, pista: /custo operacional|mercadoria|materia prima|cmv|insumo/, porque: "consumo de material" },
+  // COMPRAS/CADEIA DE SUPRIMENTO (30/07/2026 — MOVE FARMA): compra de
+  // mercadoria/semente, devoluções de compras, armazenagem e o ICMS SOBRE
+  // COMPRAS (que integra o custo — por isso esta regra vem ANTES da de
+  // tributos, senão "ICMS sobre Compras" viraria imposto de faturamento).
+  { gatilhos: /\b(materia prima|insumo|mercadoria|cmv|custo da mercadoria|materiais?|semente|armazenag|armazem)\w*|compras? de |devoluc(ao|oes) de compras?|icms sobre compras|impostos? sobre compras/, pista: /custo operacional|mercadoria|materia prima|cmv|insumo/, porque: "compras e consumo de material" },
   // Agregados genéricos dos modelos antigos: melhor a regra do que deixar a IA
   // filosofar ("Custos sobre a receita" virou Impostos s/ Faturamento num teste).
   { gatilhos: /\bcustos? sobre (a )?receita\b|\bcusto das? (vendas|mercadorias)\b|\bcpv\b|\bcsv\b/, pista: /custo operacional/, porque: "custo da operação" },
@@ -68,14 +74,23 @@ const VOCABULARIO: Array<{ gatilhos: RegExp; pista: RegExp; porque: string }> = 
   // RESULTADO CAMBIAL/FINANCEIRO (30/07/2026 — plano MOVE FARMA): "Variação
   // Cambial Ativa" caía na IA e virou "Despesas com Pessoas"; rendimento de
   // aplicação ficava sem sugestão. Regra determinística ANTES da IA.
-  { gatilhos: /\bcambia(l|is)\b|\bhedge\b|\bswap\b/, pista: /financeir|cambial/, porque: "resultado cambial/financeiro" },
+  { gatilhos: /\bcambia(l|is)\b|\bhedge\b|\bswap\b|\bndf\b|commodit\w*|derivativ\w*/, pista: /financeir|cambial/, porque: "resultado cambial/derivativos" },
+  { gatilhos: /descontos? (obtidos|concedidos|financeiros)|perdao de divida/, pista: /financeir/, porque: "desconto financeiro" },
+  // Multas/taxas ANTES da regra de juros: "Multas e Juros s/ Tributos" é
+  // taxa/contribuição — o gatilho "juros" a levaria para financeiras.
+  { gatilhos: /\bmultas?\b|\balvara\b|taxas? diversas|cartori\w*|sindicat\w*|associacao de classe/, pista: /taxas|contribuic|tributo/, porque: "taxas e contribuições" },
   { gatilhos: /\brendimentos? de aplicac\w*|\baplicac\w* financeir\w*|\bjuros ativ\w*/, pista: /financeir/, porque: "resultado financeiro" },
   { gatilhos: /\b(juros|financeir|tarifas? bancaria|iof|banco|cobranca|taxas? de cartao|meios de pagamento|adquirencia|antecipacao de recebiv)\w*/, pista: /financeir|juros|tarifa/, porque: "despesa financeira" },
+  // IR/CSLL tem linha canônica PRÓPRIA — antes de "tributos", senão a provisão
+  // de IRPJ somaria em imposto de faturamento.
+  { gatilhos: /\birpj\b|\bcsll\b|imposto de renda|contribuicao social/, pista: /ir e csll|imposto de renda/, porque: "IR e CSLL" },
   // "isqn" é grafia corrente de ISSQN (o \w* de "iss" não cobre o Q no meio).
   { gatilhos: /\b(imposto|tributo|icms|iss|isqn|pis|cofins|simples)\w*/, pista: /imposto|tributo/, porque: "tributos" },
+  // Perdas operacionais e doações — resultado, mas fora da operação corrente.
+  { gatilhos: /perdas? (com|de|em) (estoque|credito|clientes)|quebras? de estoque|\bdoac(ao|oes)\b|inadimplencia|\bpdd\b|creditos? de liquidacao duvidosa/, pista: /outras despesas/, porque: "perdas e doações" },
   // SST/ASO são siglas — palavra inteira, senão casariam dentro de outras.
   { gatilhos: /\b(treinament|capacitac|curso|recrutament|selecao|medicina|seguranca do trabalho|ocupacional)\w*|\bsst\b|\baso\b/, pista: /treinament|pessoa|recursos humanos/, porque: "desenvolvimento de pessoas" },
-  { gatilhos: /\b(escritorio|copa|limpeza|papelaria|consumo)\w*/, pista: /material|escritorio|administrativ/, porque: "consumo administrativo" },
+  { gatilhos: /\b(escritorio|copa|limpeza|papelaria|consumo|correio|malote|postagem|assinatura)\w*|bens de pequeno valor/, pista: /material|escritorio|administrativ/, porque: "consumo administrativo" },
 ];
 
 export interface SugestaoConta {

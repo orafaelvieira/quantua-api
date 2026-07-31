@@ -2498,6 +2498,14 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   // a lista completa: quem declara sabe o que quer).
   const opcoesSugestao = opcoesDeParaOrcamento(canonicas);
   const sugeridas: string[] = [];
+  // RECEITA TEM DESTINO AUTOMÁTICO (30/07/2026): linha de receita operacional
+  // criada pela importação soma na Receita Bruta do modelo da empresa — antes
+  // TODA receita nascia "sem grupo" (a classificação automática só olhava
+  // custos/despesas) e o analista via a coluna inteira vazia.
+  const canonReceitaBruta = canonicas.find((c) => normContaGmd(c) === "receita bruta")
+    ?? canonicas.find((c) => /^receita bruta/.test(normContaGmd(c)))
+    ?? null;
+  const destinoReceita = canonReceitaBruta ? { destino: { conta: canonReceitaBruta, sinal: "soma" as const } } : {};
 
   // CÓDIGO DA CONTA (29/07/2026): conta que entra sem código do cliente ganha o
   // código interno da família (4.1.xxx custo, 4.2.xxx despesa) — é ele que o
@@ -2621,6 +2629,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       const linhaId = `${stampR}_${seqR++}`;
       linhasReceita.push({
         id: linhaId, nome, template: "generico", nodeRaiz: `${linhaId}_receita`,
+        ...destinoReceita,
         nodes: [{
           id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${nome}`, unidade: "R$",
           params: { modoPreenchimento: "mes", valores: {}, valorMensal: 0, crescimentoAnual: 0 },
@@ -2643,6 +2652,10 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         template: "excel",
         nodeRaiz: nova.nodeRaiz,
         nodes: nova.nodes,
+        // De-para: preserva o da linha antiga; linha nova soma na Receita Bruta.
+        ...(idx >= 0 && (linhasReceita[idx] as { destino?: unknown }).destino
+          ? { destino: (linhasReceita[idx] as { destino?: unknown }).destino }
+          : destinoReceita),
         // Lotação (unidade/CC) da linha antiga é preservada — a planilha traz o
         // cálculo, não a estrutura.
         ...(idx >= 0 ? (() => {
@@ -2708,6 +2721,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
           codigosUsados.add(codigoNovo);
           linhasReceita.push({
             id: linhaId, nome: cr.nome, codigo: codigoNovo, template: "generico", nodeRaiz: `${linhaId}_receita`,
+            ...destinoReceita,
             nodes: [{
               id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${cr.nome}`, unidade: "R$",
               params: { modoPreenchimento: "mes", valores: {}, valorMensal: 0, crescimentoAnual: 0 },
@@ -2775,6 +2789,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         codigosUsados.add(codigoNovo);
         linhasReceita.push({
           id: linhaId, nome: cr.nome, codigo: codigoNovo, template: "generico", nodeRaiz: `${linhaId}_receita`,
+          ...destinoReceita,
           nodes: [{
             id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${cr.nome}`, unidade: "R$",
             params: { modoPreenchimento: "mes", valores, valorMensal: 0, crescimentoAnual: 0 },
@@ -3232,6 +3247,11 @@ router.post("/:id/classificar-de-para", async (req: AuthRequest, res: Response):
   const cfgDespesa = blocoDespesa.config as BlocoModelo["config"];
   const linhasCusto = [...(cfgCusto.linhasCusto ?? [])];
   const linhasDespesa = [...(cfgDespesa.linhasCusto ?? [])];
+  // BLOCO FINANCEIRO TAMBÉM (30/07/2026): a conta reclassificada como despesa
+  // financeira sumia do classificador e ficava "sem grupo" para sempre.
+  const blocoNaoOpDp = blocks.find((b) => b.tipo === "despesasNaoOp");
+  const cfgNaoOpDp = (blocoNaoOpDp?.config ?? {}) as BlocoModelo["config"];
+  const linhasNaoOpDp = [...(cfgNaoOpDp.linhasCusto ?? [])];
 
   const dreAtiva = await loadActiveDREModel(model.companyId);
   const canonicas = dreAtiva.lines.filter((l) => !l.subtotal).map((l) => l.conta);
@@ -3264,28 +3284,54 @@ router.post("/:id/classificar-de-para", async (req: AuthRequest, res: Response):
   };
   revisar(linhasCusto, "custo");
   revisar(linhasDespesa, "despesa");
+  revisar(linhasNaoOpDp, "despesa");
+
+  // RECEITAS (30/07/2026): a coluna inteira ficava "sem grupo" — a operacional
+  // soma na Receita Bruta por definição (determinístico, sem IA). O que não
+  // for isso o analista aponta na linha.
+  const blocoReceitasCl = blocks.find((b) => b.tipo === "receitas");
+  const cfgReceitasCl = (blocoReceitasCl?.config ?? {}) as BlocoModelo["config"];
+  const linhasReceitaCl = [...(cfgReceitasCl.linhasReceita ?? [])];
+  const canonReceitaBrutaCl = canonicas.find((c) => normContaGmd(c) === "receita bruta")
+    ?? canonicas.find((c) => /^receita bruta/.test(normContaGmd(c))) ?? null;
+  const receitasClassificadas: Array<{ nome: string; conta: string }> = [];
+  if (canonReceitaBrutaCl) {
+    for (const l of linhasReceitaCl) {
+      const destinoValido = (l as { destino?: { conta?: string } }).destino?.conta
+        ? canonPorNorm.has(normContaGmd(String((l as { destino?: { conta?: string } }).destino!.conta)))
+        : false;
+      if (destinoValido) continue;
+      (l as { destino?: { conta: string; sinal: string } }).destino = { conta: canonReceitaBrutaCl, sinal: "soma" };
+      receitasClassificadas.push({ nome: l.nome, conta: canonReceitaBrutaCl });
+    }
+  }
 
   const r = await classificarDeParaOrcamento(semDestino, canonicas);
   const porId = new Map(r.classificadas.map((c) => [c.id, c]));
-  for (const l of [...linhasCusto, ...linhasDespesa]) {
+  for (const l of [...linhasCusto, ...linhasDespesa, ...linhasNaoOpDp]) {
     const hit = porId.get(l.id);
     if (hit) l.destino = { conta: hit.conta, sinal: "soma" };
   }
 
-  if (corrigidas.length === 0 && r.classificadas.length === 0) {
-    res.json({ classificadas: [], corrigidas: [], semSugestao: r.semSugestao, custoUsd: r.custo?.usd ?? 0, resultado: null });
+  if (corrigidas.length === 0 && r.classificadas.length === 0 && receitasClassificadas.length === 0) {
+    res.json({ classificadas: [], corrigidas: [], receitas: [], semSugestao: r.semSugestao, custoUsd: r.custo?.usd ?? 0, resultado: null });
     return;
   }
 
   await prisma.$transaction([
     prisma.modelBlock.update({ where: { id: blocoCusto.id }, data: { config: { ...cfgCusto, linhasCusto } as object } }),
     prisma.modelBlock.update({ where: { id: blocoDespesa.id }, data: { config: { ...cfgDespesa, linhasCusto: linhasDespesa } as object } }),
+    ...(blocoNaoOpDp ? [prisma.modelBlock.update({ where: { id: blocoNaoOpDp.id }, data: { config: { ...cfgNaoOpDp, linhasCusto: linhasNaoOpDp } as object } })] : []),
+    ...(blocoReceitasCl && receitasClassificadas.length > 0
+      ? [prisma.modelBlock.update({ where: { id: blocoReceitasCl.id }, data: { config: { ...cfgReceitasCl, linhasReceita: linhasReceitaCl } as object } })]
+      : []),
   ]);
   await registrarAuditoria({
     userId: req.userId!, entity: "financial_model", entityId: model.id, field: "de-para classificado automaticamente",
     after: {
       corrigidasPeloCatalogo: corrigidas.map((c) => `${c.nome}: ${c.de ?? "(sem de-para)"} → ${c.para}`),
       classificadas: r.classificadas.map((c) => `${c.nome} → ${c.conta} (${c.via})`),
+      receitas: receitasClassificadas.map((c) => `${c.nome} → ${c.conta}`),
       semSugestao: r.semSugestao,
       custoIaUsd: r.custo?.usd ?? 0, // [[registrar-custo-ia]]
     },
@@ -3296,6 +3342,7 @@ router.post("/:id/classificar-de-para", async (req: AuthRequest, res: Response):
   res.json({
     classificadas: r.classificadas.map((c) => ({ nome: c.nome, conta: c.conta, via: c.via, porque: c.porque })),
     corrigidas,
+    receitas: receitasClassificadas,
     semSugestao: r.semSugestao,
     custoUsd: r.custo?.usd ?? 0,
     resultado: calc?.resultado ?? null,
