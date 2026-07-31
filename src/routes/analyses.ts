@@ -1736,6 +1736,11 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     let sugestoesIA: Record<string, import("../services/classification-suggest").SugestaoIA> = {};
     let custoSugestoes: import("../services/ai-extraction").CustoIA | null = null;
     const nmParaSugerir = [...((usouIA ? hibridoNaoMapeados : []) as import("../services/ai-extraction").NaoMapeado[]), ...nmBalancete];
+    // DIAGNÓSTICO persistido (prod não tem log acessível): a tela mostra quantas
+    // pendentes têm dica e POR QUE a geração falhou, quando falha.
+    const sugestoesDiag: { pedidas: number; geradas: number; erros: string[]; em: string } = {
+      pedidas: nmParaSugerir.length, geradas: 0, erros: [], em: new Date().toISOString(),
+    };
     if (nmParaSugerir.length > 0) {
       try {
         const dreModelAtivo = await loadActiveDREModel(analysis.companyId);
@@ -1749,8 +1754,11 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         );
         sugestoesIA = r.sugestoes;
         custoSugestoes = r.custo;
+        sugestoesDiag.geradas = Object.keys(r.sugestoes).length;
+        sugestoesDiag.erros = r.erros;
         if (r.custo) console.log(`[process] sugestões IA: ${Object.keys(r.sugestoes).length}/${nmParaSugerir.length} contas, $${r.custo.usd.toFixed(4)}`);
       } catch (e: any) {
+        sugestoesDiag.erros.push(String(e?.message ?? e).slice(0, 300));
         console.warn(`[process] sugestões IA falharam (segue sem):`, e?.message ?? e);
       }
     }
@@ -1770,6 +1778,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       arvoreOriginalDRE: arvoreOriginalDRE,
       naoMapeados: [...(usouIA ? (hibridoNaoMapeados as NaoMapeado[]) : []), ...nmBalancete],
       sugestoesIA,
+      sugestoesDiag,
       custoSugestoes,
       alertasComposicao: usouIA ? escolhido.alertasComposicao : [],
       modeloVersaoBP: modeloVersoes.bp,
@@ -2208,9 +2217,18 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   }
   dados.alertasComposicao = alertasComp;
   // Carry-over das sugestões IA (cacheadas na extração) para os que continuam não-mapeados.
+  // Sentinela LEGADA ("sem sugestão segura") NÃO é carregada: ela era gravada até
+  // quando o LOTE INTEIRO falhava (resposta truncada em max_tokens — caso Belagro),
+  // envenenando o cache para sempre. Vira re-tentável; a sentinela nova (marcador
+  // abaixo) só nasce de lote saudável e essa sim persiste.
+  const SENTINELA_LEGADA = "sem sugestão segura";
   const sugAntigas = (dados as any).sugestoesIA ?? {};
   const sugNovas: Record<string, any> = {};
-  for (const nm of naoMapeados) { const k = chaveNM(nm as any); if (sugAntigas[k]) sugNovas[k] = sugAntigas[k]; }
+  for (const nm of naoMapeados) {
+    const k = chaveNM(nm as any);
+    const s = sugAntigas[k];
+    if (s && !(s.sugestao === "" && s.justificativa === SENTINELA_LEGADA)) sugNovas[k] = s;
+  }
   // GERA para quem ficou SEM (30/07/2026 — defeito relatado: "por que o sistema
   // não está mais sugerindo?"): a sugestão só nascia no /process; se a chamada
   // de IA falhasse lá (best-effort), ou a conta entrasse depois (balancete
@@ -2219,6 +2237,9 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   // vazia, que a tela ignora) para não re-consultar a cada refold — mas ERRO
   // de chamada não grava sentinela, então o próximo refold tenta de novo.
   const aindaSem = naoMapeados.filter((nm) => !sugNovas[chaveNM(nm as any)]);
+  const diagRefold: { pedidas: number; geradas: number; erros: string[]; em: string } = {
+    pedidas: aindaSem.length, geradas: 0, erros: [], em: new Date().toISOString(),
+  };
   if (aindaSem.length > 0) {
     try {
       const dreInputsRefold = dreModelRefold.lines.filter((l: { subtotal: boolean }) => !l.subtotal).map((l: { conta: string }) => l.conta);
@@ -2233,9 +2254,15 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
         dreInputsRefold,
       );
       Object.assign(sugNovas, rSug.sugestoes);
-      for (const nm of aindaSem) {
-        const k = chaveNM(nm as any);
-        if (!sugNovas[k]) sugNovas[k] = { sugestao: "", justificativa: "sem sugestão segura", confianca: "baixa" };
+      diagRefold.geradas = Object.keys(rSug.sugestoes).length;
+      diagRefold.erros = rSug.erros;
+      // Sentinela (evita re-consultar a cada refold) SÓ quando o lote rodou SEM
+      // erro — "a IA respondeu e não indicou" é diferente de "a chamada falhou".
+      if (rSug.erros.length === 0) {
+        for (const nm of aindaSem) {
+          const k = chaveNM(nm as any);
+          if (!sugNovas[k]) sugNovas[k] = { sugestao: "", justificativa: "a IA não indicou destino para esta conta", confianca: "baixa" };
+        }
       }
       if (rSug.custo) {
         console.log(`[refold] sugestões IA: ${Object.keys(rSug.sugestoes).length}/${aindaSem.length} contas, $${rSug.custo.usd.toFixed(4)}`);
@@ -2248,10 +2275,12 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
         });
       }
     } catch (e) {
+      diagRefold.erros.push(String(e instanceof Error ? e.message : e).slice(0, 300));
       console.warn("[refold] sugestões IA falharam (segue sem; tenta no próximo refold):", e instanceof Error ? e.message : e);
     }
   }
   (dados as any).sugestoesIA = sugNovas;
+  (dados as any).sugestoesDiag = diagRefold;
   dados.naoMapeados = naoMapeados;
   // FC continua visível mesmo sem validação completa: é SUPERFÍCIE DE AUDITORIA
   // (tem prova de fechamento própria) e ajuda a diagnosticar as pendências.

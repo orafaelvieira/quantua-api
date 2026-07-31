@@ -112,30 +112,33 @@ export async function sugerirClassificacoesIA(
   naoMapeados: NaoMapeado[],
   ctx: { setor?: string | null; receitaUltimoAno?: number | null },
   dreInputs: string[],
-): Promise<{ sugestoes: Record<string, SugestaoIA>; custo: CustoIA | null }> {
+): Promise<{ sugestoes: Record<string, SugestaoIA>; custo: CustoIA | null; erros: string[] }> {
   const todos = naoMapeados.filter((nm) => nm.nome && typeof nm.valor === "number");
-  if (todos.length === 0) return { sugestoes: {}, custo: null };
+  if (todos.length === 0) return { sugestoes: {}, custo: null, erros: [] };
 
   const sugestoes: Record<string, SugestaoIA> = {};
+  const erros: string[] = [];
   let inTok = 0, outTok = 0, chamou = false;
   for (let i = 0; i < todos.length; i += LOTE_MAX) {
     const fatia = todos.slice(i, i + LOTE_MAX);
     const r = await sugerirFatia(fatia, ctx, dreInputs);
-    if (r) {
+    if ("erro" in r) {
+      erros.push(r.erro);
+    } else {
       Object.assign(sugestoes, r.sugestoes);
       inTok += r.inputTokens; outTok += r.outputTokens; chamou = true;
     }
   }
-  return { sugestoes, custo: chamou ? calcCusto(MODELO_SUGESTAO, inTok, outTok) : null };
+  return { sugestoes, custo: chamou ? calcCusto(MODELO_SUGESTAO, inTok, outTok) : null, erros };
 }
 
-/** UMA chamada Haiku para uma fatia de até LOTE_MAX itens. null em erro (a fatia
- *  fica sem dica; as demais seguem). */
+/** UMA chamada Haiku para uma fatia de até LOTE_MAX itens. Em erro devolve {erro}
+ *  (a fatia fica sem dica; as demais seguem — e o motivo sobe para o diagnóstico). */
 async function sugerirFatia(
   itens: NaoMapeado[],
   ctx: { setor?: string | null; receitaUltimoAno?: number | null },
   dreInputs: string[],
-): Promise<{ sugestoes: Record<string, SugestaoIA>; inputTokens: number; outputTokens: number } | null> {
+): Promise<{ sugestoes: Record<string, SugestaoIA>; inputTokens: number; outputTokens: number } | { erro: string }> {
   const linhas = itens.map((nm, i) => {
     const opcoes = nm.tipo === "BP"
       ? opcoesBPDoGrupo(nm.grupo)
@@ -189,6 +192,6 @@ Responda APENAS JSON: [{"i":1,"sugestao":"...","justificativa":"...","confianca"
     return { sugestoes, inputTokens: msg.usage?.input_tokens ?? 0, outputTokens: msg.usage?.output_tokens ?? 0 };
   } catch (e: any) {
     console.warn(`[sugestoes] fatia falhou (segue sem dica): ${e?.message ?? e}`);
-    return null;
+    return { erro: String(e?.message ?? e).slice(0, 300) };
   }
 }
