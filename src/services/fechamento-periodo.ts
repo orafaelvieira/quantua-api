@@ -56,9 +56,12 @@ export interface DocumentoLogico {
 
 /** Competência mensal ("2026-05"). */
 const RE_MES = /^\d{4}-\d{2}$/;
-/** Competência válida: mês OU exercício/ano fechado ("2025") — DF anual é
- *  documento de período tanto quanto o balancete mensal (pedido do usuário). */
-const RE_COMPETENCIA = /^\d{4}(-\d{2})?$/;
+/** Competência válida: mês, exercício/ano fechado ("2025") OU período
+ *  ACUMULADO "YYYY-MM..YYYY-MM" (31/07/2026 — caso Belagro: o balancete
+ *  acumulado com competência definida VOLTAVA para "sem competência" porque
+ *  esta régua anulava o formato; parecia que o "definir período" não salvou).
+ *  Acumulado NÃO entra na cadência mensal (RE_MES segue mandando lá). */
+const RE_COMPETENCIA = /^\d{4}(-\d{2})?$|^\d{4}-\d{2}\.\.\d{4}-\d{2}$/;
 
 /**
  * Deriva os DOCUMENTOS LÓGICOS de uma lista de documentos:

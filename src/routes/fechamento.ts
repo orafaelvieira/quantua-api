@@ -15,7 +15,10 @@ import { whereEmpresaVisivel, guardaEscritaSuspensao } from "../services/escopo-
 import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
 import { propagarMetadadosDoPool } from "../services/fixacao-pool";
-import { competenciaValida } from "../services/curadoria-pool";
+import { competenciaValida, competenciaDoPeriodoBalancete, rotuloCompetencia } from "../services/curadoria-pool";
+import { downloadFile } from "../services/storage";
+import { extrairTextoLayoutPDF } from "../services/parser";
+import { parseBalanceteTexto } from "../services/balancete-parser";
 import {
   REGIMES,
   RegimeFechamento,
@@ -177,6 +180,30 @@ router.put("/documentos/:docId/competencia", async (req: AuthRequest, res: Respo
   if (doc.analysisId) {
     res.status(409).json({ error: "Este documento pertence a um IBR — a competência dele é gerida lá (Documentos do IBR)." });
     return;
+  }
+
+  // O DOCUMENTO MANDA (31/07/2026 — "testei errando a data de propósito e ele
+  // tem que continuar dizendo que está errado"): para BALANCETE em PDF, a
+  // competência informada é conferida contra o período do CABEÇALHO antes de
+  // gravar. Divergiu → 422 com a competência real; o erro persiste a cada
+  // tentativa errada, até a correção. Best-effort: PDF ilegível segue sem checar.
+  if (!limpa && /balancete/i.test(doc.tipo) && /\.pdf$/i.test(doc.nome) && doc.storagePath) {
+    try {
+      const texto = await extrairTextoLayoutPDF(await downloadFile(doc.storagePath));
+      if (texto && texto.length > 300) {
+        const p = parseBalanceteTexto(texto);
+        const real = competenciaDoPeriodoBalancete(p.periodoInicio, p.periodoFim);
+        if (real && real !== competencia) {
+          res.status(422).json({
+            error: `O documento diz "${p.periodoInicio ?? "?"} a ${p.periodoFim ?? "?"}" — a competência informada (${rotuloCompetencia(competencia)}) não bate. A correta é ${rotuloCompetencia(real)}.`,
+            competenciaCorreta: real,
+          });
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn(`[fechamento] conferência do período falhou para ${doc.nome} (segue sem checar):`, e instanceof Error ? e.message : e);
+    }
   }
 
   const antes = doc.competencia;
