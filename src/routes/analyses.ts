@@ -2211,6 +2211,46 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const sugAntigas = (dados as any).sugestoesIA ?? {};
   const sugNovas: Record<string, any> = {};
   for (const nm of naoMapeados) { const k = chaveNM(nm as any); if (sugAntigas[k]) sugNovas[k] = sugAntigas[k]; }
+  // GERA para quem ficou SEM (30/07/2026 — defeito relatado: "por que o sistema
+  // não está mais sugerindo?"): a sugestão só nascia no /process; se a chamada
+  // de IA falhasse lá (best-effort), ou a conta entrasse depois (balancete
+  // novo), o refold perpetuava o vazio — a tela mostrava só "Classificar…".
+  // Best-effort de novo aqui; quem a IA não resolve ganha SENTINELA (sugestao
+  // vazia, que a tela ignora) para não re-consultar a cada refold — mas ERRO
+  // de chamada não grava sentinela, então o próximo refold tenta de novo.
+  const aindaSem = naoMapeados.filter((nm) => !sugNovas[chaveNM(nm as any)]);
+  if (aindaSem.length > 0) {
+    try {
+      const dreInputsRefold = dreModelRefold.lines.filter((l: { subtotal: boolean }) => !l.subtotal).map((l: { conta: string }) => l.conta);
+      const receitaLinhaRefold = (dados.dre ?? []).find((l: { conta: string }) => l.conta === "Receita Bruta");
+      const ultimoPRefold = periodos.length ? [...periodos].sort((a: string, b: string) => ordPeriodo(a) - ordPeriodo(b)).slice(-1)[0] : null;
+      const rSug = await sugerirClassificacoesIA(
+        aindaSem as any,
+        {
+          setor: (analysis as any).setorConfirmado ?? null,
+          receitaUltimoAno: receitaLinhaRefold && ultimoPRefold ? (receitaLinhaRefold as any).valores?.[ultimoPRefold] ?? null : null,
+        },
+        dreInputsRefold,
+      );
+      Object.assign(sugNovas, rSug.sugestoes);
+      for (const nm of aindaSem) {
+        const k = chaveNM(nm as any);
+        if (!sugNovas[k]) sugNovas[k] = { sugestao: "", justificativa: "sem sugestão segura", confianca: "baixa" };
+      }
+      if (rSug.custo) {
+        console.log(`[refold] sugestões IA: ${Object.keys(rSug.sugestoes).length}/${aindaSem.length} contas, $${rSug.custo.usd.toFixed(4)}`);
+        // Custo de IA da etapa na trilha ([[registrar-custo-ia]]).
+        void registrarAuditoria({
+          userId: req.userId!, analysisId: id, entity: "analysis", entityId: id,
+          field: "sugestões de classificação (refold)",
+          after: { contas: aindaSem.length, sugeridas: Object.keys(rSug.sugestoes).length, custoIaUsd: rSug.custo.usd },
+          source: "refold",
+        });
+      }
+    } catch (e) {
+      console.warn("[refold] sugestões IA falharam (segue sem; tenta no próximo refold):", e instanceof Error ? e.message : e);
+    }
+  }
   (dados as any).sugestoesIA = sugNovas;
   dados.naoMapeados = naoMapeados;
   // FC continua visível mesmo sem validação completa: é SUPERFÍCIE DE AUDITORIA
