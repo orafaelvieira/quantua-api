@@ -15,6 +15,7 @@ import { whereEmpresaVisivel, guardaEscritaSuspensao } from "../services/escopo-
 import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
 import { propagarMetadadosDoPool } from "../services/fixacao-pool";
+import { competenciaValida } from "../services/curadoria-pool";
 import {
   REGIMES,
   RegimeFechamento,
@@ -157,13 +158,15 @@ router.put("/regime", async (req: AuthRequest, res: Response): Promise<void> => 
 // documento DE POOL (esquecida no upload é o caso comum — sem isso o documento
 // fica invisível na cadência sem conserto). Documento de IBR é recusado: a
 // competência dele é gerida no fluxo do IBR (zero retrocesso).
-// body: { companyId, competencia: "YYYY-MM" (mês) | "YYYY" (ano fechado) | "" (limpa) }
+// body: { companyId, competencia: "YYYY-MM" (mês) | "YYYY" (ano fechado) |
+// "YYYY-MM..YYYY-MM" (período ACUMULADO, 30/07/2026 — ex.: balancete de
+// 01/01 a 30/09) | "" (limpa) }
 router.put("/documentos/:docId/competencia", async (req: AuthRequest, res: Response): Promise<void> => {
   const { companyId, competencia } = (req.body ?? {}) as Record<string, string | undefined>;
   if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
   const limpa = competencia === "" || competencia === null || competencia === undefined;
-  if (!limpa && !/^\d{4}(-\d{2})?$/.test(competencia!)) {
-    res.status(400).json({ error: "competencia deve ser YYYY-MM (mês) ou YYYY (ano fechado) — ou vazia, para limpar" });
+  if (!limpa && !competenciaValida(competencia!)) {
+    res.status(400).json({ error: "competencia deve ser YYYY-MM (mês), YYYY (ano fechado) ou YYYY-MM..YYYY-MM (período acumulado, de ≤ até) — ou vazia, para limpar" });
     return;
   }
   const company = await companyNoEscopo(companyId, req);

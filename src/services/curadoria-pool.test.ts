@@ -3,6 +3,9 @@ import {
   nomeDistintivo,
   validarEmpresaDoDocumento,
   curarConteudo,
+  competenciaDoPeriodoBalancete,
+  rotuloCompetencia,
+  competenciaValida,
   competenciaDoCabecalho,
   competenciaDosPeriodos,
   tipoPorKeywords,
@@ -132,5 +135,38 @@ describe("trava de EMPRESA ERRADA no upload (21/07/2026)", () => {
     const v = validarEmpresaDoDocumento("Conta;2024;2025\nCaixa;10;20", MOVE, [BELAGRO, PAMPA]);
     expect(v.alvoNoDoc).toBe(false);
     expect(v.outraDetectada).toBeNull();
+  });
+});
+
+describe("competência × período do balancete (30/07/2026 — caso Belagro)", () => {
+  it("01/01/2025 a 30/09/2025 é ACUMULADO, nunca ano fechado", () => {
+    expect(competenciaDoPeriodoBalancete("01/01/2025", "30/09/2025")).toBe("2025-01..2025-09");
+  });
+  it("01/01 a 31/12 do mesmo ano é ano fechado", () => {
+    expect(competenciaDoPeriodoBalancete("01/01/2025", "31/12/2025")).toBe("2025");
+  });
+  it("mesmo mês nas duas pontas é competência mensal", () => {
+    expect(competenciaDoPeriodoBalancete("01/05/2026", "31/05/2026")).toBe("2026-05");
+  });
+  it("sem data inicial, o fim vira o mês de competência", () => {
+    expect(competenciaDoPeriodoBalancete(null, "30/09/2025")).toBe("2025-09");
+  });
+  it("atravessando anos vira acumulado com os dois anos", () => {
+    expect(competenciaDoPeriodoBalancete("01/07/2024", "30/06/2025")).toBe("2024-07..2025-06");
+  });
+  it("rótulos legíveis para as três formas", () => {
+    expect(rotuloCompetencia("2025")).toBe("ano fechado 2025");
+    expect(rotuloCompetencia("2025-09")).toBe("set/2025");
+    expect(rotuloCompetencia("2025-01..2025-09")).toBe("acumulado jan–set/2025");
+    expect(rotuloCompetencia("2024-07..2025-06")).toBe("acumulado jul/2024–jun/2025");
+    expect(rotuloCompetencia(null)).toBe("sem competência");
+  });
+  it("validação do formato: acumulado precisa ir para a frente", () => {
+    expect(competenciaValida("2025")).toBe(true);
+    expect(competenciaValida("2025-09")).toBe(true);
+    expect(competenciaValida("2025-01..2025-09")).toBe(true);
+    expect(competenciaValida("2025-09..2025-01")).toBe(false);
+    expect(competenciaValida("2025-09..2025-09")).toBe(false);
+    expect(competenciaValida("2025-13")).toBe(false);
   });
 });

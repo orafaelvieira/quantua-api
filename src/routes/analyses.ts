@@ -16,7 +16,7 @@ import { comparePeersCvm, CVM_COMPARAVEIS } from "../services/peer-benchmark-cvm
 import { researchCompanyWeb, researchSectorBenchmarksWeb } from "../services/web-research";
 import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-context";
 import { fixarDocumentosDoPool, montarLinhaFixada } from "../services/fixacao-pool";
-import { curarUpload, curarConteudo, competenciaDosPeriodos } from "../services/curadoria-pool";
+import { curarUpload, curarConteudo, competenciaDosPeriodos, competenciaDoPeriodoBalancete, rotuloCompetencia } from "../services/curadoria-pool";
 import { acharDuplicadoPorHash, mensagemDuplicado } from "../services/duplicidade-docs";
 import { cicloVidaAnalysis, etapaAnalysis } from "../services/ciclo-vida";
 import { sugerirClassificacoesIA, chaveNM } from "../services/classification-suggest";
@@ -1198,6 +1198,41 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     };
     const alertasTipoDoc: Array<{ tipo: "erro" | "aviso" | "info"; area: string; mensagem: string; detalhes?: string }> = [];
 
+    /** COMPETÊNCIA × PERÍODO DO BALANCETE (30/07/2026 — caso Belagro: o
+     *  "Balancete Consolidado de 01/01/2025 a 30/09/2025" subiu declarado como
+     *  ano fechado 2025 e o sistema aceitou calado). O cabeçalho do documento
+     *  MANDA: divergiu, o sistema corrige para o período real (inclusive o
+     *  ACUMULADO "YYYY-MM..YYYY-MM"), grava a trilha e avisa em ERRO — nada em
+     *  silêncio. Sem competência declarada, preenche e informa. */
+    const conferirCompetenciaBalancete = async (
+      doc: { id: string; nome: string; competencia: string | null },
+      inicio: string | null | undefined,
+      fim: string | null | undefined,
+    ) => {
+      const real = competenciaDoPeriodoBalancete(inicio ?? null, fim ?? null);
+      if (!real || doc.competencia === real) return;
+      const declarada = doc.competencia;
+      await prisma.document.update({ where: { id: doc.id }, data: { competencia: real } });
+      void registrarAuditoria({
+        userId: req.userId!, analysisId: analysis.id, entity: "document", entityId: doc.id,
+        field: "competência (corrigida pelo período do documento)",
+        before: { competencia: declarada },
+        after: { competencia: real, periodoDocumento: `${inicio ?? "?"} a ${fim ?? "?"}` },
+        source: "process",
+      });
+      alertasTipoDoc.push({
+        tipo: declarada ? "erro" : "info",
+        area: "Competência do documento",
+        mensagem: declarada
+          ? `${doc.nome}: a competência declarada (${rotuloCompetencia(declarada)}) NÃO bate com o período do documento (${inicio ?? "?"} a ${fim ?? "?"}) — corrigida para ${rotuloCompetencia(real)}.`
+          : `${doc.nome}: competência preenchida pelo período do documento (${inicio ?? "?"} a ${fim ?? "?"}) → ${rotuloCompetencia(real)}.`,
+        detalhes: declarada
+          ? "O período do cabeçalho do balancete manda. Se o arquivo certo é outro (ex.: o exercício completo), substitua o documento na Data room."
+          : undefined,
+      });
+      doc.competencia = real;
+    };
+
     // ── MATERIAL QUE É DEMONSTRAÇÃO (27/07/2026) ──
     // PDF subido como "Material complementar" cujo NOME sugere demonstração é
     // aberto e, com assinatura confiável no conteúdo, RECLASSIFICADO (auditado)
@@ -1601,6 +1636,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
             docId: doc.id, nome: doc.nome, periodo: periodoBP, periodoInicio: cacheBal.periodoInicio,
             provas: cacheBal.provas, avisos: cacheBal.avisos ?? [], linhas: cacheBal.totalLinhas ?? 0,
           });
+          await conferirCompetenciaBalancete(doc, cacheBal.periodoInicio ?? null, periodoBP);
           console.log(`[process] balancete ${doc.nome}: extração HERDADA reusada (período ${periodoBP}) — re-parse pulado`);
           continue;
         }
@@ -1646,6 +1682,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
             confianca: conv.provas.fechamento.ok ? 95 : 40,
           },
         });
+        await conferirCompetenciaBalancete(doc, parseado.periodoInicio, parseado.periodoFim);
         console.log(`[process] balancete ${doc.nome}: período ${conv.periodoBP}, ${parseado.linhas.length} linhas, fechamento ${conv.provas.fechamento.ok ? "OK" : `Δ ${conv.provas.fechamento.delta}`}${conv.provas.exercicioEncerrado ? " (exercício encerrado)" : ""}`);
       } catch (err) {
         console.error(`[process] balancete ${doc.nome} falhou:`, err instanceof Error ? err.message : err);

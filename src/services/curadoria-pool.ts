@@ -64,6 +64,53 @@ function anoMes(p: string): { ano: number; mes: number | null } | null {
  * todos anuais (ano puro ou dezembro) → ano fechado do MAIOR ano;
  * exatamente um período mensal → aquele mês; mistura ambígua → nada.
  */
+/** COMPETÊNCIA REAL DO BALANCETE pelo período extraído do cabeçalho
+ *  (30/07/2026 — caso Belagro: "Balancete Consolidado de 01/01/2025 a
+ *  30/09/2025" subiu declarado como ano fechado 2025 e o sistema aceitou).
+ *  O DOCUMENTO manda: devolve "YYYY" (01/01→dez do mesmo ano), "YYYY-MM"
+ *  (um mês só) ou "YYYY-MM..YYYY-MM" (ACUMULADO — mais de um mês sem fechar
+ *  o ano). Datas em dd/mm/aaaa, como o parser entrega. */
+export function competenciaDoPeriodoBalancete(inicio: string | null, fim: string | null): string | null {
+  const pi = (inicio ?? "").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const pf = (fim ?? "").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!pf) return null;
+  const anoF = pf[3]!;
+  const mesF = pf[2]!;
+  if (!pi) return `${anoF}-${mesF}`; // sem data inicial: o fim é o mês de competência
+  const anoI = pi[3]!;
+  const mesI = pi[2]!;
+  if (anoI === anoF && mesI === "01" && mesF === "12") return anoF; // exercício completo
+  if (anoI === anoF && mesI === mesF) return `${anoF}-${mesF}`; // um mês só
+  return `${anoI}-${mesI}..${anoF}-${mesF}`; // acumulado (parcial)
+}
+
+const MESES_ROTULO = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+
+/** Competência legível: "2025" → "ano fechado 2025" · "2025-09" → "set/2025" ·
+ *  "2025-01..2025-09" → "acumulado jan–set/2025" (anos diferentes aparecem). */
+export function rotuloCompetencia(comp: string | null | undefined): string {
+  if (!comp) return "sem competência";
+  if (/^\d{4}$/.test(comp)) return `ano fechado ${comp}`;
+  let m = comp.match(/^(\d{4})-(\d{2})$/);
+  if (m) return `${MESES_ROTULO[+m[2]! - 1] ?? m[2]}/${m[1]}`;
+  m = comp.match(/^(\d{4})-(\d{2})\.\.(\d{4})-(\d{2})$/);
+  if (m) {
+    const [, anoI, mesI, anoF, mesF] = m;
+    const de = `${MESES_ROTULO[+mesI! - 1] ?? mesI}${anoI !== anoF ? `/${anoI}` : ""}`;
+    return `acumulado ${de}–${MESES_ROTULO[+mesF! - 1] ?? mesF}/${anoF}`;
+  }
+  return comp;
+}
+
+/** O formato de competência é válido? (ano · mês · acumulado de..até) */
+export function competenciaValida(comp: string): boolean {
+  if (/^\d{4}$/.test(comp) || /^\d{4}-(0[1-9]|1[0-2])$/.test(comp)) return true;
+  const m = comp.match(/^(\d{4})-(0[1-9]|1[0-2])\.\.(\d{4})-(0[1-9]|1[0-2])$/);
+  if (!m) return false;
+  // acumulado precisa ir para a FRENTE (de ≤ até) e ter mais de um mês
+  return `${m[1]}-${m[2]}` < `${m[3]}-${m[4]}`;
+}
+
 export function competenciaDosPeriodos(periodos: string[]): string | null {
   const norm = periodos.map(anoMes).filter((p): p is NonNullable<ReturnType<typeof anoMes>> => p !== null && (p.mes === null || (p.mes >= 1 && p.mes <= 12)));
   if (norm.length === 0) return null;
