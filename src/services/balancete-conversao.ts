@@ -242,6 +242,23 @@ export function mesclarArvoresBalancete<
   if (arv.length === 0) return dados;
   const bp: Record<string, unknown> = { ...((dados.arvoreOriginalBP as Record<string, unknown>) ?? {}) };
   const dre: Record<string, unknown> = { ...((dados.arvoreOriginalDRE as Record<string, unknown>) ?? {}) };
+  // A FOTO PRÓPRIA MANDA (31/07/2026): cada balancete produz DUAS fotos — o mês
+  // corrente (saldoAtual) e o mês ANTERIOR (saldoAnterior). Sem esta ordem, a
+  // foto "anterior" de um mês posterior podia OCUPAR a chave de um mês que tem
+  // documento próprio (o primeiro a chegar vencia) — e a auditoria mostrava o
+  // mês inteiro sem destino, porque só a foto corrente é dobrada (caso Belagro:
+  // fevereiro exibido a partir do saldo anterior do balancete de março).
+  // As árvores ANUAIS (BP/DRE) seguem intocadas — elas mandam sobre o balancete.
+  const anuaisBP = new Set(Object.keys(bp));
+  const anuaisDRE = new Set(Object.keys(dre));
+  for (const ab of arv) {
+    const proprio = String(ab?.periodo ?? "");
+    if (!proprio) continue;
+    for (const [p, v] of Object.entries(ab?.arvoreBP ?? {})) if (p === proprio && !anuaisBP.has(p)) bp[p] = v;
+    for (const [p, v] of Object.entries(ab?.arvoreDRE ?? {})) if (p === proprio && !anuaisDRE.has(p)) dre[p] = v;
+  }
+  // Só então o saldo anterior preenche os meses ÓRFÃOS (sem documento próprio) —
+  // ex.: o mês de abertura da série, que só existe como coluna do mês seguinte.
   for (const ab of arv) {
     for (const [p, v] of Object.entries(ab?.arvoreBP ?? {})) if (!bp[p]) bp[p] = v;
     for (const [p, v] of Object.entries(ab?.arvoreDRE ?? {})) if (!dre[p]) dre[p] = v;

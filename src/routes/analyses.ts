@@ -1077,6 +1077,28 @@ const ehBalancete = (tipo: string): boolean => /balancete/i.test(tipo);
 const ehPlugBalancete = (n: { nome?: string }): boolean => /apura[çc][ãa]o do balancete/i.test(n?.nome ?? "");
 const semPlugBalancete = <T extends { nome?: string }>(arr: T[]): T[] => arr.filter((n) => !ehPlugBalancete(n));
 
+/**
+ * O balancete traz DUAS fotos patrimoniais: o mês corrente (coluna saldo atual) e
+ * o mês ANTERIOR (coluna saldo anterior). Só a corrente alimenta os números da
+ * análise — mas a anterior APARECE na auditoria (é o mês de abertura da série) e,
+ * sem passar pelo fold, saía com a coluna de destino inteiramente VAZIA: nem conta
+ * padrão, nem "Classificar…" (flagrado pelo usuário em fev/2026, Belagro).
+ *
+ * Dobra os períodos secundários SÓ para anotar a árvore (destino em cada nó). O
+ * retorno é descartado de propósito: esses valores não entram em `allPeriodos`
+ * nem nas demonstrações — quem fecha o mês é o documento dono dele.
+ */
+const anotarPeriodosSecundarios = (
+  arvoreBP: unknown,
+  periodoPrincipal: string,
+  dict: Parameters<typeof foldBP>[2],
+  model: Parameters<typeof foldBP>[3],
+): void => {
+  const outros = Object.keys((arvoreBP as Record<string, unknown>) ?? {}).filter((p) => p && p !== periodoPrincipal);
+  if (outros.length === 0) return;
+  try { foldBP(arvoreBP as any, outros, dict, model); } catch { /* anotação é best-effort */ }
+};
+
 // Períodos vindos de BALANCETE no IBR (DRE acumulada YTD): base dos dias dos
 // prazos médios e da leitura mensal.
 const periodosBalanceteDe = (dados: unknown): string[] => {
@@ -1627,6 +1649,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           const periodoBP = String(cacheBal.periodos[0]);
           const rB = foldBP(cacheBal.arvoreBP as any, [periodoBP], dictForBP, bpModel);
           const rD = foldDRE(cacheBal.arvoreDRE as any, [periodoBP], dictForDRE, dreModel);
+          anotarPeriodosSecundarios(cacheBal.arvoreBP, periodoBP, dictForBP, bpModel);
           if (structuredBP.length === 0) structuredBP = rB.bp; else mergeItensPorConta(structuredBP, rB.bp);
           if (structuredDRE.length === 0) structuredDRE = rD.dre; else mergeItensPorConta(structuredDRE, rD.dre);
           if (!allPeriodos.includes(periodoBP)) allPeriodos.push(periodoBP);
@@ -1662,6 +1685,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         // fold com o MESMO dicionário em cascata e modelos padrão da empresa
         const rB = foldBP(conv.arvoreBP as any, [conv.periodoBP], dictForBP, bpModel);
         const rD = foldDRE(conv.arvoreDRE as any, [conv.periodoBP], dictForDRE, dreModel);
+        anotarPeriodosSecundarios(conv.arvoreBP, conv.periodoBP, dictForBP, bpModel);
         if (structuredBP.length === 0) structuredBP = rB.bp; else mergeItensPorConta(structuredBP, rB.bp);
         if (structuredDRE.length === 0) structuredDRE = rD.dre; else mergeItensPorConta(structuredDRE, rD.dre);
         if (!allPeriodos.includes(conv.periodoBP)) allPeriodos.push(conv.periodoBP);
@@ -2212,7 +2236,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   // mescla nos meses (as anuais acima zeram os meses; o merge só preenche vazios).
   for (const ab of arvoresBalanceteRefold) {
     if (!ab?.periodo) continue;
-    if (ab.arvoreBP) { const r = foldBP(ab.arvoreBP as any, [ab.periodo], dictRows, bpModelRefold); if (!dados.bp?.length) dados.bp = r.bp; else mergeItensPorConta(dados.bp, r.bp); alertasComp.push(...r.alertasComposicao); naoMapeados.push(...semPlugBalancete(r.naoMapeados)); }
+    if (ab.arvoreBP) { const r = foldBP(ab.arvoreBP as any, [ab.periodo], dictRows, bpModelRefold); anotarPeriodosSecundarios(ab.arvoreBP, ab.periodo, dictRows, bpModelRefold); if (!dados.bp?.length) dados.bp = r.bp; else mergeItensPorConta(dados.bp, r.bp); alertasComp.push(...r.alertasComposicao); naoMapeados.push(...semPlugBalancete(r.naoMapeados)); }
     if (ab.arvoreDRE) { const r = foldDRE(ab.arvoreDRE as any, [ab.periodo], dictRows, dreModelRefold); if (!dados.dre?.length) dados.dre = r.dre; else mergeItensPorConta(dados.dre, r.dre); alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
   }
   dados.alertasComposicao = alertasComp;

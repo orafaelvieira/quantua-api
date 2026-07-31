@@ -324,4 +324,25 @@ describe("mesclarArvoresBalancete (leitura: auditoria do IBR e Valuation)", () =
     const orig = { arvoreOriginalBP: { a: 1 } as unknown, arvoreOriginalDRE: undefined as unknown, arvoresBalancete: [] };
     expect(mesclarArvoresBalancete(orig).arvoreOriginalBP).toEqual({ a: 1 });
   });
+
+  // CASO BELAGRO (31/07/2026): fevereiro aparecia SEM destino nenhum na auditoria.
+  // O balancete de MARÇO carrega a foto de 28/02 na coluna "saldo anterior"; como
+  // ele foi mesclado primeiro, ocupou a chave do mês — e essa foto não é dobrada.
+  it("mês com documento PRÓPRIO vence a foto de saldo anterior de outro mês", () => {
+    const d = mesclarArvoresBalancete({
+      arvoreOriginalBP: undefined as unknown,
+      arvoreOriginalDRE: undefined as unknown,
+      arvoresBalancete: [
+        // março chega ANTES e traz 28/02 como saldo anterior (não dobrado)
+        { periodo: "31/03/2026", arvoreBP: { "31/03/2026": { grupos: { MARCO: [] } }, "28/02/2026": { grupos: { ANTERIOR_DE_MARCO: [] } } }, arvoreDRE: { "31/03/2026": [] } },
+        // fevereiro tem documento próprio: é ele quem manda em 28/02
+        { periodo: "28/02/2026", arvoreBP: { "28/02/2026": { grupos: { FEVEREIRO: [] } }, "31/01/2026": { grupos: { ANTERIOR_DE_FEV: [] } } }, arvoreDRE: { "28/02/2026": [] } },
+      ],
+    });
+    const bp = d.arvoreOriginalBP as Record<string, { grupos: Record<string, unknown> }>;
+    expect(Object.keys(bp["28/02/2026"].grupos)).toEqual(["FEVEREIRO"]);
+    expect(Object.keys(bp["31/03/2026"].grupos)).toEqual(["MARCO"]);
+    // 31/01 não tem documento próprio — segue vindo do saldo anterior de fevereiro
+    expect(Object.keys(bp["31/01/2026"].grupos)).toEqual(["ANTERIOR_DE_FEV"]);
+  });
 });
