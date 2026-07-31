@@ -51,11 +51,24 @@ jobs:
       #   roda duas vezes, o sync da CVM concorre consigo mesmo e o rate-limit
       #   fura. min=1 também mantém a CPU sempre alocada, sem o que os crons nem
       #   disparam. Já estava assim no serviço; agora está escrito.
+      # --update-env-vars=ANTHROPIC_API_KEY  (31/07/2026) A chave da Anthropic era
+      #   um resquício da configuração manual do serviço, de uma conta SEM créditos —
+      #   toda IA de prod parou em silêncio ("credit balance is too low") e ninguém
+      #   via de onde vinha a chave. Agora ela é declarada AQUI, a partir do segredo
+      #   ANTHROPIC_API_KEY do repositório (gh secret set ANTHROPIC_API_KEY). Rotação
+      #   de chave = atualizar o segredo + redeploy, sem tocar em painel.
       - name: Deploy Cloud Run
-        run: >-
-          gcloud run deploy quantua-api
-          --image=southamerica-east1-docker.pkg.dev/quantua/quantua/quantua-api:${{ github.sha }}
-          --region=southamerica-east1
-          --timeout=1800
-          --min-instances=1
-          --max-instances=1
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::Segredo ANTHROPIC_API_KEY ausente no repositório — rode: gh secret set ANTHROPIC_API_KEY -R orafaelvieira/quantua-api"
+            exit 1
+          fi
+          gcloud run deploy quantua-api \
+            --image=southamerica-east1-docker.pkg.dev/quantua/quantua/quantua-api:${{ github.sha }} \
+            --region=southamerica-east1 \
+            --timeout=1800 \
+            --min-instances=1 \
+            --max-instances=1 \
+            --update-env-vars=ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
