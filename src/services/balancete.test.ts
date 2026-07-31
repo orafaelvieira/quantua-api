@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import { parseBalanceteTexto } from "./balancete-parser";
 import { converterBalancete, mesclarArvoresBalancete } from "./balancete-conversao";
 import { mapAccountToBPGroup } from "./account-mapper";
+import { parseBalanceteTabular, pareceBalanceteTabular, csvParaMatriz, ehArquivoTabular } from "./balancete-tabular";
 
 // ── fixtures sintéticas ──────────────────────────────────────────────────────
 
@@ -344,5 +345,115 @@ describe("mesclarArvoresBalancete (leitura: auditoria do IBR e Valuation)", () =
     expect(Object.keys(bp["31/03/2026"].grupos)).toEqual(["MARCO"]);
     // 31/01 não tem documento próprio — segue vindo do saldo anterior de fevereiro
     expect(Object.keys(bp["31/01/2026"].grupos)).toEqual(["ANTERIOR_DE_FEV"]);
+  });
+});
+
+// ── VIA TABULAR (CSV/Excel) — 31/07/2026 ─────────────────────────────────────
+// A planilha DECLARA as colunas no cabeçalho (o PDF obriga a inferir do
+// layout). Mesmo contrato de saída ⇒ conversão, provas e fold não mudam.
+
+describe("balancete tabular (CSV/Excel)", () => {
+  /** Estilo Domínio/Belagro: ';', colunas nomeadas, negativo entre parênteses. */
+  const CSV_DOMINIO = [
+    "Balancete Consolidado de 01/04/2026 a 30/04/2026;;;;;;",
+    "Empresa: 185 - EXEMPLO LTDA - CNPJ:00.000.000/0001-00",
+    "",
+    "Conta;Classificação;Nome da conta contábil;Saldo anterior;Débito;Crédito;Saldo atual",
+    "",
+    // Mês coerente: vendas +500, despesas +300, caixa +700/−100, fornecedores
+    // +450/−50. Fecha nos DOIS retratos (atual: 1.500−1.200=300=1.000−700;
+    // anterior: 900−800=100=500−400).
+    "19;01;ATIVO;900,00;700,00;100,00;1.500,00",
+    "27;01.1;ATIVO CIRCULANTE;900,00;700,00;100,00;1.500,00",
+    "35;01.1.1;Caixa Geral;900,00;700,00;100,00;1.500,00",
+    "40;01.1.2;Clientes;0,00;0,00;0,00;(0,00)",
+    "1163;02;PASSIVO;800,00;50,00;450,00;1.200,00",
+    "1171;02.1;PASSIVO CIRCULANTE;500,00;50,00;450,00;900,00",
+    "1201;02.1.1;Fornecedores;500,00;50,00;450,00;900,00",
+    "1902;02.3;PATRIMÔNIO LÍQUIDO;300,00;0,00;0,00;300,00",
+    "1952;02.3.1;Capital Social;300,00;0,00;0,00;300,00",
+    "2089;03;RECEITAS;500,00;0,00;500,00;1.000,00",
+    "2097;03.1;RECEITAS OPERACIONAIS;500,00;0,00;500,00;1.000,00",
+    "2101;03.1.1;Venda de Mercadorias;500,00;0,00;500,00;1.000,00",
+    "3000;04;DESPESAS;400,00;300,00;0,00;700,00",
+    "3100;04.1;DESPESAS OPERACIONAIS;400,00;300,00;0,00;700,00",
+    "3101;04.1.1;Aluguéis;400,00;300,00;0,00;700,00",
+  ].join("\r\n");
+
+  const buf = (s: string, enc: BufferEncoding = "utf8") => Buffer.from(s, enc);
+
+  it("lê o layout Domínio: período, contas, hierarquia e negativo entre parênteses", () => {
+    const p = parseBalanceteTabular(buf(CSV_DOMINIO), "Balancete 04.2026.csv");
+    expect(p.periodoInicio).toBe("01/04/2026");
+    expect(p.periodoFim).toBe("30/04/2026");
+    expect(p.avisos).toEqual([]);
+    expect(p.linhas).toHaveLength(15);
+    const caixa = p.linhas.find((l) => l.nome === "Caixa Geral")!;
+    expect(caixa.classificacao).toBe("01.1.1");
+    expect(caixa.nivel).toBe(3); // profundidade pela classificação pontilhada
+    expect(caixa.saldoAnterior).toBe(900);
+    expect(caixa.debito).toBe(700);
+    expect(caixa.saldoAtual).toBe(1500);
+    expect(p.linhas.find((l) => l.nome === "ATIVO")!.nivel).toBe(1);
+  });
+
+  it("o balanço fecha ao centavo pela MESMA conversão do PDF", () => {
+    const c = converterBalancete(parseBalanceteTabular(buf(CSV_DOMINIO), "b.csv"));
+    expect(c.periodoBP).toBe("30/04/2026");
+    expect(c.provas.fechamento.ok).toBe(true);
+    expect(c.provas.fechamento.delta).toBe(0);
+    // ativo 1.500 − passivo 900 = resultado do período (receita 1.000 − despesa 700 = 300)
+    expect(c.provas.fechamento.ativo).toBe(1500);
+    expect(c.provas.fechamento.resultadoAcumulado).toBe(300);
+  });
+
+  it("acento sobrevive ao ANSI do ERP (Windows-1252), não vira '\uFFFD'", () => {
+    const p = parseBalanceteTabular(buf(CSV_DOMINIO, "latin1"), "b.csv");
+    expect(p.linhas.map((l) => l.nome)).toContain("Aluguéis");
+    expect(p.linhas.some((l) => l.nome.includes("\uFFFD"))).toBe(false);
+  });
+
+  it("colunas em ORDEM DIFERENTE: mapeia pelo nome do cabeçalho, não pela posição", () => {
+    const trocado = [
+      "Balancete de 01/04/2026 a 30/04/2026",
+      "Classificação;Nome da conta contábil;Saldo atual;Saldo anterior;Débito;Crédito",
+      "01;ATIVO;1.500,00;900,00;700,00;100,00",
+      "01.1;ATIVO CIRCULANTE;1.500,00;900,00;700,00;100,00",
+      "01.1.1;Caixa Geral;1.500,00;900,00;700,00;100,00",
+    ].join("\n");
+    const l = parseBalanceteTabular(buf(trocado), "b.csv").linhas.find((x) => x.nome === "Caixa Geral")!;
+    expect(l.saldoAtual).toBe(1500);
+    expect(l.saldoAnterior).toBe(900);
+    expect(l.debito).toBe(700);
+    expect(l.credito).toBe(100);
+  });
+
+  it("separador vírgula com campo entre aspas (o ';' não é obrigatório)", () => {
+    const virgula = [
+      "Balancete de 01/04/2026 a 30/04/2026",
+      "Classificação,Nome da conta contábil,Saldo anterior,Débito,Crédito,Saldo atual",
+      '01,ATIVO,"900,00","700,00","100,00","1.500,00"',
+      '01.1,"Caixa, cofre e bancos","900,00","700,00","100,00","1.500,00"',
+    ].join("\n");
+    const p = parseBalanceteTabular(buf(virgula), "b.csv");
+    expect(p.linhas.find((l) => l.nome === "Caixa, cofre e bancos")?.saldoAtual).toBe(1500);
+  });
+
+  it("sniff pelo CONTEÚDO: planilha de balancete é reconhecida; outra planilha não", () => {
+    expect(pareceBalanceteTabular(csvParaMatriz(buf(CSV_DOMINIO))).balancete).toBe(true);
+    const orcamento = ["Conta;Jan;Fev;Mar", "Receita;100,00;200,00;300,00"].join("\n");
+    expect(pareceBalanceteTabular(csvParaMatriz(buf(orcamento))).balancete).toBe(false);
+  });
+
+  it("planilha sem cabeçalho de balancete avisa em vez de estourar", () => {
+    const p = parseBalanceteTabular(buf("qualquer coisa;sem colunas"), "b.csv");
+    expect(p.linhas).toHaveLength(0);
+    expect(p.avisos.join(" ")).toMatch(/cabeçalho de balancete não encontrado/i);
+  });
+
+  it("reconhece as extensões da via tabular (e não sequestra o PDF)", () => {
+    expect(ehArquivoTabular("Balancete 04.2026.csv")).toBe(true);
+    expect(ehArquivoTabular("Balancete.XLSX")).toBe(true);
+    expect(ehArquivoTabular("Balancete 04.2026.pdf")).toBe(false);
   });
 });

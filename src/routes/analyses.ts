@@ -7,8 +7,9 @@ import { env } from "../config/env";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, extrairTextoLayoutPDF, type ExtractedRow, type ParsedDocument } from "../services/parser";
-import { parseBalanceteTexto, pareceBalancete } from "../services/balancete-parser";
+import { parseBalanceteTexto, pareceBalancete, type BalanceteParseado } from "../services/balancete-parser";
 import { converterBalancete, mesclarArvoresBalancete } from "../services/balancete-conversao";
+import { parseBalanceteTabular, pareceBalanceteTabular, ehArquivoTabular, csvParaMatriz, xlsxParaMatriz } from "../services/balancete-tabular";
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
@@ -1311,11 +1312,21 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     for (const doc of docsAtivos) {
       // Herdado pula o sniff também: o tipo foi curado na versão anterior e o
       // download aqui anularia a economia do reuso de cache.
-      if (!doc.storagePath || !/\.pdf$/i.test(doc.nome) || reusaCache(doc)) continue;
+      const tabularSniff = ehArquivoTabular(doc.nome);
+      if (!doc.storagePath || !(tabularSniff || /\.pdf$/i.test(doc.nome)) || reusaCache(doc)) continue;
       try {
-        const texto = await extrairTextoLayoutPDF(await baixarDoc(doc));
-        if (!texto || texto.length < 300) continue; // escaneado/sem texto — não dá para afirmar nada
-        const det = pareceBalancete(texto);
+        // O CONTEÚDO manda também na planilha: CSV/Excel com a estrutura de
+        // balancete é roteado para a linha de balancete mesmo que o arquivo
+        // tenha sido enviado com outro rótulo (e vice-versa).
+        let det: { balancete: boolean; evidencias: string[] };
+        if (tabularSniff) {
+          const buf = await baixarDoc(doc);
+          det = pareceBalanceteTabular(/\.csv$/i.test(doc.nome) ? csvParaMatriz(buf) : xlsxParaMatriz(buf));
+        } else {
+          const texto = await extrairTextoLayoutPDF(await baixarDoc(doc));
+          if (!texto || texto.length < 300) continue; // escaneado/sem texto — não dá para afirmar nada
+          det = pareceBalancete(texto);
+        }
         const rotulado = ehBalancete(doc.tipo);
         let tipoNovo: string | null = null;
         if (det.balancete && !rotulado) tipoNovo = "Balancete";
@@ -1663,19 +1674,29 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           console.log(`[process] balancete ${doc.nome}: extração HERDADA reusada (período ${periodoBP}) — re-parse pulado`);
           continue;
         }
-        if (!doc.storagePath || !/\.pdf$/i.test(doc.nome)) {
-          balancetes.push({ docId: doc.id, nome: doc.nome, erro: "Balancete é suportado apenas em PDF nesta fase" });
+        // DUAS VIAS DE ENTRADA (31/07/2026): PDF (layout inferido) e PLANILHA —
+        // CSV/Excel, em que as colunas vêm DECLARADAS no cabeçalho. As duas
+        // desembocam no MESMO `BalanceteParseado`, então conversão, provas de
+        // fechamento e fold seguem idênticos para ambas.
+        const tabular = ehArquivoTabular(doc.nome);
+        if (!doc.storagePath || !(tabular || /\.pdf$/i.test(doc.nome))) {
+          balancetes.push({ docId: doc.id, nome: doc.nome, erro: "Balancete aceito em PDF, CSV ou Excel (.xlsx/.xls) — formato deste arquivo não reconhecido" });
           await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } });
           continue;
         }
         const buffer = await baixarDoc(doc);
-        const texto = await extrairTextoLayoutPDF(buffer);
-        if (!texto || texto.length < 100) {
-          balancetes.push({ docId: doc.id, nome: doc.nome, erro: "PDF sem texto extraível (escaneado?) — OCR de balancete ainda não suportado" });
-          await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } });
-          continue;
+        let parseado: BalanceteParseado;
+        if (tabular) {
+          parseado = parseBalanceteTabular(buffer, doc.nome);
+        } else {
+          const texto = await extrairTextoLayoutPDF(buffer);
+          if (!texto || texto.length < 100) {
+            balancetes.push({ docId: doc.id, nome: doc.nome, erro: "PDF sem texto extraível (escaneado?) — OCR de balancete ainda não suportado" });
+            await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } });
+            continue;
+          }
+          parseado = parseBalanceteTexto(texto);
         }
-        const parseado = parseBalanceteTexto(texto);
         const conv = converterBalancete(parseado);
         if (!conv.periodoBP || parseado.linhas.length < 5) {
           balancetes.push({ docId: doc.id, nome: doc.nome, erro: `Estrutura de balancete não reconhecida (${parseado.linhas.length} linhas; ${conv.avisos.join(" | ") || "sem avisos"})` });
