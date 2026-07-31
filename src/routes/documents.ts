@@ -9,9 +9,11 @@ import { uploadFile, deleteFile } from "../services/storage";
 import { registrarAuditoria } from "../services/audit-trail";
 import { derivarDocumentosLogicos, periodosFaltantes } from "../services/fechamento-periodo";
 import { montarLinhaAdotada, montarLinhaFixada, propagarMetadadosDoPool } from "../services/fixacao-pool";
-import { curarUpload, validarEmpresaDoDocumento } from "../services/curadoria-pool";
+import { curarUpload, validarEmpresaDoDocumento, competenciaValida, competenciaDoPeriodoBalancete, rotuloCompetencia } from "../services/curadoria-pool";
 import { acharDuplicadoPorHash, mensagemDuplicado, produtosQueUsamDocumento, avisoProdutosVinculados } from "../services/duplicidade-docs";
 import { downloadFile } from "../services/storage";
+import { extrairTextoLayoutPDF } from "../services/parser";
+import { parseBalanceteTexto } from "../services/balancete-parser";
 
 const router = Router();
 router.use(requireAuth);
@@ -400,6 +402,36 @@ router.put("/:id/tipo", async (req: AuthRequest, res: Response): Promise<void> =
   });
   if (!doc) { res.status(404).json({ error: "Documento não encontrado" }); return; }
   if (await analiseCancelada(doc.analysisId)) { res.status(409).json({ error: ERRO_CANCELADA }); return; }
+
+  // MESMA RÉGUA DO "DEFINIR PERÍODO" (31/07/2026): a CURA era a porta dos
+  // fundos — o definir-período recusava a competência que não bate com o
+  // documento, mas por aqui ela entrava calada (flagrado pelo usuário testando
+  // jan–ago num balancete de jan–set). Formato validado + cabeçalho manda.
+  const compNova = typeof competencia === "string" ? competencia.trim() : null;
+  if (compNova) {
+    if (!competenciaValida(compNova)) {
+      res.status(400).json({ error: "competencia deve ser YYYY-MM (mês), YYYY (ano fechado) ou YYYY-MM..YYYY-MM (período acumulado, de ≤ até)" });
+      return;
+    }
+    if (/balancete/i.test(tipo) && /\.pdf$/i.test(doc.nome) && doc.storagePath && compNova !== doc.competencia) {
+      try {
+        const texto = await extrairTextoLayoutPDF(await downloadFile(doc.storagePath));
+        if (texto && texto.length > 300) {
+          const p = parseBalanceteTexto(texto);
+          const real = competenciaDoPeriodoBalancete(p.periodoInicio, p.periodoFim);
+          if (real && real !== compNova) {
+            res.status(422).json({
+              error: `O documento diz "${p.periodoInicio ?? "?"} a ${p.periodoFim ?? "?"}" — a competência informada (${rotuloCompetencia(compNova)}) não bate. A correta é ${rotuloCompetencia(real)}.`,
+              competenciaCorreta: real,
+            });
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn(`[cura] conferência do período falhou para ${doc.nome} (segue sem checar):`, e instanceof Error ? e.message : e);
+      }
+    }
+  }
 
   const data = {
     tipo,

@@ -224,6 +224,12 @@ router.put("/documentos/:docId/competencia", async (req: AuthRequest, res: Respo
 // body: { companyId, periodo: "YYYY-MM" }
 router.post("/fechar", async (req: AuthRequest, res: Response): Promise<void> => {
   const { companyId, periodo } = (req.body ?? {}) as Record<string, string | undefined>;
+  // Acumulado não fecha: fechamento é da CADÊNCIA (mês/exercício) — o doc
+  // acumulado é referência de período composto (31/07/2026).
+  if (periodo && /^\d{4}-\d{2}\.\.\d{4}-\d{2}$/.test(periodo)) {
+    res.status(400).json({ error: "Período acumulado não entra no fechamento — feche os meses da cadência (ou o exercício)." });
+    return;
+  }
   if (!companyId || !periodo || !RE_PERIODO.test(periodo)) {
     res.status(400).json({ error: "companyId e periodo (YYYY-MM ou YYYY) são obrigatórios" });
     return;
