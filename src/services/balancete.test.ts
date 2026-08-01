@@ -457,3 +457,53 @@ describe("balancete tabular (CSV/Excel)", () => {
     expect(ehArquivoTabular("Balancete 04.2026.pdf")).toBe(false);
   });
 });
+
+// ── VALOR COLADO AO NOME (31/07/2026) ────────────────────────────────────────
+// Caso Belagro, achado ao cruzar o PDF com o CSV do mesmo mês: nome terminado
+// em dígitos grudados no 1º valor fazia a regex casar o número MAIS LONGO
+// (318.170.427,68 no lugar de 8.170.427,68 — 310 milhões a mais no saldo
+// anterior, em silêncio: o saldo atual e as provas de fechamento não sentem).
+describe("balancete PDF — primeiro valor COLADO ao nome da conta", () => {
+  const doc = (linhaConta: string) => `
+                    Balancete Consolidado de 01/04/2026 a 30/04/2026
+ Conta  Classificação   Nome da conta contábil     Saldo anterior    Débito     Crédito    Saldo atual
+${linhaConta}
+`;
+
+  it("a EQUAÇÃO do documento desempata: nome fica inteiro e o saldo anterior é o certo", () => {
+    // credora: 8.170.427,68 + 105.797,46 − 0 = 8.276.225,14 ✓
+    // (com 318.170.427,68 daria 318.276.225,14 ✗)
+    const l = parseBalanceteTexto(doc(
+      "  10017902.1.2.01.032  Empréstimo NCE/CCE - CEF - 27105318.170.427,68        0,00   105.797,46   8.276.225,14",
+    )).linhas[0];
+    expect(l.nome).toBe("Empréstimo NCE/CCE - CEF - 2710531");
+    expect(l.saldoAnterior).toBe(8170427.68);
+    expect(l.saldoAtual).toBe(8276225.14);
+  });
+
+  it("valor grande LEGÍTIMO colado não é encurtado (a leitura longa já fecha)", () => {
+    // devedora: 318.170.427,68 + 105.797,46 − 0 = 318.276.225,14 ✓ → nada muda
+    const l = parseBalanceteTexto(doc(
+      "  10017901.1.2.01.032  Conta com valor alto - 27105318.170.427,68   105.797,46        0,00 318.276.225,14",
+    )).linhas[0];
+    expect(l.saldoAnterior).toBe(318170427.68);
+    expect(l.nome).toBe("Conta com valor alto - 27105");
+  });
+
+  it("linha SEM colagem (espaço antes do valor) segue intocada", () => {
+    const l = parseBalanceteTexto(doc(
+      "  10017901.1.2.01.032  Conta normal   900,00   700,00   100,00   1.500,00",
+    )).linhas[0];
+    expect(l.nome).toBe("Conta normal");
+    expect(l.saldoAnterior).toBe(900);
+    expect(l.saldoAtual).toBe(1500);
+  });
+
+  it("colado mas SEM alternativa que feche: mantém o comportamento de hoje", () => {
+    const l = parseBalanceteTexto(doc(
+      "  10017901.1.2.01.032  Conta incoerente - 27105318.170.427,68   1,00   2,00   99.999,99",
+    )).linhas[0];
+    expect(l.saldoAnterior).toBe(318170427.68);
+    expect(l.saldoAtual).toBe(99999.99);
+  });
+});

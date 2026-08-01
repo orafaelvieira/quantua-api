@@ -170,6 +170,18 @@ export function parseBalanceteTexto(texto: string): BalanceteParseado {
     if (m) { totais = { debito: Math.abs(parseToken(m[1]).valor), credito: Math.abs(parseToken(m[2]).valor) }; break; }
   }
 
+  /** A linha satisfaz a equação do PRÓPRIO documento? Devedora (atual = ant +
+   *  D − C) ou credora (atual = ant + C − D). Mesmo mapeamento de colunas da
+   *  montagem final, para o teste valer para Protheus (5 colunas) e para a
+   *  ordem invertida. */
+  const equacaoFecha = (toks: Token[]): boolean => {
+    const t = toks.length === 5 ? [toks[0], toks[1], toks[2], toks[4]] : toks;
+    const [ant, deb, cred, atual] = ordemColunas === "ant-d-c-atual" ? t : [t[1], t[2], t[3], t[0]];
+    if (!ant || !deb || !cred || !atual) return false;
+    const d = Math.abs(deb.valor), c = Math.abs(cred.valor);
+    return Math.abs(ant.valor + d - c - atual.valor) < 0.005 || Math.abs(ant.valor + c - d - atual.valor) < 0.005;
+  };
+
   // ── 1ª passada: candidatas (linhas com o nº esperado de valores monetários) ──
   const candidatas: Candidata[] = [];
   for (const bruta of linhasBrutas) {
@@ -177,7 +189,28 @@ export function parseBalanceteTexto(texto: string): BalanceteParseado {
     const valores = [...linha.matchAll(RE_VALOR)];
     if (valores.length !== nValoresEsperados) continue;
 
-    const cabecalho = linha.slice(0, valores[0].index).replace(/\s+$/, "");
+    let inicioValores = valores[0].index ?? 0;
+    let tokens = valores.map((v) => parseToken(v[0]));
+
+    // TOKEN COLADO AO NOME (31/07/2026 — caso Belagro, achado ao cruzar com o
+    // CSV do mesmo mês): quando o nome termina em dígitos grudados no primeiro
+    // valor ("…- 27105318.170.427,68"), a regex casa o número MAIS LONGO
+    // ("318.170.427,68"), mas o valor real é "8.170.427,68" e "2710531" é
+    // parte do nome da conta. O saldo ATUAL e as provas não sentem — só o
+    // saldo anterior sai inflado (310 milhões no caso real), corrompendo em
+    // silêncio a foto do mês anterior.
+    // Quem desempata é a EQUAÇÃO do próprio documento. Regra deliberadamente
+    // ESTREITA: só quando o token está colado a um dígito E a leitura atual
+    // NÃO fecha E a alternativa mais curta fecha — senão nada muda.
+    if (inicioValores > 0 && /\d/.test(linha[inicioValores - 1]) && !equacaoFecha(tokens)) {
+      const m = valores[0][0].match(/^(\d{1,3})((?:\.\d{3})*,\d{2}(?:\s?[DC])?)$/);
+      for (let corte = 1; m && corte < m[1].length; corte++) {
+        const alternativa = [parseToken(m[1].slice(corte) + m[2]), ...tokens.slice(1)];
+        if (equacaoFecha(alternativa)) { tokens = alternativa; inicioValores += corte; break; }
+      }
+    }
+
+    const cabecalho = linha.slice(0, inicioValores).replace(/\s+$/, "");
     if (!/\d/.test(cabecalho)) continue; // linha de conta sempre tem código
 
     // Classificação pontilhada: entre os tokens pontilhados do cabeçalho,
@@ -191,7 +224,7 @@ export function parseBalanceteTexto(texto: string): BalanceteParseado {
       if (pontos > melhorPontos) melhor = p;
     }
 
-    const cand: Candidata = { original: linha, cabecalho, tokens: valores.map((v) => parseToken(v[0])) };
+    const cand: Candidata = { original: linha, cabecalho, tokens };
     if (melhor) {
       const bruto = melhor[0];
       cand.sinteticaPrefixo = bruto.startsWith("S") || undefined;
