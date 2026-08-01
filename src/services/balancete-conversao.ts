@@ -305,7 +305,7 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
 
   // ── resultado acumulado (assinado, só folhas, sem apuração) ──
   const folhasResultado = resultados.flatMap((g) => folhasDe(g.no));
-  const resultadoAcumulado = arred(folhasResultado.reduce((s, f) => s + assinadoDRE(f, "saldoAtual"), 0));
+  let resultadoAcumulado = arred(folhasResultado.reduce((s, f) => s + assinadoDRE(f, "saldoAtual"), 0));
 
   // ── exercício encerrado: resultado zerado (apurado) e A=P ──
   const ativoAtual = arred(ativos.reduce((s, g) => s + Math.abs(g.no.linha.saldoAtual), 0));
@@ -314,15 +314,52 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
   const exercicioEncerrado = saldosResultadoZerados && Math.abs(ativoAtual - passivoAtual) <= TOLERANCIA;
 
   // ── P2: fechamento ──
-  const delta = arred(ativoAtual - passivoAtual - (exercicioEncerrado ? 0 : resultadoAcumulado));
+  let delta = arred(ativoAtual - passivoAtual - (exercicioEncerrado ? 0 : resultadoAcumulado));
+
+  // DESTINAÇÃO DE RESULTADO com saldo vivo (caso EXTRAMED, 01/08/2026): nos
+  // sistemas do corpus original o grupo de apuração é DUPLICATA do resultado
+  // (só usado no encerramento) e excluí-lo fecha o balanço. Mas há plano de
+  // contas em que "CONTAS DE DESTINAÇÃO/APURAÇÃO DE RESULTADO" carrega saldo
+  // pelo ano (distribuições) — aí a identidade do documento é A − P =
+  // resultado + destinação(assinada). Quem decide é a EQUAÇÃO: só integra a
+  // apuração quando SEM ela não fecha e COM ela fecha ao centavo.
+  let apuracaoIntegrada = false;
+  const apuracoes = grupos.filter((g) => g.tipo === "apuracao");
+  if (!exercicioEncerrado && Math.abs(delta) > TOLERANCIA && apuracoes.length > 0) {
+    const folhasApuracao = apuracoes.flatMap((g) => folhasDe(g.no));
+    const apuracaoAssinada = arred(folhasApuracao.reduce((s, f) => s + assinadoDRE(f, "saldoAtual"), 0));
+    const resultadoCom = arred(resultadoAcumulado + apuracaoAssinada);
+    const deltaCom = arred(ativoAtual - passivoAtual - resultadoCom);
+    if (Math.abs(apuracaoAssinada) > TOLERANCIA && Math.abs(deltaCom) <= TOLERANCIA) {
+      resultadoAcumulado = resultadoCom;
+      delta = deltaCom;
+      apuracaoIntegrada = true;
+      avisos.push(
+        `Grupo de destinação/apuração de resultado (${fmt(apuracaoAssinada)}) integrado ao resultado acumulado — é o que fecha o balanço ao centavo neste plano de contas.`,
+      );
+    }
+  }
 
   // ── P3: coerência de CADA linha (cobre as 4 colunas, não só o saldo atual) ──
   const incoerentes: ProvasBalancete["linhas"]["incoerentes"] = [];
   for (const l of b.linhas) {
     const d = Math.abs(l.debito), c = Math.abs(l.credito);
-    const devedora = Math.abs(l.saldoAnterior + d - c - l.saldoAtual) <= TOLERANCIA;
-    const credora = Math.abs(l.saldoAnterior + c - d - l.saldoAtual) <= TOLERANCIA;
-    if (devedora || credora) continue;
+    let coerente: boolean;
+    if (l.naturezaAnterior && l.naturezaAtual) {
+      // Natureza DECLARADA nos dois retratos: equação ÚNICA assinada (débito
+      // soma). Cobre a conta que VIRA de natureza no período — começa credora
+      // e termina devedora (caso EXTRAMED: −2.485.223,60 + 58.450.567,81 −
+      // 54.300.432,64 = +1.664.911,57 D ✓), que as duas equações sem sinal
+      // reprovariam.
+      const antS = (l.naturezaAnterior === "C" ? -1 : 1) * Math.abs(l.saldoAnterior);
+      const atualS = (l.naturezaAtual === "C" ? -1 : 1) * Math.abs(l.saldoAtual);
+      coerente = Math.abs(antS + d - c - atualS) <= TOLERANCIA;
+    } else {
+      const devedora = Math.abs(l.saldoAnterior + d - c - l.saldoAtual) <= TOLERANCIA;
+      const credora = Math.abs(l.saldoAnterior + c - d - l.saldoAtual) <= TOLERANCIA;
+      coerente = devedora || credora;
+    }
+    if (coerente) continue;
     if (incoerentes.length < 20) {
       incoerentes.push({ classificacao: l.classificacao, nome: l.nome, anterior: l.saldoAnterior, debito: l.debito, credito: l.credito, atual: l.saldoAtual });
     }
@@ -379,9 +416,14 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
       }
     }
     // AJUSTE-CHAVE: resultado do período entra no PL para o balanço fechar.
+    // Com a destinação integrada (EXTRAMED), ela entra nos DOIS retratos — a
+    // identidade vale igualmente na coluna do saldo anterior.
+    const folhasDoResultado = apuracaoIntegrada
+      ? [...folhasResultado, ...apuracoes.flatMap((g) => folhasDe(g.no))]
+      : folhasResultado;
     const resultadoDoCampo = campo === "saldoAtual"
       ? resultadoAcumulado
-      : arred(folhasResultado.reduce((s, f) => s + assinadoDRE(f, "saldoAnterior"), 0));
+      : arred(folhasDoResultado.reduce((s, f) => s + assinadoDRE(f, "saldoAnterior"), 0));
     if (!exercicioEncerrado && Math.abs(resultadoDoCampo) > TOLERANCIA) {
       (gruposBP["Patrimônio Líquido"] ??= []).push({
         nome: "Resultado do Período (apuração do balancete)",

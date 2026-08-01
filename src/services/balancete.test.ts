@@ -534,3 +534,126 @@ describe("P3 — coerência de cada linha do balancete", () => {
     expect(c.avisos.join(" ")).toMatch(/não fecham na própria equação/i);
   });
 });
+
+// ── CORPUS Excel_Quantua (01/08/2026): 4 formatos novos de planilha ──────────
+describe("balancete tabular — formatos do corpus de clientes", () => {
+  const buf = (s: string) => Buffer.from(s, "utf8");
+
+  it("TANGO: classificação e nome na MESMA célula, coluna S, dados desalinhados do cabeçalho", () => {
+    const csv = [
+      '"Período: 01/12/2022 a 31/12/2022"',
+      '"BALANCETE";"Valores expressos em Reais (R$)"',
+      '"Conta";"S";"Classificação";"Saldo Ant.";"Débito";"Crédito";"Saldo"',
+      '"";"";"10000";"S";"1   A T I V O";"900,00";"";"700,00";"100,00";"1.500,00"',
+      '"";"";"19990";"S";"1.01   ATIVO CIRCULANTE";"900,00";"";"700,00";"100,00";"1.500,00"',
+      '"";"";"19981";"";"1.01.01   Caixa Geral";"900,00";"";"700,00";"100,00";"1.500,00"',
+      '"";"";"20000";"S";"2   P A S S I V O";"800,00";"";"50,00";"450,00";"1.200,00"',
+      '"";"";"20010";"";"2.01   Fornecedores";"500,00";"";"50,00";"450,00";"900,00"',
+      '"";"";"20020";"";"2.02   Capital Social";"300,00";"";"0,00";"0,00";"300,00"',
+      '"";"";"30000";"S";"3   RECEITAS";"500,00";"";"0,00";"500,00";"1.000,00"',
+      '"";"";"30010";"";"3.01   Vendas";"500,00";"";"0,00";"500,00";"1.000,00"',
+      '"";"";"40000";"S";"4   DESPESAS";"400,00";"";"300,00";"0,00";"700,00"',
+      '"";"";"40010";"";"4.01   Aluguéis";"400,00";"";"300,00";"0,00";"700,00"',
+    ].join("\r\n");
+    const p = parseBalanceteTabular(buf(csv), "b.csv");
+    expect(p.periodoFim).toBe("31/12/2022");
+    expect(p.linhas).toHaveLength(10);
+    const ativo = p.linhas[0];
+    expect(ativo.nome).toBe("ATIVO"); // "A T I V O" colapsado
+    expect(ativo.sintetica).toBe(true);
+    expect(ativo.saldoAnterior).toBe(900);
+    expect(ativo.saldoAtual).toBe(1500);
+    const c = converterBalancete(p);
+    expect(c.provas.fechamento.ok).toBe(true);
+    expect(c.provas.linhas.ok).toBe(true);
+  });
+
+  it("EXTRAMED: natureza colada ('1.500,00D'), conta que VIRA de natureza fecha no P3 assinado", () => {
+    const csv = [
+      "Classificação;Conta;Nome;Saldo Anterior;Débito;Crédito;Saldo Atual",
+      "1;10;ATIVO;900,00D;700,00;100,00;1.500,00D",
+      "1.1;20;Caixa;900,00D;700,00;100,00;1.500,00D",
+      "2;30;PASSIVO;500,00C;20,00;620,00;1.100,00C",
+      // conta que começa CREDORA e termina DEVEDORA: -200 + 800 - 500 = +100 ✓
+      "2.1;40;Adiantamento que virou;200,00C;800,00;500,00;100,00D",
+      "2.2;50;Fornecedores;300,00C;20,00;120,00;400,00C",
+      "2.3;60;Capital;0,00C;0,00;800,00;800,00C",
+      "3;70;RECEITAS;500,00C;0,00;500,00;1.000,00C",
+      "3.1;80;Vendas;500,00C;0,00;500,00;1.000,00C",
+      "4;90;DESPESAS;400,00D;200,00;0,00;600,00D",
+      "4.1;91;Salários;400,00D;200,00;0,00;600,00D",
+    ].join("\n");
+    const p = parseBalanceteTabular(buf(csv), "b.csv", "2022");
+    const vira = p.linhas.find((l) => l.nome === "Adiantamento que virou")!;
+    expect(vira.naturezaAnterior).toBe("C");
+    expect(vira.naturezaAtual).toBe("D");
+    const c = converterBalancete(p);
+    expect(c.provas.linhas.ok).toBe(true); // P3 assinado aprova a virada
+    expect(p.periodoFim).toBe("31/12/2022"); // período veio da competência
+  });
+
+  it("DESTINAÇÃO com saldo vivo: integrada ao resultado SÓ quando é o que fecha o balanço", () => {
+    const csv = [
+      "Classificação;Conta;Nome;Saldo Anterior;Débito;Crédito;Saldo Atual",
+      "1;10;ATIVO;0,00D;1.000,00;0,00;1.000,00D",
+      "1.1;20;Caixa;0,00D;1.000,00;0,00;1.000,00D",
+      "2;30;PASSIVO;0,00C;0,00;700,00;700,00C",
+      "2.1;40;Capital;0,00C;0,00;700,00;700,00C",
+      "3;50;RECEITAS;0,00C;0,00;500,00;500,00C",
+      "3.1;60;Vendas;0,00C;0,00;500,00;500,00C",
+      "6;70;CONTAS DE DESTINACAO/APURACAO DE RESULTADO;0,00D;200,00;0,00;200,00D",
+      "6.1;80;Distribuição de lucros;0,00D;200,00;0,00;200,00D",
+    ].join("\n");
+    // A−P = 300; resultado puro = 500; com destinação (−200) = 300 ✓
+    const c = converterBalancete(parseBalanceteTabular(buf(csv), "b.csv", "2022"));
+    expect(c.provas.fechamento.ok).toBe(true);
+    expect(c.provas.fechamento.resultadoAcumulado).toBe(300);
+    expect(c.avisos.join(" ")).toMatch(/destinação\/apuração de resultado .* integrado/i);
+  });
+
+  it("ENCERRAMENTO: coluna 'Conta' corrida, Movimento ignorado e saldo zerado em BRANCO", () => {
+    const csv = [
+      "Conta;Descricao;Saldo anterior;Debito;Credito;Mov  periodo;Saldo atual",
+      "1;ATIVO;900,00 D;700.00;100.00;600,00 D;1.500,00 D",
+      "11;CIRCULANTE;900,00 D;700.00;100.00;600,00 D;1.500,00 D",
+      "111;Caixa Geral;900,00 D;700.00;100.00;600,00 D;1.500,00 D",
+      // saldo final ZERADO impresso como célula vazia — equação decide (ant+D−C=0)
+      "112;Conta zerada;38.663,35 D;2640.80;41304.15;38.663,35 C;",
+      "2;PASSIVO;838.663,35 C;41304.15;662640.80;621.336,65 C;1.460.000,00 C",
+      "21;Fornecedores;538.663,35 C;41304.15;362640.80;321.336,65 C;860.000,00 C",
+      "22;Capital;300.000,00 C;0.00;300000.00;300.000,00 C;600.000,00 C",
+      "3;RECEITAS;500,00 C;0.00;39500.00;39.500,00 C;40.000,00 C",
+      "31;Vendas;500,00 C;0.00;39500.00;39.500,00 C;40.000,00 C",
+    ].join("\n");
+    const p = parseBalanceteTabular(buf(csv), "b.csv", "2022");
+    expect(p.linhas.map((l) => l.nivel).slice(0, 4)).toEqual([1, 2, 3, 3]); // corrida: comprimentos → níveis
+    const zerada = p.linhas.find((l) => l.nome === "Conta zerada")!;
+    expect(zerada.saldoAtual).toBe(0); // NÃO herdou a coluna de movimento
+    const c = converterBalancete(p);
+    expect(c.provas.linhas.ok).toBe(true);
+  });
+
+  it("INDENTAÇÃO POR COLUNA (CADMO): dados fora dos índices do cabeçalho — a equação escolhe a leitura", () => {
+    const csv = [
+      "Código;;;Classificação;;;;Descrição da conta;;;;;;;Saldo Anterior;;;;;;;Débito;;;;Crédito;;;;;;Saldo Atual",
+      // raiz: nome no índice do cabeçalho, mas Saldo Anterior 4 colunas à direita
+      "1;;;1;;;;ATIVO;;;;;;;;;;;900.00;;;700.00;;;;100.00;;;;;;1500.00",
+      "2;;;1.1;;;;;CIRCULANTE;;;;;;;;;;900.00;;;700.00;;;;100.00;;;;;;1500.00",
+      "3;;;1.1.1;;;;;;Caixa;;;;;;;;;900.00;;;700.00;;;;100.00;;;;;;1500.00",
+      "4;;;2;;;;PASSIVO;;;;;;;;;;;800.00;;;50.00;;;;450.00;;;;;;1200.00",
+      "5;;;2.1;;;;;Fornecedores;;;;;;;;;;500.00;;;50.00;;;;450.00;;;;;;900.00",
+      "6;;;2.2;;;;;Capital;;;;;;;;;;300.00;;;0.00;;;;0.00;;;;;;300.00",
+      "7;;;3;;;;RECEITAS;;;;;;;;;;;500.00;;;0.00;;;;500.00;;;;;;1000.00",
+      "8;;;3.1;;;;;Vendas;;;;;;;;;;500.00;;;0.00;;;;500.00;;;;;;1000.00",
+      "9;;;4;;;;DESPESAS;;;;;;;;;;;400.00;;;300.00;;;;0.00;;;;;;700.00",
+      "10;;;4.1;;;;;Aluguel;;;;;;;;;;400.00;;;300.00;;;;0.00;;;;;;700.00",
+    ].join("\n");
+    const p = parseBalanceteTabular(buf(csv), "b.csv", "2020");
+    expect(p.linhas).toHaveLength(10);
+    const ativo = p.linhas[0];
+    expect(ativo.saldoAnterior).toBe(900); // achado pela varredura posicional
+    const c = converterBalancete(p);
+    expect(c.provas.fechamento.ok).toBe(true);
+    expect(c.provas.linhas.ok).toBe(true);
+  });
+});

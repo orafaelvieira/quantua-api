@@ -1706,7 +1706,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         const buffer = await baixarDoc(doc);
         let parseado: BalanceteParseado;
         if (tabular) {
-          parseado = parseBalanceteTabular(buffer, doc.nome);
+          parseado = parseBalanceteTabular(buffer, doc.nome, doc.competencia);
         } else {
           const texto = await extrairTextoLayoutPDF(buffer);
           if (!texto || texto.length < 100) {
