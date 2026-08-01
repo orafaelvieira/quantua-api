@@ -8,7 +8,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, extrairTextoLayoutPDF, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { parseBalanceteTexto, pareceBalancete, type BalanceteParseado } from "../services/balancete-parser";
-import { converterBalancete, mesclarArvoresBalancete } from "../services/balancete-conversao";
+import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal } from "../services/balancete-conversao";
 import { parseBalanceteTabular, pareceBalanceteTabular, ehArquivoTabular, csvParaMatriz, xlsxParaMatriz } from "../services/balancete-tabular";
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
@@ -2052,6 +2052,10 @@ router.get("/:id/dados-estruturados", async (req: AuthRequest, res: Response): P
   // Mescla SÓ NA LEITURA: persistir junto faria o /refold dobrar os meses em
   // dobro (as balancete são re-dobradas pela própria lista arvoresBalancete).
   try { mesclarArvoresBalancete(dadosOut); } catch { /* best-effort — nunca bloqueia os dados */ }
+  // DRE do balancete é ACUMULADA do exercício (YTD) — deriva o MÊS isolado
+  // (YTD N − YTD N−1) na leitura, junto com a marcação de quais períodos
+  // acumulam. A tela mostra o mês; o gravado segue fiel ao documento.
+  try { (dadosOut as any).dreMensal = derivarDREMensal(dadosOut); } catch { /* best-effort */ }
   res.json(dadosOut);
 });
 

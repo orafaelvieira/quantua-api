@@ -276,6 +276,84 @@ export function mesclarArvoresBalancete<
   return dados;
 }
 
+/**
+ * DRE MENSALIZADA NA LEITURA (01/08/2026 — pedido do usuário: "no balancete a
+ * DRE é acumulada do ano e a tela precisa do resultado do mês").
+ *
+ * O mês vindo de balancete carrega a DRE ACUMULADA do exercício (YTD, período
+ * "01/01 a fim do mês") — é fiel ao documento e continua sendo o que fica
+ * GRAVADO. O mês ISOLADO é derivado aqui, na leitura: YTD(mês) − YTD(mês
+ * anterior), quando o mês anterior do MESMO exercício existe na série (também
+ * vindo de balancete). Janeiro (ou o 1º mês da janela do doc) já é o próprio
+ * mês. Sem o mês anterior, não há como isolar — o período fica marcado como
+ * acumulado e a tela mostra o rótulo.
+ *
+ * Mesmo padrão do mesclarArvoresBalancete: derivado a cada GET, nunca
+ * persistido (o refold/process re-dobra as árvores e o derivado acompanha).
+ */
+export interface DREMensal {
+  /** Por período ACUMULADO (dd/mm/aaaa): desde quando acumula e se o mês pôde ser isolado. */
+  periodos: Record<string, { desde: string; mesIsolado: boolean; anterior?: string }>;
+  /** conta → período → valor DO MÊS (só para períodos com mesIsolado). */
+  valores: Record<string, Record<string, number>>;
+}
+
+export function derivarDREMensal(dados: {
+  dre?: Array<{ conta: string; valores?: Record<string, number> }>;
+  balancetes?: unknown;
+}): DREMensal | null {
+  const bals = Array.isArray(dados?.balancetes) ? (dados.balancetes as Array<Record<string, any>>) : [];
+  const dre = Array.isArray(dados?.dre) ? dados.dre : [];
+  if (bals.length === 0 || dre.length === 0) return null;
+
+  const dataDe = (s: string): Date | null => {
+    const m = (s ?? "").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    return m ? new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])) : null;
+  };
+  const fmtData = (d: Date): string =>
+    `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+
+  // TODOS os meses de balancete (para o encadeamento): o elo de fevereiro é
+  // JANEIRO, que não é acumulado (01/01 a 31/01 = o próprio mês) mas carrega o
+  // YTD de janeiro do mesmo jeito. ACUMULADOS (para marcação/derivação) são o
+  // subconjunto cujo início fica em mês anterior ao do fim.
+  const mesesBalancete = new Map<string, { desde: string; inicio: Date; fim: Date; acumula: boolean }>();
+  for (const b of bals) {
+    if (b?.erro || !b?.periodo) continue;
+    const fim = dataDe(String(b.periodo));
+    const inicio = b.periodoInicio ? dataDe(String(b.periodoInicio)) : null;
+    if (!fim || !inicio) continue;
+    const mesmoMes = inicio.getFullYear() === fim.getFullYear() && inicio.getMonth() === fim.getMonth();
+    mesesBalancete.set(String(b.periodo), { desde: String(b.periodoInicio), inicio, fim, acumula: !mesmoMes });
+  }
+  const acumulados = [...mesesBalancete.entries()].filter(([, v]) => v.acumula);
+  if (acumulados.length === 0) return null;
+
+  const out: DREMensal = { periodos: {}, valores: {} };
+  for (const [periodo, info] of acumulados) {
+    // Mês anterior DO MESMO exercício acumulado: último dia do mês anterior ao
+    // fim, presente na série como mês de balancete com o MESMO início de
+    // janela (o YTD dele é o minuendo da subtração).
+    const fimAnterior = new Date(info.fim.getFullYear(), info.fim.getMonth(), 0);
+    const chaveAnterior = fmtData(fimAnterior);
+    const anterior = mesesBalancete.get(chaveAnterior);
+    const encadeia = !!anterior && anterior.desde === info.desde;
+    if (!encadeia || fimAnterior < info.inicio) {
+      out.periodos[periodo] = { desde: info.desde, mesIsolado: false };
+      continue;
+    }
+    out.periodos[periodo] = { desde: info.desde, mesIsolado: true, anterior: chaveAnterior };
+    for (const linha of dre) {
+      const ytd = linha?.valores?.[periodo];
+      const ytdAnt = linha?.valores?.[chaveAnterior];
+      if (typeof ytd !== "number" && typeof ytdAnt !== "number") continue;
+      const mes = Math.round(((ytd ?? 0) - (ytdAnt ?? 0)) * 100) / 100;
+      (out.valores[linha.conta] ??= {})[periodo] = mes;
+    }
+  }
+  return Object.keys(out.periodos).length ? out : null;
+}
+
 // ── conversão principal ──────────────────────────────────────────────────────
 
 export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {

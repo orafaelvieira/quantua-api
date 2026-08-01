@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { parseBalanceteTexto } from "./balancete-parser";
-import { converterBalancete, mesclarArvoresBalancete } from "./balancete-conversao";
+import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal } from "./balancete-conversao";
 import { mapAccountToBPGroup } from "./account-mapper";
 import { parseBalanceteTabular, pareceBalanceteTabular, csvParaMatriz, ehArquivoTabular } from "./balancete-tabular";
 
@@ -655,5 +655,50 @@ describe("balancete tabular — formatos do corpus de clientes", () => {
     const c = converterBalancete(p);
     expect(c.provas.fechamento.ok).toBe(true);
     expect(c.provas.linhas.ok).toBe(true);
+  });
+});
+
+// ── DRE mensalizada na leitura (01/08/2026) ──────────────────────────────────
+// "No balancete a DRE é acumulada do ano e a tela precisa do resultado do mês."
+describe("derivarDREMensal", () => {
+  const bal = (periodo: string, periodoInicio: string) => ({ periodo, periodoInicio, provas: {} });
+  const dados: { balancetes: unknown[]; dre: Array<{ conta: string; valores: Record<string, number> }> } = {
+    balancetes: [bal("31/01/2026", "01/01/2026"), bal("28/02/2026", "01/01/2026"), bal("31/03/2026", "01/01/2026")],
+    dre: [
+      { conta: "Receita Bruta", valores: { "31/01/2026": 100, "28/02/2026": 250, "31/03/2026": 450, "31/12/2025": 900 } },
+      { conta: "Custo Operacional", valores: { "31/01/2026": -40, "28/02/2026": -90, "31/03/2026": -160 } },
+    ],
+  };
+
+  it("identifica os períodos acumulados e deriva o MÊS = YTD N − YTD N−1", () => {
+    const d = derivarDREMensal(dados)!;
+    // janeiro (01/01 a 31/01) NÃO acumula — nem aparece
+    expect(d.periodos["31/01/2026"]).toBeUndefined();
+    expect(d.periodos["28/02/2026"]).toEqual({ desde: "01/01/2026", mesIsolado: true, anterior: "31/01/2026" });
+    expect(d.valores["Receita Bruta"]["28/02/2026"]).toBe(150); // 250 − 100
+    expect(d.valores["Receita Bruta"]["31/03/2026"]).toBe(200); // 450 − 250
+    expect(d.valores["Custo Operacional"]["31/03/2026"]).toBe(-70); // −160 − (−90)
+    // período anual (31/12/2025) não é tocado
+    expect(d.periodos["31/12/2025"]).toBeUndefined();
+  });
+
+  it("mês SEM o anterior na série fica marcado como acumulado (sem isolar)", () => {
+    const d = derivarDREMensal({
+      balancetes: [bal("31/03/2026", "01/01/2026")], // só março YTD, sem fevereiro
+      dre: [{ conta: "Receita Bruta", valores: { "31/03/2026": 450 } }],
+    })!;
+    expect(d.periodos["31/03/2026"]).toEqual({ desde: "01/01/2026", mesIsolado: false });
+    expect(d.valores["Receita Bruta"]?.["31/03/2026"]).toBeUndefined();
+  });
+
+  it("balancete de mês único (01/06 a 30/06) não é acumulado — nada a derivar", () => {
+    expect(derivarDREMensal({
+      balancetes: [bal("30/06/2026", "01/06/2026")],
+      dre: [{ conta: "Receita Bruta", valores: { "30/06/2026": 80 } }],
+    })).toBeNull();
+  });
+
+  it("sem balancetes, retorna null (documentos anuais não são tocados)", () => {
+    expect(derivarDREMensal({ dre: dados.dre })).toBeNull();
   });
 });
