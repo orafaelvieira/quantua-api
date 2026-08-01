@@ -1127,6 +1127,22 @@ function aplicarProvasBalancete(
     const f = b.provas?.fechamento;
     if (b.erro || !f) { todasOk = false; continue; }
     temProva = true;
+    // P3 (31/07/2026): a linha inteira precisa fechar, não só a coluna do saldo
+    // ATUAL. Sem isto, um saldo ANTERIOR corrompido saía com selo verde de 100%
+    // (caso Belagro: 310 milhões inflados por um valor colado ao nome da conta).
+    // Ausente em extração ANTIGA (undefined) — aí só P2 vale, como antes.
+    const lin = b.provas?.linhas;
+    if (lin && !lin.ok) {
+      todasOk = false;
+      const ex = lin.incoerentes?.[0];
+      validacao.alertas.push({
+        tipo: "erro", area: "Balancete",
+        mensagem: `${b.nome}: ${lin.total - lin.coerentes} de ${lin.total} conta(s) não fecham na própria equação do documento (saldo anterior + débito − crédito = saldo atual).`,
+        detalhes: ex
+          ? `Ex.: "${ex.nome}" — ${fmtBR(ex.anterior)} + ${fmtBR(ex.debito)} − ${fmtBR(ex.credito)} ≠ ${fmtBR(ex.atual)}. Isso indica valor lido errado em alguma coluna (o fechamento patrimonial olha só o saldo atual e não pega esse tipo de erro) — reprocesse e, se persistir, envie o balancete em CSV/Excel.`
+          : undefined,
+      });
+    }
     if (f.ok) continue;
     todasOk = false;
     validacao.alertas.push({
@@ -1137,9 +1153,12 @@ function aplicarProvasBalancete(
   }
   if (temProva && todasOk) {
     validacao.reconciliacaoDRE = { verificada: true, ok: validacao.reconciliacaoDRE.ok };
+    const comP3 = bals.every((b) => b.provas?.linhas?.ok);
     validacao.alertas.push({
       tipo: "info", area: "Balancete",
-      mensagem: "Fechamento do(s) balancete(s) provado ao centavo: Ativo − Passivo = resultado acumulado do período — a DRE reconcilia com o balanço por construção.",
+      mensagem: comP3
+        ? "Fechamento do(s) balancete(s) provado ao centavo: Ativo − Passivo = resultado acumulado do período, e cada conta fecha na própria equação (saldo anterior + débito − crédito = saldo atual) — a DRE reconcilia com o balanço por construção."
+        : "Fechamento do(s) balancete(s) provado ao centavo: Ativo − Passivo = resultado acumulado do período — a DRE reconcilia com o balanço por construção.",
     });
   } else {
     validacao.reconciliacaoDRE = { verificada: true, ok: false };
@@ -1723,8 +1742,10 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
             // linha `balancetes` completa sem re-parsear o PDF.
             dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], periodoInicio: parseado.periodoInicio, provas: conv.provas, avisos: conv.avisos, totalLinhas: parseado.linhas.length } as any,
             status: "Processado",
-            // "verde só com prova": confiança alta SOMENTE com fechamento ao centavo
-            confianca: conv.provas.fechamento.ok ? 95 : 40,
+            // "verde só com prova": confiança alta SOMENTE com fechamento ao
+            // centavo E com todas as linhas fechando na própria equação (P3) —
+            // P2 sozinho não olha o saldo anterior nem o movimento.
+            confianca: conv.provas.fechamento.ok && conv.provas.linhas.ok ? 95 : 40,
           },
         });
         await conferirCompetenciaBalancete(doc, parseado.periodoInicio, parseado.periodoFim);

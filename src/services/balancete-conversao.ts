@@ -44,6 +44,14 @@ export interface ProvasBalancete {
   debitosCreditos?: { debito: number; credito: number; ok: boolean };
   /** P2 — fechamento patrimonial. */
   fechamento: { ativo: number; passivo: number; resultadoAcumulado: number; delta: number; ok: boolean };
+  /**
+   * P3 — COERÊNCIA DE CADA LINHA (31/07/2026). P1 e P2 olham só a coluna do
+   * SALDO ATUAL: um saldo anterior corrompido passava com selo verde de 100%
+   * (caso real Belagro — 310 milhões inflados por um valor colado ao nome).
+   * Esta prova cobre as QUATRO colunas de cada conta: saldo atual = saldo
+   * anterior + débito − crédito (devedora) ou + crédito − débito (credora).
+   */
+  linhas: { total: number; coerentes: number; ok: boolean; incoerentes: Array<{ classificacao: string; nome: string; anterior: number; debito: number; credito: number; atual: number }> };
   exercicioEncerrado: boolean;
 }
 
@@ -307,8 +315,22 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
 
   // ── P2: fechamento ──
   const delta = arred(ativoAtual - passivoAtual - (exercicioEncerrado ? 0 : resultadoAcumulado));
+
+  // ── P3: coerência de CADA linha (cobre as 4 colunas, não só o saldo atual) ──
+  const incoerentes: ProvasBalancete["linhas"]["incoerentes"] = [];
+  for (const l of b.linhas) {
+    const d = Math.abs(l.debito), c = Math.abs(l.credito);
+    const devedora = Math.abs(l.saldoAnterior + d - c - l.saldoAtual) <= TOLERANCIA;
+    const credora = Math.abs(l.saldoAnterior + c - d - l.saldoAtual) <= TOLERANCIA;
+    if (devedora || credora) continue;
+    if (incoerentes.length < 20) {
+      incoerentes.push({ classificacao: l.classificacao, nome: l.nome, anterior: l.saldoAnterior, debito: l.debito, credito: l.credito, atual: l.saldoAtual });
+    }
+  }
+
   const provas: ProvasBalancete = {
     fechamento: { ativo: ativoAtual, passivo: passivoAtual, resultadoAcumulado, delta, ok: Math.abs(delta) <= TOLERANCIA },
+    linhas: { total: b.linhas.length, coerentes: b.linhas.length - incoerentes.length, ok: incoerentes.length === 0, incoerentes },
     exercicioEncerrado,
     ...(b.totais
       ? { debitosCreditos: { ...b.totais, ok: Math.abs(b.totais.debito - b.totais.credito) <= TOLERANCIA } }
@@ -316,6 +338,13 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
   };
   if (!provas.fechamento.ok) {
     avisos.push(`Fechamento não bate: Ativo ${fmt(ativoAtual)} − Passivo ${fmt(passivoAtual)} − Resultado ${fmt(resultadoAcumulado)} = ${fmt(delta)}.`);
+  }
+  if (!provas.linhas.ok) {
+    const ex = incoerentes[0];
+    avisos.push(
+      `${incoerentes.length} conta(s) não fecham na própria equação (saldo anterior + débito − crédito = saldo atual). ` +
+      `Ex.: "${ex.nome}" — ${fmt(ex.anterior)} + ${fmt(ex.debito)} − ${fmt(ex.credito)} ≠ ${fmt(ex.atual)}.`,
+    );
   }
 
   // ── BP: árvore original nos 5 GRUPOS CANÔNICOS que o fold consome ──

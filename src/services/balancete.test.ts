@@ -507,3 +507,30 @@ ${linhaConta}
     expect(l.saldoAtual).toBe(99999.99);
   });
 });
+
+// ── P3: cada conta fecha na PRÓPRIA equação ──────────────────────────────────
+// P1/P2 olham só a coluna do saldo ATUAL — um saldo anterior corrompido passava
+// com selo verde de 100% (caso Belagro: 310 milhões inflados por valor colado).
+describe("P3 — coerência de cada linha do balancete", () => {
+  it("vale nos 7 sistemas do corpus: nenhum falso alarme", () => {
+    for (const [nome, fix] of Object.entries({ FIX_COLADO, FIX_DOMINIO, FIX_CORRIDA, FIX_S_COLADO, FIX_PROTHEUS })) {
+      const c = converterBalancete(parseBalanceteTexto(fix));
+      expect(`${nome}: ${c.provas.linhas.coerentes}/${c.provas.linhas.total}`)
+        .toBe(`${nome}: ${c.provas.linhas.total}/${c.provas.linhas.total}`);
+      expect(c.provas.linhas.ok).toBe(true);
+    }
+  });
+
+  it("pega a coluna que P1/P2 não olham: saldo anterior corrompido derruba a prova", () => {
+    // fechamento (saldo ATUAL) intacto — só o saldo ANTERIOR está inflado
+    const corrompido = FIX_COLADO.replace(
+      "    3501.1.1               Caixa Geral                  900,00        700,00        100,00       1.500,00",
+      "    3501.1.1               Caixa Geral              310.900,00        700,00        100,00       1.500,00",
+    );
+    const c = converterBalancete(parseBalanceteTexto(corrompido));
+    expect(c.provas.fechamento.ok).toBe(true);   // P2 continua passando…
+    expect(c.provas.linhas.ok).toBe(false);      // …e P3 acusa
+    expect(c.provas.linhas.incoerentes[0].nome).toBe("Caixa Geral");
+    expect(c.avisos.join(" ")).toMatch(/não fecham na própria equação/i);
+  });
+});
