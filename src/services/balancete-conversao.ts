@@ -321,10 +321,16 @@ export function derivarDREMensal(dados: {
   for (const b of bals) {
     if (b?.erro || !b?.periodo) continue;
     const fim = dataDe(String(b.periodo));
-    const inicio = b.periodoInicio ? dataDe(String(b.periodoInicio)) : null;
-    if (!fim || !inicio) continue;
+    if (!fim) continue;
+    // SEM início declarado (cache de extração ANTERIOR ao campo periodoInicio —
+    // caso Belagro em prod, onde o toggle não aparecia): vale a PRAXE do
+    // balancete brasileiro, acumulado desde 01/01 do ano do fim. Documento
+    // parseado pelo código atual sempre carrega o início lido do cabeçalho.
+    const desde = b.periodoInicio ? String(b.periodoInicio) : `01/01/${fim.getFullYear()}`;
+    const inicio = dataDe(desde);
+    if (!inicio) continue;
     const mesmoMes = inicio.getFullYear() === fim.getFullYear() && inicio.getMonth() === fim.getMonth();
-    mesesBalancete.set(String(b.periodo), { desde: String(b.periodoInicio), inicio, fim, acumula: !mesmoMes });
+    mesesBalancete.set(String(b.periodo), { desde, inicio, fim, acumula: !mesmoMes });
   }
   const acumulados = [...mesesBalancete.entries()].filter(([, v]) => v.acumula);
   if (acumulados.length === 0) return null;

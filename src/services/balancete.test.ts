@@ -701,4 +701,16 @@ describe("derivarDREMensal", () => {
   it("sem balancetes, retorna null (documentos anuais não são tocados)", () => {
     expect(derivarDREMensal({ dre: dados.dre })).toBeNull();
   });
+
+  // CASO BELAGRO em prod: o toggle não aparecia porque o cache de extração dos
+  // documentos é ANTERIOR ao campo periodoInicio — sem ele, nada era marcado.
+  it("cache antigo SEM periodoInicio: assume a praxe (acumulado desde 01/01) e deriva normalmente", () => {
+    const d = derivarDREMensal({
+      balancetes: [{ periodo: "31/01/2026", provas: {} }, { periodo: "28/02/2026", provas: {} }],
+      dre: [{ conta: "Receita Bruta", valores: { "31/01/2026": 100, "28/02/2026": 250 } }],
+    })!;
+    expect(d.periodos["28/02/2026"]).toEqual({ desde: "01/01/2026", mesIsolado: true, anterior: "31/01/2026" });
+    expect(d.valores["Receita Bruta"]["28/02/2026"]).toBe(150);
+    expect(d.periodos["31/01/2026"]).toBeUndefined(); // janeiro segue sendo o próprio mês
+  });
 });
