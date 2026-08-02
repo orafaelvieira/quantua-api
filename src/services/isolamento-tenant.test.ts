@@ -101,23 +101,118 @@ describe("gate da equipe Quantua", () => {
 });
 
 // ── ibr.ts: economia da firma não vai para o cliente ─────────────────────────
+// 2ª RODADA: a 1ª versão desta trava testava só `scopeCompanyIds != null` —
+// que NÃO pega o portal (role "client" tem tipoUsuario "quantua" e escopo nulo)
+// — e deixava `hoursByUser` fora do condicional.
+/** Espelha `callerExterno` do ibr.ts. */
+const callerExterno = (u: { scopeCompanyIds: string[] | null; role?: string | null; tipoUsuario?: string }): boolean => {
+  if (u.scopeCompanyIds !== null && u.scopeCompanyIds !== undefined) return true;
+  return u.role === "client" || u.tipoUsuario === "empresa" || u.tipoUsuario === "parceiro";
+};
+
 describe("resumo de horas do IBR", () => {
-  const montar = (scopeCompanyIds: string[] | null) => {
-    const externo = scopeCompanyIds !== null && scopeCompanyIds !== undefined;
-    return { totalHours: 10, ...(externo ? {} : { estimatedCost: 3500, feeAmount: 9000, marginAmount: 5500, marginPct: 0.61 }) };
+  const montar = (u: { scopeCompanyIds: string[] | null; role?: string | null; tipoUsuario?: string }) => {
+    const externo = callerExterno(u);
+    return {
+      totalHours: 10,
+      ...(externo ? {} : { hoursByUser: [{ userName: "Fulano", hours: 10 }], estimatedCost: 3500, feeAmount: 9000, marginAmount: 5500, marginPct: 0.61 }),
+    };
   };
 
   it("usuário EXTERNO não recebe honorário, custo nem margem", () => {
-    const r = montar(["c1"]);
+    const r = montar({ scopeCompanyIds: ["c1"] });
     expect(r.totalHours).toBe(10);
-    expect(r).not.toHaveProperty("feeAmount");
-    expect(r).not.toHaveProperty("marginAmount");
-    expect(r).not.toHaveProperty("marginPct");
-    expect(r).not.toHaveProperty("estimatedCost");
+    for (const campo of ["feeAmount", "marginAmount", "marginPct", "estimatedCost"]) expect(r).not.toHaveProperty(campo);
   });
 
-  it("equipe interna continua vendo a margem", () => {
-    expect(montar(null)).toHaveProperty("marginPct", 0.61);
+  it("PORTAL (role client, escopo nulo) também é externo — era o furo da 1ª rodada", () => {
+    const r = montar({ scopeCompanyIds: null, role: "client", tipoUsuario: "quantua" });
+    expect(r).not.toHaveProperty("marginPct");
+    expect(r).not.toHaveProperty("feeAmount");
+  });
+
+  it("nem o nome de quem lançou horas vai para fora (hoursByUser)", () => {
+    expect(montar({ scopeCompanyIds: ["c1"] })).not.toHaveProperty("hoursByUser");
+    expect(montar({ scopeCompanyIds: null, role: "client" })).not.toHaveProperty("hoursByUser");
+  });
+
+  it("equipe interna continua vendo margem e a lista de horas por pessoa", () => {
+    const r = montar({ scopeCompanyIds: null, role: "partner", tipoUsuario: "quantua" });
+    expect(r).toHaveProperty("marginPct", 0.61);
+    expect(r).toHaveProperty("hoursByUser");
+  });
+});
+
+// ── 2ª rodada: as portas IRMÃS precisam do mesmo gate ────────────────────────
+describe("portas irmãs do IBR — o gate não pode existir em uma rota só", () => {
+  const rotasInternas = ["/:id/audit", "/:id/review", "/:id/review/comments", "/:id/executive-summary", "/:id/review/transition"];
+  const gate = (rota: string, u: { scopeCompanyIds: string[] | null; role?: string | null }) =>
+    rotasInternas.includes(rota) && callerExterno(u) ? 403 : 200;
+
+  it("externo é barrado em TODAS as rotas de trabalho interno", () => {
+    for (const rota of rotasInternas) {
+      expect(gate(rota, { scopeCompanyIds: ["c1"] })).toBe(403);
+      expect(gate(rota, { scopeCompanyIds: null, role: "client" })).toBe(403);
+    }
+  });
+
+  it("equipe interna passa em todas", () => {
+    for (const rota of rotasInternas) expect(gate(rota, { scopeCompanyIds: null, role: "reviewer" })).toBe(200);
+  });
+});
+
+// ── 2ª rodada: adoção de conta não pode importar a carteira alheia ───────────
+describe("team/adotar — só conta de equipe interna", () => {
+  const podeAdotar = (alvo: { role: string | null; tipoUsuario: string; empresas: number; colegas: number }) => {
+    if (alvo.role === "client" || alvo.tipoUsuario === "empresa" || alvo.tipoUsuario === "parceiro") return false;
+    if (alvo.empresas > 0) return false;
+    if (alvo.colegas > 0) return false;
+    return true;
+  };
+
+  it("cliente de PORTAL não é adotável (traria as empresas dele para a minha carteira)", () => {
+    expect(podeAdotar({ role: "client", tipoUsuario: "quantua", empresas: 1, colegas: 0 })).toBe(false);
+  });
+
+  it("usuário EXTERNO (empresa/parceiro) não é adotável", () => {
+    expect(podeAdotar({ role: null, tipoUsuario: "empresa", empresas: 0, colegas: 0 })).toBe(false);
+    expect(podeAdotar({ role: null, tipoUsuario: "parceiro", empresas: 0, colegas: 0 })).toBe(false);
+  });
+
+  it("conta interna DONA de empresas também é recusada", () => {
+    expect(podeAdotar({ role: "operator", tipoUsuario: "quantua", empresas: 3, colegas: 0 })).toBe(false);
+  });
+
+  it("conta órfã de equipe segue adotável (o caso legítimo)", () => {
+    expect(podeAdotar({ role: "operator", tipoUsuario: "quantua", empresas: 0, colegas: 0 })).toBe(true);
+  });
+});
+
+// ── 2ª rodada: clones do gate precisam da MESMA regra ────────────────────────
+describe("ehQuantua (organizacoes) espelha o requireQuantua endurecido", () => {
+  const ehQuantua = (u: { role: string | null; tipoUsuario: string; workspaceId: string | null }) => {
+    if (u.role === "client" || u.tipoUsuario === "empresa" || u.tipoUsuario === "parceiro") return false;
+    if (!u.workspaceId && !u.role) return false;
+    return true;
+  };
+
+  it("conta do cadastro público NÃO administra organizações (era takeover de tenant)", () => {
+    expect(ehQuantua({ role: null, tipoUsuario: "quantua", workspaceId: null })).toBe(false);
+  });
+
+  it("equipe real segue administrando", () => {
+    expect(ehQuantua({ role: "partner", tipoUsuario: "quantua", workspaceId: "ws-1" })).toBe(true);
+  });
+
+  it("decide igual ao gate do middleware (nenhum clone mais frouxo)", () => {
+    const casos = [
+      { role: null, tipoUsuario: "quantua", workspaceId: null },
+      { role: null, tipoUsuario: "quantua", workspaceId: "ws" },
+      { role: "operator", tipoUsuario: "quantua", workspaceId: null },
+      { role: "client", tipoUsuario: "quantua", workspaceId: "ws" },
+      { role: null, tipoUsuario: "empresa", workspaceId: "ws" },
+    ];
+    for (const c of casos) expect(ehQuantua(c)).toBe(passaNoGateQuantua(c));
   });
 });
 

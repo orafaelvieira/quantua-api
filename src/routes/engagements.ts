@@ -168,6 +168,17 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
   const data = parsed.data;
 
+  // RT DA CASA (02/08/2026 — 2ª rodada): a 1ª rodada validou `rtId` só no PUT;
+  // o POST continuava aceitando responsável técnico de OUTRA firma, cujo nome e
+  // registro profissional passavam a sair no GET, na carta e na proposta.
+  if (data.rtId) {
+    const rt = await prisma.user.findFirst({
+      where: { AND: [{ id: data.rtId }, { id: { in: req.scopeUserIds! } }] },
+      select: { id: true },
+    });
+    if (!rt) { res.status(404).json({ error: "Responsável técnico não encontrado na sua equipe" }); return; }
+  }
+
   // Caminho com leadId: promoção via dialog de triagem do Inbox. Transação
   // garante atomicidade entre criação do Engagement e mudança de Lead.status.
   if (data.leadId) {

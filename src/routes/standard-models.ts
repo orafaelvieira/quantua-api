@@ -64,11 +64,16 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
 // Operador/revisor/cliente só visualizam (afeta todas as análises futuras).
 async function podeEditar(userId?: string): Promise<boolean> {
   if (!userId) return false;
-  const u = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, tipoUsuario: true } });
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, tipoUsuario: true, workspaceId: true } });
   if (!u) return false;
   // F2 SaaS: usuário EXTERNO nunca edita o modelo GLOBAL — role null era o
   // período de graça dos fundadores e não pode valer para tipoUsuario externo.
   if (u.tipoUsuario === "empresa" || u.tipoUsuario === "parceiro") return false;
+  // ONBOARDING CONCLUÍDO (02/08/2026 — 2ª rodada da auditoria): o "período de
+  // graça" da role nula abria o MODELO GLOBAL (plano de contas que rege o fold
+  // de TODOS os IBRs de TODOS os clientes) para qualquer conta recém-criada
+  // pelo cadastro público. Fundador de verdade tem workspace.
+  if (!u.workspaceId && !u.role) return false;
   return u.role === "partner" || u.role === null;
 }
 

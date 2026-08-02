@@ -32,7 +32,14 @@ router.use("/:id", async (req: AuthRequest, res: Response, next: () => void): Pr
   }
   const id = String(req.params.id ?? ""); // em router.use o param é string|string[]
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id)) { next(); return; }
-  const a = await prisma.analysis.findUnique({ where: { id }, select: { status: true } }).catch(() => null);
+  // ESCOPO no guard (02/08/2026 — 2ª rodada da auditoria): este é o guard GÊMEO
+  // do de analyses.ts e roda ANTES dele no mesmo prefixo /analyses. Escopar só
+  // lá deixava o oráculo de pé aqui: 409 para IBR cancelado de outra empresa,
+  // 404 depois. Fora do escopo o guard se cala e o handler responde 404.
+  const a = await prisma.analysis.findFirst({
+    where: { id, ...whereRecursoEmpresa(req) },
+    select: { status: true },
+  }).catch(() => null);
   if (a?.status === "Cancelada") {
     res.status(409).json({ error: "IBR cancelado é somente consulta — nenhuma alteração é permitida. Se precisar retrabalhar, crie um novo IBR (a evidência deste fica preservada)." });
     return;
@@ -47,6 +54,25 @@ async function loadAnalysis(req: AuthRequest) {
     where: { id, ...whereRecursoEmpresa(req) },
   });
 }
+
+/**
+ * O CALLER É DE FORA DA FIRMA? (02/08/2026 — 2ª rodada da auditoria.)
+ *
+ * Duas armadilhas que a 1ª rodada não pegou:
+ *  - `scopeCompanyIds != null` NÃO identifica o portal: o cliente tem role
+ *    "client" mas `tipoUsuario` "quantua" (default do schema) e escopo nulo —
+ *    era classificado como INTERNO e recebia honorário, custo e margem.
+ *  - o teste vivia inline numa rota só; as portas irmãs (trilha, review,
+ *    comentários, sumário executivo, horas) ficaram sem gate nenhum.
+ * Helper único, usado em TODAS elas.
+ */
+async function callerExterno(req: AuthRequest): Promise<boolean> {
+  if (req.scopeCompanyIds !== null && req.scopeCompanyIds !== undefined) return true;
+  const u = await prisma.user.findUnique({ where: { id: req.userId! }, select: { role: true, tipoUsuario: true } });
+  return u?.role === "client" || u?.tipoUsuario === "empresa" || u?.tipoUsuario === "parceiro";
+}
+
+const ERRO_SO_EQUIPE = "Esta área é do trabalho interno da equipe responsável pelo IBR.";
 
 /* ─────────────  STCF  ───────────── */
 
@@ -259,6 +285,9 @@ router.get("/:id/executive-summary", async (req: AuthRequest, res: Response): Pr
 router.put("/:id/executive-summary", async (req: AuthRequest, res: Response): Promise<void> => {
   const analysis = await loadAnalysis(req);
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  // O SUMÁRIO É O PRODUTO DA FIRMA (contém a recomendação ao credor): a empresa
+  // auditada não escreve o próprio parecer — achado da 2ª rodada.
+  if (await callerExterno(req)) { res.status(403).json({ error: ERRO_SO_EQUIPE }); return; }
   const parsed = summarySchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
   const updated = await prisma.analysis.update({
@@ -306,6 +335,10 @@ const TRANSITION_TO_STATE: Record<string, { from: string[]; to: string }> = {
 router.get("/:id/review", async (req: AuthRequest, res: Response): Promise<void> => {
   const analysis = await loadAnalysis(req);
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  // A DELIBERAÇÃO DO REVISOR não é do auditado: comments e transitions trazem
+  // quem disse o quê, com papel e motivo (achado da 2ª rodada — a 1ª cobriu só
+  // a rota de transição).
+  if (await callerExterno(req)) { res.status(403).json({ error: ERRO_SO_EQUIPE }); return; }
   const meta = (analysis.reviewMeta as Record<string, unknown> | null) ?? {};
   res.json({
     state: analysis.reviewState,
@@ -372,6 +405,9 @@ router.post("/:id/review/transition", async (req: AuthRequest, res: Response): P
 router.post("/:id/review/comments", async (req: AuthRequest, res: Response): Promise<void> => {
   const analysis = await loadAnalysis(req);
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  // Escrever no fio interno de revisão também é da equipe (o externo entrava
+  // com authorRole "operator" pelo default) — achado da 2ª rodada.
+  if (await callerExterno(req)) { res.status(403).json({ error: ERRO_SO_EQUIPE }); return; }
   const body = (req.body?.body as string) || "";
   if (!body.trim()) { res.status(400).json({ error: "Comentário vazio" }); return; }
   const user = await prisma.user.findUnique({ where: { id: req.userId! } });
@@ -470,6 +506,11 @@ router.post("/:id/sign", async (req: AuthRequest, res: Response): Promise<void> 
 router.get("/:id/audit", async (req: AuthRequest, res: Response): Promise<void> => {
   const analysis = await loadAnalysis(req);
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  // A TRILHA É INTERNA: os eventos guardam before/after crus — honorário,
+  // prazo e escopo contratado do engagement — e o NOME de cada pessoa da
+  // firma. O router /audit dedicado tem requireQuantua; esta porta irmã não
+  // tinha nada (achado da 2ª rodada).
+  if (await callerExterno(req)) { res.status(403).json({ error: ERRO_SO_EQUIPE }); return; }
   const limit = Math.min(parseInt(String(req.query.limit ?? "200")) || 200, 500);
   const offset = parseInt(String(req.query.offset ?? "0")) || 0;
   const entity = req.query.entity as string | undefined;
@@ -546,15 +587,20 @@ router.get("/:id/time/summary", async (req: AuthRequest, res: Response): Promise
 
   // ECONOMIA DA FIRMA NÃO VAZA PARA O CLIENTE (02/08/2026, auditoria
   // multi-tenant): este router não tem requireQuantua, então um usuário EXTERNO
-  // (empresa/parceiro) com a empresa no escopo chegava aqui e lia honorário,
-  // custo e MARGEM da Quantua no próprio contrato. Externo vê só as horas.
-  const externo = req.scopeCompanyIds !== null && req.scopeCompanyIds !== undefined;
+  // com a empresa no escopo chegava aqui e lia honorário, custo e MARGEM da
+  // Quantua no próprio contrato.
+  // 2ª RODADA — dois furos da 1ª versão desta trava:
+  //  (a) o teste era só `scopeCompanyIds != null`, que NÃO pega o portal (role
+  //      "client" tem tipoUsuario "quantua" e escopo nulo) → o cliente seguia
+  //      recebendo a margem. Agora usa callerExterno.
+  //  (b) `hoursByUser` ficava FORA do condicional — nome de cada pessoa da
+  //      firma e as horas dela iam para o externo de qualquer jeito.
+  const externo = await callerExterno(req);
   res.json({
     analysisId: analysis.id,
     totalHours,
     hoursByPhase,
-    hoursByUser: Array.from(userMap.values()),
-    ...(externo ? {} : { estimatedCost, feeAmount, marginAmount, marginPct }),
+    ...(externo ? {} : { hoursByUser: Array.from(userMap.values()), estimatedCost, feeAmount, marginAmount, marginPct }),
   });
 });
 

@@ -66,9 +66,26 @@ async function ehGestor(userId: string, organizacaoId: string): Promise<boolean>
   return membroVigente(m, agora) && statusOrganizacao(m.organizacao, agora) === "ativo";
 }
 
+/**
+ * CLONE DO GATE — endurecido em 02/08/2026 (2ª rodada da auditoria).
+ *
+ * Esta função repetia a lógica ANTIGA do requireQuantua e ficou para trás
+ * quando o middleware foi endurecido. Como o router só tem requireAuth, uma
+ * conta recém-criada pelo cadastro público (tipoUsuario "quantua" por default,
+ * role nula, sem workspace) passava aqui e alcançava a cadeia mais perigosa do
+ * sistema: listar TODAS as organizações da plataforma, ler membros com e-mail e
+ * empresas com CNPJ, e se autoconvidar como gestor — o que dá escopo sobre as
+ * empresas atendidas (DFs, documentos, IBRs) de qualquer cliente.
+ * Mesmas condições do middleware, inclusive a de onboarding concluído.
+ */
 async function ehQuantua(userId: string): Promise<boolean> {
-  const u = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, tipoUsuario: true } });
-  return !!u && u.role !== "client" && u.tipoUsuario !== "empresa" && u.tipoUsuario !== "parceiro";
+  const u = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true, tipoUsuario: true, workspaceId: true },
+  });
+  if (!u || u.role === "client" || u.tipoUsuario === "empresa" || u.tipoUsuario === "parceiro") return false;
+  if (!u.workspaceId && !u.role) return false; // onboarding não concluído
+  return true;
 }
 
 /** Quantua OU gestor da organização — gate das rotas de membros/convites. */

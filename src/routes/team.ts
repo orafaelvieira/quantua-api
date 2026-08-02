@@ -381,12 +381,33 @@ router.post("/membros/adotar", async (req: AuthRequest, res: Response): Promise<
   const alvo = await prisma.user.findUnique({
     where: { email },
     select: {
-      id: true, name: true, email: true, workspaceId: true, role: true, desativadoEm: true,
+      id: true, name: true, email: true, workspaceId: true, role: true, tipoUsuario: true, desativadoEm: true,
       workspace: { select: { razaoSocial: true, nomeFantasia: true } },
+      _count: { select: { companies: true } },
     },
   });
   if (!alvo) { res.status(404).json({ error: "Não existe conta com este e-mail — use o convite normal." }); return; }
   if (alvo.workspaceId === ws) { res.status(409).json({ error: "Esta pessoa já está na sua equipe." }); return; }
+
+  // ADOÇÃO É SÓ PARA CONTA DE EQUIPE INTERNA (02/08/2026 — 2ª rodada da
+  // auditoria). Adotar traz o userId do alvo para o MEU escopo de workspace:
+  // se o alvo for um cliente de portal (dono da própria Company) ou um usuário
+  // externo, a CARTEIRA DELE entrava no meu escopo — `whereEmpresaVisivel`
+  // passava a casar as empresas da vítima e eu lia DFs, documentos e IBRs dela
+  // sabendo apenas o e-mail. A trava antiga só olhava "tem colegas no
+  // workspace", que não cobre cliente/externo (que costumam estar sozinhos).
+  if (alvo.role === "client" || alvo.tipoUsuario === "empresa" || alvo.tipoUsuario === "parceiro") {
+    res.status(409).json({
+      error: "Esta conta é de acesso de CLIENTE (portal/organização), não de equipe interna — adotar traria os dados da empresa dela para a sua carteira. Use o convite de equipe para colaboradores da firma.",
+    });
+    return;
+  }
+  if (alvo._count.companies > 0) {
+    res.status(409).json({
+      error: `Esta conta é dona de ${alvo._count.companies} empresa(s) cadastrada(s) — trazê-la para a equipe moveria essas empresas para a sua carteira. Transfira as empresas primeiro, se for o caso.`,
+    });
+    return;
+  }
 
   // A trava não é "tem workspace", é "tem COLEGAS lá". Workspace de uma pessoa
   // só é auto-cadastro acidental (o onboarding cria um por conta nova); mover
