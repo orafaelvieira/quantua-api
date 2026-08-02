@@ -714,3 +714,24 @@ describe("derivarDREMensal", () => {
     expect(d.periodos["31/01/2026"]).toBeUndefined(); // janeiro segue sendo o próprio mês
   });
 });
+
+  // CASO BELAGRO 2 (a lista `balancetes` do cache antigo pode estar em qualquer
+  // estado): a lista de meses vem da UNIÃO com `arvoresBalancete` — que é a
+  // fonte da auditoria e sempre existe quando há mês de balancete.
+  it("sem a lista balancetes, os meses vêm de arvoresBalancete (com a praxe 01/01)", () => {
+    const d = derivarDREMensal({
+      arvoresBalancete: [{ periodo: "31/01/2026" }, { periodo: "28/02/2026" }],
+      dre: [{ conta: "Receita Bruta", valores: { "31/01/2026": 100, "28/02/2026": 250 } }],
+    })!;
+    expect(d.periodos["28/02/2026"]).toEqual({ desde: "01/01/2026", mesIsolado: true, anterior: "31/01/2026" });
+    expect(d.valores["Receita Bruta"]["28/02/2026"]).toBe(150);
+  });
+
+  it("a união NÃO duplica mês que existe nas duas listas (periodoInicio da lista rica vence)", () => {
+    const d = derivarDREMensal({
+      balancetes: [{ periodo: "30/06/2026", periodoInicio: "01/06/2026", provas: {} }],
+      arvoresBalancete: [{ periodo: "30/06/2026" }],
+      dre: [{ conta: "Receita Bruta", valores: { "30/06/2026": 80 } }],
+    });
+    expect(d).toBeNull(); // mês único (01/06 a 30/06) segue fora — a praxe não atropela o início declarado
+  });

@@ -301,8 +301,18 @@ export interface DREMensal {
 export function derivarDREMensal(dados: {
   dre?: Array<{ conta: string; valores?: Record<string, number> }>;
   balancetes?: unknown;
+  arvoresBalancete?: unknown;
 }): DREMensal | null {
-  const bals = Array.isArray(dados?.balancetes) ? (dados.balancetes as Array<Record<string, any>>) : [];
+  // DUAS fontes para a lista de meses-de-balancete, unidas: `balancetes`
+  // (traz periodoInicio quando o cache o tem) e `arvoresBalancete` (sempre
+  // presente quando há mês de balancete — é dela que a auditoria vive). Cache
+  // antigo pode ter a primeira incompleta; a segunda garante os meses.
+  const bals = Array.isArray(dados?.balancetes) ? [...(dados.balancetes as Array<Record<string, any>>)] : [];
+  const arvores = Array.isArray(dados?.arvoresBalancete) ? (dados.arvoresBalancete as Array<Record<string, any>>) : [];
+  for (const ab of arvores) {
+    const p = String(ab?.periodo ?? "");
+    if (p && !bals.some((b) => String(b?.periodo ?? "") === p)) bals.push({ periodo: p });
+  }
   const dre = Array.isArray(dados?.dre) ? dados.dre : [];
   if (bals.length === 0 || dre.length === 0) return null;
 
