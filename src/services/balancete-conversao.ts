@@ -323,24 +323,23 @@ export function derivarDREMensal(dados: {
   const fmtData = (d: Date): string =>
     `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
 
-  // TODOS os meses de balancete (para o encadeamento): o elo de fevereiro é
-  // JANEIRO, que não é acumulado (01/01 a 31/01 = o próprio mês) mas carrega o
-  // YTD de janeiro do mesmo jeito. ACUMULADOS (para marcação/derivação) são o
-  // subconjunto cujo início fica em mês anterior ao do fim.
+  // TODOS os meses de balancete entram no encadeamento. O critério de
+  // "acumulado" é CONTÁBIL, não a janela declarada no cabeçalho: conta de
+  // RESULTADO carrega saldo acumulado do exercício até o encerramento anual —
+  // o balancete "01/05 a 31/05" (caso real Belagro) descreve a janela do
+  // MOVIMENTO (débitos/créditos), mas a coluna de saldo das contas de
+  // resultado é YTD desde 01/01 do mesmo jeito. É o mesmo conceito que os
+  // indicadores sempre usaram (periodosYTD, sem olhar a janela). Logo: DRE de
+  // mês de balancete acumula desde 01/01 do exercício, SEMPRE; janeiro é o
+  // único mês em que YTD = mês (nada a derivar).
   const mesesBalancete = new Map<string, { desde: string; inicio: Date; fim: Date; acumula: boolean }>();
   for (const b of bals) {
     if (b?.erro || !b?.periodo) continue;
     const fim = dataDe(String(b.periodo));
     if (!fim) continue;
-    // SEM início declarado (cache de extração ANTERIOR ao campo periodoInicio —
-    // caso Belagro em prod, onde o toggle não aparecia): vale a PRAXE do
-    // balancete brasileiro, acumulado desde 01/01 do ano do fim. Documento
-    // parseado pelo código atual sempre carrega o início lido do cabeçalho.
-    const desde = b.periodoInicio ? String(b.periodoInicio) : `01/01/${fim.getFullYear()}`;
-    const inicio = dataDe(desde);
-    if (!inicio) continue;
-    const mesmoMes = inicio.getFullYear() === fim.getFullYear() && inicio.getMonth() === fim.getMonth();
-    mesesBalancete.set(String(b.periodo), { desde, inicio, fim, acumula: !mesmoMes });
+    const desde = `01/01/${fim.getFullYear()}`;
+    const inicio = dataDe(desde)!;
+    mesesBalancete.set(String(b.periodo), { desde, inicio, fim, acumula: fim.getMonth() > 0 });
   }
   const acumulados = [...mesesBalancete.entries()].filter(([, v]) => v.acumula);
   if (acumulados.length === 0) return null;

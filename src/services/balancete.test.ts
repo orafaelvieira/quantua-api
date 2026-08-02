@@ -691,11 +691,26 @@ describe("derivarDREMensal", () => {
     expect(d.valores["Receita Bruta"]?.["31/03/2026"]).toBeUndefined();
   });
 
-  it("balancete de mês único (01/06 a 30/06) não é acumulado — nada a derivar", () => {
-    expect(derivarDREMensal({
+  // CASO REAL BELAGRO: o cabeçalho declara a janela do MOVIMENTO ("01/05 a
+  // 31/05"), mas o SALDO de conta de resultado é YTD por natureza contábil —
+  // o critério de acumulado é o exercício, nunca a janela declarada.
+  it("balancete 'de mês único' no cabeçalho AINDA é DRE acumulada do exercício", () => {
+    const d = derivarDREMensal({
       balancetes: [bal("30/06/2026", "01/06/2026")],
       dre: [{ conta: "Receita Bruta", valores: { "30/06/2026": 80 } }],
-    })).toBeNull();
+    })!;
+    // marcado como acumulado desde 01/01; sem maio na série, não isola
+    expect(d.periodos["30/06/2026"]).toEqual({ desde: "01/01/2026", mesIsolado: false });
+  });
+
+  it("janelas de movimento mensais (Belagro): fev..mai isolam via YTD N − YTD N−1", () => {
+    const d = derivarDREMensal({
+      balancetes: [bal("31/01/2026", "01/01/2026"), bal("28/02/2026", "01/02/2026"), bal("31/03/2026", "01/03/2026")],
+      dre: [{ conta: "Receita Bruta", valores: { "31/01/2026": 100, "28/02/2026": 250, "31/03/2026": 450 } }],
+    })!;
+    expect(d.periodos["31/01/2026"]).toBeUndefined(); // janeiro: YTD = mês
+    expect(d.periodos["28/02/2026"]).toEqual({ desde: "01/01/2026", mesIsolado: true, anterior: "31/01/2026" });
+    expect(d.valores["Receita Bruta"]["31/03/2026"]).toBe(200);
   });
 
   it("sem balancetes, retorna null (documentos anuais não são tocados)", () => {
@@ -727,11 +742,11 @@ describe("derivarDREMensal", () => {
     expect(d.valores["Receita Bruta"]["28/02/2026"]).toBe(150);
   });
 
-  it("a união NÃO duplica mês que existe nas duas listas (periodoInicio da lista rica vence)", () => {
+  it("a união NÃO duplica mês que existe nas duas listas", () => {
     const d = derivarDREMensal({
       balancetes: [{ periodo: "30/06/2026", periodoInicio: "01/06/2026", provas: {} }],
       arvoresBalancete: [{ periodo: "30/06/2026" }],
       dre: [{ conta: "Receita Bruta", valores: { "30/06/2026": 80 } }],
-    });
-    expect(d).toBeNull(); // mês único (01/06 a 30/06) segue fora — a praxe não atropela o início declarado
+    })!;
+    expect(Object.keys(d.periodos)).toEqual(["30/06/2026"]); // um só, sem eco da união
   });
