@@ -252,6 +252,17 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   if (!eng) { res.status(404).json({ error: "Engagement não encontrado" }); return; }
   const parsed = engagementUpdateSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
+  // O RT PRECISA SER DA CASA (02/08/2026, auditoria multi-tenant): `rtId` vinha
+  // do corpo e entrava no spread sem checagem — apontava como responsável um
+  // usuário de OUTRA firma, cujo nome e registro profissional passavam a sair
+  // no GET e na carta de contratação.
+  if (parsed.data.rtId) {
+    const rt = await prisma.user.findFirst({
+      where: { AND: [{ id: parsed.data.rtId }, { id: { in: req.scopeUserIds! } }] },
+      select: { id: true },
+    });
+    if (!rt) { res.status(404).json({ error: "Responsável técnico não encontrado na sua equipe" }); return; }
+  }
   const updated = await prisma.engagement.update({
     where: { id },
     data: {

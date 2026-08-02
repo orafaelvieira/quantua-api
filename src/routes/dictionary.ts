@@ -70,9 +70,17 @@ router.get("/version", async (_req: AuthRequest, res: Response): Promise<void> =
 router.get("/versions", async (req: AuthRequest, res: Response): Promise<void> => {
   const limit = Math.min(parseInt(String(req.query.limit ?? "100")) || 100, 500);
   const offset = parseInt(String(req.query.offset ?? "0")) || 0;
+  // ESCOPO DO CHANGELOG (02/08/2026, auditoria multi-tenant): as notas gravadas
+  // aqui citam NOME DE EMPRESA e de conta ("cancelada na empresa X", "regra de
+  // grupo promovida a partir de…"). Sem filtro, o changelog inteiro — de todos
+  // os clientes de todas as firmas — era legível por qualquer usuário interno.
+  // Passa a mostrar só as mudanças GLOBAIS (companyId null) e as das empresas
+  // visíveis para o caller.
+  const visiveis = await prisma.company.findMany({ where: whereEmpresaVisivel(req), select: { id: true } });
+  const where = { OR: [{ companyId: null }, { companyId: { in: visiveis.map((c) => c.id) } }] };
   const [items, total] = await Promise.all([
-    prisma.dictionaryVersion.findMany({ orderBy: { versao: "desc" }, take: limit, skip: offset }),
-    prisma.dictionaryVersion.count(),
+    prisma.dictionaryVersion.findMany({ where, orderBy: { versao: "desc" }, take: limit, skip: offset }),
+    prisma.dictionaryVersion.count({ where }),
   ]);
   res.json({ items, total, atual: await getCurrentDictionaryVersion() });
 });
@@ -356,7 +364,11 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
       where: { id: analysisId, ...whereRecursoEmpresa(req) },
       select: { companyId: true, dadosEstruturados: true },
     });
-    companyIdClassify = a?.companyId ?? null;
+    // FAIL-CLOSED (02/08/2026, auditoria multi-tenant): análise fora do escopo
+    // devolvia null e o fluxo seguia CALADO para o ramo legado, gravando a
+    // entrada no dicionário do workspace. Agora recusa, como o ramo companyId.
+    if (!a) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+    companyIdClassify = a.companyId ?? null;
     const nms = (a?.dadosEstruturados as any)?.naoMapeados;
     if (Array.isArray(nms)) {
       for (const nm of nms) {

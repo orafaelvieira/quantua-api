@@ -8,7 +8,7 @@ import { Router, Response } from "express";
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { whereEmpresaVisivel, guardaEscritaSuspensao } from "../services/escopo-empresa";
+import { whereEmpresaVisivel, guardaEscritaSuspensao, empresaVisivel } from "../services/escopo-empresa";
 import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
 import { calcularModelo, validarFormula, backfillPremissasAoRecuar, BlocoModelo, ScenarioOverrides, RealizadoModelo, IndicesMacroSnapshot, SERIES_MACRO, MACRO_CAMBIO, ResultadoModelo, LinhaDre } from "../services/model-engine";
@@ -259,6 +259,14 @@ router.get("/reconciliacao-planilha", async (_req: AuthRequest, res: Response): 
 router.get("/contas-destino", async (req: AuthRequest, res: Response): Promise<void> => {
   // ?companyId= → cascata empresa→global (modelo próprio da empresa, se houver)
   const companyId = typeof req.query.companyId === "string" && req.query.companyId ? req.query.companyId : null;
+  // O companyId da QUERY é validado (02/08/2026, auditoria multi-tenant): o
+  // modelo padrão é copy-on-write POR EMPRESA, então sem esta checagem a rota
+  // devolvia o plano de contas (nomes de conta da DRE e do BP) de qualquer
+  // empresa a quem soubesse o id. Fora do escopo, cai no modelo GLOBAL.
+  if (companyId && !(await empresaVisivel(req, companyId))) {
+    res.status(404).json({ error: "Empresa não encontrada" });
+    return;
+  }
   const [dreModel, bpModel] = await Promise.all([loadActiveDREModel(companyId), loadActiveBPModel(companyId)]);
   const inputs = dreModel.lines.filter((l) => !l.subtotal).map((l) => l.conta);
   const contaIdx = (conta: string) => dreModel.lines.findIndex((l) => l.conta === conta);

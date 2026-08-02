@@ -212,14 +212,24 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
 
   const { analysisId, companyId, tipo, competencia, moeda, descricao } = parsed.data;
 
+  // A EMPRESA DO CORPO É SEMPRE VALIDADA (02/08/2026, auditoria multi-tenant).
+  // Antes, com `analysisId` presente só a ANÁLISE era conferida e o `companyId`
+  // seguia cru para (a) a busca de duplicidade por hash — que respondia 409 com
+  // nome/tipo/competência de documento de OUTRA empresa — e (b) o create, que
+  // gravava a linha na Data room dela. Uma análise própria bastava para
+  // escrever e sondar a base alheia.
+  const company = await prisma.company.findFirst({ where: { id: companyId, ...whereEmpresaVisivel(req) } });
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+
   if (analysisId) {
     // Fluxo de sempre: a análise pertence ao usuário (e ancora o documento).
     const analysis = await prisma.analysis.findFirst({ where: { id: analysisId, ...whereRecursoEmpresa(req) } });
     if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
-  } else {
-    // POOL (fase A): sem análise, a validação de escopo é pela EMPRESA.
-    const company = await prisma.company.findFirst({ where: { id: companyId, ...whereEmpresaVisivel(req) } });
-    if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+    // ...e o documento não pode nascer numa empresa diferente da do IBR.
+    if (analysis.companyId !== companyId) {
+      res.status(400).json({ error: "A empresa informada não é a do IBR — o documento fica na Data room da empresa do próprio IBR." });
+      return;
+    }
   }
 
   const nome = fixFilename(req.file.originalname);

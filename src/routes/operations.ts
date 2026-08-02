@@ -60,15 +60,13 @@ router.get("/pipeline", async (req: AuthRequest, res: Response): Promise<void> =
 });
 
 router.get("/workload", async (req: AuthRequest, res: Response): Promise<void> => {
-  // Por enquanto, agrupamos horas por usuário do workspace do RT logado.
-  const me = await prisma.user.findUnique({ where: { id: req.userId! } });
+  // Horas por usuário DO WORKSPACE do RT logado. O filtro por `role` sozinho
+  // (02/08/2026, auditoria multi-tenant) devolvia o diretório de staff da
+  // plataforma INTEIRA — nome e papel de gente de outras firmas. Sem workspace,
+  // a "equipe" é o próprio usuário.
+  const me = await prisma.user.findUnique({ where: { id: req.userId! }, select: { workspaceId: true } });
   const team = await prisma.user.findMany({
-    where: {
-      OR: [
-        { id: req.userId! },
-        { role: { in: ["operator", "reviewer", "partner"] } },
-      ],
-    },
+    where: me?.workspaceId ? { workspaceId: me.workspaceId } : { id: req.userId! },
     select: { id: true, name: true, role: true },
   });
 

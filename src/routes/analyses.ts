@@ -158,9 +158,13 @@ router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise
       if (doc.tipo !== "Material complementar") avisos.push(`"${doc.nome}" não está na Data room — use "Trazer documentos dos IBRs" na Data room da empresa e fixe na nova versão pelo wizard.`);
       continue;
     }
-    let vigente = await prisma.document.findUnique({ where: { id: poolOrigemId } });
+    // A cadeia de substituição fica AMARRADA À EMPRESA (02/08/2026, auditoria
+    // multi-tenant): o elo seguinte é copiado para a nova versão com arquivo,
+    // hash e extração juntos. Um `substituidoPorId` que aponte para fora da
+    // empresa (bug de dados/import) viraria cópia de documento entre tenants.
+    let vigente = await prisma.document.findFirst({ where: { id: poolOrigemId, companyId: origem.companyId } });
     for (let i = 0; vigente?.substituidoPorId && i < 50; i++) {
-      const prox = await prisma.document.findUnique({ where: { id: vigente.substituidoPorId } });
+      const prox = await prisma.document.findFirst({ where: { id: vigente.substituidoPorId, companyId: origem.companyId } });
       if (!prox) break;
       vigente = prox;
     }
@@ -268,7 +272,14 @@ router.use("/:id", async (req: AuthRequest, res: Response, next: () => void): Pr
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") { next(); return; }
   const id = String(req.params.id ?? ""); // em router.use o param é string|string[]
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id)) { next(); return; }
-  const a = await prisma.analysis.findUnique({ where: { id }, select: { status: true } }).catch(() => null);
+  // ESCOPO no guard (02/08/2026, auditoria multi-tenant): sem ele o findUnique
+  // por id puro respondia 409 "IBR cancelado" para análise de OUTRA empresa —
+  // um oráculo que confirmava id + estado alheios antes do 404 do handler.
+  // Fora do escopo, o guard se cala e o handler responde 404 como sempre.
+  const a = await prisma.analysis.findFirst({
+    where: { id, ...whereRecursoEmpresa(req) },
+    select: { status: true },
+  }).catch(() => null);
   if (a?.status === "Cancelada") {
     res.status(409).json({ error: "IBR cancelado é somente consulta — nenhuma alteração é permitida. Se precisar retrabalhar, crie um novo IBR (a evidência deste fica preservada)." });
     return;

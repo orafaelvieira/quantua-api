@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/client";
 import { requireAuth, requireQuantua, requireInternal, AuthRequest } from "../middleware/auth";
-import { whereEmpresaVisivel } from "../services/escopo-empresa";
+import { whereEmpresaVisivel, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { deleteFile } from "../services/storage";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
 import { sugerirSetores } from "../services/cnae-b3";
@@ -79,6 +79,16 @@ async function consultarCnpj(digits: string): Promise<Record<string, any> | { na
   return houve404 ? { naoEncontrado: true } : null;
 }
 
+router.use(requireAuth);
+// SOMENTE CONSULTA quando a organização está suspensa (inadimplência): era o
+// único router de dado de empresa sem o guard (02/08/2026, auditoria) — externo
+// suspenso ainda mudava status da empresa, unidades, centros de custo e GMD.
+router.use(guardaEscritaSuspensao("company-body"));
+
+// Consulta de CNPJ na Receita — DEPOIS do requireAuth (02/08/2026, auditoria):
+// registrada antes, era um proxy ANÔNIMO para BrasilAPI/minhareceita/ReceitaWS
+// (3 chamadas externas por request, sem limite), queimando a cota de terceiros
+// em nome da Quantua e servindo de open proxy de consulta cadastral.
 router.get("/cnpj/:cnpj", async (req: AuthRequest, res: Response): Promise<void> => {
   const digits = (req.params.cnpj as string).replace(/\D/g, "");
   if (digits.length !== 14) { res.status(400).json({ error: "CNPJ inválido" }); return; }
@@ -88,8 +98,6 @@ router.get("/cnpj/:cnpj", async (req: AuthRequest, res: Response): Promise<void>
   if (dados) { res.status(404).json({ error: "CNPJ não encontrado na Receita Federal" }); return; }
   res.status(502).json({ error: "Fontes da Receita indisponíveis no momento — preencha manualmente e reconsulte depois" });
 });
-
-router.use(requireAuth);
 
 const companySchema = z.object({
   razaoSocial: z.string().min(2),

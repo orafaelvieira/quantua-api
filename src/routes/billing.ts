@@ -21,7 +21,11 @@ const invoiceCreateSchema = z.object({
   notes: z.string().optional(),
 });
 
-const invoiceUpdateSchema = invoiceCreateSchema.partial();
+// O ENGAGEMENT DA FATURA NÃO SE TROCA NO UPDATE (02/08/2026, auditoria
+// multi-tenant): `invoiceCreateSchema.partial()` deixava `engagementId` entrar
+// no spread do update e mover a fatura para o engagement de OUTRO workspace —
+// ela sumia do seu faturamento e aparecia no alheio. Recriar é o caminho.
+const invoiceUpdateSchema = invoiceCreateSchema.partial().omit({ engagementId: true });
 
 router.get("/invoices", async (req: AuthRequest, res: Response): Promise<void> => {
   const scopeIds = req.scopeUserIds!;

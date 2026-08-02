@@ -69,10 +69,22 @@ export async function requireInternal(req: AuthRequest, res: Response, next: Nex
 export async function requireQuantua(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   const user = await prisma.user.findUnique({
     where: { id: req.userId! },
-    select: { role: true, tipoUsuario: true },
+    select: { role: true, tipoUsuario: true, workspaceId: true, emailConfirmedAt: true },
   });
   if (!user || user.role === "client" || user.tipoUsuario === "empresa" || user.tipoUsuario === "parceiro") {
     res.status(403).json({ error: "Acesso restrito à equipe Quantua" });
+    return;
+  }
+  // CADASTRO PÚBLICO NÃO É EQUIPE (02/08/2026, auditoria multi-tenant).
+  // `POST /auth/register` é aberto e cria a conta com tipoUsuario "quantua"
+  // (default do schema), role NULA e SEM workspace — e passava neste gate,
+  // alcançando os routers de firma. Como `role` nula é lida como "fundador"
+  // em várias permissões, qualquer pessoa da internet virava staff.
+  // Conta sem workspace e sem papel = onboarding não concluído: não é equipe.
+  if (!user.workspaceId && !user.role) {
+    res.status(403).json({
+      error: "Conclua o onboarding (crie ou entre em um workspace) para acessar as áreas da firma.",
+    });
     return;
   }
   next();

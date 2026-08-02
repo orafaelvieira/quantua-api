@@ -31,6 +31,30 @@ async function workspaceDoCaller(userId: string): Promise<string | null> {
   return u?.workspaceId ?? null;
 }
 
+/**
+ * ESCOPO DA EQUIPE (02/08/2026 — auditoria multi-tenant).
+ *
+ * Sem workspace, a equipe do caller é ELE MESMO — nunca a plataforma inteira.
+ * Antes, os filtros caíam em `...(ws ? { workspaceId: ws } : {})` e
+ * `workspaceId: ws ?? undefined`: com `ws` nulo o Prisma simplesmente descartava
+ * o filtro e a query passava a valer para TODOS os usuários/convites de TODOS os
+ * workspaces. Como `podeGerirEquipe` trata `role` nulo como fundador, uma conta
+ * recém-criada (que nasce sem workspace e sem papel) conseguia listar o staff de
+ * outras firmas, mudar papéis, desativar acessos e — o pior — emitir link de
+ * redefinição de senha de qualquer conta, com o link devolvido na resposta.
+ */
+const escopoEquipe = (ws: string | null, userId: string): Record<string, unknown> =>
+  ws ? { workspaceId: ws } : { id: userId };
+
+/** Mutação de equipe exige workspace: sem ele não há "equipe" para gerir. */
+function exigirWorkspace(ws: string | null, res: Response): boolean {
+  if (ws) return true;
+  res.status(409).json({
+    error: "Sua conta ainda não faz parte de um workspace — conclua o onboarding (crie a firma) antes de gerir a equipe.",
+  });
+  return false;
+}
+
 const allocationCreateSchema = z.object({
   userId: z.string().uuid(),
   analysisId: z.string().uuid(),
@@ -48,14 +72,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   });
   if (!me) { res.status(401).json({ error: "Sessão inválida" }); return; }
 
-  const where = me.workspaceId
-    ? { workspaceId: me.workspaceId }
-    : {
-        OR: [
-          { id: req.userId! },
-          { role: { in: ["operator", "reviewer", "partner"] } },
-        ],
-      };
+  const where = escopoEquipe(me.workspaceId, req.userId!);
 
   const members = await prisma.user.findMany({
     where,
@@ -174,7 +191,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
 // GET /team/acesso — membros (com status/desativado) + convites pendentes.
 router.get("/acesso", async (req: AuthRequest, res: Response): Promise<void> => {
   const ws = await workspaceDoCaller(req.userId!);
-  const where = ws ? { workspaceId: ws } : { OR: [{ id: req.userId! }, { role: { in: PAPEIS_EQUIPE } }] };
+  const where = escopoEquipe(ws, req.userId!);
   const [membros, convites] = await Promise.all([
     prisma.user.findMany({
       where, orderBy: { createdAt: "asc" },
@@ -272,7 +289,8 @@ router.post("/convites", async (req: AuthRequest, res: Response): Promise<void> 
 router.post("/convites/:id/reenviar", async (req: AuthRequest, res: Response): Promise<void> => {
   if (!(await podeGerirEquipe(req.userId!))) { res.status(403).json({ error: "Sem permissão" }); return; }
   const ws = await workspaceDoCaller(req.userId!);
-  const invite = await prisma.teamInvite.findFirst({ where: { id: String(req.params.id), workspaceId: ws ?? undefined, status: "pending" } });
+  if (!exigirWorkspace(ws, res)) return;
+  const invite = await prisma.teamInvite.findFirst({ where: { id: String(req.params.id), workspaceId: ws!, status: "pending" } });
   if (!invite) { res.status(404).json({ error: "Convite pendente não encontrado" }); return; }
   const inviter = await prisma.user.findUnique({ where: { id: req.userId! }, select: { name: true, workspace: { select: { razaoSocial: true } } } });
   const rawToken = crypto.randomBytes(32).toString("hex");
@@ -290,7 +308,8 @@ router.post("/convites/:id/reenviar", async (req: AuthRequest, res: Response): P
 router.delete("/convites/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   if (!(await podeGerirEquipe(req.userId!))) { res.status(403).json({ error: "Sem permissão" }); return; }
   const ws = await workspaceDoCaller(req.userId!);
-  const upd = await prisma.teamInvite.updateMany({ where: { id: String(req.params.id), workspaceId: ws ?? undefined, status: "pending" }, data: { status: "revoked" } });
+  if (!exigirWorkspace(ws, res)) return;
+  const upd = await prisma.teamInvite.updateMany({ where: { id: String(req.params.id), workspaceId: ws!, status: "pending" }, data: { status: "revoked" } });
   if (upd.count === 0) { res.status(404).json({ error: "Convite não encontrado" }); return; }
   void registrarAuditoria({ userId: req.userId!, entity: "team", entityId: String(req.params.id), field: "convite de equipe revogado", source: "team" });
   res.status(204).send();
@@ -298,7 +317,9 @@ router.delete("/convites/:id", async (req: AuthRequest, res: Response): Promise<
 
 /** Não deixa o workspace sem NENHUM partner ativo. */
 async function ehUltimoPartnerAtivo(ws: string | null, userId: string): Promise<boolean> {
-  const where = ws ? { workspaceId: ws } : { role: { in: PAPEIS_EQUIPE } };
+  // Sem workspace a contagem seria GLOBAL (partners de outras firmas) — a trava
+  // do "último partner" passaria a depender de outro tenant. Escopo é o próprio.
+  const where = ws ? { workspaceId: ws } : { id: userId };
   const ativos = await prisma.user.findMany({ where: { ...where, role: "partner", desativadoEm: null }, select: { id: true } });
   return ativos.length === 1 && ativos[0].id === userId;
 }
@@ -310,7 +331,7 @@ router.put("/membros/:userId/papel", async (req: AuthRequest, res: Response): Pr
   const alvo = String(req.params.userId);
   const papel = PAPEIS_EQUIPE.includes(req.body?.papel) ? req.body.papel : null;
   if (!papel) { res.status(400).json({ error: "Papel inválido" }); return; }
-  const membro = await prisma.user.findFirst({ where: { id: alvo, ...(ws ? { workspaceId: ws } : {}) }, select: { id: true, role: true } });
+  const membro = await prisma.user.findFirst({ where: { id: alvo, ...escopoEquipe(ws, req.userId!) }, select: { id: true, role: true } });
   if (!membro) { res.status(404).json({ error: "Membro não encontrado" }); return; }
   if (membro.role === "partner" && papel !== "partner" && await ehUltimoPartnerAtivo(ws, alvo)) {
     res.status(409).json({ error: "Não é possível rebaixar o último partner ativo do workspace." }); return;
@@ -327,7 +348,7 @@ router.put("/membros/:userId/ativo", async (req: AuthRequest, res: Response): Pr
   const alvo = String(req.params.userId);
   const ativo = req.body?.ativo === true; // ativo=true reativa; false desativa
   if (alvo === req.userId && !ativo) { res.status(409).json({ error: "Você não pode desativar o próprio acesso." }); return; }
-  const membro = await prisma.user.findFirst({ where: { id: alvo, ...(ws ? { workspaceId: ws } : {}) }, select: { id: true, role: true } });
+  const membro = await prisma.user.findFirst({ where: { id: alvo, ...escopoEquipe(ws, req.userId!) }, select: { id: true, role: true } });
   if (!membro) { res.status(404).json({ error: "Membro não encontrado" }); return; }
   if (!ativo && membro.role === "partner" && await ehUltimoPartnerAtivo(ws, alvo)) {
     res.status(409).json({ error: "Não é possível desativar o último partner ativo do workspace." }); return;
@@ -410,9 +431,12 @@ router.post("/membros/adotar", async (req: AuthRequest, res: Response): Promise<
 router.post("/membros/:userId/redefinir-senha", async (req: AuthRequest, res: Response): Promise<void> => {
   if (!(await podeGerirEquipe(req.userId!))) { res.status(403).json({ error: "Sem permissão" }); return; }
   const ws = await workspaceDoCaller(req.userId!);
+  // Emitir link de redefinição é a ação mais sensível do router (a resposta traz
+  // o link em claro). Sem workspace não há equipe para administrar — bloqueia.
+  if (!exigirWorkspace(ws, res)) return;
   const alvo = String(req.params.userId);
   const membro = await prisma.user.findFirst({
-    where: { id: alvo, ...(ws ? { workspaceId: ws } : {}) },
+    where: { id: alvo, ...escopoEquipe(ws, req.userId!) },
     select: { id: true, name: true, email: true, desativadoEm: true },
   });
   if (!membro) { res.status(404).json({ error: "Membro não encontrado na sua equipe" }); return; }
@@ -505,6 +529,16 @@ router.post("/allocations", async (req: AuthRequest, res: Response): Promise<voi
     select: { id: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+
+  // O ALOCADO precisa ser da equipe do caller (02/08/2026): sem esta checagem
+  // dava para alocar usuário de OUTRA firma numa análise própria — o nome dele
+  // passava a aparecer nas telas de equipe/capacidade.
+  const ws = await workspaceDoCaller(req.userId!);
+  const alocado = await prisma.user.findFirst({
+    where: { id: parsed.data.userId, ...escopoEquipe(ws, req.userId!) },
+    select: { id: true },
+  });
+  if (!alocado) { res.status(404).json({ error: "Membro não encontrado na sua equipe" }); return; }
 
   const allocation = await prisma.allocation.create({
     data: {

@@ -5,7 +5,7 @@ import { prisma } from "../db/client";
 import { requireAuth, requireQuantua, AuthRequest } from "../middleware/auth";
 import { whereEmpresaVisivel } from "../services/escopo-empresa";
 import { registrarAuditoria } from "../services/audit-trail";
-import { statusOrganizacao } from "../services/escopo-acesso";
+import { statusOrganizacao, membroVigente } from "../services/escopo-acesso";
 import { sendOrgInviteEmail } from "../services/email";
 import { env } from "../config/env";
 
@@ -51,13 +51,19 @@ const router = Router();
 
 const hashToken = (raw: string): string => crypto.createHash("sha256").update(raw).digest("hex");
 
-/** Caller é gestor da organização? (Quantua passa por requireQuantua nas rotas próprias.) */
+/** Caller é gestor da organização? (Quantua passa por requireQuantua nas rotas próprias.)
+ *  VIGÊNCIA CONTA (02/08/2026, auditoria multi-tenant): antes bastava a LINHA de
+ *  membro com papel "gestor" — ex-gestor (dataFim no passado) ou gestor de
+ *  organização cancelada/agendada, que já não enxerga empresa nenhuma pelo
+ *  escopo, seguia convidando gente, mudando papéis e removendo membros. */
 async function ehGestor(userId: string, organizacaoId: string): Promise<boolean> {
   const m = await prisma.organizacaoMembro.findFirst({
     where: { organizacaoId, userId, papel: "gestor" },
-    select: { id: true },
+    select: { dataInicio: true, dataFim: true, organizacao: { select: { dataInicio: true, dataFim: true, suspenso: true } } },
   });
-  return !!m;
+  if (!m) return false;
+  const agora = new Date();
+  return membroVigente(m, agora) && statusOrganizacao(m.organizacao, agora) === "ativo";
 }
 
 async function ehQuantua(userId: string): Promise<boolean> {
@@ -194,8 +200,27 @@ router.post("/", requireQuantua, async (req: AuthRequest, res: Response): Promis
 router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = String(req.params.id);
   const quantua = await ehQuantua(req.userId!);
+  const agora = new Date();
   const org = await prisma.organizacao.findFirst({
-    where: quantua ? { id } : { id, membros: { some: { userId: req.userId! } } },
+    // VIGÊNCIA vale também para VER a organização (02/08/2026, auditoria
+    // multi-tenant): `membros: { some: { userId } }` ignorava dataInicio/dataFim
+    // e o status da org — ex-membro, ou membro de organização cancelada (que já
+    // não enxerga empresa nenhuma), continuava lendo a lista de membros com
+    // e-mails, os convites pendentes e todas as empresas atendidas com CNPJ.
+    where: quantua
+      ? { id }
+      : {
+          id,
+          membros: {
+            some: {
+              userId: req.userId!,
+              AND: [
+                { OR: [{ dataInicio: null }, { dataInicio: { lte: agora } }] },
+                { OR: [{ dataFim: null }, { dataFim: { gt: agora } }] },
+              ],
+            },
+          },
+        },
     include: {
       membros: { include: { user: { select: { id: true, name: true, email: true } } }, orderBy: { createdAt: "asc" } },
       empresas: { include: { company: { select: { id: true, razaoSocial: true, nomeFantasia: true, cnpj: true } } }, orderBy: { createdAt: "asc" } },
@@ -203,6 +228,12 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     },
   });
   if (!org) { res.status(404).json({ error: "Organização não encontrada" }); return; }
+  // Organização fora de vigência (cancelada/agendada) não abre os dados para o
+  // externo — a Quantua segue enxergando para administrar o ciclo de vida.
+  if (!quantua && statusOrganizacao(org, agora) !== "ativo") {
+    res.status(404).json({ error: "Organização não encontrada" });
+    return;
+  }
   const souGestor = await ehGestor(req.userId!, id);
   res.json({
     id: org.id, nome: org.nome, tipo: org.tipo, subtipo: org.subtipo, cnpj: org.cnpj,

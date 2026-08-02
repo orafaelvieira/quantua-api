@@ -326,6 +326,21 @@ router.post("/:id/review/transition", async (req: AuthRequest, res: Response): P
     return;
   }
   const user = await prisma.user.findUnique({ where: { id: req.userId! } });
+  // QUEM REVISA É A FIRMA (02/08/2026, auditoria multi-tenant). O `requirePerm`
+  // de VALID_TRANSITIONS nunca era consultado — a rota só olhava o estado. Sem
+  // isso, o usuário EXTERNO (a própria empresa auditada) aprovava, assinava e
+  // entregava o próprio IBR. Externo/portal não transiciona; aprovar, assinar,
+  // entregar e reabrir são de reviewer/partner.
+  const externo = (req.scopeCompanyIds !== null && req.scopeCompanyIds !== undefined) || user?.role === "client";
+  if (externo) {
+    res.status(403).json({ error: "O fluxo de revisão do IBR é da equipe responsável pelo trabalho." });
+    return;
+  }
+  const exigeRevisor = ["approve", "request_revision", "sign", "deliver", "reopen"].includes(action);
+  if (exigeRevisor && !(user?.role === "partner" || user?.role === "reviewer" || !user?.role)) {
+    res.status(403).json({ error: `A ação '${action}' é de reviewer ou partner.` });
+    return;
+  }
   const meta = (analysis.reviewMeta as Record<string, unknown> | null) ?? {};
   const transitions = ((meta.transitions as unknown[]) ?? []).slice() as Record<string, unknown>[];
   transitions.push({
@@ -529,15 +544,17 @@ router.get("/:id/time/summary", async (req: AuthRequest, res: Response): Promise
   const marginAmount = feeAmount != null ? feeAmount - estimatedCost : undefined;
   const marginPct = feeAmount && feeAmount > 0 ? (marginAmount! / feeAmount) : undefined;
 
+  // ECONOMIA DA FIRMA NÃO VAZA PARA O CLIENTE (02/08/2026, auditoria
+  // multi-tenant): este router não tem requireQuantua, então um usuário EXTERNO
+  // (empresa/parceiro) com a empresa no escopo chegava aqui e lia honorário,
+  // custo e MARGEM da Quantua no próprio contrato. Externo vê só as horas.
+  const externo = req.scopeCompanyIds !== null && req.scopeCompanyIds !== undefined;
   res.json({
     analysisId: analysis.id,
     totalHours,
     hoursByPhase,
     hoursByUser: Array.from(userMap.values()),
-    estimatedCost,
-    feeAmount,
-    marginAmount,
-    marginPct,
+    ...(externo ? {} : { estimatedCost, feeAmount, marginAmount, marginPct }),
   });
 });
 
