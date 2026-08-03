@@ -10,6 +10,7 @@ import { parseDocument, dadosExtraidosToRaw, extrairTextoLayoutPDF, type Extract
 import { parseBalanceteTexto, pareceBalancete, type BalanceteParseado } from "../services/balancete-parser";
 import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal } from "../services/balancete-conversao";
 import { parseBalanceteTabular, pareceBalanceteTabular, ehArquivoTabular, csvParaMatriz, xlsxParaMatriz } from "../services/balancete-tabular";
+import { pdfEscaneado, ocrBalancete } from "../services/balancete-ocr";
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
@@ -1677,6 +1678,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // do Período") → MESMO fold/dicionário/modelos da cascata. O mês entra como
     // período novo MESCLADO aos anuais (BP no fim do mês; DRE acumulada YTD).
     const balancetes: Array<Record<string, unknown>> = [];
+    // Custo de IA da via de OCR ([[registrar-custo-ia]]): entra no custo da extração.
+    let custoOcrUsd = 0;
     const arvoresBalancete: Array<{ docId: string; nome: string; periodo: string; arvoreBP: unknown; arvoreDRE: unknown }> = [];
     const nmBalancete: NaoMapeado[] = [];
     for (const doc of balanceteDocs) {
@@ -1708,6 +1711,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         // CSV/Excel, em que as colunas vêm DECLARADAS no cabeçalho. As duas
         // desembocam no MESMO `BalanceteParseado`, então conversão, provas de
         // fechamento e fold seguem idênticos para ambas.
+        // Preenchido só quando a via de OCR entra em ação (PDF escaneado).
+        let ocrDoDoc: { custo: import("../services/ai-extraction").CustoIA | null; suspeitas: unknown[]; avisos: string[]; paginas: number } | null = null;
         const tabular = ehArquivoTabular(doc.nome);
         if (!doc.storagePath || !(tabular || /\.pdf$/i.test(doc.nome))) {
           balancetes.push({ docId: doc.id, nome: doc.nome, erro: "Balancete aceito em PDF, CSV ou Excel (.xlsx/.xls) — formato deste arquivo não reconhecido" });
@@ -1720,12 +1725,25 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           parseado = parseBalanceteTabular(buffer, doc.nome, doc.competencia);
         } else {
           const texto = await extrairTextoLayoutPDF(buffer);
-          if (!texto || texto.length < 100) {
-            balancetes.push({ docId: doc.id, nome: doc.nome, erro: "PDF sem texto extraível (escaneado?) — OCR de balancete ainda não suportado" });
-            await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } });
-            continue;
+          parseado = texto ? parseBalanceteTexto(texto) : { periodoInicio: null, periodoFim: null, ordemColunas: "ant-d-c-atual", linhas: [], avisos: [] };
+          // TERCEIRA VIA — PDF ESCANEADO (02/08/2026). A detecção é ESTRUTURAL,
+          // não por tamanho de texto: o caso real (Budel, via Projudi) tem 4 KB
+          // de texto que é só o CARIMBO do tribunal em cada página — o antigo
+          // `texto.length < 100` passava batido e o documento rendia 0 contas.
+          // Quem manda é o parse: sem linhas de conta + páginas com imagem = OCR.
+          if (parseado.linhas.length < 5) {
+            const det = await pdfEscaneado(buffer, parseado.linhas.length);
+            if (!det.escaneado) {
+              balancetes.push({ docId: doc.id, nome: doc.nome, erro: `Estrutura de balancete não reconhecida no texto do PDF (${det.motivo})` });
+              await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } });
+              continue;
+            }
+            console.log(`[process] balancete ${doc.nome}: ${det.motivo} → OCR (${det.paginas} páginas)`);
+            const r = await ocrBalancete(buffer, doc.competencia);
+            parseado = r.parseado;
+            ocrDoDoc = { custo: r.custo, suspeitas: r.suspeitas, avisos: r.avisos, paginas: r.paginas };
+            if (r.custo) custoOcrUsd += r.custo.usd;
           }
-          parseado = parseBalanceteTexto(texto);
         }
         const conv = converterBalancete(parseado);
         if (!conv.periodoBP || parseado.linhas.length < 5) {
@@ -1744,19 +1762,22 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         arvoresBalancete.push({ docId: doc.id, nome: doc.nome, periodo: conv.periodoBP, arvoreBP: conv.arvoreBP, arvoreDRE: conv.arvoreDRE });
         balancetes.push({
           docId: doc.id, nome: doc.nome, periodo: conv.periodoBP, periodoInicio: parseado.periodoInicio,
-          provas: conv.provas, avisos: conv.avisos, linhas: parseado.linhas.length,
+          provas: conv.provas, avisos: [...conv.avisos, ...(ocrDoDoc?.avisos ?? [])], linhas: parseado.linhas.length,
+          // Proveniência da leitura: OCR é assistido por IA e a tela precisa
+          // dizer isso ao analista (nunca passa por leitura determinística).
+          ...(ocrDoDoc ? { fonte: "ocr", ocr: { paginas: ocrDoDoc.paginas, suspeitas: ocrDoDoc.suspeitas, custoUsd: ocrDoDoc.custo?.usd ?? 0 } } : {}),
         });
         await prisma.document.update({
           where: { id: doc.id },
           data: {
             // periodoInicio entra no cache: a herança (nova-versão) reproduz a
             // linha `balancetes` completa sem re-parsear o PDF.
-            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], periodoInicio: parseado.periodoInicio, provas: conv.provas, avisos: conv.avisos, totalLinhas: parseado.linhas.length } as any,
+            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], periodoInicio: parseado.periodoInicio, provas: conv.provas, avisos: conv.avisos, totalLinhas: parseado.linhas.length, ...(ocrDoDoc ? { fonte: "ocr", ocrSuspeitas: ocrDoDoc.suspeitas.length } : {}) } as any,
             status: "Processado",
             // "verde só com prova": confiança alta SOMENTE com fechamento ao
             // centavo E com todas as linhas fechando na própria equação (P3) —
             // P2 sozinho não olha o saldo anterior nem o movimento.
-            confianca: conv.provas.fechamento.ok && conv.provas.linhas.ok ? 95 : 40,
+            confianca: conv.provas.fechamento.ok && conv.provas.linhas.ok && !ocrDoDoc ? 95 : 40,
           },
         });
         await conferirCompetenciaBalancete(doc, parseado.periodoInicio, parseado.periodoFim);
@@ -1863,7 +1884,12 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       dicionarioVersao,
       fluxoCaixa: buildIndirectCashFlow(structuredBP, structuredDRE, allPeriodos),
       version: 2,
-      custoExtracao: { usd: custoExtracaoUsd, fonte: escolhido.fonte, fecha: escolhido.fecha, niveis: custos },
+      // O OCR de balancete é IA e entra no custo da extração ([[registrar-custo-ia]]).
+      custoExtracao: {
+        usd: custoExtracaoUsd + custoOcrUsd,
+        fonte: escolhido.fonte, fecha: escolhido.fecha,
+        niveis: [...custos, ...(custoOcrUsd > 0 ? [{ usd: custoOcrUsd, fonte: "ocr-balancete" }] : [])],
+      },
     } as DadosEstruturados;
     // Linha de balancete: provas por documento + árvores mensais (o /refold as
     // re-dobra quando o dicionário/modelo muda — mesma mecânica das anuais).
