@@ -1377,9 +1377,24 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           const buf = await baixarDoc(doc);
           det = pareceBalanceteTabular(/\.csv$/i.test(doc.nome) ? csvParaMatriz(buf) : xlsxParaMatriz(buf));
         } else {
-          const texto = await extrairTextoLayoutPDF(await baixarDoc(doc));
+          const buf = await baixarDoc(doc);
+          const texto = await extrairTextoLayoutPDF(buf);
           if (!texto || texto.length < 300) continue; // escaneado/sem texto — não dá para afirmar nada
           det = pareceBalancete(texto);
+          // TEXTO DE CARIMBO NÃO DESCLASSIFICA DOCUMENTO (03/08/2026 — caça de
+          // regressão). Num PDF ESCANEADO o texto extraível é só o carimbo de
+          // assinatura digital/protocolo, e o sniff julgava o balancete por ele:
+          // sem a palavra "balancete" no carimbo, o documento era rebaixado para
+          // "PDF" e ia para a cascata BP/DRE — a via de OCR, criada exatamente
+          // para esse caso, nunca era alcançada. Só o acaso salvou o documento
+          // que motivou o recurso (o carimbo do Projudi cita "Balancete").
+          if (!det.balancete && ehBalancete(doc.tipo)) {
+            const escaneado = await pdfEscaneado(buf, 0);
+            if (escaneado.escaneado) {
+              console.log(`[process] ${doc.nome}: conteúdo ilegível (${escaneado.motivo}) — mantém o tipo declarado e segue para a via de OCR`);
+              continue;
+            }
+          }
         }
         const rotulado = ehBalancete(doc.tipo);
         let tipoNovo: string | null = null;
