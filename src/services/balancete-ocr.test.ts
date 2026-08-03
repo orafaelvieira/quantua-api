@@ -5,7 +5,7 @@
  * árvore. Fixtures sintéticas — documento de cliente não vai para o repo (LGPD).
  */
 import { describe, it, expect } from "vitest";
-import { linhaFecha } from "./balancete-ocr";
+import { linhaFecha, contarNaoFecham, avisoNaoFecham, AMOSTRA_SUSPEITAS_MAX } from "./balancete-ocr";
 import { parseBalanceteMatriz } from "./balancete-tabular";
 import { converterBalancete } from "./balancete-conversao";
 
@@ -76,5 +76,49 @@ describe("documento escaneado que FECHA vira extração confiável", () => {
     const c = converterBalancete(parseBalanceteMatriz(matriz(ruim)));
     expect(c.provas.linhas.ok).toBe(false);
     expect(c.provas.linhas.incoerentes[0].nome).toBe("CAIXA");
+  });
+});
+
+/**
+ * CONTAGEM DE CONTAS QUEBRADAS — flagrado no IBR Budel em produção (03/08/2026).
+ * Os dois chamadores faziam `.slice(0, 20)` ANTES de medir e usavam o `.length`
+ * do recorte como contagem: com 234 contas quebradas em 655 a tela dizia
+ * "20 a conferir" e o chip "OCR (IA) · 20". O analista lia 3% quando a verdade
+ * era 36% do documento.
+ */
+describe("contarNaoFecham: teto de armazenamento nunca vira contagem", () => {
+  const quebrada = (i: number) => ({
+    classificacao: `9${String(i).padStart(4, "0")}`, nome: `CONTA ${i}`, nivel: 3,
+    saldoAnterior: 100, debito: 0, credito: 0, saldoAtual: 999, // 100 + 0 - 0 != 999
+  }) as any;
+  const boa = (i: number) => ({
+    classificacao: `1${String(i).padStart(4, "0")}`, nome: `OK ${i}`, nivel: 3,
+    saldoAnterior: 100, debito: 50, credito: 20, saldoAtual: 130,
+  }) as any;
+
+  it("conta TODAS as quebradas, mesmo muito acima do teto da amostra", () => {
+    const linhas = [...Array.from({ length: 350 }, (_, i) => quebrada(i)), ...Array.from({ length: 40 }, (_, i) => boa(i))];
+    const r = contarNaoFecham(linhas);
+    expect(r.total).toBe(350);
+    expect(r.amostra).toHaveLength(AMOSTRA_SUSPEITAS_MAX);
+    expect(r.amostra.length).toBeLessThan(r.total); // a amostra JAMAIS é a contagem
+  });
+
+  it("o número exato do caso Budel aparece inteiro no aviso, com o percentual", () => {
+    const aviso = avisoNaoFecham(234, 655)!;
+    expect(aviso).toContain("234 de 655");
+    expect(aviso).toContain("36%");
+    expect(aviso).not.toContain("20 conta");
+  });
+
+  it("acima do teto, o aviso DECLARA que a amostra foi cortada (sem esconder o total)", () => {
+    const aviso = avisoNaoFecham(350, 400)!;
+    expect(aviso).toContain("350 de 400");
+    expect(aviso).toContain(`${AMOSTRA_SUSPEITAS_MAX} primeiras`);
+  });
+
+  it("documento limpo não gera aviso nenhum", () => {
+    expect(contarNaoFecham(Array.from({ length: 20 }, (_, i) => boa(i))).total).toBe(0);
+    expect(avisoNaoFecham(0, 20)).toBeNull();
   });
 });

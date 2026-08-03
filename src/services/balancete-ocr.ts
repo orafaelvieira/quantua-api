@@ -65,8 +65,13 @@ export interface ResultadoOCR {
    * substituir por bytes idênticos também). Só se guarda leitura limpa.
    */
   degradou: boolean;
-  /** Contas que seguem sem fechar a equação após a releitura dirigida. */
+  /**
+   * AMOSTRA das contas que seguem sem fechar a equação (limitada para não inchar
+   * o JSON do documento). NUNCA use `.length` como contagem — use `naoFecham`.
+   */
   suspeitas: Array<{ classificacao: string; nome: string; anterior: number; debito: number; credito: number; atual: number }>;
+  /** Quantas contas NÃO fecham a própria equação — o número de verdade, sem teto. */
+  naoFecham: number;
   avisos: string[];
 }
 
@@ -82,6 +87,41 @@ export function linhaFecha(l: Pick<LinhaBalancete, "saldoAnterior" | "debito" | 
     Math.abs(l.saldoAnterior + d - c - l.saldoAtual) <= TOLERANCIA ||
     Math.abs(l.saldoAnterior + c - d - l.saldoAtual) <= TOLERANCIA
   );
+}
+
+/** Teto de ARMAZENAMENTO da amostra de contas quebradas (nunca da contagem). */
+export const AMOSTRA_SUSPEITAS_MAX = 300;
+
+/**
+ * QUANTAS contas não fecham a própria equação, e uma AMOSTRA delas.
+ *
+ * Ponto único de propósito (03/08/2026 — flagrado no IBR Budel em produção):
+ * antes, os dois chamadores faziam `.filter(...).slice(0, 20)` e usavam o
+ * `.length` do resultado como contagem. Com 234 contas quebradas em 655, a tela
+ * dizia "20 a conferir" — o analista lia 3% quando a verdade era 36%. Um teto
+ * disfarçado de contagem é o oposto de "verde só com prova": some com o
+ * problema em vez de mostrá-lo.
+ */
+export function contarNaoFecham(linhas: LinhaBalancete[]): {
+  total: number;
+  amostra: Array<{ classificacao: string; nome: string; anterior: number; debito: number; credito: number; atual: number }>;
+} {
+  const quebradas = linhas.filter((l) => !linhaFecha(l));
+  return {
+    total: quebradas.length,
+    amostra: quebradas.slice(0, AMOSTRA_SUSPEITAS_MAX).map((l) => ({
+      classificacao: l.classificacao, nome: l.nome, anterior: l.saldoAnterior,
+      debito: l.debito, credito: l.credito, atual: l.saldoAtual,
+    })),
+  };
+}
+
+/** Frase única sobre a qualidade da leitura — some com o número, nunca o esconde. */
+export function avisoNaoFecham(total: number, totalLinhas: number): string | null {
+  if (total <= 0) return null;
+  const pct = Math.round((100 * total) / Math.max(1, totalLinhas));
+  return `${total} de ${totalLinhas} conta(s) (${pct}%) não fecham a própria equação do documento — a leitura por OCR errou dígitos nessas linhas. Confira no documento antes de usar os números.`
+    + (total > AMOSTRA_SUSPEITAS_MAX ? ` (guardadas as ${AMOSTRA_SUSPEITAS_MAX} primeiras para conferência)` : "");
 }
 
 /**
@@ -218,7 +258,7 @@ export async function ocrBalancete(buffer: Buffer, competencia?: string | null):
   if (totalPaginas > MAX_PAGINAS) {
     const vazio = parseBalanceteMatriz(montarMatriz([], null));
     return {
-      parseado: vazio, custo: null, paginas: totalPaginas, suspeitas: [], degradou: true,
+      parseado: vazio, custo: null, paginas: totalPaginas, suspeitas: [], naoFecham: 0, degradou: true,
       avisos: [`Documento escaneado com ~${totalPaginas} páginas — acima do limite de ${MAX_PAGINAS} para leitura por OCR (custo e tempo). Envie o balancete em CSV/Excel, ou divida o PDF por período.`],
     };
   }
@@ -239,7 +279,7 @@ export async function ocrBalancete(buffer: Buffer, competencia?: string | null):
   const custoDe = () => calcCusto(MODELO_OCR, inTok, outTok);
   if (linhas.length === 0) {
     const vazio = parseBalanceteMatriz(montarMatriz([], periodo));
-    return { parseado: vazio, custo: custoDe(), paginas: lotes.length * PAGINAS_POR_LOTE, suspeitas: [], degradou: true, avisos: [...avisos, "A leitura não reconheceu nenhuma linha de conta."] };
+    return { parseado: vazio, custo: custoDe(), paginas: lotes.length * PAGINAS_POR_LOTE, suspeitas: [], naoFecham: 0, degradou: true, avisos: [...avisos, "A leitura não reconheceu nenhuma linha de conta."] };
   }
 
   // ── AUDITORIA ARITMÉTICA + RELEITURA DIRIGIDA ──────────────────────────────
@@ -269,16 +309,14 @@ export async function ocrBalancete(buffer: Buffer, competencia?: string | null):
     avisos.push(`${arv.consertos.length} conta(s) de grupo corrigidas pela soma dos filhos (a leitura do total divergia das contas que o compõem): ${arv.consertos.slice(0, 5).join(", ")}${arv.consertos.length > 5 ? "…" : ""}.`);
   }
 
-  const suspeitas = p.linhas.filter((l) => !linhaFecha(l)).slice(0, 20).map((l) => ({
-    classificacao: l.classificacao, nome: l.nome, anterior: l.saldoAnterior, debito: l.debito, credito: l.credito, atual: l.saldoAtual,
-  }));
-  if (suspeitas.length > 0) {
-    avisos.push(`${suspeitas.length} conta(s) seguem sem fechar a equação após a releitura — confira estes valores no documento antes de usar os números.`);
-  }
+  const quebradas = contarNaoFecham(p.linhas);
+  const suspeitas = quebradas.amostra;
+  const aviso = avisoNaoFecham(quebradas.total, p.linhas.length);
+  if (aviso) avisos.push(aviso);
   avisos.push(`Números lidos por OCR (${p.linhas.length} contas em ${lotes.length * PAGINAS_POR_LOTE} páginas) — a extração é assistida por IA e as provas de fechamento valem como conferência.`);
 
   return {
-    parseado: p, custo: custoDe(), paginas: lotes.length * PAGINAS_POR_LOTE, suspeitas, avisos, degradou,
+    parseado: p, custo: custoDe(), paginas: lotes.length * PAGINAS_POR_LOTE, suspeitas, naoFecham: quebradas.total, avisos, degradou,
     matriz: { linhas: linhasAtuais, periodo },
   };
 }

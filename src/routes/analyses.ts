@@ -10,7 +10,7 @@ import { parseDocument, dadosExtraidosToRaw, extrairTextoLayoutPDF, type Extract
 import { parseBalanceteTexto, pareceBalancete, type BalanceteParseado } from "../services/balancete-parser";
 import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal } from "../services/balancete-conversao";
 import { parseBalanceteTabular, pareceBalanceteTabular, ehArquivoTabular, csvParaMatriz, xlsxParaMatriz } from "../services/balancete-tabular";
-import { pdfEscaneado, ocrBalancete, parseDaMatrizOcr, linhaFecha } from "../services/balancete-ocr";
+import { pdfEscaneado, ocrBalancete, parseDaMatrizOcr, contarNaoFecham, avisoNaoFecham } from "../services/balancete-ocr";
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
@@ -1182,7 +1182,7 @@ function aplicarProvasBalancete(
     const comP3 = !p3Falhou && bals.every((b) => b.provas?.linhas?.ok);
     const temOcr = bals.some((b) => b.fonte === "ocr");
     if (temOcr) {
-      const suspeitas = bals.reduce((s, b) => s + ((b.ocr as any)?.suspeitas?.length ?? 0), 0);
+      const suspeitas = bals.reduce((s, b) => s + ((b.ocr as any)?.naoFecham ?? (b.ocr as any)?.suspeitas?.length ?? 0), 0);
       validacao.alertas.push({
         tipo: "aviso", area: "Balancete",
         mensagem: `Balancete lido por OCR (documento escaneado): os números vieram de leitura assistida por IA, não de extração determinística.${suspeitas > 0 ? ` ${suspeitas} conta(s) seguem sem fechar a própria equação.` : ""} O fechamento confere, mas confira os valores no documento antes de assinar.`,
@@ -1766,7 +1766,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
             // número lido por IA. Atenção: no cache, `ocrSuspeitas` é um NÚMERO
             // (não array), e o consumidor espera o array em `ocr.suspeitas`.
             ...(cacheBal.fonte === "ocr"
-              ? { fonte: "ocr", ocr: { paginas: cacheBal.ocrPaginas ?? 0, suspeitas: new Array(cacheBal.ocrSuspeitas ?? 0).fill(null), custoUsd: cacheBal.ocrCustoUsd ?? 0 } }
+              ? { fonte: "ocr", ocr: { paginas: cacheBal.ocrPaginas ?? 0, suspeitas: new Array(Math.min(cacheBal.ocrSuspeitas ?? 0, 300)).fill(null), naoFecham: cacheBal.ocrSuspeitas ?? 0, custoUsd: cacheBal.ocrCustoUsd ?? 0 } }
               : {}),
           });
           await conferirCompetenciaBalancete(doc, cacheBal.periodoInicio ?? null, periodoBP, cacheBal.periodoAssumido === true);
@@ -1778,7 +1778,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         // desembocam no MESMO `BalanceteParseado`, então conversão, provas de
         // fechamento e fold seguem idênticos para ambas.
         // Preenchido só quando a via de OCR entra em ação (PDF escaneado).
-        let ocrDoDoc: { custo: import("../services/ai-extraction").CustoIA | null; suspeitas: unknown[]; avisos: string[]; paginas: number; matriz?: { linhas: string[][]; periodo: string | null }; custoOriginalUsd?: number } | null = null;
+        let ocrDoDoc: { custo: import("../services/ai-extraction").CustoIA | null; suspeitas: unknown[]; naoFecham: number; avisos: string[]; paginas: number; matriz?: { linhas: string[][]; periodo: string | null }; custoOriginalUsd?: number } | null = null;
         const tabular = ehArquivoTabular(doc.nome);
         if (!doc.storagePath || !(tabular || /\.pdf$/i.test(doc.nome))) {
           balancetes.push({ docId: doc.id, nome: doc.nome, erro: "Balancete aceito em PDF, CSV ou Excel (.xlsx/.xls) — formato deste arquivo não reconhecido" });
@@ -1826,29 +1826,30 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
               // Suspeitas RECALCULADAS sobre a extração atual — copiar `[]` fazia
               // o chip perder o "N a conferir" depois de um reprocesso que não
               // mudou byte nenhum (a prova P3 seguia acusando as mesmas contas).
-              const suspeitasCache = parseado.linhas.filter((l) => !linhaFecha(l)).slice(0, 20).map((l) => ({
-                classificacao: l.classificacao, nome: l.nome, anterior: l.saldoAnterior,
-                debito: l.debito, credito: l.credito, atual: l.saldoAtual,
-              }));
+              // Contagem de VERDADE, não teto — pelo MESMO helper do caminho de
+              // leitura nova, para os dois nunca divergirem de novo.
+              const quebradasCache = contarNaoFecham(parseado.linhas);
+              const suspeitasCache = quebradasCache.amostra;
+              const avisoQualidade = avisoNaoFecham(quebradasCache.total, parseado.linhas.length);
               ocrDoDoc = {
-                custo: null, suspeitas: suspeitasCache, paginas: extra.ocrPaginas ?? 0, matriz: cacheOcr,
+                custo: null, suspeitas: suspeitasCache, naoFecham: quebradasCache.total, paginas: extra.ocrPaginas ?? 0, matriz: cacheOcr,
                 // Custo do OCR ORIGINAL preservado no histórico do IBR
                 // ([[registrar-custo-ia]]): sem isso o reprocesso zerava o gasto
                 // que de fato aconteceu.
                 custoOriginalUsd: extra.ocrCustoUsd ?? 0,
                 avisos: [
                   "Leitura por OCR reaproveitada do processamento anterior (mesmo arquivo) — sem novo custo de IA.",
-                  ...(suspeitasCache.length > 0 ? [`${suspeitasCache.length} conta(s) seguem sem fechar a própria equação — confira no documento.`] : []),
+                  ...(avisoQualidade ? [avisoQualidade] : []),
                 ],
               };
               custoOcrUsd += extra.ocrCustoUsd ?? 0;
-              console.log(`[process] balancete ${doc.nome}: OCR reusado do cache (${cacheOcr.linhas.length} contas, ${suspeitasCache.length} suspeitas)`);
+              console.log(`[process] balancete ${doc.nome}: OCR reusado do cache (${cacheOcr.linhas.length} contas, ${quebradasCache.total} não fecham)`);
             } else {
               console.log(`[process] balancete ${doc.nome}: ${det.motivo} → OCR (${det.paginas} páginas)`);
               const r = await ocrBalancete(buffer, doc.competencia);
               parseado = r.parseado;
               ocrDoDoc = {
-                custo: r.custo, suspeitas: r.suspeitas, avisos: r.avisos, paginas: r.paginas,
+                custo: r.custo, suspeitas: r.suspeitas, naoFecham: r.naoFecham, avisos: r.avisos, paginas: r.paginas,
                 // LEITURA DEGRADADA NÃO ENTRA NO CACHE: congelá-la seria
                 // definitivo — reenviar ou substituir pelo MESMO arquivo é
                 // recusado por duplicidade, e o analista ficaria sem saída.
@@ -1880,14 +1881,14 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           provas: conv.provas, avisos: [...conv.avisos, ...(ocrDoDoc?.avisos ?? [])], linhas: parseado.linhas.length,
           // Proveniência da leitura: OCR é assistido por IA e a tela precisa
           // dizer isso ao analista (nunca passa por leitura determinística).
-          ...(ocrDoDoc ? { fonte: "ocr", ocr: { paginas: ocrDoDoc.paginas, suspeitas: ocrDoDoc.suspeitas, custoUsd: ocrDoDoc.custo?.usd ?? 0 } } : {}),
+          ...(ocrDoDoc ? { fonte: "ocr", ocr: { paginas: ocrDoDoc.paginas, suspeitas: ocrDoDoc.suspeitas, naoFecham: ocrDoDoc.naoFecham, custoUsd: ocrDoDoc.custo?.usd ?? 0 } } : {}),
         });
         await prisma.document.update({
           where: { id: doc.id },
           data: {
             // periodoInicio entra no cache: a herança (nova-versão) reproduz a
             // linha `balancetes` completa sem re-parsear o PDF.
-            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], periodoInicio: parseado.periodoInicio, periodoAssumido: parseado.periodoAssumido ?? false, provas: conv.provas, avisos: conv.avisos, totalLinhas: parseado.linhas.length, ...(ocrDoDoc ? { fonte: "ocr", ocrSuspeitas: ocrDoDoc.suspeitas.length, ocrPaginas: ocrDoDoc.paginas, ocrCustoUsd: ocrDoDoc.custoOriginalUsd ?? 0, ...(ocrDoDoc.matriz ? { ocrMatriz: ocrDoDoc.matriz, ocrHash: doc.hash } : {}) } : {}) } as any,
+            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], periodoInicio: parseado.periodoInicio, periodoAssumido: parseado.periodoAssumido ?? false, provas: conv.provas, avisos: conv.avisos, totalLinhas: parseado.linhas.length, ...(ocrDoDoc ? { fonte: "ocr", ocrSuspeitas: ocrDoDoc.naoFecham, ocrPaginas: ocrDoDoc.paginas, ocrCustoUsd: ocrDoDoc.custoOriginalUsd ?? 0, ...(ocrDoDoc.matriz ? { ocrMatriz: ocrDoDoc.matriz, ocrHash: doc.hash } : {}) } : {}) } as any,
             status: "Processado",
             // "verde só com prova": confiança alta SOMENTE com fechamento ao
             // centavo E com todas as linhas fechando na própria equação (P3) —
