@@ -116,3 +116,48 @@ describe("avaliarProntidaoGeracao — a régua única do gate", () => {
     expect(r.pendencias.join(" ")).toMatch(/1 conta\(s\)/);
   });
 });
+
+/**
+ * A MENSAGEM tem de casar com o documento que o analista tem na mão.
+ * Flagrado em produção (IBR Budel, 03/08/2026): num IBR feito só de balancete o
+ * gate mandava "reconciliar os subtotais declarados (Receita Líquida / Lucro
+ * Bruto / Lucro Líquido)" — subtotais que balancete nenhum declara. O analista
+ * sai procurando o que não existe.
+ */
+describe("mensagem do gate quando a reconciliação falha", () => {
+  const divergente = (extra: Record<string, unknown>) => {
+    const d = base() as any;
+    d.validacao.reconciliacaoDRE = { verificada: true, ok: false };
+    return { ...d, ...extra };
+  };
+
+  it("IBR só de BALANCETE: fala do fechamento do balancete, não de subtotal inexistente", () => {
+    const texto = avaliarProntidaoGeracao(
+      divergente({ balancetes: [{ docId: "d1", nome: "bal.pdf" }], declarados: [] }),
+    ).pendencias.join(" ");
+    expect(texto).toMatch(/balancete não fecha/i);
+    expect(texto).not.toMatch(/subtotais declarados/i);
+  });
+
+  it("balancete lido por OCR: aponta o caminho prático (CSV/Excel)", () => {
+    const texto = avaliarProntidaoGeracao(
+      divergente({ balancetes: [{ docId: "d1", fonte: "ocr" }], declarados: [] }),
+    ).pendencias.join(" ");
+    expect(texto).toMatch(/OCR/);
+    expect(texto).toMatch(/CSV\/Excel/i);
+  });
+
+  it("DRE de verdade com subtotais declarados: mantém a mensagem original", () => {
+    const texto = avaliarProntidaoGeracao(
+      divergente({ declarados: [{ conta: "Receita Líquida", valor: 100 }] }),
+    ).pendencias.join(" ");
+    expect(texto).toMatch(/subtotais declarados/i);
+  });
+
+  it("balancete SEM lista de declarados (campo ausente) também cai na mensagem certa", () => {
+    const texto = avaliarProntidaoGeracao(
+      divergente({ balancetes: [{ docId: "d1" }] }),
+    ).pendencias.join(" ");
+    expect(texto).toMatch(/balancete não fecha/i);
+  });
+});

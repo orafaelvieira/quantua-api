@@ -89,7 +89,28 @@ export function avaliarProntidaoGeracao(dados: unknown): ProntidaoGeracao {
   //    Sem declarados não há como provar — passa com AVISO (senão bloquearia p/ sempre).
   const rec = v.reconciliacaoDRE;
   if (temDRE && rec?.verificada === true && rec?.ok === false) {
-    pendencias.push("A DRE diverge dos subtotais declarados no documento (Receita Líquida / Lucro Bruto / Lucro Líquido) — reconcilie antes de gerar.");
+    // A MENSAGEM PRECISA CASAR COM O DOCUMENTO (03/08/2026 — flagrado em
+    // produção no IBR Budel). Num IBR feito só de BALANCETE não existem
+    // "subtotais declarados" (Receita Líquida / Lucro Bruto / Lucro Líquido) —
+    // a prova de lá é o fechamento Ativo − Passivo = resultado acumulado. Mandar
+    // o analista "reconciliar subtotais" que o documento não tem é enviá-lo
+    // procurar o que não existe.
+    const bals = Array.isArray((d as any)?.balancetes) ? (d as any).balancetes : [];
+    const declarados = (d as any)?.declarados;
+    // "Sem subtotais declarados" cobre ausente E lista vazia — o balancete não
+    // declara Receita Líquida/Lucro Bruto/Lucro Líquido em lugar nenhum.
+    const semDeclarados = !Array.isArray(declarados) || declarados.length === 0;
+    const soBalancete = bals.length > 0 && semDeclarados;
+    const ocr = bals.some((b: any) => b?.fonte === "ocr");
+    if (soBalancete) {
+      pendencias.push(
+        ocr
+          ? "O balancete não fecha (Ativo − Passivo ≠ resultado do período) e foi lido por OCR — a leitura do documento escaneado saiu com valores errados. Reprocesse; se persistir, peça o balancete em CSV/Excel ao cliente (a leitura de planilha é exata)."
+          : "O balancete não fecha (Ativo − Passivo ≠ resultado do período) — revise a extração na aba Histórico financeiro antes de gerar.",
+      );
+    } else {
+      pendencias.push("A DRE diverge dos subtotais declarados no documento (Receita Líquida / Lucro Bruto / Lucro Líquido) — reconcilie antes de gerar.");
+    }
   }
   if (temDRE && rec?.verificada === false) {
     avisos.push("A DRE não traz subtotais declarados — não foi possível provar por reconciliação (confira a DRE na aba Histórico financeiro).");

@@ -72,6 +72,17 @@ function valorPtBr(raw: string): { valor: number; natureza?: "D" | "C" } {
   if (s.startsWith("(") && s.endsWith(")")) { negativo = true; s = s.slice(1, -1); }
   if (s.startsWith("-")) { negativo = true; s = s.slice(1); }
   s = s.replace(/[R$\s]/g, "");
+  // FORMATO AMERICANO com milhar por vírgula ("46,706,796.30", "7,008.54").
+  // Só o OCR produz isso: o modelo de visão, mandado devolver número canônico,
+  // às vezes devolve com separador de milhar americano. Lido como pt-BR,
+  // "46,706,796.30" virava 46,706 — o valor achatado de milhões para dezenas
+  // que apareceu no balancete Budel em produção (03/08/2026). O padrão é
+  // inequívoco (grupos de exatamente 3 dígitos e o ponto DEPOIS da vírgula),
+  // então não colide com pt-BR: "1.234,56" não casa e segue pelo caminho de sempre.
+  if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) {
+    const us = parseFloat(s.replace(/,/g, ""));
+    return Number.isFinite(us) ? { valor: negativo ? -us : us, natureza } : { valor: 0 };
+  }
   // pt-BR: ponto é milhar, vírgula é decimal. Sem vírgula, ponto decimal (en-US) vale.
   const n = s.includes(",") ? parseFloat(s.replace(/\./g, "").replace(",", ".")) : parseFloat(s);
   if (!Number.isFinite(n)) return { valor: 0 };
