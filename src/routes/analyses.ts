@@ -10,7 +10,7 @@ import { parseDocument, dadosExtraidosToRaw, extrairTextoLayoutPDF, type Extract
 import { parseBalanceteTexto, pareceBalancete, type BalanceteParseado } from "../services/balancete-parser";
 import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal } from "../services/balancete-conversao";
 import { parseBalanceteTabular, pareceBalanceteTabular, ehArquivoTabular, csvParaMatriz, xlsxParaMatriz } from "../services/balancete-tabular";
-import { pdfEscaneado, ocrBalancete } from "../services/balancete-ocr";
+import { pdfEscaneado, ocrBalancete, parseDaMatrizOcr, linhaFecha } from "../services/balancete-ocr";
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
@@ -1274,6 +1274,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       return buffer;
     };
     const alertasTipoDoc: Array<{ tipo: "erro" | "aviso" | "info"; area: string; mensagem: string; detalhes?: string }> = [];
+    /** Documentos cujo período NÃO veio do conteúdo (competência é palavra do
+     *  analista) — viram UM aviso consolidado depois do laço dos balancetes. */
+    const competenciasAssumidas: string[] = [];
 
     /** COMPETÊNCIA × PERÍODO DO BALANCETE (30/07/2026 — caso Belagro: o
      *  "Balancete Consolidado de 01/01/2025 a 30/09/2025" subiu declarado como
@@ -1285,7 +1288,23 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       doc: { id: string; nome: string; competencia: string | null },
       inicio: string | null | undefined,
       fim: string | null | undefined,
+      periodoAssumido?: boolean,
     ) => {
+      // CONFERÊNCIA CIRCULAR NÃO É CONFERÊNCIA (03/08/2026 — caça de regressão).
+      // Quando a planilha/OCR não traz período, ele é DERIVADO da competência
+      // declarada pelo analista. Comparar esse derivado contra a mesma
+      // competência concorda SEMPRE e dava a falsa impressão de documento
+      // conferido — uma competência errada punha o mês no lugar errado da série
+      // sem nenhuma prova acusar. Sem período no documento não há o que conferir:
+      // o sistema se cala aqui e AVISA que a competência é palavra do analista.
+      if (periodoAssumido) {
+        // Acumula e emite UM alerta ao final: uma série mensal de 3 anos daria
+        // 36 linhas idênticas na tela. A área é "Tipo de documento" porque é a
+        // que o banner de integridade já renderiza — aviso em área que ninguém
+        // exibe é letra morta (achado da revisão pré-deploy).
+        competenciasAssumidas.push(`${doc.nome} (${doc.competencia ?? "sem competência"})`);
+        return;
+      }
       const real = competenciaDoPeriodoBalancete(inicio ?? null, fim ?? null);
       if (!real || doc.competencia === real) return;
       const declarada = doc.competencia;
@@ -1740,8 +1759,17 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           balancetes.push({
             docId: doc.id, nome: doc.nome, periodo: periodoBP, periodoInicio: cacheBal.periodoInicio,
             provas: cacheBal.provas, avisos: cacheBal.avisos ?? [], linhas: cacheBal.totalLinhas ?? 0,
+            // PROVENIÊNCIA SOBREVIVE À HERANÇA (03/08/2026 — revisão pré-deploy):
+            // o push da extração herdada (usado pela "Nova versão") não levava
+            // `fonte`, então um IBR com balancete escaneado voltava a exibir
+            // cartão verde e — pior — o selo emitia a nota de PROVA PLENA para
+            // número lido por IA. Atenção: no cache, `ocrSuspeitas` é um NÚMERO
+            // (não array), e o consumidor espera o array em `ocr.suspeitas`.
+            ...(cacheBal.fonte === "ocr"
+              ? { fonte: "ocr", ocr: { paginas: cacheBal.ocrPaginas ?? 0, suspeitas: new Array(cacheBal.ocrSuspeitas ?? 0).fill(null), custoUsd: cacheBal.ocrCustoUsd ?? 0 } }
+              : {}),
           });
-          await conferirCompetenciaBalancete(doc, cacheBal.periodoInicio ?? null, periodoBP);
+          await conferirCompetenciaBalancete(doc, cacheBal.periodoInicio ?? null, periodoBP, cacheBal.periodoAssumido === true);
           console.log(`[process] balancete ${doc.nome}: extração HERDADA reusada (período ${periodoBP}) — re-parse pulado`);
           continue;
         }
@@ -1750,7 +1778,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         // desembocam no MESMO `BalanceteParseado`, então conversão, provas de
         // fechamento e fold seguem idênticos para ambas.
         // Preenchido só quando a via de OCR entra em ação (PDF escaneado).
-        let ocrDoDoc: { custo: import("../services/ai-extraction").CustoIA | null; suspeitas: unknown[]; avisos: string[]; paginas: number } | null = null;
+        let ocrDoDoc: { custo: import("../services/ai-extraction").CustoIA | null; suspeitas: unknown[]; avisos: string[]; paginas: number; matriz?: { linhas: string[][]; periodo: string | null }; custoOriginalUsd?: number } | null = null;
         const tabular = ehArquivoTabular(doc.nome);
         if (!doc.storagePath || !(tabular || /\.pdf$/i.test(doc.nome))) {
           balancetes.push({ docId: doc.id, nome: doc.nome, erro: "Balancete aceito em PDF, CSV ou Excel (.xlsx/.xls) — formato deste arquivo não reconhecido" });
@@ -1776,11 +1804,60 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
               await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } });
               continue;
             }
-            console.log(`[process] balancete ${doc.nome}: ${det.motivo} → OCR (${det.paginas} páginas)`);
-            const r = await ocrBalancete(buffer, doc.competencia);
-            parseado = r.parseado;
-            ocrDoDoc = { custo: r.custo, suspeitas: r.suspeitas, avisos: r.avisos, paginas: r.paginas };
-            if (r.custo) custoOcrUsd += r.custo.usd;
+            // CACHE DA LEITURA (03/08/2026): a transcrição por visão é o
+            // equivalente ao texto de um PDF legível — cara e SEMPRE a mesma
+            // para os mesmos bytes. Sem cache, cada "Reprocessar" repagava o
+            // documento inteiro. O hash amarra o cache aos bytes: arquivo
+            // substituído invalida sozinho. O parse roda de novo em cima da
+            // matriz guardada, então dicionário/modelos novos são aplicados.
+            const extra = (doc.dadosExtraidos as any) ?? {};
+            const cacheOcr = extra.ocrMatriz;
+            // O cache SÓ vale com: leitura guardada (que por construção é limpa
+            // — degradada nunca é gravada), MESMOS BYTES (hash string, nunca
+            // null==null) e sem pedido explícito de reextração. Sem a última
+            // condição o "Reprocessar" deixaria de ser o caminho de recuperação
+            // de uma leitura ruim, que era exatamente o que ele fazia antes.
+            const cacheVale = !forcarReextracao
+              && Array.isArray(cacheOcr?.linhas) && cacheOcr.linhas.length > 0
+              && typeof doc.hash === "string" && doc.hash.length > 0
+              && extra.ocrHash === doc.hash;
+            if (cacheVale) {
+              parseado = parseDaMatrizOcr(cacheOcr, doc.competencia);
+              // Suspeitas RECALCULADAS sobre a extração atual — copiar `[]` fazia
+              // o chip perder o "N a conferir" depois de um reprocesso que não
+              // mudou byte nenhum (a prova P3 seguia acusando as mesmas contas).
+              const suspeitasCache = parseado.linhas.filter((l) => !linhaFecha(l)).slice(0, 20).map((l) => ({
+                classificacao: l.classificacao, nome: l.nome, anterior: l.saldoAnterior,
+                debito: l.debito, credito: l.credito, atual: l.saldoAtual,
+              }));
+              ocrDoDoc = {
+                custo: null, suspeitas: suspeitasCache, paginas: extra.ocrPaginas ?? 0, matriz: cacheOcr,
+                // Custo do OCR ORIGINAL preservado no histórico do IBR
+                // ([[registrar-custo-ia]]): sem isso o reprocesso zerava o gasto
+                // que de fato aconteceu.
+                custoOriginalUsd: extra.ocrCustoUsd ?? 0,
+                avisos: [
+                  "Leitura por OCR reaproveitada do processamento anterior (mesmo arquivo) — sem novo custo de IA.",
+                  ...(suspeitasCache.length > 0 ? [`${suspeitasCache.length} conta(s) seguem sem fechar a própria equação — confira no documento.`] : []),
+                ],
+              };
+              custoOcrUsd += extra.ocrCustoUsd ?? 0;
+              console.log(`[process] balancete ${doc.nome}: OCR reusado do cache (${cacheOcr.linhas.length} contas, ${suspeitasCache.length} suspeitas)`);
+            } else {
+              console.log(`[process] balancete ${doc.nome}: ${det.motivo} → OCR (${det.paginas} páginas)`);
+              const r = await ocrBalancete(buffer, doc.competencia);
+              parseado = r.parseado;
+              ocrDoDoc = {
+                custo: r.custo, suspeitas: r.suspeitas, avisos: r.avisos, paginas: r.paginas,
+                // LEITURA DEGRADADA NÃO ENTRA NO CACHE: congelá-la seria
+                // definitivo — reenviar ou substituir pelo MESMO arquivo é
+                // recusado por duplicidade, e o analista ficaria sem saída.
+                matriz: r.degradou ? undefined : r.matriz,
+                custoOriginalUsd: r.custo?.usd ?? 0,
+              };
+              if (r.degradou) ocrDoDoc.avisos = [...ocrDoDoc.avisos, "A leitura ficou incompleta e NÃO foi guardada — use \"Reprocessar\" para tentar de novo."];
+              if (r.custo) custoOcrUsd += r.custo.usd;
+            }
           }
         }
         const conv = converterBalancete(parseado);
@@ -1810,7 +1887,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           data: {
             // periodoInicio entra no cache: a herança (nova-versão) reproduz a
             // linha `balancetes` completa sem re-parsear o PDF.
-            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], periodoInicio: parseado.periodoInicio, provas: conv.provas, avisos: conv.avisos, totalLinhas: parseado.linhas.length, ...(ocrDoDoc ? { fonte: "ocr", ocrSuspeitas: ocrDoDoc.suspeitas.length } : {}) } as any,
+            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], periodoInicio: parseado.periodoInicio, periodoAssumido: parseado.periodoAssumido ?? false, provas: conv.provas, avisos: conv.avisos, totalLinhas: parseado.linhas.length, ...(ocrDoDoc ? { fonte: "ocr", ocrSuspeitas: ocrDoDoc.suspeitas.length, ocrPaginas: ocrDoDoc.paginas, ocrCustoUsd: ocrDoDoc.custoOriginalUsd ?? 0, ...(ocrDoDoc.matriz ? { ocrMatriz: ocrDoDoc.matriz, ocrHash: doc.hash } : {}) } : {}) } as any,
             status: "Processado",
             // "verde só com prova": confiança alta SOMENTE com fechamento ao
             // centavo E com todas as linhas fechando na própria equação (P3) —
@@ -1818,7 +1895,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
             confianca: conv.provas.fechamento.ok && conv.provas.linhas.ok && !ocrDoDoc ? 95 : 40,
           },
         });
-        await conferirCompetenciaBalancete(doc, parseado.periodoInicio, parseado.periodoFim);
+        await conferirCompetenciaBalancete(doc, parseado.periodoInicio, parseado.periodoFim, parseado.periodoAssumido);
         console.log(`[process] balancete ${doc.nome}: período ${conv.periodoBP}, ${parseado.linhas.length} linhas, fechamento ${conv.provas.fechamento.ok ? "OK" : `Δ ${conv.provas.fechamento.delta}`}${conv.provas.exercicioEncerrado ? " (exercício encerrado)" : ""}`);
       } catch (err) {
         console.error(`[process] balancete ${doc.nome} falhou:`, err instanceof Error ? err.message : err);
@@ -1835,6 +1912,14 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       // a reconciliação por declarados nos meses (aplicarProvasBalancete).
       validacao = validateFinancialData(structuredBP, structuredDRE, allPeriodos, declaradosDRE);
       aplicarProvasBalancete(validacao, { balancetes });
+    }
+    // COMPETÊNCIA SEM CONFERÊNCIA: um aviso só, com a lista (03/08/2026).
+    if (competenciasAssumidas.length > 0) {
+      alertasTipoDoc.push({
+        tipo: "aviso", area: "Tipo de documento",
+        mensagem: `${competenciasAssumidas.length} documento(s) não declaram o período no conteúdo — a competência informada foi usada como está, sem conferência.`,
+        detalhes: `Confira se a competência bate com o documento (ela define a posição do mês na série): ${competenciasAssumidas.slice(0, 8).join("; ")}${competenciasAssumidas.length > 8 ? "; …" : ""}.`,
+      });
     }
     // Avisos de tipo corrigido pelo conteúdo entram na validação (e persistem adiante)
     validacao.alertas.push(...alertasTipoDoc);
@@ -2978,6 +3063,21 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
         statusBal = statusBal === "error" ? "error" : "warning";
         issuesBal.push(`${pendBal} conta(s) não classificada(s) — classifique ou ignore na auditoria (grátis)`);
       }
+      // PROVENIÊNCIA NA CARA DO ANALISTA (03/08/2026 — caça de regressão): o
+      // documento lido por OCR gravava `fonte:"ocr"` e as contas suspeitas, mas
+      // NADA disso chegava à tela — o cartão saía verde como se a leitura fosse
+      // determinística. Leitura assistida por IA nunca é "ok" silencioso.
+      const linhaBal = (dados as any)?.balancetes?.find?.((b: any) => b.docId === doc.id);
+      const ehOcr = linhaBal?.fonte === "ocr";
+      const suspeitasOcr = (linhaBal?.ocr?.suspeitas?.length ?? 0) as number;
+      if (ehOcr) {
+        statusBal = statusBal === "error" ? "error" : "warning";
+        issuesBal.push(
+          suspeitasOcr > 0
+            ? `Lido por OCR (documento escaneado) — ${suspeitasOcr} conta(s) não fecham a própria equação; confira os valores no documento`
+            : "Lido por OCR (documento escaneado) — números vieram de leitura assistida por IA; confira antes de assinar",
+        );
+      }
       return {
         id: doc.id,
         nome: doc.nome,
@@ -2995,6 +3095,8 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
           balancete: true,
           resultadoAcumulado: fech?.resultadoAcumulado ?? null,
           exercicioEncerrado: provasBal?.exercicioEncerrado === true,
+          fonte: ehOcr ? "ocr" : "deterministica",
+          ocrSuspeitas: ehOcr ? suspeitasOcr : null,
         },
         confianca: doc.confianca ?? null,
       };

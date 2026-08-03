@@ -46,6 +46,15 @@ export interface BalanceteParseado {
   linhas: LinhaBalancete[];
   /** Linha "Total de débitos/créditos" quando o documento declara. */
   totais?: { debito: number; credito: number };
+  /**
+   * true = o período NÃO veio do documento; foi assumido da competência
+   * declarada pelo analista (planilha/OCR sem cabeçalho de período).
+   * OPCIONAL de propósito — quem não preenche continua válido.
+   * Existe para impedir a CONFERÊNCIA CIRCULAR: conferir um período derivado
+   * da competência CONTRA a própria competência concorda sempre e dá a falsa
+   * impressão de que o documento foi checado.
+   */
+  periodoAssumido?: boolean;
   avisos: string[];
 }
 

@@ -53,6 +53,18 @@ export interface ResultadoOCR {
   parseado: BalanceteParseado;
   custo: CustoIA | null;
   paginas: number;
+  /** LEITURA CRUA para cache: as linhas transcritas (código·nome·4 valores) e o
+   *  período literal. Guardar isto é o equivalente ao texto de um PDF legível —
+   *  o reprocesso re-parseia de graça em vez de pagar a visão de novo. */
+  matriz?: { linhas: string[][]; periodo: string | null };
+  /**
+   * A leitura DEGRADOU (lote truncado no limite de tokens, lote que falhou na
+   * chamada, ou nenhuma conta reconhecida)? Leitura degradada NUNCA pode ser
+   * cacheada: o cache a tornaria permanente, e o analista não tem como forçar
+   * releitura pela tela (reenviar o mesmo arquivo é recusado por duplicidade e
+   * substituir por bytes idênticos também). Só se guarda leitura limpa.
+   */
+  degradou: boolean;
   /** Contas que seguem sem fechar a equação após a releitura dirigida. */
   suspeitas: Array<{ classificacao: string; nome: string; anterior: number; debito: number; credito: number; atual: number }>;
   avisos: string[];
@@ -194,6 +206,7 @@ const montarMatriz = (linhas: string[][], periodo: string | null): Matriz =>
 export async function ocrBalancete(buffer: Buffer, competencia?: string | null): Promise<ResultadoOCR> {
   const avisos: string[] = [];
   let inTok = 0, outTok = 0;
+  let degradou = false;
 
   const lotes = await fatiarPDF(buffer, PAGINAS_POR_LOTE);
   // TETO DE PÁGINAS (03/08/2026 — caça de regressão): sem ele, um documento de
@@ -205,7 +218,7 @@ export async function ocrBalancete(buffer: Buffer, competencia?: string | null):
   if (totalPaginas > MAX_PAGINAS) {
     const vazio = parseBalanceteMatriz(montarMatriz([], null));
     return {
-      parseado: vazio, custo: null, paginas: totalPaginas, suspeitas: [],
+      parseado: vazio, custo: null, paginas: totalPaginas, suspeitas: [], degradou: true,
       avisos: [`Documento escaneado com ~${totalPaginas} páginas — acima do limite de ${MAX_PAGINAS} para leitura por OCR (custo e tempo). Envie o balancete em CSV/Excel, ou divida o PDF por período.`],
     };
   }
@@ -214,9 +227,10 @@ export async function ocrBalancete(buffer: Buffer, competencia?: string | null):
     try {
       const r = await transcreverLote(lotes[i], i + 1, lotes.length);
       inTok += r.inTok; outTok += r.outTok;
-      if (r.truncado) avisos.push(`A transcrição do lote ${i + 1}/${lotes.length} bateu no limite de tamanho — pode faltar conta desse trecho.`);
+      if (r.truncado) { degradou = true; avisos.push(`A transcrição do lote ${i + 1}/${lotes.length} bateu no limite de tamanho — pode faltar conta desse trecho.`); }
       tsvs.push(r.texto);
     } catch (e: any) {
+      degradou = true;
       avisos.push(`Lote ${i + 1}/${lotes.length} falhou na leitura (${e?.message ?? e}) — as contas dessas páginas ficaram de fora.`);
     }
   }
@@ -225,7 +239,7 @@ export async function ocrBalancete(buffer: Buffer, competencia?: string | null):
   const custoDe = () => calcCusto(MODELO_OCR, inTok, outTok);
   if (linhas.length === 0) {
     const vazio = parseBalanceteMatriz(montarMatriz([], periodo));
-    return { parseado: vazio, custo: custoDe(), paginas: lotes.length * PAGINAS_POR_LOTE, suspeitas: [], avisos: [...avisos, "A leitura não reconheceu nenhuma linha de conta."] };
+    return { parseado: vazio, custo: custoDe(), paginas: lotes.length * PAGINAS_POR_LOTE, suspeitas: [], degradou: true, avisos: [...avisos, "A leitura não reconheceu nenhuma linha de conta."] };
   }
 
   // ── AUDITORIA ARITMÉTICA + RELEITURA DIRIGIDA ──────────────────────────────
@@ -263,7 +277,10 @@ export async function ocrBalancete(buffer: Buffer, competencia?: string | null):
   }
   avisos.push(`Números lidos por OCR (${p.linhas.length} contas em ${lotes.length * PAGINAS_POR_LOTE} páginas) — a extração é assistida por IA e as provas de fechamento valem como conferência.`);
 
-  return { parseado: p, custo: custoDe(), paginas: lotes.length * PAGINAS_POR_LOTE, suspeitas, avisos };
+  return {
+    parseado: p, custo: custoDe(), paginas: lotes.length * PAGINAS_POR_LOTE, suspeitas, avisos, degradou,
+    matriz: { linhas: linhasAtuais, periodo },
+  };
 }
 
 
@@ -365,6 +382,18 @@ function consertarPelaArvore(linhas: string[][], periodo: string | null): { linh
     consertos.push(`${pai.classificacao} ${pai.nome}`);
   }
   return { linhas: saida, consertos };
+}
+
+/**
+ * Re-parseia uma leitura de OCR já feita (cache) — sem nenhuma chamada de IA.
+ * Mesmo caminho do parse fresco, então dicionário/modelos novos são aplicados
+ * normalmente no reprocesso; o que não se repete é a transcrição paga.
+ */
+export function parseDaMatrizOcr(
+  cache: { linhas: string[][]; periodo: string | null },
+  competencia?: string | null,
+): BalanceteParseado {
+  return parseBalanceteMatriz(montarMatriz(cache.linhas ?? [], cache.periodo ?? null), competenciaComoPeriodo(competencia));
 }
 
 /** Competência do documento como período de fallback (a planilha faz igual). */

@@ -8,7 +8,8 @@ import { describe, it, expect } from "vitest";
 import { parseBalanceteTexto } from "./balancete-parser";
 import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal } from "./balancete-conversao";
 import { mapAccountToBPGroup } from "./account-mapper";
-import { parseBalanceteTabular, pareceBalanceteTabular, csvParaMatriz, ehArquivoTabular } from "./balancete-tabular";
+import { parseBalanceteTabular, pareceBalanceteTabular, csvParaMatriz, ehArquivoTabular, parseBalanceteMatriz } from "./balancete-tabular";
+import { parseDaMatrizOcr } from "./balancete-ocr";
 
 // ── fixtures sintéticas ──────────────────────────────────────────────────────
 
@@ -798,5 +799,70 @@ describe("regressões caçadas na revisão da sessão", () => {
     const p = parseBalanceteTexto(doc);
     expect(p.linhas[0].saldoAnterior).toBe(8170427.68);
     expect(p.avisos.join(" ")).toMatch(/colado ao nome/i);
+  });
+});
+
+// ── Backlog da caça: os 3 itens de maior risco (03/08/2026) ─────────────────
+describe("período assumido não pode virar conferência circular", () => {
+  const CAB = ["Classificação", "Nome da conta contábil", "Saldo anterior", "Débito", "Crédito", "Saldo atual"];
+  const linhas = [
+    ["1", "ATIVO", "900,00", "700,00", "100,00", "1.500,00"],
+    ["1.1", "Caixa", "900,00", "700,00", "100,00", "1.500,00"],
+    ["2", "PASSIVO", "800,00", "50,00", "450,00", "1.200,00"],
+    ["2.1", "Fornecedores", "500,00", "50,00", "450,00", "900,00"],
+    ["2.2", "Capital", "300,00", "0,00", "0,00", "300,00"],
+    ["3", "RECEITAS", "500,00", "0,00", "500,00", "1.000,00"],
+    ["3.1", "Vendas", "500,00", "0,00", "500,00", "1.000,00"],
+    ["4", "DESPESAS", "400,00", "300,00", "0,00", "700,00"],
+    ["4.1", "Aluguel", "400,00", "300,00", "0,00", "700,00"],
+  ];
+
+  it("planilha SEM período: marca periodoAssumido (o sistema não conferiu nada)", () => {
+    const p = parseBalanceteMatriz([[""], CAB, ...linhas], { inicio: "01/06/2026", fim: "30/06/2026" });
+    expect(p.periodoAssumido).toBe(true);
+    expect(p.periodoFim).toBe("30/06/2026");
+    expect(p.avisos.join(" ")).toMatch(/ninguém conferiu/i);
+  });
+
+  it("planilha COM período no cabeçalho: NÃO é assumido — a conferência vale", () => {
+    const p = parseBalanceteMatriz([["Balancete de 01/04/2026 a 30/04/2026"], CAB, ...linhas], { inicio: "01/06/2026", fim: "30/06/2026" });
+    expect(p.periodoAssumido).toBe(false);
+    expect(p.periodoFim).toBe("30/04/2026"); // o documento manda sobre a competência
+  });
+
+  it("sem fallback e sem cabeçalho: segue sem período, sem falsa conferência", () => {
+    const p = parseBalanceteMatriz([[""], CAB, ...linhas]);
+    expect(p.periodoAssumido).toBe(false);
+    expect(p.periodoFim).toBeNull();
+  });
+});
+
+describe("cache do OCR: re-parse sem repagar a leitura", () => {
+  const cache = {
+    periodo: "Período: 01/07/2015 a 31/07/2015",
+    linhas: [
+      ["1", "ATIVO", "0.00", "1000000.00", "0.00", "1000000.00"],
+      ["11", "CAIXA", "0.00", "1000000.00", "0.00", "1000000.00"],
+      ["2", "PASSIVO", "0.00", "0.00", "700000.00", "700000.00"],
+      ["21", "CAPITAL", "0.00", "0.00", "700000.00", "700000.00"],
+      ["3", "RECEITAS", "0.00", "0.00", "500000.00", "500000.00"],
+      ["31", "VENDAS", "0.00", "0.00", "500000.00", "500000.00"],
+      ["4", "DESPESAS", "0.00", "200000.00", "0.00", "200000.00"],
+      ["41", "ALUGUEL", "0.00", "200000.00", "0.00", "200000.00"],
+    ],
+  };
+
+  it("reproduz a MESMA extração da leitura original (sem chamar IA)", () => {
+    const p = parseDaMatrizOcr(cache, "2015-07");
+    expect(p.linhas).toHaveLength(8);
+    expect(p.periodoFim).toBe("31/07/2015");
+    const c = converterBalancete(p);
+    expect(c.provas.fechamento.ok).toBe(true);
+    expect(c.provas.linhas.ok).toBe(true);
+  });
+
+  it("cache vazio não finge extração", () => {
+    const p = parseDaMatrizOcr({ linhas: [], periodo: null }, "2015-07");
+    expect(p.linhas).toHaveLength(0);
   });
 });

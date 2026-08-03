@@ -164,18 +164,20 @@ export function pareceBalanceteTabular(m: Matriz): { balancete: boolean; evidenc
 export function parseBalanceteMatriz(m: Matriz, periodoFallback?: { inicio: string; fim: string } | null): BalanceteParseado {
   const avisos: string[] = [];
   let { inicio, fim } = periodoDaMatriz(m);
+  let periodoAssumido = false;
   if (!fim && periodoFallback) {
     // A planilha não declara o período (EXTRAMED) — vale a COMPETÊNCIA do
     // documento, informada no upload/curadoria. Transparência via aviso.
     ({ inicio, fim } = periodoFallback);
-    avisos.push(`Período assumido pela competência do documento (${inicio} a ${fim}) — a planilha não o declara.`);
+    periodoAssumido = true;
+    avisos.push(`Período assumido pela competência do documento (${inicio} a ${fim}) — a planilha não o declara; ninguém conferiu essa competência contra o conteúdo.`);
   }
   if (!fim) avisos.push("Período do cabeçalho não identificado.");
 
   const achado = acharColunas(m);
   if (!achado) {
     avisos.push("Cabeçalho de balancete não encontrado na planilha (esperado: Classificação · Saldo anterior · Débito · Crédito · Saldo atual).");
-    return { periodoInicio: inicio, periodoFim: fim, ordemColunas: "ant-d-c-atual", linhas: [], avisos };
+    return { periodoInicio: inicio, periodoFim: fim, ordemColunas: "ant-d-c-atual", linhas: [], periodoAssumido, avisos };
   }
 
   interface Crua { classificacao: string; nome: string; sintetica?: boolean; ant: ReturnType<typeof valorPtBr>; deb: ReturnType<typeof valorPtBr>; cred: ReturnType<typeof valorPtBr>; atual: ReturnType<typeof valorPtBr> }
@@ -281,7 +283,7 @@ export function parseBalanceteMatriz(m: Matriz, periodoFallback?: { inicio: stri
   }));
   if (linhas.length === 0) avisos.push("Nenhuma linha de conta encontrada abaixo do cabeçalho.");
 
-  return { periodoInicio: inicio, periodoFim: fim, ordemColunas: "ant-d-c-atual", linhas, totais, avisos };
+  return { periodoInicio: inicio, periodoFim: fim, ordemColunas: "ant-d-c-atual", linhas, totais, periodoAssumido, avisos };
 }
 
 // ── leitura dos arquivos ─────────────────────────────────────────────────────
