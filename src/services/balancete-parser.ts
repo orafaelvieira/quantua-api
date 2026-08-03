@@ -206,7 +206,19 @@ export function parseBalanceteTexto(texto: string): BalanceteParseado {
       const m = valores[0][0].match(/^(\d{1,3})((?:\.\d{3})*,\d{2}(?:\s?[DC])?)$/);
       for (let corte = 1; m && corte < m[1].length; corte++) {
         const alternativa = [parseToken(m[1].slice(corte) + m[2]), ...tokens.slice(1)];
-        if (equacaoFecha(alternativa)) { tokens = alternativa; inicioValores += corte; break; }
+        if (!equacaoFecha(alternativa)) continue;
+        // A LINHA TODA ZERADA NÃO É PROVA (03/08/2026 — caça de regressão):
+        // com débito e crédito nulos, "0 + 0 − 0 = 0" fecha para QUALQUER corte,
+        // e o saldo do documento (ex.: 4.711.200,00) seria apagado em silêncio.
+        // Sem poder discriminante, mantém a leitura original.
+        const semMovimento = alternativa.slice(1).every((t) => Math.abs(t.valor) <= 0.005);
+        if (semMovimento) continue;
+        avisos.push(
+          `Valor colado ao nome da conta: "${valores[0][0]}" foi lido como ${m[1].slice(corte)}${m[2]} — é a única leitura que fecha a equação da linha. Confira no documento.`,
+        );
+        tokens = alternativa;
+        inicioValores += corte;
+        break;
       }
     }
 

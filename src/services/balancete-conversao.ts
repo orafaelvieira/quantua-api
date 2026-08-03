@@ -337,6 +337,18 @@ export function derivarDREMensal(dados: {
     if (b?.erro || !b?.periodo) continue;
     const fim = dataDe(String(b.periodo));
     if (!fim) continue;
+    // EXERCÍCIO ENCERRADO NÃO É YTD (03/08/2026 — caça de regressão). No mês de
+    // encerramento a apuração ZERA as contas de resultado e a conversão passa a
+    // usar o MOVIMENTO da janela (ver `paraDREItem`, ramo `encerrado`): o valor
+    // já é do período, não acumulado. Subtrair o YTD do mês anterior dava
+    // resultado NEGATIVO na tela (dezembro 1.000 − novembro 11.000 = −10.000)
+    // com o selo dizendo "provado ao centavo".
+    if (b?.provas?.exercicioEncerrado === true) {
+      const inicioDecl = b.periodoInicio ? dataDe(String(b.periodoInicio)) : null;
+      const desdeDecl = b.periodoInicio ? String(b.periodoInicio) : `01/01/${fim.getFullYear()}`;
+      mesesBalancete.set(String(b.periodo), { desde: desdeDecl, inicio: inicioDecl ?? dataDe(`01/01/${fim.getFullYear()}`)!, fim, acumula: false });
+      continue;
+    }
     const desde = `01/01/${fim.getFullYear()}`;
     const inicio = dataDe(desde)!;
     mesesBalancete.set(String(b.periodo), { desde, inicio, fim, acumula: fim.getMonth() > 0 });

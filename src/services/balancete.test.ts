@@ -750,3 +750,53 @@ describe("derivarDREMensal", () => {
     })!;
     expect(Object.keys(d.periodos)).toEqual(["30/06/2026"]); // um só, sem eco da união
   });
+
+// ── REGRESSÕES DA SESSÃO (03/08/2026) — cada uma travada no ponto de origem ──
+describe("regressões caçadas na revisão da sessão", () => {
+  const bal = (periodo: string, extra: Record<string, unknown> = {}) => ({ periodo, provas: {}, ...extra });
+
+  it("mês de ENCERRAMENTO não é acumulado — subtrair YTD dava receita NEGATIVA", () => {
+    // Dezembro de encerramento: a apuração zera o resultado e a conversão passa
+    // a usar o MOVIMENTO da janela — o valor já é do mês, não YTD.
+    const d = derivarDREMensal({
+      balancetes: [
+        bal("30/11/2026"),
+        bal("31/12/2026", { periodoInicio: "01/12/2026", provas: { exercicioEncerrado: true } }),
+      ],
+      dre: [{ conta: "Receita Bruta", valores: { "30/11/2026": 11000, "31/12/2026": 1000 } }],
+    }) ?? { periodos: {}, valores: {} };
+    // dezembro NÃO entra como acumulado → nada é derivado (o documento já é do mês)
+    expect(d.periodos["31/12/2026"]).toBeUndefined();
+    expect(d.valores["Receita Bruta"]?.["31/12/2026"]).toBeUndefined();
+  });
+
+  it("mês normal segue derivando o resultado do mês (não quebrei o caso bom)", () => {
+    const d = derivarDREMensal({
+      balancetes: [bal("31/01/2026"), bal("28/02/2026")],
+      dre: [{ conta: "Receita Bruta", valores: { "31/01/2026": 100, "28/02/2026": 250 } }],
+    })!;
+    expect(d.valores["Receita Bruta"]["28/02/2026"]).toBe(150);
+  });
+
+  it("valor colado: linha TODA zerada não autoriza corte (0+0−0=0 fecha sempre)", () => {
+    const doc = `
+                    Balancete Consolidado de 01/04/2026 a 30/04/2026
+ Conta  Classificação   Nome da conta contábil     Saldo anterior    Débito     Crédito    Saldo atual
+  10017902.1.2.01.032  PARTICIPACAO EM COLIGADA 4711200.000,00        0,00        0,00        0,00
+`;
+    const l = parseBalanceteTexto(doc).linhas[0];
+    // sem poder discriminante, mantém a leitura original em vez de apagar o saldo
+    expect(l.saldoAnterior).not.toBe(0);
+  });
+
+  it("valor colado com movimento REAL segue sendo corrigido — e agora avisa", () => {
+    const doc = `
+                    Balancete Consolidado de 01/04/2026 a 30/04/2026
+ Conta  Classificação   Nome da conta contábil     Saldo anterior    Débito     Crédito    Saldo atual
+  10017902.1.2.01.032  Empréstimo CEF - 27105318.170.427,68        0,00   105.797,46   8.276.225,14
+`;
+    const p = parseBalanceteTexto(doc);
+    expect(p.linhas[0].saldoAnterior).toBe(8170427.68);
+    expect(p.avisos.join(" ")).toMatch(/colado ao nome/i);
+  });
+});

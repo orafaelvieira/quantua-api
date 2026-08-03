@@ -81,19 +81,28 @@ export async function pdfEscaneado(buffer: Buffer, linhasDoTexto: number): Promi
   try {
     const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf.mjs");
     const doc = await pdfjs.getDocument({ data: new Uint8Array(buffer), useSystemFonts: true }).promise;
-    let comImagem = 0;
+    let escaneadas = 0;
     const amostra = Math.min(doc.numPages, 3);
     for (let n = 1; n <= amostra; n++) {
       const page = await doc.getPage(n);
+      // PÁGINA ESCANEADA = POUCO TEXTO (03/08/2026 — caça de regressão). O teste
+      // "tem imagem" sozinho disparava OCR pago por causa de um LOGOTIPO no
+      // cabeçalho de um PDF de texto perfeitamente legível. Numa página
+      // escaneada de verdade o texto é quase nada (só carimbo/rodapé); numa
+      // página de texto com logo há centenas de caracteres.
+      const txt = await page.getTextContent();
+      const chars = txt.items.reduce((s: number, i: any) => s + String(i?.str ?? "").trim().length, 0);
       const ops = await page.getOperatorList();
-      if (ops.fnArray.some((f: number) => f === pdfjs.OPS.paintImageXObject || f === pdfjs.OPS.paintJpegXObject || f === pdfjs.OPS.paintInlineImageXObject)) comImagem++;
+      const temImagem = ops.fnArray.some((f: number) => f === pdfjs.OPS.paintImageXObject || f === pdfjs.OPS.paintJpegXObject || f === pdfjs.OPS.paintInlineImageXObject);
+      if (temImagem && chars < 600) escaneadas++;
     }
+    const escaneado = escaneadas > 0;
     return {
-      escaneado: comImagem > 0,
+      escaneado,
       paginas: doc.numPages,
-      motivo: comImagem > 0
-        ? `${comImagem}/${amostra} páginas iniciais são imagem e o texto não rendeu contas (o texto presente costuma ser carimbo de assinatura digital)`
-        : "PDF sem imagem nas páginas iniciais",
+      motivo: escaneado
+        ? `${escaneadas}/${amostra} páginas iniciais são imagem com texto irrelevante (carimbo/rodapé) e o parse não rendeu contas`
+        : "as páginas têm texto de verdade — o problema não é digitalização, é o layout não reconhecido",
     };
   } catch (e: any) {
     return { escaneado: false, paginas: 0, motivo: `não foi possível inspecionar o PDF: ${e?.message ?? e}` };
@@ -187,6 +196,19 @@ export async function ocrBalancete(buffer: Buffer, competencia?: string | null):
   let inTok = 0, outTok = 0;
 
   const lotes = await fatiarPDF(buffer, PAGINAS_POR_LOTE);
+  // TETO DE PÁGINAS (03/08/2026 — caça de regressão): sem ele, um documento de
+  // 200 páginas viraria ~100 chamadas em série (mais de uma hora e vários
+  // dólares), e a instância única do Cloud Run ficaria presa em "Extraindo".
+  // Acima do teto, a extração falha com instrução clara em vez de queimar tudo.
+  const MAX_PAGINAS = 40;
+  const totalPaginas = lotes.length * PAGINAS_POR_LOTE;
+  if (totalPaginas > MAX_PAGINAS) {
+    const vazio = parseBalanceteMatriz(montarMatriz([], null));
+    return {
+      parseado: vazio, custo: null, paginas: totalPaginas, suspeitas: [],
+      avisos: [`Documento escaneado com ~${totalPaginas} páginas — acima do limite de ${MAX_PAGINAS} para leitura por OCR (custo e tempo). Envie o balancete em CSV/Excel, ou divida o PDF por período.`],
+    };
+  }
   const tsvs: string[] = [];
   for (let i = 0; i < lotes.length; i++) {
     try {

@@ -1133,7 +1133,11 @@ function aplicarProvasBalancete(
   const bals = Array.isArray(dados?.balancetes) ? (dados.balancetes as Array<Record<string, any>>) : [];
   if (bals.length === 0) return;
   const fmtBR = (n: number): string => n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // `todasOk` governa a RECONCILIAÇÃO (P2: Ativo − Passivo = resultado), que é o
+  // que o portão de geração lê. `p3Falhou` governa só o SELO: linha incoerente
+  // tira o verde e vira alerta de erro, sem travar o trabalho do analista.
   let todasOk = true;
+  let p3Falhou = false;
   let temProva = false;
   for (const b of bals) {
     const f = b.provas?.fechamento;
@@ -1145,7 +1149,14 @@ function aplicarProvasBalancete(
     // Ausente em extração ANTIGA (undefined) — aí só P2 vale, como antes.
     const lin = b.provas?.linhas;
     if (lin && !lin.ok) {
-      todasOk = false;
+      // P3 NÃO ENTRA NA RECONCILIAÇÃO DA DRE (03/08/2026 — caça de regressão).
+      // Ao marcar `todasOk = false` aqui, a falha de P3 virava
+      // `reconciliacaoDRE.ok = false`, e o portão de geração traduzia isso como
+      // "a DRE diverge dos subtotais declarados (Receita Líquida / Lucro Bruto
+      // / Lucro Líquido)" — frase que não existe no mundo de um IBR só de
+      // balancete — e TRAVAVA o botão Gerar. O alerta de ERRO abaixo já tira o
+      // selo verde, que era a intenção declarada; bloquear a geração não era.
+      p3Falhou = true;
       const ex = lin.incoerentes?.[0];
       validacao.alertas.push({
         tipo: "erro", area: "Balancete",
@@ -1165,13 +1176,25 @@ function aplicarProvasBalancete(
   }
   if (temProva && todasOk) {
     validacao.reconciliacaoDRE = { verificada: true, ok: validacao.reconciliacaoDRE.ok };
-    const comP3 = bals.every((b) => b.provas?.linhas?.ok);
-    validacao.alertas.push({
-      tipo: "info", area: "Balancete",
-      mensagem: comP3
-        ? "Fechamento do(s) balancete(s) provado ao centavo: Ativo − Passivo = resultado acumulado do período, e cada conta fecha na própria equação (saldo anterior + débito − crédito = saldo atual) — a DRE reconcilia com o balanço por construção."
-        : "Fechamento do(s) balancete(s) provado ao centavo: Ativo − Passivo = resultado acumulado do período — a DRE reconcilia com o balanço por construção.",
-    });
+    // A nota de PROVA PLENA só sai quando P3 passou E nenhum balancete veio de
+    // OCR: leitura por visão computacional não é leitura determinística e não
+    // pode se apresentar como tal (caça de regressão, 03/08/2026).
+    const comP3 = !p3Falhou && bals.every((b) => b.provas?.linhas?.ok);
+    const temOcr = bals.some((b) => b.fonte === "ocr");
+    if (temOcr) {
+      const suspeitas = bals.reduce((s, b) => s + ((b.ocr as any)?.suspeitas?.length ?? 0), 0);
+      validacao.alertas.push({
+        tipo: "aviso", area: "Balancete",
+        mensagem: `Balancete lido por OCR (documento escaneado): os números vieram de leitura assistida por IA, não de extração determinística.${suspeitas > 0 ? ` ${suspeitas} conta(s) seguem sem fechar a própria equação.` : ""} O fechamento confere, mas confira os valores no documento antes de assinar.`,
+      });
+    } else {
+      validacao.alertas.push({
+        tipo: "info", area: "Balancete",
+        mensagem: comP3
+          ? "Fechamento do(s) balancete(s) provado ao centavo: Ativo − Passivo = resultado acumulado do período, e cada conta fecha na própria equação (saldo anterior + débito − crédito = saldo atual) — a DRE reconcilia com o balanço por construção."
+          : "Fechamento do(s) balancete(s) provado ao centavo: Ativo − Passivo = resultado acumulado do período — a DRE reconcilia com o balanço por construção.",
+      });
+    }
   } else {
     validacao.reconciliacaoDRE = { verificada: true, ok: false };
   }
@@ -2681,6 +2704,12 @@ router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Respons
     where: { id },
     data: { dadosEstruturados: dados as any },
   });
+  // A resposta desta rota SUBSTITUI o estado da tela, então precisa carregar os
+  // mesmos derivados de leitura do GET (03/08/2026 — caça de regressão): sem
+  // `dreMensal`, "Recalcular indicadores" fazia a DRE voltar do resultado do
+  // MÊS para o acumulado, sem o analista pedir nem entender por quê.
+  try { mesclarArvoresBalancete(dados as any); } catch { /* best-effort */ }
+  try { (dados as any).dreMensal = derivarDREMensal(dados as any); } catch { /* best-effort */ }
   res.json(dados);
 });
 
