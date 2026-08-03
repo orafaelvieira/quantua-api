@@ -18,6 +18,49 @@ function arquivos(dir: string, prof = 0): string[] {
   return out;
 }
 const f = (n: number) => n.toFixed(2);
+
+/**
+ * A ASSINATURA TEM DE ENXERGAR O QUE A MUDANÇA MEXE (03/08/2026 — a revisão
+ * adversarial barrou o plano dos grupos-espelho justamente aqui). Antes, a
+ * assinatura só gravava fechamento + P3: uma mudança que reorganiza a ÁRVORE
+ * DA DRE, troca `exercicioEncerrado` (que muda a DRE de saldo para movimento)
+ * ou mexe na linha "Resultado do Período" do PL passava com assinatura
+ * byte-idêntica. "Não mudou, logo nada regrediu" só vale se a régua mede.
+ */
+function achatar(itens: any[], prof = 0): string[] {
+  const out: string[] = [];
+  for (const i of itens ?? []) {
+    out.push(`${"·".repeat(prof)}${String(i?.nome ?? "?").trim()}=${f(Number(i?.valor ?? 0))}`);
+    if (Array.isArray(i?.filhos) && i.filhos.length) out.push(...achatar(i.filhos, prof + 1));
+  }
+  return out;
+}
+/** Composição da DRE por período: nome, valor e hierarquia de cada seção. */
+function assinaturaDRE(c: any): string {
+  const arv = c?.arvoreDRE ?? {};
+  const partes: string[] = [];
+  for (const periodo of Object.keys(arv).sort()) {
+    const v: any = (arv as any)[periodo];
+    partes.push(`${periodo}[${achatar(Array.isArray(v) ? v : (v?.secoes ?? [])).join(";")}]`);
+  }
+  return `dre{${partes.join("|")}}`;
+}
+/** Composição do BP por período (inclui a linha de Resultado do Período no PL). */
+function assinaturaBP(c: any): string {
+  const arv = c?.arvoreBP ?? {};
+  const partes: string[] = [];
+  for (const periodo of Object.keys(arv).sort()) {
+    const v: any = (arv as any)[periodo];
+    // ArvoreOriginalBP é Record<periodo, { grupos: Record<nomeGrupo, BPN3Item[]> }>:
+    // sem descer em `.grupos` a assinatura virava a constante "grupos=0.00" e
+    // dois balanços completamente diferentes davam a MESMA string.
+    const grupos = Array.isArray(v)
+      ? v
+      : Object.entries((v as any)?.grupos ?? {}).map(([g, itens]) => ({ nome: g, valor: 0, filhos: itens }));
+    partes.push(`${periodo}[${achatar(grupos as any[]).join(";")}]`);
+  }
+  return `bp{${partes.join("|")}}`;
+}
 async function main() {
   const linhas: string[] = [];
   const todos = RAIZES.flatMap((r) => arquivos(r)).sort();
@@ -33,7 +76,7 @@ async function main() {
         if (p.linhas.length === 0) { linhas.push(`${nome}|SEM_LINHAS`); continue; }
         const c: any = converterBalancete(p);
         const pr = c.provas;
-        linhas.push(`${nome}|${p.linhas.length}|${c.periodoBP}|${f(pr.fechamento.ativo)}|${f(pr.fechamento.passivo)}|${f(pr.fechamento.resultadoAcumulado)}|${f(pr.fechamento.delta)}|${pr.linhas.coerentes}/${pr.linhas.total}`);
+        linhas.push(`${nome}|${p.linhas.length}|${c.periodoBP}|${f(pr.fechamento.ativo)}|${f(pr.fechamento.passivo)}|${f(pr.fechamento.resultadoAcumulado)}|${f(pr.fechamento.delta)}|${pr.linhas.coerentes}/${pr.linhas.total}|${assinaturaDRE(c)}|${assinaturaBP(c)}|enc=${c.provas?.exercicioEncerrado === true ? 1 : 0}`);
       } catch (e: any) { linhas.push(`${nome}|ERRO:${e?.message ?? e}`); }
     }
   }

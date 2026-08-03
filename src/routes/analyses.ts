@@ -1126,7 +1126,7 @@ const periodosBalanceteDe = (dados: unknown): string[] => {
 // conta como VERIFICADA ("verde só com prova" — aqui a prova é matemática, não
 // declarativa); prova falhando ⇒ erro que derruba o verde. Chamado no /process,
 // no /refold e no GET /validacao (todos recalculam a validação do zero).
-function aplicarProvasBalancete(
+export function aplicarProvasBalancete(
   validacao: ReturnType<typeof validateFinancialData>,
   dados: { balancetes?: unknown },
 ): void {
@@ -1164,6 +1164,18 @@ function aplicarProvasBalancete(
         detalhes: ex
           ? `Ex.: "${ex.nome}" — ${fmtBR(ex.anterior)} + ${fmtBR(ex.debito)} − ${fmtBR(ex.credito)} ≠ ${fmtBR(ex.atual)}. Isso indica valor lido errado em alguma coluna (o fechamento patrimonial olha só o saldo atual e não pega esse tipo de erro) — reprocesse e, se persistir, envie o balancete em CSV/Excel.`
           : undefined,
+      });
+    }
+    // GRUPO EXCLUÍDO DAS DEMONSTRAÇÕES — AVISO ANTES DO `continue` (03/08/2026).
+    // O espelho de centro de custos só é detectado quando o fechamento PASSA;
+    // se este bloco viesse depois do `if (f.ok) continue` abaixo, o aviso nunca
+    // apareceria justamente no caso em que dinheiro sai da DRE com selo bom.
+    // "O sistema nunca descarta dinheiro em silêncio."
+    for (const g of (b as any).gruposExcluidos ?? []) {
+      validacao.alertas.push({
+        tipo: "aviso", area: "Balancete",
+        mensagem: `${b.nome}: o grupo "${g.nome}" (${g.contas} contas, ${fmtBR(g.movimento)} de movimento) ficou FORA da DRE — é um circuito fechado, não uma demonstração.`,
+        detalhes: `O saldo dessa raiz é zero no início e no fim do período e as contas dentro dela se cancelam ao centavo: é espelho gerencial de centro de custos. Incluí-la mostraria o custo dobrado e transformaria a contrapartida (transferências) em receita. Nenhum total mudou — o que saiu soma zero —, mas confira no documento se essa leitura corresponde ao plano de contas do cliente.`,
       });
     }
     if (f.ok) continue;
@@ -1763,6 +1775,13 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
             // o push da extração herdada (usado pela "Nova versão") não levava
             // `fonte`, então um IBR com balancete escaneado voltava a exibir
             // cartão verde e — pior — o selo emitia a nota de PROVA PLENA para
+            // GRUPO EXCLUÍDO SOBREVIVE À HERANÇA (03/08/2026 — a revisão pegou):
+            // na "Nova versão" o balancete idêntico entra por aqui SEM reconverter.
+            // Sem repassar o campo, o alerta sumia e a raiz-espelho saía da DRE em
+            // silêncio, com selo verde e sem rastro nenhum na tela — permanentemente,
+            // porque esta linha é a que fica persistida. Mesma armadilha que o campo
+            // `fonte` caiu logo abaixo.
+            gruposExcluidos: (cacheBal as any).gruposExcluidos ?? [],
             // número lido por IA. Atenção: no cache, `ocrSuspeitas` é um NÚMERO
             // (não array), e o consumidor espera o array em `ocr.suspeitas`.
             ...(cacheBal.fonte === "ocr"
@@ -1878,7 +1897,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         arvoresBalancete.push({ docId: doc.id, nome: doc.nome, periodo: conv.periodoBP, arvoreBP: conv.arvoreBP, arvoreDRE: conv.arvoreDRE });
         balancetes.push({
           docId: doc.id, nome: doc.nome, periodo: conv.periodoBP, periodoInicio: parseado.periodoInicio,
-          provas: conv.provas, avisos: [...conv.avisos, ...(ocrDoDoc?.avisos ?? [])], linhas: parseado.linhas.length,
+          provas: conv.provas, gruposExcluidos: conv.gruposExcluidos, avisos: [...conv.avisos, ...(ocrDoDoc?.avisos ?? [])], linhas: parseado.linhas.length,
           // Proveniência da leitura: OCR é assistido por IA e a tela precisa
           // dizer isso ao analista (nunca passa por leitura determinística).
           ...(ocrDoDoc ? { fonte: "ocr", ocr: { paginas: ocrDoDoc.paginas, suspeitas: ocrDoDoc.suspeitas, naoFecham: ocrDoDoc.naoFecham, custoUsd: ocrDoDoc.custo?.usd ?? 0 } } : {}),
@@ -1888,7 +1907,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           data: {
             // periodoInicio entra no cache: a herança (nova-versão) reproduz a
             // linha `balancetes` completa sem re-parsear o PDF.
-            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], periodoInicio: parseado.periodoInicio, periodoAssumido: parseado.periodoAssumido ?? false, provas: conv.provas, avisos: conv.avisos, totalLinhas: parseado.linhas.length, ...(ocrDoDoc ? { fonte: "ocr", ocrSuspeitas: ocrDoDoc.naoFecham, ocrPaginas: ocrDoDoc.paginas, ocrCustoUsd: ocrDoDoc.custoOriginalUsd ?? 0, ...(ocrDoDoc.matriz ? { ocrMatriz: ocrDoDoc.matriz, ocrHash: doc.hash } : {}) } : {}) } as any,
+            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], periodoInicio: parseado.periodoInicio, periodoAssumido: parseado.periodoAssumido ?? false, provas: conv.provas, gruposExcluidos: conv.gruposExcluidos, avisos: conv.avisos, totalLinhas: parseado.linhas.length, ...(ocrDoDoc ? { fonte: "ocr", ocrSuspeitas: ocrDoDoc.naoFecham, ocrPaginas: ocrDoDoc.paginas, ocrCustoUsd: ocrDoDoc.custoOriginalUsd ?? 0, ...(ocrDoDoc.matriz ? { ocrMatriz: ocrDoDoc.matriz, ocrHash: doc.hash } : {}) } : {}) } as any,
             status: "Processado",
             // "verde só com prova": confiança alta SOMENTE com fechamento ao
             // centavo E com todas as linhas fechando na própria equação (P3) —

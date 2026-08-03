@@ -64,12 +64,24 @@ export interface ConversaoBalancete {
   arvoreDRE: ArvoreOriginalDRE;
   resultadoAcumulado: number;
   provas: ProvasBalancete;
+  /**
+   * Raízes de CIRCUITO FECHADO deixadas de fora das demonstrações (espelho de
+   * centro de custos). Estruturado, não só texto: a tela precisa mostrar QUE
+   * dinheiro saiu, e um aviso perdido num array que ninguém lê não é auditoria.
+   */
+  gruposExcluidos: Array<{ nome: string; contas: number; movimento: number }>;
   avisos: string[];
 }
 
 // ── classificação dos grupos de nível 1 ──────────────────────────────────────
 
-export type TipoGrupo = "ativo" | "passivo" | "resultado" | "apuracao";
+/**
+ * "espelho" = raiz de CIRCUITO FECHADO (centro de custos que devolve tudo por
+ * uma contrapartida). Não é ativo, não é passivo e não é demonstração: fica
+ * fora do BP e da DRE. Detectado por ARITMÉTICA em converterBalancete, nunca
+ * por nome — ver o bloco de quatro condições lá.
+ */
+export type TipoGrupo = "ativo" | "passivo" | "resultado" | "apuracao" | "espelho";
 
 const normalizar = (s: string): string =>
   s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
@@ -401,11 +413,67 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
   const assinadoBP = (l: LinhaBalancete, ladoAtivo: boolean, campo: "saldoAtual" | "saldoAnterior"): number =>
     (naturezaDe(l, campo) === (ladoAtivo ? "D" : "C") ? 1 : -1) * Math.abs(l[campo]);
 
+  // ── GRUPO-ESPELHO: raiz que é CIRCUITO FECHADO, não demonstração ──────────
+  // Caso Budel (03/08/2026). O plano de contas traz uma raiz "4 CENTRO DE
+  // CUSTOS" que espelha os custos operacionais e devolve tudo por uma
+  // contrapartida ("TRANSFERÊNCIAS"). O total da raiz é zero nos dois retratos,
+  // então ela não move resultado nenhum — mas, foldada, DOBRA o custo da DRE e
+  // inventa uma receita do tamanho da contrapartida: no Budel, R$ 34.497.458,97
+  // apareceram como "Outras Receitas Operacionais" (a verdade do grupo 33 é
+  // R$ 7.015,20). O fechamento PASSAVA e a análise mentia.
+  //
+  // A regra sai da ARITMÉTICA, nunca do nome — "TRANSFERÊNCIAS" varia por
+  // sistema contábil. São QUATRO condições, e cada uma existe por um
+  // contraexemplo medido em documento real:
+  //   1) a raiz zera no saldo ATUAL e no ANTERIOR;
+  //   2) há movimento de verdade dentro dela — senão um período sem lançamento
+  //      zeraria tudo e o grupo inteiro sumiria;
+  //   3) restam ≥2 contas VIVAS **que carregam o movimento do grupo** — o saldo
+  //      vivo tem de ser fração material do que passou por lá. É isto que separa
+  //      espelho de EXERCÍCIO ENCERRADO. "Ter 2 contas vivas" sozinho NÃO basta:
+  //      a revisão adversarial mediu que em "Balancete de encerramento 2023.xlsx"
+  //      bastaria uma reclassificação de R$ 0,06 entre duas contas irmãs para a
+  //      raiz "3 CONTAS DE RESULTADO" (544 folhas, R$ 834 milhões de DRE) virar
+  //      "espelho" e a DRE inteira sumir COM SELO VERDE. No encerramento as 542
+  //      folhas mortas carregam todo o movimento e as vivas carregam centavos
+  //      (razão ~7e-11); no espelho as folhas vivas SÃO as que movimentam
+  //      (razão ~1). 31 raízes do corpus passam nas outras condições e só
+  //      escapam por aqui;
+  //   4) a soma ASSINADA das folhas também é zero. Raiz que zera com folhas que
+  //      NÃO zeram é DEFEITO DE LEITURA, não espelho — e tem de continuar dentro
+  //      da prova de fechamento para o motor recusar o selo em vez de esconder
+  //      o erro. É esta condição que garante que excluir o grupo NÃO enfraquece
+  //      P2: o que sai soma zero, então resultadoAcumulado e delta não se movem.
+  const gruposExcluidos: Array<{ nome: string; contas: number; movimento: number }> = [];
+  for (const g of grupos) {
+    if (g.tipo !== "resultado") continue;
+    if (Math.abs(g.no.linha.saldoAtual) > TOLERANCIA) continue;
+    if (Math.abs(g.no.linha.saldoAnterior) > TOLERANCIA) continue;
+    const folhas = folhasDe(g.no);
+    const movimento = folhas.reduce((s, f) => s + Math.abs(f.debito) + Math.abs(f.credito), 0);
+    if (movimento <= TOLERANCIA) continue;
+    const vivas = folhas.filter((f) => Math.abs(f.saldoAtual) > TOLERANCIA);
+    if (vivas.length < 2) continue;
+    // As contas vivas têm de CARREGAR o movimento (ver condição 3): no espelho
+    // a razão é ~1; num exercício encerrado com resíduo de centavos, ~1e-11.
+    const saldoVivo = vivas.reduce((s, f) => s + Math.abs(f.saldoAtual), 0);
+    if (saldoVivo < 0.05 * movimento) continue;
+    if (Math.abs(arred(folhas.reduce((s, f) => s + assinadoDRE(f, "saldoAtual"), 0))) > TOLERANCIA) continue;
+    g.tipo = "espelho";
+    gruposExcluidos.push({ nome: g.no.linha.nome, contas: folhas.length, movimento: arred(movimento) });
+  }
+
   const ativos = grupos.filter((g) => g.tipo === "ativo");
   const passivos = grupos.filter((g) => g.tipo === "passivo");
   const resultados = grupos.filter((g) => g.tipo === "resultado");
+  const espelhos = grupos.filter((g) => g.tipo === "espelho");
   if (ativos.length === 0 || passivos.length === 0) {
     avisos.push("Grupos ATIVO/PASSIVO não identificados no nível 1 — verifique a extração.");
+  }
+  for (const e of gruposExcluidos) {
+    avisos.push(
+      `"${e.nome}" é um CIRCUITO FECHADO (${e.contas} contas, ${fmt(e.movimento)} de movimento): o saldo da raiz é zero no início e no fim do período e as contas dentro dela se cancelam ao centavo. É espelho gerencial de centro de custos, não demonstração — ficou FORA da DRE, senão o custo apareceria dobrado e a contrapartida viraria receita. Nenhum total mudou: o que saiu soma zero.`,
+    );
   }
 
   // ── resultado acumulado (assinado, só folhas, sem apuração) ──
@@ -415,7 +483,12 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
   // ── exercício encerrado: resultado zerado (apurado) e A=P ──
   const ativoAtual = arred(ativos.reduce((s, g) => s + Math.abs(g.no.linha.saldoAtual), 0));
   const passivoAtual = arred(passivos.reduce((s, g) => s + Math.abs(g.no.linha.saldoAtual), 0));
-  const saldosResultadoZerados = folhasResultado.every((f) => Math.abs(f.saldoAtual) < TOLERANCIA);
+  // EXERCÍCIO ENCERRADO OLHA TODAS AS FOLHAS DE RESULTADO, ESPELHO INCLUÍDO:
+  // um espelho tem contas VIVAS que se cancelam; se ele saísse desta conta, um
+  // documento com espelho e resultado zerado pareceria encerrado e a DRE
+  // inteira trocaria de regime (saldo → movimento, e `derivarDREMensal` junto).
+  const folhasResultadoTodas = [...folhasResultado, ...espelhos.flatMap((g) => folhasDe(g.no))];
+  const saldosResultadoZerados = folhasResultadoTodas.every((f) => Math.abs(f.saldoAtual) < TOLERANCIA);
   const exercicioEncerrado = saldosResultadoZerados && Math.abs(ativoAtual - passivoAtual) <= TOLERANCIA;
 
   // ── P2: fechamento ──
@@ -446,7 +519,14 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
   }
 
   // ── P3: coerência de CADA linha (cobre as 4 colunas, não só o saldo atual) ──
+  // CONTAR SEMPRE, GUARDAR ALGUMAS (03/08/2026). Antes o `push` parava em 20 e
+  // `coerentes` era `total − incoerentes.length`: num documento com 234 linhas
+  // quebradas a PRÓPRIA PROVA declarava "635 de 655 coerentes" e o aviso dizia
+  // "20 conta(s)". O teto da amostra não pode ser a contagem — o selo e o
+  // analista passam a acreditar num número que ninguém mediu.
   const incoerentes: ProvasBalancete["linhas"]["incoerentes"] = [];
+  const AMOSTRA_INCOERENTES = 20;
+  let totalIncoerentes = 0;
   for (const l of b.linhas) {
     const d = Math.abs(l.debito), c = Math.abs(l.credito);
     let coerente: boolean;
@@ -465,14 +545,15 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
       coerente = devedora || credora;
     }
     if (coerente) continue;
-    if (incoerentes.length < 20) {
+    totalIncoerentes++;
+    if (incoerentes.length < AMOSTRA_INCOERENTES) {
       incoerentes.push({ classificacao: l.classificacao, nome: l.nome, anterior: l.saldoAnterior, debito: l.debito, credito: l.credito, atual: l.saldoAtual });
     }
   }
 
   const provas: ProvasBalancete = {
     fechamento: { ativo: ativoAtual, passivo: passivoAtual, resultadoAcumulado, delta, ok: Math.abs(delta) <= TOLERANCIA },
-    linhas: { total: b.linhas.length, coerentes: b.linhas.length - incoerentes.length, ok: incoerentes.length === 0, incoerentes },
+    linhas: { total: b.linhas.length, coerentes: b.linhas.length - totalIncoerentes, ok: totalIncoerentes === 0, incoerentes },
     exercicioEncerrado,
     ...(b.totais
       ? { debitosCreditos: { ...b.totais, ok: Math.abs(b.totais.debito - b.totais.credito) <= TOLERANCIA } }
@@ -484,8 +565,9 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
   if (!provas.linhas.ok) {
     const ex = incoerentes[0];
     avisos.push(
-      `${incoerentes.length} conta(s) não fecham na própria equação (saldo anterior + débito − crédito = saldo atual). ` +
-      `Ex.: "${ex.nome}" — ${fmt(ex.anterior)} + ${fmt(ex.debito)} − ${fmt(ex.credito)} ≠ ${fmt(ex.atual)}.`,
+      `${totalIncoerentes} de ${b.linhas.length} conta(s) não fecham na própria equação (saldo anterior + débito − crédito = saldo atual). ` +
+      `Ex.: "${ex.nome}" — ${fmt(ex.anterior)} + ${fmt(ex.debito)} − ${fmt(ex.credito)} ≠ ${fmt(ex.atual)}.` +
+      (totalIncoerentes > AMOSTRA_INCOERENTES ? ` (listadas as ${AMOSTRA_INCOERENTES} primeiras)` : ""),
     );
   }
 
@@ -572,7 +654,7 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
     arvoreDRE[periodoBP] = secoes;
   }
 
-  return { periodoBP, periodoBPAnterior, arvoreBP, arvoreDRE, resultadoAcumulado, provas, avisos };
+  return { periodoBP, periodoBPAnterior, arvoreBP, arvoreDRE, resultadoAcumulado, provas, gruposExcluidos, avisos };
 }
 
 function temSaldosAnteriores(linhas: LinhaBalancete[]): boolean {
