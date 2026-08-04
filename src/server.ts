@@ -23,6 +23,7 @@ import sectorsRouter from "./routes/sectors";
 import adminRouter from "./routes/admin";
 import peersRouter from "./routes/peers";
 import indicatorsRouter from "./routes/indicators";
+import aiUsageRouter from "./routes/ai-usage";
 import modelsRouter from "./routes/models";
 import produtosRouter from "./routes/produtos";
 import fechamentoRouter from "./routes/fechamento";
@@ -154,6 +155,7 @@ app.use("/sectors", sectorsRouter);
 app.use("/admin", adminRouter);
 app.use("/peers", peersRouter);
 app.use("/indicators", indicatorsRouter);
+app.use("/ai-usage", aiUsageRouter);
 app.use("/models", modelsRouter);
 // Workspace FP&A (W1): envelopes de produto/versões da empresa.
 app.use("/produtos", produtosRouter);
