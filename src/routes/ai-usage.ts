@@ -27,6 +27,14 @@ router.use(requireAuth);
 // fail-closed e bloqueia portal (role "client") e SaaS externo
 // (tipoUsuario "empresa"/"parceiro"), independentemente dos filtros de query.
 router.use(requireQuantua);
+// E, dentro da equipe, SÓ SÓCIO (decisão do dono, 04/08/2026): custo de IA é
+// margem da operação — analista e revisor não precisam ver. Mesmo critério do
+// Faturamento, que já é `billing.view` (exclusivo de partner no roles.ts).
+router.use(async (req: AuthRequest, res: Response, next): Promise<void> => {
+  const u = await prisma.user.findUnique({ where: { id: req.userId! }, select: { role: true } });
+  if (u?.role !== "partner") { res.status(403).json({ error: "Acesso restrito aos sócios" }); return; }
+  next();
+});
 
 /**
  * Janela padrão: mês corrente. Datas em ISO (yyyy-mm-dd).
@@ -37,10 +45,16 @@ router.use(requireQuantua);
  */
 function janela(req: AuthRequest): { de: Date; ate: Date } {
   const hoje = new Date();
-  const de = req.query.de ? new Date(`${String(req.query.de)}T00:00:00.000Z`) : new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth(), 1));
-  const ate = req.query.ate
-    ? new Date(`${String(req.query.ate)}T23:59:59.999Z`)
-    : new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth() + 1, 0, 23, 59, 59, 999));
+  // Aceita INSTANTE completo (ISO com fuso) — é como a tela manda, para que a
+  // janela case com o fuso de quem olha. Data pura ("2026-08-04") continua
+  // aceita, tratada como dia UTC, para chamada manual da API não quebrar.
+  const bruta = (v: unknown, fimDoDia: boolean): Date | null => {
+    if (!v) return null;
+    const t = String(v);
+    return /T/.test(t) ? new Date(t) : new Date(`${t}T${fimDoDia ? "23:59:59.999" : "00:00:00.000"}Z`);
+  };
+  const de = bruta(req.query.de, false) ?? new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth(), 1));
+  const ate = bruta(req.query.ate, true) ?? new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth() + 1, 0, 23, 59, 59, 999));
   return { de, ate };
 }
 
@@ -78,7 +92,7 @@ router.get("/resumo", async (req: AuthRequest, res: Response): Promise<void> => 
     const ordena = (xs: any[]) => xs.sort((a, b) => (b._sum.usdTotal ?? 0) - (a._sum.usdTotal ?? 0));
 
     res.json({
-      periodo: { de: de.toISOString().slice(0, 10), ate: ate.toISOString().slice(0, 10) },
+      periodo: { de: de.toISOString(), ate: ate.toISOString() },
       total: {
         usd: total._sum.usdTotal ?? 0,
         chamadas: total._count,
@@ -123,7 +137,7 @@ router.get("/eventos", async (req: AuthRequest, res: Response): Promise<void> =>
         provedor: true, modelo: true, modeloSolicitado: true, unidade: true, quantidade: true,
         inputTokens: true, outputTokens: true, cacheCriacaoTokens: true, cacheLeituraTokens: true, buscasWeb: true,
         usdTotal: true, precoDesconhecido: true, reaproveitado: true, usdOriginal: true,
-        status: true, stopReason: true, fonte: true,
+        status: true, stopReason: true, erroTipo: true, fonte: true,
         userName: true, companyId: true, analysisId: true, modelId: true, documentId: true,
       },
     });
@@ -139,7 +153,7 @@ router.get("/eventos", async (req: AuthRequest, res: Response): Promise<void> =>
     const nomeAnalise = new Map(analises.map((a) => [a.id, a.nome]));
 
     res.json({
-      periodo: { de: de.toISOString().slice(0, 10), ate: ate.toISOString().slice(0, 10) },
+      periodo: { de: de.toISOString(), ate: ate.toISOString() },
       total: eventos.length,
       limiteAtingido: eventos.length >= limite,
       eventos: eventos.map((e) => ({

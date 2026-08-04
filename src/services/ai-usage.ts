@@ -113,7 +113,16 @@ export interface RegistroUsoIA {
  * Grava UMA linha de consumo. Devolve o id (ou null se não gravou) para que um
  * reaproveitamento futuro possa apontar para o evento que de fato pagou.
  */
+/**
+ * Chamada SIMULADA não é consumo. A suíte de testes exercita `createWithRetry`
+ * com cliente mockado e, sem esta trava, gravava 13 eventos de custo no banco a
+ * cada rodada — poluindo o ambiente local e, num banco compartilhado, injetando
+ * gasto que nunca existiu no relatório do sócio.
+ */
+const emTeste = (): boolean => process.env.NODE_ENV === "test" || process.env.VITEST === "true";
+
 export async function registrarUsoIA(r: RegistroUsoIA): Promise<string | null> {
+  if (emTeste()) return null;
   try {
     const ctx = contextoIA();
     const fim = new Date();
@@ -221,6 +230,7 @@ export async function registrarReaproveitamentoIA(r: {
   eventoOriginalId?: string | null;
   observacao?: string | null;
 }): Promise<void> {
+  if (emTeste()) return;
   try {
     const ctx = contextoIA();
     const agora = new Date();
