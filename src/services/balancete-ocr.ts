@@ -260,64 +260,63 @@ const montarMatriz = (linhas: string[][], periodo: string | null): Matriz =>
  * OCR do balancete escaneado → BalanceteParseado (mesmo contrato das outras
  * duas vias), com auditoria aritmética e releitura dirigida.
  */
+/**
+ * SÓ A VIA DETERMINÍSTICA (Cloud Vision). Devolve `null` quando o motor não
+ * está disponível ou a leitura não serve — SEM cair para o LLM.
+ *
+ * Existe separada porque a rota precisa poder tentar o Vision sobre um
+ * documento cuja leitura ANTIGA (do LLM) já está em cache: se o Vision der
+ * certo, troca-se por uma leitura melhor; se não der, reaproveita-se o cache em
+ * vez de PAGAR uma leitura de LLM nova. Sem isso, cada "Reprocessar" custaria
+ * US$ 0,15 enquanto o Vision não estivesse ligado.
+ */
+export async function ocrBalanceteVision(
+  buffer: Buffer,
+  competencia?: string | null,
+  documentId?: string | null,
+): Promise<ResultadoOCR | null> {
+  try {
+    const r = await lerVision(buffer, documentId ?? null);
+    const matrizV = matrizDasPaginas(r.paginas, null);
+    const reconhecidas = matrizV.linhas.length;
+    const perdidas = matrizV.descartadas;
+    const proporcaoPerdida = reconhecidas + perdidas > 0 ? perdidas / (reconhecidas + perdidas) : 1;
+    if (reconhecidas < 5 || proporcaoPerdida > 0.05) return null;
+
+    const pV = parseBalanceteMatriz(montarMatriz(matrizV.linhas, matrizV.periodo), competenciaComoPeriodo(competencia));
+    const qV = contarNaoFecham(pV.linhas);
+    const avisoV = avisoNaoFecham(qV.total, pV.linhas.length);
+    return {
+      parseado: pV,
+      custo: null,
+      custoUsd: precificarUnidades("google-vision:DOCUMENT_TEXT_DETECTION", r.totalPaginas).usdTotal,
+      paginas: r.totalPaginas,
+      suspeitas: qV.amostra,
+      naoFecham: qV.total,
+      degradou: false,
+      motor: "vision",
+      avisos: [
+        `Leitura por OCR determinístico (Google Cloud Vision) em ${r.totalPaginas} página(s) — a tabela foi remontada pela posição de cada palavra no papel, não por interpretação de modelo.`,
+        ...(perdidas > 0 ? [`${perdidas} linha(s) com cara de conta não renderam os 4 valores e ficaram de fora — confira no documento.`] : []),
+        ...(avisoV ? [avisoV] : []),
+      ],
+      matriz: { linhas: matrizV.linhas, periodo: matrizV.periodo },
+    };
+  } catch (e: any) {
+    console.warn("[ocr] Cloud Vision indisponível:", e?.message ?? e);
+    return null;
+  }
+}
+
 export async function ocrBalancete(buffer: Buffer, competencia?: string | null, documentId?: string | null): Promise<ResultadoOCR> {
   const avisos: string[] = [];
   let inTok = 0, outTok = 0;
   let degradou = false;
 
   // ── VIA 1: OCR DETERMINÍSTICO (Cloud Vision) ──────────────────────────────
-  // Medido no mesmo tipo de documento: 97,2% de valores exatos e ZERO valor
-  // inventado, contra 35,6% de linhas quebradas e 4 alucinações do LLM — a 1/10
-  // do custo. Vem primeiro porque erro que se declara a prova pega; valor
-  // inventado que fecha a equação, não.
-  //
-  // SEM RETROCESSO: qualquer falha aqui (API desligada, credencial ausente,
-  // cota, leitura pobre) cai no caminho de LLM EXATAMENTE como era antes. O
-  // pior caso do Vision é o comportamento de hoje.
-  try {
-    const r = await lerVision(buffer, documentId ?? null);
-    const matrizV = matrizDasPaginas(r.paginas, null);
-    // PORTÃO DE ACEITE POR PROPORÇÃO, não por número absoluto. O critério
-    // anterior (">= 5 contas") deixaria 5 contas reconhecidas num documento de
-    // 655 passarem como leitura boa — e, pior, serem CACHEADAS. O que importa é
-    // quanto do documento se perdeu: acima de 5% de linhas com cara de conta que
-    // não renderam valor, a leitura não serve e cai para a via de IA.
-    const reconhecidas = matrizV.linhas.length;
-    const perdidas = matrizV.descartadas;
-    const proporcaoPerdida = reconhecidas + perdidas > 0 ? perdidas / (reconhecidas + perdidas) : 1;
-    if (reconhecidas >= 5 && proporcaoPerdida <= 0.05) {
-      const pV = parseBalanceteMatriz(montarMatriz(matrizV.linhas, matrizV.periodo), competenciaComoPeriodo(competencia));
-      const qV = contarNaoFecham(pV.linhas);
-      const avisoV = avisoNaoFecham(qV.total, pV.linhas.length);
-      return {
-        parseado: pV,
-        // O custo do Vision é registrado por página em `ai_usage_events` (é
-        // cobrado em página, não em token) — por isso `custo` de token é nulo.
-        custo: null,
-        custoUsd: precificarUnidades("google-vision:DOCUMENT_TEXT_DETECTION", r.totalPaginas).usdTotal,
-        paginas: r.totalPaginas,
-        suspeitas: qV.amostra,
-        naoFecham: qV.total,
-        degradou: false,
-        avisos: [
-          `Leitura por OCR determinístico (Google Cloud Vision) em ${r.totalPaginas} página(s) — a tabela foi remontada pela posição de cada palavra no papel, não por interpretação de modelo.`,
-          ...(perdidas > 0
-            ? [`${perdidas} linha(s) com cara de conta não renderam os 4 valores e ficaram de fora — confira no documento.`]
-            : []),
-          ...(avisoV ? [avisoV] : []),
-        ],
-        motor: "vision",
-        matriz: { linhas: matrizV.linhas, periodo: matrizV.periodo },
-      };
-    }
-    avisos.push(
-      perdidas > 0
-        ? `A leitura determinística perdeu ${perdidas} de ${reconhecidas + perdidas} linha(s) de conta (${Math.round(100 * proporcaoPerdida)}%) — caindo para a leitura assistida por IA.`
-        : `A leitura determinística reconheceu apenas ${reconhecidas} conta(s) — caindo para a leitura assistida por IA.`,
-    );
-  } catch (e: any) {
-    console.warn("[ocr] Cloud Vision indisponível, usando a via de IA:", e?.message ?? e);
-  }
+  // Ver `ocrBalanceteVision`. Qualquer falha cai na via de IA como era antes.
+  const viaVision = await ocrBalanceteVision(buffer, competencia, documentId);
+  if (viaVision) return viaVision;
 
   // ── VIA 2: leitura assistida por IA (o caminho de sempre, intocado) ────────
 

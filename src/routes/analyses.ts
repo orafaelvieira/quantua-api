@@ -10,7 +10,7 @@ import { parseDocument, dadosExtraidosToRaw, extrairTextoLayoutPDF, type Extract
 import { parseBalanceteTexto, pareceBalancete, type BalanceteParseado } from "../services/balancete-parser";
 import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal } from "../services/balancete-conversao";
 import { parseBalanceteTabular, pareceBalanceteTabular, ehArquivoTabular, csvParaMatriz, xlsxParaMatriz } from "../services/balancete-tabular";
-import { pdfEscaneado, ocrBalancete, parseDaMatrizOcr, contarNaoFecham, avisoNaoFecham } from "../services/balancete-ocr";
+import { pdfEscaneado, ocrBalancete, ocrBalanceteVision, parseDaMatrizOcr, contarNaoFecham, avisoNaoFecham } from "../services/balancete-ocr";
 import { middlewareContextoIA, enriquecerContextoIA, resolverAutorIA, registrarReaproveitamentoIA, ETAPAS } from "../services/ai-usage";
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
@@ -1849,11 +1849,40 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
             // null==null) e sem pedido explícito de reextração. Sem a última
             // condição o "Reprocessar" deixaria de ser o caminho de recuperação
             // de uma leitura ruim, que era exatamente o que ele fazia antes.
+            // O CACHE NÃO PODE CONGELAR O MOTOR PIOR (04/08/2026). Flagrado ao
+            // reprocessar o balancete Budel: o cache devolveu a leitura ANTIGA,
+            // feita pelo LLM, e o Cloud Vision — 97,2% de valores exatos contra
+            // 35,6% de linhas quebradas — nunca chegou a rodar. Como o botão
+            // "Reprocessar" não força reextração, NENHUM documento já lido se
+            // beneficiaria do motor novo. O cache economiza chamada repetida do
+            // MESMO motor; ele não pode impedir a troca por um motor melhor.
+            const leituraAntigaEraPior = extra.ocrMotor !== "vision";
             const cacheVale = !forcarReextracao
               && Array.isArray(cacheOcr?.linhas) && cacheOcr.linhas.length > 0
               && typeof doc.hash === "string" && doc.hash.length > 0
               && extra.ocrHash === doc.hash;
-            if (cacheVale) {
+            // CACHE DE LEITURA PIOR: tenta o motor determinístico ANTES de
+            // reaproveitar. Se o Vision responder, o documento passa a ter a
+            // leitura boa; se não responder, cai no cache — sem pagar leitura
+            // de LLM nova. É o que permite um documento já processado migrar
+            // de motor sem custo e sem o analista precisar fazer nada.
+            const upgradeVision = cacheVale && leituraAntigaEraPior
+              ? await ocrBalanceteVision(buffer, doc.competencia, doc.id)
+              : null;
+            if (upgradeVision) {
+              parseado = upgradeVision.parseado;
+              ocrDoDoc = {
+                custo: null, suspeitas: upgradeVision.suspeitas, naoFecham: upgradeVision.naoFecham,
+                motor: "vision", paginas: upgradeVision.paginas, matriz: upgradeVision.matriz,
+                custoOriginalUsd: upgradeVision.custoUsd ?? 0,
+                avisos: [
+                  "Documento relido pelo OCR determinístico (Cloud Vision) — a leitura anterior, assistida por IA, foi substituída.",
+                  ...upgradeVision.avisos,
+                ],
+              };
+              custoOcrUsd += upgradeVision.custoUsd ?? 0;
+              console.log(`[process] balancete ${doc.nome}: leitura antiga (llm) SUBSTITUÍDA por Vision`);
+            } else if (cacheVale) {
               parseado = parseDaMatrizOcr(cacheOcr, doc.competencia);
               // Suspeitas RECALCULADAS sobre a extração atual — copiar `[]` fazia
               // o chip perder o "N a conferir" depois de um reprocesso que não

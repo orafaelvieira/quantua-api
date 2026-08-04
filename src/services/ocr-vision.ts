@@ -352,8 +352,14 @@ export function textoLayoutDasPaginas(paginas: PaginaVision[]): string {
     // totais vêm das raízes declaradas. Aqui os x de início de linha viram uma
     // ESCADA ORDINAL: o que importa a jusante é a ORDEM dos níveis, não a
     // distância em caracteres.
-    const inicios = [...new Set(linhas.map((l) => Math.round(l[0].x)))].sort((a, b) => a - b);
-    const tolerancia = Math.max(3, larguraChar * 0.35);
+    const inicios = [...new Set(linhas.map((l) => Math.round(l[0].x * 10) / 10))].sort((a, b) => a - b);
+    // A TOLERÂNCIA SAI DO PASSO DO PRÓPRIO DOCUMENTO, nunca de uma constante.
+    // Um piso fixo de 3px era MAIOR que o passo do AOCP e fundia três níveis
+    // num só — a escada 4/5/6/7 virava 4/6/6/6 e a folha ficava irmã do grupo.
+    // O passo é o menor avanço real entre posições de início de linha.
+    const avancos = inicios.slice(1).map((x, i) => x - inicios[i]).filter((d) => d > 0.4);
+    const passo = avancos.length ? Math.min(...avancos) : larguraChar;
+    const tolerancia = Math.max(0.5, passo * 0.5);
     const postos: number[] = [];
     for (const x of inicios) {
       if (postos.length === 0 || x - postos[postos.length - 1] > tolerancia) postos.push(x);
