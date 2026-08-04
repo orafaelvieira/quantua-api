@@ -45,6 +45,8 @@ app.use(cors({
     env.frontendUrl,
     "https://quantua.com.br",
     "https://www.quantua.com.br",
+    // Quantua Digital — app do Especialista (mesmo SPA, host dedicado).
+    "https://app.quantua.com.br",
     "https://walrus-app-bizfv.ondigitalocean.app",
     "http://localhost:5173",
     "http://localhost:5174",
