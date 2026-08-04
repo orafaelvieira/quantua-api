@@ -58,3 +58,12 @@ export const forgotPasswordIpLimiter = rateLimit({
   max: 10,
   keyGenerator: (req) => `forgot-ip:${req.ip ?? "anon"}`,
 });
+
+/** 30 perguntas por usuário por hora — assistente do Quantua Digital (cada
+ *  pergunta gasta tokens de IA; o teto protege o orçamento sem travar uso real). */
+export const assistantLimiter = rateLimit({
+  ...baseConfig,
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  keyGenerator: (req) => `assistant:${(req as { userId?: string }).userId ?? req.ip ?? "anon"}`,
+});

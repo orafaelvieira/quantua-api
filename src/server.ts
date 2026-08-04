@@ -28,6 +28,8 @@ import modelsRouter from "./routes/models";
 import produtosRouter from "./routes/produtos";
 import fechamentoRouter from "./routes/fechamento";
 import organizacoesRouter from "./routes/organizacoes";
+import portfolioRouter from "./routes/portfolio";
+import assistantRouter from "./routes/assistant";
 import { startJobs } from "./jobs";
 import { estadoHistorico, anotaSinal, autoRetomarSeInterrompido, getPicoRssMB } from "./services/cvm-sync";
 import { runtimeState } from "./services/runtime-state";
@@ -159,6 +161,8 @@ app.use("/ai-usage", aiUsageRouter);
 app.use("/models", modelsRouter);
 // Workspace FP&A (W1): envelopes de produto/versões da empresa.
 app.use("/produtos", produtosRouter);
+app.use("/portfolio", portfolioRouter);
+app.use("/assistant", assistantRouter);
 // Workspace FP&A (W2): fechamento de período, regime e documentos lógicos.
 app.use("/fechamento", fechamentoRouter);
 app.use("/orgs", organizacoesRouter); // /orgs (nao /organizacoes): a rota do FRONTEND usa /organizacoes e o proxy do Vite colidiria
