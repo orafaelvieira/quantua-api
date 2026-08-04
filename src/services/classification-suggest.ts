@@ -15,6 +15,7 @@
  */
 import { createWithRetry, calcCusto, type CustoIA, type NaoMapeado } from "./ai-extraction";
 import { DEFAULT_BP_MODEL, blocoDoCaminhoDRE, blocoDoDestinoDRE } from "./account-mapper";
+import { ETAPAS } from "./ai-usage";
 
 const MODELO_SUGESTAO = "claude-haiku-4-5-20251001";
 
@@ -167,7 +168,7 @@ Responda APENAS JSON: [{"i":1,"sugestao":"...","justificativa":"...","confianca"
       max_tokens: 4000,
       temperature: 0,
       messages: [{ role: "user", content: prompt }],
-    });
+    }, 0, { etapa: ETAPAS.SUGESTOES_CLASSIFICACAO });
     let txt = msg.content?.[0]?.type === "text" ? msg.content[0].text.trim() : "";
     if (txt.startsWith("```")) txt = txt.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
     const arr = parseArrayTolerante(txt);

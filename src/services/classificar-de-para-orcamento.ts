@@ -16,6 +16,7 @@
  */
 import { createWithRetry, calcCusto, type CustoIA } from "./ai-extraction";
 import { sugerirContaCanonica } from "./sugerir-conta-canonica";
+import { ETAPAS } from "./ai-usage";
 
 const MODELO_DEPARA = "claude-haiku-4-5-20251001";
 
@@ -82,7 +83,7 @@ Responda APENAS JSON: [{"i":1,"conta":"...","porque":"..."}]`;
       max_tokens: 4000,
       temperature: 0,
       messages: [{ role: "user", content: prompt }],
-    });
+    }, 0, { etapa: ETAPAS.DE_PARA_ORCAMENTO });
     let txt = msg.content?.[0]?.type === "text" ? msg.content[0].text.trim() : "";
     if (txt.startsWith("```")) txt = txt.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
     let arr: Array<{ i?: number; conta?: unknown; porque?: unknown }> = [];

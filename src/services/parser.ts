@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
-import Anthropic from "@anthropic-ai/sdk";
+import { createWithRetry } from "./ai-extraction";
+import { ETAPAS } from "./ai-usage";
 import { env } from "../config/env";
 
 export interface ExtractedRow {
@@ -481,7 +482,11 @@ function removeChildRowsByValueSum(rows: ExtractedRow[], periodos: string[]): Ex
  * Returns the text as Claude sees it, suitable for feeding into the extraction pipeline.
  */
 async function ocrPDFWithClaude(buffer: Buffer, tipo: string): Promise<string> {
-  const client = new Anthropic({ apiKey: env.anthropicApiKey });
+  // BURACO #1 FECHADO (03/08/2026). Esta função instanciava um cliente Anthropic
+  // PRÓPRIO, fora de toda a instrumentação, mandava o PDF inteiro em visão e
+  // DESCARTAVA o `usage` — gastava sem deixar um centavo registrado em lugar
+  // nenhum. Passa a usar `createWithRetry`, que além de medir traz o backoff de
+  // 429/529 que aqui também não existia.
   const base64 = buffer.toString("base64");
 
   const tipoLabel = tipo.toLowerCase().includes("dre") || tipo.toLowerCase().includes("demonstra")
@@ -490,7 +495,7 @@ async function ocrPDFWithClaude(buffer: Buffer, tipo: string): Promise<string> {
       ? "Balanço Patrimonial"
       : tipo;
 
-  const message = await client.messages.create({
+  const message = await createWithRetry({
     model: "claude-haiku-4-5-20251001",
     max_tokens: 8192,
     messages: [{
@@ -523,7 +528,7 @@ REGRAS CRÍTICAS:
         },
       ],
     }],
-  });
+  }, 0, { etapa: ETAPAS.OCR_PARSER });
 
   return message.content[0].type === "text" ? message.content[0].text : "";
 }

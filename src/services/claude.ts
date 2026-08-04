@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { env } from "../config/env";
 import { calcCusto, modeloAnaliseId, createWithRetry, type CustoIA } from "./ai-extraction";
+import { ETAPAS } from "./ai-usage";
 import type { PeerComparisonRow } from "./peer-benchmark";
 import { INDICADORES_TEMPLATE } from "./financial-templates";
 import { calcularValorCanonico, type AlavancaValor, type ValorCanonico } from "./valor-na-mesa";
@@ -504,7 +505,13 @@ PRINCÍPIOS (inegociáveis):
   // gravada VAZIA por cima da anterior — incidente Move Farma 08/07). 24k dá folga 2x;
   // haiku fica em 8k (limite do modelo rápido).
   const maxTokensAnalise = modelKey === "haiku" ? 8000 : 24000;
-  const message = await createWithRetry({ model, max_tokens: maxTokensAnalise, messages: [{ role: "user", content: prompt }] });
+  const message = await createWithRetry(
+    { model, max_tokens: maxTokensAnalise, messages: [{ role: "user", content: prompt }] },
+    0,
+    // A passada principal do IBR é o maior gasto de IA da plataforma: sem nomear
+    // a etapa ela cairia no relatório como "desconhecida".
+    { etapa: ETAPAS.GERACAO_ANALISE, modeloSolicitado: modelKey ?? null },
+  );
   const truncada = (message as { stop_reason?: string }).stop_reason === "max_tokens";
   let text = message.content[0]?.type === "text" ? message.content[0].text.trim() : "";
   const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);

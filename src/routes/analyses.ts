@@ -11,6 +11,7 @@ import { parseBalanceteTexto, pareceBalancete, type BalanceteParseado } from "..
 import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal } from "../services/balancete-conversao";
 import { parseBalanceteTabular, pareceBalanceteTabular, ehArquivoTabular, csvParaMatriz, xlsxParaMatriz } from "../services/balancete-tabular";
 import { pdfEscaneado, ocrBalancete, parseDaMatrizOcr, contarNaoFecham, avisoNaoFecham } from "../services/balancete-ocr";
+import { middlewareContextoIA, enriquecerContextoIA, resolverAutorIA, registrarReaproveitamentoIA, ETAPAS } from "../services/ai-usage";
 import { generateAnalysis } from "../services/claude";
 import { comparePeersForIndicators, type PeerComparisonRow } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
@@ -269,6 +270,13 @@ router.post("/:id/marcar-teste", async (req: AuthRequest, res: Response): Promis
   res.json({ ok: true, ehTeste: teste });
 });
 
+// CONTEXTO DE CONSUMO DE IA (03/08/2026) — declara UMA vez, para a requisição
+// inteira, de quem é o gasto. Sem isto, dar autor às 15 etapas com IA exigiria
+// passar o usuário por 15 assinaturas de função, e a que alguém esquecesse
+// ficaria órfã em silêncio. A empresa entra depois, com `enriquecerContextoIA`.
+router.use("/:id", middlewareContextoIA("IBR"));
+router.use("/:id", async (_req, _res, next: () => void) => { await resolverAutorIA(); next(); });
+
 router.use("/:id", async (req: AuthRequest, res: Response, next: () => void): Promise<void> => {
   if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") { next(); return; }
   const id = String(req.params.id ?? ""); // em router.use o param é string|string[]
@@ -454,6 +462,7 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   // EXTRAÇÃO DESATUALIZADA: algum documento financeiro vigente entrou DEPOIS da
   // última extração (upload novo ou substituição de versão) — os números exibidos
   // não refletem a base atual até reprocessar. Nada muda silencioso: só o aviso.
@@ -489,6 +498,7 @@ router.get("/:id/versoes", async (req: AuthRequest, res: Response): Promise<void
     select: { id: true, dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   const versoes = await prisma.analysisVersion.findMany({
     where: { analysisId: id },
     orderBy: { criadoEm: "desc" },
@@ -518,6 +528,7 @@ router.get("/:id/snapshots-diarios", async (req: AuthRequest, res: Response): Pr
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({ where: { id, ...whereRecursoEmpresa(req) }, select: { id: true } });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   const fotos = await prisma.snapshotDiario.findMany({
     where: { entidade: "analysis", entidadeId: id },
     orderBy: { criadoEm: "desc" },
@@ -542,6 +553,7 @@ router.post("/:id/snapshots-diarios/:snapshotId/restaurar", async (req: AuthRequ
     include: { documents: SELECT_DOCS_FOTO },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
   if (STATUS_TRANSITORIOS.includes(analysis.status)) {
     res.status(409).json({ error: "Há um processamento em andamento — aguarde terminar antes de restaurar uma foto." });
@@ -1242,6 +1254,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     include: { company: true, documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
   // Materiais complementares (notas/apresentações) NÃO entram na extração financeira —
   // são resumidos depois, na geração da análise (buildMateriaisContext). Documentos
@@ -1785,7 +1798,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
             // número lido por IA. Atenção: no cache, `ocrSuspeitas` é um NÚMERO
             // (não array), e o consumidor espera o array em `ocr.suspeitas`.
             ...(cacheBal.fonte === "ocr"
-              ? { fonte: "ocr", ocr: { paginas: cacheBal.ocrPaginas ?? 0, suspeitas: new Array(Math.min(cacheBal.ocrSuspeitas ?? 0, 300)).fill(null), naoFecham: cacheBal.ocrSuspeitas ?? 0, custoUsd: cacheBal.ocrCustoUsd ?? 0 } }
+              ? { fonte: "ocr", ocr: { paginas: cacheBal.ocrPaginas ?? 0, suspeitas: new Array(Math.min(cacheBal.ocrSuspeitas ?? 0, 300)).fill(null), naoFecham: cacheBal.ocrSuspeitas ?? 0, motor: cacheBal.ocrMotor ?? "llm", custoUsd: cacheBal.ocrCustoUsd ?? 0 } }
               : {}),
           });
           await conferirCompetenciaBalancete(doc, cacheBal.periodoInicio ?? null, periodoBP, cacheBal.periodoAssumido === true);
@@ -1797,7 +1810,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         // desembocam no MESMO `BalanceteParseado`, então conversão, provas de
         // fechamento e fold seguem idênticos para ambas.
         // Preenchido só quando a via de OCR entra em ação (PDF escaneado).
-        let ocrDoDoc: { custo: import("../services/ai-extraction").CustoIA | null; suspeitas: unknown[]; naoFecham: number; avisos: string[]; paginas: number; matriz?: { linhas: string[][]; periodo: string | null }; custoOriginalUsd?: number } | null = null;
+        let ocrDoDoc: { custo: import("../services/ai-extraction").CustoIA | null; suspeitas: unknown[]; naoFecham: number; motor?: "vision" | "llm"; avisos: string[]; paginas: number; matriz?: { linhas: string[][]; periodo: string | null }; custoOriginalUsd?: number } | null = null;
         const tabular = ehArquivoTabular(doc.nome);
         if (!doc.storagePath || !(tabular || /\.pdf$/i.test(doc.nome))) {
           balancetes.push({ docId: doc.id, nome: doc.nome, erro: "Balancete aceito em PDF, CSV ou Excel (.xlsx/.xls) — formato deste arquivo não reconhecido" });
@@ -1851,7 +1864,12 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
               const suspeitasCache = quebradasCache.amostra;
               const avisoQualidade = avisoNaoFecham(quebradasCache.total, parseado.linhas.length);
               ocrDoDoc = {
-                custo: null, suspeitas: suspeitasCache, naoFecham: quebradasCache.total, paginas: extra.ocrPaginas ?? 0, matriz: cacheOcr,
+                custo: null, suspeitas: suspeitasCache, naoFecham: quebradasCache.total,
+                // O MOTOR É HERDADO, não redefinido: sem isto o reprocesso regravava
+                // "llm" por cima de "vision" e a tela passava a descrever ERRADO
+                // como os números foram obtidos — permanentemente.
+                motor: extra.ocrMotor === "vision" ? "vision" : "llm",
+                paginas: extra.ocrPaginas ?? 0, matriz: cacheOcr,
                 // Custo do OCR ORIGINAL preservado no histórico do IBR
                 // ([[registrar-custo-ia]]): sem isso o reprocesso zerava o gasto
                 // que de fato aconteceu.
@@ -1862,21 +1880,30 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
                 ],
               };
               custoOcrUsd += extra.ocrCustoUsd ?? 0;
+              // REAPROVEITAMENTO vira linha de custo ZERO com o valor ORIGINAL
+              // preservado: o histórico do IBR continua mostrando o que a leitura
+              // custou, e o extrato do mês não cobra a mesma página duas vezes.
+              void registrarReaproveitamentoIA({
+                etapa: ETAPAS.OCR_BALANCETE, provedor: String(extra.ocrMotor) === "vision" ? "google-vision" : "anthropic", modelo: "cache",
+                usdOriginal: extra.ocrCustoUsd ?? 0, documentId: doc.id, hashInsumo: doc.hash ?? null,
+                observacao: "Leitura por OCR reaproveitada do processamento anterior (mesmo arquivo).",
+              });
               console.log(`[process] balancete ${doc.nome}: OCR reusado do cache (${cacheOcr.linhas.length} contas, ${quebradasCache.total} não fecham)`);
             } else {
               console.log(`[process] balancete ${doc.nome}: ${det.motivo} → OCR (${det.paginas} páginas)`);
-              const r = await ocrBalancete(buffer, doc.competencia);
+              const r = await ocrBalancete(buffer, doc.competencia, doc.id);
               parseado = r.parseado;
               ocrDoDoc = {
-                custo: r.custo, suspeitas: r.suspeitas, naoFecham: r.naoFecham, avisos: r.avisos, paginas: r.paginas,
+                custo: r.custo, suspeitas: r.suspeitas, naoFecham: r.naoFecham, motor: r.motor, avisos: r.avisos, paginas: r.paginas,
                 // LEITURA DEGRADADA NÃO ENTRA NO CACHE: congelá-la seria
                 // definitivo — reenviar ou substituir pelo MESMO arquivo é
                 // recusado por duplicidade, e o analista ficaria sem saída.
                 matriz: r.degradou ? undefined : r.matriz,
-                custoOriginalUsd: r.custo?.usd ?? 0,
+                // Agnóstico de provedor: token (LLM) ou página (Vision).
+                custoOriginalUsd: r.custoUsd ?? r.custo?.usd ?? 0,
               };
               if (r.degradou) ocrDoDoc.avisos = [...ocrDoDoc.avisos, "A leitura ficou incompleta e NÃO foi guardada — use \"Reprocessar\" para tentar de novo."];
-              if (r.custo) custoOcrUsd += r.custo.usd;
+              custoOcrUsd += r.custoUsd ?? r.custo?.usd ?? 0;
             }
           }
         }
@@ -1900,14 +1927,14 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           provas: conv.provas, gruposExcluidos: conv.gruposExcluidos, avisos: [...conv.avisos, ...(ocrDoDoc?.avisos ?? [])], linhas: parseado.linhas.length,
           // Proveniência da leitura: OCR é assistido por IA e a tela precisa
           // dizer isso ao analista (nunca passa por leitura determinística).
-          ...(ocrDoDoc ? { fonte: "ocr", ocr: { paginas: ocrDoDoc.paginas, suspeitas: ocrDoDoc.suspeitas, naoFecham: ocrDoDoc.naoFecham, custoUsd: ocrDoDoc.custo?.usd ?? 0 } } : {}),
+          ...(ocrDoDoc ? { fonte: "ocr", ocr: { paginas: ocrDoDoc.paginas, suspeitas: ocrDoDoc.suspeitas, naoFecham: ocrDoDoc.naoFecham, motor: ocrDoDoc.motor ?? "llm", custoUsd: ocrDoDoc.custo?.usd ?? 0 } } : {}),
         });
         await prisma.document.update({
           where: { id: doc.id },
           data: {
             // periodoInicio entra no cache: a herança (nova-versão) reproduz a
             // linha `balancetes` completa sem re-parsear o PDF.
-            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], periodoInicio: parseado.periodoInicio, periodoAssumido: parseado.periodoAssumido ?? false, provas: conv.provas, gruposExcluidos: conv.gruposExcluidos, avisos: conv.avisos, totalLinhas: parseado.linhas.length, ...(ocrDoDoc ? { fonte: "ocr", ocrSuspeitas: ocrDoDoc.naoFecham, ocrPaginas: ocrDoDoc.paginas, ocrCustoUsd: ocrDoDoc.custoOriginalUsd ?? 0, ...(ocrDoDoc.matriz ? { ocrMatriz: ocrDoDoc.matriz, ocrHash: doc.hash } : {}) } : {}) } as any,
+            dadosExtraidos: { balancete: true, periodos: [conv.periodoBP], periodoInicio: parseado.periodoInicio, periodoAssumido: parseado.periodoAssumido ?? false, provas: conv.provas, gruposExcluidos: conv.gruposExcluidos, avisos: conv.avisos, totalLinhas: parseado.linhas.length, ...(ocrDoDoc ? { fonte: "ocr", ocrMotor: ocrDoDoc.motor ?? "llm", ocrSuspeitas: ocrDoDoc.naoFecham, ocrPaginas: ocrDoDoc.paginas, ocrCustoUsd: ocrDoDoc.custoOriginalUsd ?? 0, ...(ocrDoDoc.matriz ? { ocrMatriz: ocrDoDoc.matriz, ocrHash: doc.hash } : {}) } : {}) } as any,
             status: "Processado",
             // "verde só com prova": confiança alta SOMENTE com fechamento ao
             // centavo E com todas as linhas fechando na própria equação (P3) —
@@ -2167,9 +2194,10 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, ...whereRecursoEmpresa(req) },
-    select: { id: true, status: true, dadosEstruturados: true, setorConfirmado: true, resultado: true },
+    select: { id: true, companyId: true, status: true, dadosEstruturados: true, setorConfirmado: true, resultado: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   // Concluído é IMUTÁVEL (21/07/2026): regerar sobre produto emitido = nova versão.
   if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
   const dados = analysis.dadosEstruturados as any;
@@ -2207,6 +2235,7 @@ router.get("/:id/dados-estruturados", async (req: AuthRequest, res: Response): P
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   if (!analysis.dadosEstruturados) { res.json({ bp: [], dre: [], indicadores: [], periodos: [], version: 1 }); return; }
   const dadosOut = analysis.dadosEstruturados as any;
   // Ocultação de indicadores aplicada NA LEITURA (config atual, não a do momento do
@@ -2246,6 +2275,7 @@ router.put("/:id/dados-estruturados/bp", async (req: AuthRequest, res: Response)
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
 
   const dados = (analysis.dadosEstruturados as any) || { bp: [], dre: [], indicadores: [], periodos: [], version: 1 };
   dados.bp = req.body.linhas;
@@ -2264,6 +2294,7 @@ router.put("/:id/dados-estruturados/dre", async (req: AuthRequest, res: Response
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
 
   const dados = (analysis.dadosEstruturados as any) || { bp: [], dre: [], indicadores: [], periodos: [], version: 1 };
   dados.dre = req.body.linhas;
@@ -2288,6 +2319,7 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
     select: { id: true, mode: true, nome: true, companyId: true, tipo: true, sectorId: true, sectorCustom: true, ibrType: true, status: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   // ABA ESCOPO (21/07/2026): esta rota também serve a edição PÓS-análise (a aba
   // vira a casa do cadastro). Concluído é imutável — solicitante/prazo/escopo
   // saem no PDF emitido; Cancelada já morre no guarda único do router.
@@ -2400,6 +2432,7 @@ router.put("/:id/dores", async (req: AuthRequest, res: Response): Promise<void> 
     select: { id: true, dores: true, status: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   // Concluído imutável — as dores declaradas alimentaram o confronto do produto emitido.
   if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
   const raw = req.body?.dores;
@@ -2433,6 +2466,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
     select: { companyId: true, dadosEstruturados: true, indicadorConfig: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   const dados = analysis.dadosEstruturados as any;
   const arvoreBP = dados?.arvoreOriginalBP;
   const arvoreDRE = dados?.arvoreOriginalDRE;
@@ -2599,6 +2633,7 @@ router.put("/:id/dados-estruturados/arvore", async (req: AuthRequest, res: Respo
     select: { companyId: true, dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
 
   const dados = (analysis.dadosEstruturados as any) || { bp: [], dre: [], indicadores: [], periodos: [], version: 1 };
   dados.arvoreOriginalBP = req.body.arvoreOriginalBP ?? null;
@@ -2624,6 +2659,7 @@ router.put("/:id/dados-estruturados/indicadores/override", async (req: AuthReque
     select: { dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
 
   const { nome, periodo, valor } = req.body;
   const dados = (analysis.dadosEstruturados as any) || { bp: [], dre: [], indicadores: [], periodos: [], version: 1 };
@@ -2668,6 +2704,7 @@ router.get("/:id/indicador-config", async (req: AuthRequest, res: Response): Pro
     select: { indicadorConfig: true, sectorId: true, dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
 
   const dados = analysis.dadosEstruturados as any;
   let cfg = analysis.indicadorConfig as unknown as IBRIndicadorConfig | null;
@@ -2717,6 +2754,7 @@ router.put("/:id/indicador-config", async (req: AuthRequest, res: Response): Pro
     select: { indicadorConfig: true, dadosEstruturados: true, nome: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
 
   const anterior = analysis.indicadorConfig as unknown as IBRIndicadorConfig | null;
   const padrao = await catalogoPadraoEfetivo();
@@ -2767,6 +2805,7 @@ router.post("/:id/indicador-config/recalibrar", async (req: AuthRequest, res: Re
     select: { indicadorConfig: true, sectorId: true, dadosEstruturados: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   const dados = analysis.dadosEstruturados as any;
 
   // Re-seed do padrão + calibração nova — descarta edições manuais de semáforo/exibição
@@ -2795,6 +2834,7 @@ router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Respons
     select: { dadosEstruturados: true, indicadorConfig: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   if (!analysis.dadosEstruturados) { res.status(400).json({ error: "Sem dados estruturados" }); return; }
 
   const dados = analysis.dadosEstruturados as any as DadosEstruturados;
@@ -2843,6 +2883,7 @@ router.post("/:id/reconcile-ai", async (req: AuthRequest, res: Response): Promis
     include: { documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
 
   // Apenas DEMONSTRAÇÕES ANUAIS (BP/DRE) — ignora data-room/contratos/etc.
   // Balancete NÃO entra aqui: tem linha de extração própria e determinística
@@ -2909,6 +2950,7 @@ router.post("/:id/setor/confirmar", async (req: AuthRequest, res: Response): Pro
     select: { sectorId: true, sectorCustom: true, setorConfirmado: true, dadosEstruturados: true, status: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   // Concluído é imutável: trocar o setor recalibraria pares/semáforo de um
   // produto emitido (aba Escopo é editável, mas nunca sobre evidência).
   if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
@@ -2959,6 +3001,7 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
     select: { dadosEstruturados: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true, sectorCustom: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   if (!analysis.dadosEstruturados) { res.status(400).json({ error: "Sem dados estruturados" }); return; }
 
   const dados = analysis.dadosEstruturados as any as DadosEstruturados;
@@ -3028,6 +3071,7 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
     include: { documents: { orderBy: { createdAt: "asc" } } },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
 
   const dados = analysis.dadosEstruturados as any as DadosEstruturados | null;
 
@@ -3089,7 +3133,11 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
       // determinística. Leitura assistida por IA nunca é "ok" silencioso.
       const linhaBal = (dados as any)?.balancetes?.find?.((b: any) => b.docId === doc.id);
       const ehOcr = linhaBal?.fonte === "ocr";
-      const suspeitasOcr = (linhaBal?.ocr?.suspeitas?.length ?? 0) as number;
+      // CONTAGEM DE VERDADE: `suspeitas` é AMOSTRA (teto de 300); `naoFecham` é o
+      // total. Usar o length da amostra foi o defeito que dizia "20 a conferir"
+      // num documento com 233 contas quebradas.
+      const suspeitasOcr = (linhaBal?.ocr?.naoFecham ?? linhaBal?.ocr?.suspeitas?.length ?? 0) as number;
+      const motorOcr = (linhaBal?.ocr?.motor ?? "llm") as "vision" | "llm";
       if (ehOcr) {
         statusBal = statusBal === "error" ? "error" : "warning";
         issuesBal.push(
@@ -3117,6 +3165,7 @@ router.get("/:id/validation-report", async (req: AuthRequest, res: Response): Pr
           exercicioEncerrado: provasBal?.exercicioEncerrado === true,
           fonte: ehOcr ? "ocr" : "deterministica",
           ocrSuspeitas: ehOcr ? suspeitasOcr : null,
+          ocrMotor: ehOcr ? motorOcr : null,
         },
         confianca: doc.confianca ?? null,
       };
@@ -3255,6 +3304,7 @@ router.post(
       select: { id: true, companyId: true },
     });
     if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
 
     const hash = crypto.createHash("sha256").update(req.file.buffer).digest("hex");
 
@@ -3347,6 +3397,7 @@ router.post("/:id/documents/fixar", async (req: AuthRequest, res: Response): Pro
     select: { id: true, companyId: true, status: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   // Concluído é IMUTÁVEL (21/07/2026): fixar documento novo = nova versão.
   if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
 
@@ -3374,6 +3425,7 @@ router.delete("/:id/documents/:docId", async (req: AuthRequest, res: Response): 
     select: { id: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
 
   const doc = await prisma.document.findFirst({
     where: { id: docId, analysisId: analysis.id },
@@ -3451,6 +3503,7 @@ router.get("/:id/data-room/manifest", async (req: AuthRequest, res: Response): P
     select: { id: true, nome: true, documents: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
 
   const date = new Date().toISOString().slice(0, 10);
   res.setHeader("Content-Type", "text/csv; charset=utf-8");

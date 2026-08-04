@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { registrarUsoIA, usoDaResposta, ETAPAS } from "./ai-usage";
 import { env } from "../config/env";
 import { DRE_TEMPLATE } from "./financial-templates";
 import type { BPLineItem, DRELineItem } from "../types/financial";
@@ -81,16 +82,34 @@ async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, mo
         { type: "text", text: prompt },
       ];
   let msg;
+  // MEDIDO SEM TROCAR O CAMINHO (03/08/2026). Delegar ao `createWithRetry` faria
+  // esta função passar a usar STREAMING quando max_tokens > 12000 — caminho de
+  // código diferente do que roda em produção hoje, e o teste de extração pegou.
+  // Telemetria não pode mudar comportamento: mede-se aqui mesmo.
+  const iniciadoIA = new Date();
   try {
     msg = await client.messages.create({ model, max_tokens: maxTokens, temperature: 0, messages: [{ role: "user", content }] });
   } catch (e: any) {
-    // 429 (rate limit) ou 529 (overloaded): espera e tenta de novo (uploads multi-doc)
     if ((e?.status === 429 || e?.status === 529) && attempt < 4) {
       await sleep(7000 * (attempt + 1));
       return ask(input, prompt, model, attempt + 1, maxTokens);
     }
+    void registrarUsoIA({
+      etapa: input?.buffer ? ETAPAS.EXTRACAO_VISAO : ETAPAS.EXTRACAO_HIBRIDA,
+      provedor: "anthropic", modelo: model, iniciadoEm: iniciadoIA,
+      sequencia: attempt + 1, ehRetentativa: attempt > 0,
+      status: "erro", erroTipo: String(e?.status ?? e?.name ?? "erro"),
+    });
     throw e;
   }
+  void registrarUsoIA({
+    etapa: input?.buffer ? ETAPAS.EXTRACAO_VISAO : ETAPAS.EXTRACAO_HIBRIDA,
+    provedor: "anthropic", modelo: model, iniciadoEm: iniciadoIA,
+    tokens: usoDaResposta(msg),
+    sequencia: attempt + 1, ehRetentativa: attempt > 0,
+    stopReason: msg?.stop_reason ?? null,
+    status: msg?.stop_reason === "max_tokens" ? "truncado" : "ok",
+  });
   if (msg.stop_reason === "max_tokens") console.warn(`[ask] SAÍDA TRUNCADA em ${maxTokens} tokens (${model}) — captura pode estar incompleta`);
   let txt = msg.content[0]?.type === "text" ? msg.content[0].text.trim() : "";
   if (txt.startsWith("```")) txt = txt.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
@@ -113,6 +132,9 @@ const PRECO_USD: Record<string, { in: number; out: number }> = {
   [AI_MODEL]: { in: 3 / 1e6, out: 15 / 1e6 },
   [AI_MODEL_OPUS]: { in: 5 / 1e6, out: 25 / 1e6 },
 };
+/** Quem é a etapa por trás da chamada — o que dá nome ao gasto no relatório. */
+export interface MetaUsoIA { etapa: string; documentId?: string | null; modeloSolicitado?: string | null }
+
 export interface CustoIA { modelo: string; inputTokens: number; outputTokens: number; usd: number }
 export function calcCusto(modelo: string, inTok: number, outTok: number): CustoIA {
   const p = PRECO_USD[modelo] ?? { in: 0, out: 0 };
@@ -124,10 +146,12 @@ export function calcCusto(modelo: string, inTok: number, outTok: number): CustoI
  *  Devolve o custo junto: quem chama REGISTRA (regra da casa). */
 export async function perguntarJson(prompt: string, maxTokens = 800, modelo: "haiku" | "sonnet" = "haiku"): Promise<{ data: Record<string, unknown>; custo: CustoIA }> {
   const modelId = modelo === "sonnet" ? AI_MODEL : AI_MODEL_FAST;
-  const msg = await client.messages.create({
-    model: modelId, max_tokens: maxTokens, temperature: 0,
-    messages: [{ role: "user", content: prompt }],
-  });
+  // Passa pelo gate: ganha backoff de 429/529 (que aqui NÃO existia) e telemetria.
+  const msg = await createWithRetry(
+    { model: modelId, max_tokens: maxTokens, temperature: 0, messages: [{ role: "user", content: prompt }] },
+    0,
+    { etapa: ETAPAS.FORMULA_MODELO, modeloSolicitado: modelo },
+  );
   let txt = msg.content[0]?.type === "text" ? msg.content[0].text.trim() : "";
   if (txt.startsWith("```")) txt = txt.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
   let data: Record<string, unknown> = {};
@@ -144,22 +168,59 @@ export async function perguntarJson(prompt: string, maxTokens = 800, modelo: "ha
  * derrubar a geração da análise nem a pesquisa web (causa do "Erro ao processar"
  * intermitente). Erros não-transitórios (400/401/...) sobem na hora.
  */
-export async function createWithRetry(params: any, attempt = 0): Promise<any> {
+export async function createWithRetry(params: any, attempt = 0, meta?: MetaUsoIA): Promise<any> {
+  const iniciadoEm = new Date();
   try {
     // max_tokens grande (análise "para leigos": 24k) → o SDK EXIGE streaming em
     // requisições potencialmente longas ("Streaming is strongly recommended…").
     // O stream é consumido inteiro aqui e finalMessage() devolve o MESMO shape de
     // Message (content/usage/stop_reason) — os chamadores não mudam em nada.
+    let msg: any;
     if (typeof params?.max_tokens === "number" && params.max_tokens > 12000) {
       const stream = client.messages.stream(params);
-      return await stream.finalMessage();
+      msg = await stream.finalMessage();
+    } else {
+      msg = await client.messages.create(params);
     }
-    return await client.messages.create(params);
+    // TELEMETRIA DE CUSTO (03/08/2026): esta é a porta por onde passam 11 das 15
+    // etapas com IA. Instrumentar POR DENTRO cobre todas de uma vez, e o chamador
+    // que não declarar `meta` grava etapa "desconhecida" — visível no relatório,
+    // nunca invisível. Best-effort: `registrarUsoIA` engole o próprio erro.
+    void registrarUsoIA({
+      etapa: meta?.etapa ?? ETAPAS.DESCONHECIDA,
+      provedor: "anthropic",
+      modelo: params?.model ?? "desconhecido",
+      modeloSolicitado: meta?.modeloSolicitado ?? null,
+      documentId: meta?.documentId ?? null,
+      iniciadoEm,
+      tokens: usoDaResposta(msg),
+      sequencia: attempt + 1,
+      ehRetentativa: attempt > 0,
+      stopReason: msg?.stop_reason ?? null,
+      // Bater no teto de tokens gasta o token E entrega resultado truncado — o
+      // relatório precisa mostrar isso separado de uma chamada sã.
+      status: msg?.stop_reason === "max_tokens" ? "truncado" : "ok",
+    });
+    return msg;
   } catch (e: any) {
     if ((e?.status === 429 || e?.status === 529) && attempt < 4) {
+      // 429/529 são rejeição ANTES do processamento: não há usage, não há custo.
+      // O que importa registrar é que a chamada boa precisou de N tentativas —
+      // vai em `sequencia` na linha que der certo.
       await sleep(7000 * (attempt + 1));
-      return createWithRetry(params, attempt + 1);
+      return createWithRetry(params, attempt + 1, meta);
     }
+    void registrarUsoIA({
+      etapa: meta?.etapa ?? ETAPAS.DESCONHECIDA,
+      provedor: "anthropic",
+      modelo: params?.model ?? "desconhecido",
+      documentId: meta?.documentId ?? null,
+      iniciadoEm,
+      sequencia: attempt + 1,
+      ehRetentativa: attempt > 0,
+      status: "erro",
+      erroTipo: String(e?.status ?? e?.name ?? "erro"),
+    });
     throw e;
   }
 }

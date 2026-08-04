@@ -15,6 +15,7 @@
  */
 
 import { modeloAnaliseId, calcCusto, createWithRetry, type CustoIA } from "./ai-extraction";
+import { ETAPAS } from "./ai-usage";
 
 /** Preço da ferramenta web_search da Anthropic: US$10 por 1.000 buscas. */
 const WEB_SEARCH_USD_POR_BUSCA = 10 / 1000;
@@ -153,7 +154,7 @@ export async function researchSectorBenchmarksWeb(
       max_tokens: 1500,
       tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_BUSCAS }],
       messages: [{ role: "user", content: promptPares(setor, alvo.map((i) => i.nome)) }],
-    });
+    }, 0, { etapa: ETAPAS.PESQUISA_WEB_PARES });
   } catch (e: any) {
     console.warn(`[web-pares] falhou (${setor}): ${e?.message ?? e}`);
     return null;
@@ -197,7 +198,7 @@ export async function researchCompanyWeb(
       max_tokens: 3000,
       tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_BUSCAS }],
       messages: [{ role: "user", content: prompt(empresa) }],
-    });
+    }, 0, { etapa: ETAPAS.PESQUISA_WEB_EMPRESA });
   } catch (e: any) {
     console.warn(`[web-research] falhou (${empresa.razaoSocial}): ${e?.message ?? e}`);
     return null;

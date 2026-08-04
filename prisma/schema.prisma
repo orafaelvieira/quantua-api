@@ -8,51 +8,51 @@ datasource db {
 }
 
 model User {
-  id                      String     @id @default(uuid())
-  email                   String     @unique
-  name                    String
-  passwordHash            String     @map("password_hash")
-  workspaceType           String     @default("consultoria") @map("workspace_type")
+  id                       String    @id @default(uuid())
+  email                    String    @unique
+  name                     String
+  passwordHash             String    @map("password_hash")
+  workspaceType            String    @default("consultoria") @map("workspace_type")
   // Perfil de ICP auto-declarado no cadastro via páginas /para/* (contabilidade | bpo | cfo).
   // Opcional: nulo em cadastros que não vieram de uma página de perfil.
-  partnerProfile          String?    @map("partner_profile")
-  role                    String?
+  partnerProfile           String?   @map("partner_profile")
+  role                     String?
   // TIPO DE USUÁRIO (2026-07-17, fundação SaaS): "quantua" = equipe interna
   // (funcionário/diretor/sócio — o nível fino segue em `role`: operator/
   // reviewer/partner); "empresa" = responsável/funcionário do cliente (acessa a
   // empresa dele e as do GRUPO via Organizacao tipo "grupo"); "parceiro" =
   // contabilidade/advocacia etc. (acessa as empresas ATENDIDAS pela organização).
   // O portal legado continua marcado por role "client".
-  tipoUsuario             String     @default("quantua") @map("tipo_usuario")
+  tipoUsuario              String    @default("quantua") @map("tipo_usuario")
   professionalRegistration String?   @map("professional_registration")
-  invitedAt               DateTime?  @map("invited_at")
-  mustChangePassword      Boolean    @default(false) @map("must_change_password")
-  emailConfirmedAt        DateTime?  @map("email_confirmed_at")
-  phone                   String?
-  cargo                   String?
-  timezone                String?    @default("America/Sao_Paulo")
-  language                String?    @default("pt-BR")
-  onboardedAt             DateTime?  @map("onboarded_at")
+  invitedAt                DateTime? @map("invited_at")
+  mustChangePassword       Boolean   @default(false) @map("must_change_password")
+  emailConfirmedAt         DateTime? @map("email_confirmed_at")
+  phone                    String?
+  cargo                    String?
+  timezone                 String?   @default("America/Sao_Paulo")
+  language                 String?   @default("pt-BR")
+  onboardedAt              DateTime? @map("onboarded_at")
   // Offboarding da equipe interna: preenchido = acesso REVOGADO (não loga, sessão
   // rejeitada). A conta e o histórico ficam; nada é apagado.
-  desativadoEm            DateTime?  @map("desativado_em")
-  workspaceId             String?    @map("workspace_id")
-  createdAt               DateTime   @default(now()) @map("created_at")
+  desativadoEm             DateTime? @map("desativado_em")
+  workspaceId              String?   @map("workspace_id")
+  createdAt                DateTime  @default(now()) @map("created_at")
 
-  workspace           Workspace?            @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
-  companies           Company[]
-  analyses            Analysis[]
-  dictionaries        AccountDictionary[]
-  auditEvents         AuditEvent[]
-  timeEntries         TimeEntry[]
-  allocations         Allocation[]
-  ownedEngagements    Engagement[]          @relation("EngagementRT")
-  createdInvitations  ClientInvitation[]    @relation("InvitationCreator")
-  engagementSignatures EngagementSignature[] @relation("Signer")
-  createdTeamInvites  TeamInvite[]          @relation("TeamInviteCreator")
-  passwordResets      PasswordResetToken[]
-  emailConfirmations  EmailConfirmationToken[]
-  organizacoes        OrganizacaoMembro[]
+  workspace            Workspace?               @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  companies            Company[]
+  analyses             Analysis[]
+  dictionaries         AccountDictionary[]
+  auditEvents          AuditEvent[]
+  timeEntries          TimeEntry[]
+  allocations          Allocation[]
+  ownedEngagements     Engagement[]             @relation("EngagementRT")
+  createdInvitations   ClientInvitation[]       @relation("InvitationCreator")
+  engagementSignatures EngagementSignature[]    @relation("Signer")
+  createdTeamInvites   TeamInvite[]             @relation("TeamInviteCreator")
+  passwordResets       PasswordResetToken[]
+  emailConfirmations   EmailConfirmationToken[]
+  organizacoes         OrganizacaoMembro[]
 
   @@index([role])
   @@index([workspaceId])
@@ -89,19 +89,19 @@ model EmailConfirmationToken {
 }
 
 model Workspace {
-  id              String       @id @default(uuid())
-  type            String       // "empresa" | "consultoria"
+  id              String   @id @default(uuid())
+  type            String // "empresa" | "consultoria"
   cnpj            String?
-  razaoSocial     String       @map("razao_social")
-  nomeFantasia    String?      @map("nome_fantasia")
+  razaoSocial     String   @map("razao_social")
+  nomeFantasia    String?  @map("nome_fantasia")
   setor           String?
-  porte           String?      // micro | pequena | média | grande
-  defaultCurrency String       @default("BRL") @map("default_currency")
-  fiscalYearStart String       @default("january") @map("fiscal_year_start") // january | april | july
-  auditLogsOn     Boolean      @default(true) @map("audit_logs_on")
-  aiAnalysisModel String       @default("sonnet") @map("ai_analysis_model") // haiku | sonnet | opus — modelo de IA da análise (generateAnalysis)
-  createdAt       DateTime     @default(now()) @map("created_at")
-  updatedAt       DateTime     @updatedAt @map("updated_at")
+  porte           String? // micro | pequena | média | grande
+  defaultCurrency String   @default("BRL") @map("default_currency")
+  fiscalYearStart String   @default("january") @map("fiscal_year_start") // january | april | july
+  auditLogsOn     Boolean  @default(true) @map("audit_logs_on")
+  aiAnalysisModel String   @default("sonnet") @map("ai_analysis_model") // haiku | sonnet | opus — modelo de IA da análise (generateAnalysis)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
 
   members User[]
   invites TeamInvite[]
@@ -110,16 +110,16 @@ model Workspace {
 }
 
 model TeamInvite {
-  id           String    @id @default(uuid())
-  workspaceId  String    @map("workspace_id")
-  email        String
-  role         String    // "operator" | "reviewer" | "partner"
-  tokenHash    String    @unique @map("token_hash")
-  expiresAt    DateTime  @map("expires_at")
-  acceptedAt   DateTime? @map("accepted_at")
-  invitedById  String    @map("invited_by_id")
-  status       String    @default("pending") // pending | accepted | expired | revoked
-  createdAt    DateTime  @default(now()) @map("created_at")
+  id          String    @id @default(uuid())
+  workspaceId String    @map("workspace_id")
+  email       String
+  role        String // "operator" | "reviewer" | "partner"
+  tokenHash   String    @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at")
+  acceptedAt  DateTime? @map("accepted_at")
+  invitedById String    @map("invited_by_id")
+  status      String    @default("pending") // pending | accepted | expired | revoked
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   invitedBy User      @relation("TeamInviteCreator", fields: [invitedById], references: [id])
@@ -130,35 +130,35 @@ model TeamInvite {
 }
 
 model AccountDictionary {
-  id            String   @id @default(uuid())
-  nomeOriginal  String   @map("nome_original")
-  contaDestino  String   @map("conta_destino")
-  grupoConta    String   @map("grupo_conta")
-  tipo          String   @default("BP")
-  userId        String?  @map("user_id")
+  id              String    @id @default(uuid())
+  nomeOriginal    String    @map("nome_original")
+  contaDestino    String    @map("conta_destino")
+  grupoConta      String    @map("grupo_conta")
+  tipo            String    @default("BP")
+  userId          String?   @map("user_id")
   // Cascata de escopo (2026-07-17): companyId null + userId null = GLOBAL (seed);
   // companyId null + userId = workspace (legado/manual); companyId = EMPRESA
   // (autofeed do IBR — vale só para os IBRs daquela empresa, com userId = autor).
-  companyId     String?  @map("company_id")
+  companyId       String?   @map("company_id")
   // Entradas de EMPRESA: "pendente" | "aprovada" | "reprovada" | "local" — fila da
   // tela "Validação de contas" (aprovar promove ao dicionário global). Em QUALQUER
   // escopo: "cancelada" = fora da cascata dos folds (inclusão errada; reversível) —
   // globais canceladas não são herdadas por empresas novas.
-  revisao       String?
-  revisadoPor   String?   @map("revisado_por")
-  revisadoEm    DateTime? @map("revisado_em")
+  revisao         String?
+  revisadoPor     String?   @map("revisado_por")
+  revisadoEm      DateTime? @map("revisado_em")
   // Motivo da reprovação/cancelamento (obrigatório na reprovação da fila).
-  revisaoMotivo String?   @map("revisao_motivo")
+  revisaoMotivo   String?   @map("revisao_motivo")
   // Caminho da conta no documento de origem ("Ativo Circulante > … > EMPRÉSTIMOS
   // A PESSOAS LIGADAS") — alimenta o detector de conta PARTICULAR e a promoção
   // "como regra de grupo" (promove o nome do grupo, nunca o nome do terceiro).
-  grupoCaminho  String?   @map("grupo_caminho")
+  grupoCaminho    String?   @map("grupo_caminho")
   // Varredura LGPD: entrada GLOBAL revisada por humano e mantida (falso positivo
   // do detector — ex.: "Banco do Brasil S/A") sai das varreduras seguintes.
   lgpdRevisadoEm  DateTime? @map("lgpd_revisado_em")
   lgpdRevisadoPor String?   @map("lgpd_revisado_por")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
 
   user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -196,17 +196,17 @@ model StandardModel {
 // Empresas listadas, demonstrativos por período e indicadores nas 3 VISÕES:
 // TRI (trimestre isolado) · ANO (exercício fechado) · LTM (últimos 12 meses).
 model CvmCompany {
-  cnpj      String   @id // só dígitos
-  cdCvm     String   @map("cd_cvm")
-  denom     String
-  ticker    String? // código emissor B3 (4 letras) — join exato CNPJ↔código via API de listadas
+  cnpj          String   @id // só dígitos
+  cdCvm         String   @map("cd_cvm")
+  denom         String
+  ticker        String? // código emissor B3 (4 letras) — join exato CNPJ↔código via API de listadas
   // Taxonomia setorial oficial B3 (mesma semântica da PeerCompany):
   // classificacao = SETOR B3 · setor = SUBSETOR · subsetor = SEGMENTO
   classificacao String?
   setor         String?
   subsetor      String?
   pregao        String? // nome de pregão B3
-  updatedAt DateTime @updatedAt @map("updated_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
   periods    CvmPeriod[]
   indicators CvmIndicator[]
@@ -336,15 +336,15 @@ model DictionaryVersion {
 }
 
 model StandardModelLine {
-  id      String  @id @default(uuid())
-  modelId String  @map("model_id")
-  codigo  String // chave ESTÁVEL (cascata/indicadores referenciam por código, não nome)
-  nome    String
-  grupo   String  @default("") // classificacao do BP (AT/AC/AF/AO/ANC/PT/PC/PF/PNC/PL); "" na DRE
-  ordem   Int
-  tipo    String  @default("input") // "input" | "subtotal" | "total"
-  nivel   Int     @default(2)
-  sinal   Int? // convenção de sinal para inputs (+1/-1); null = neutro/subtotal
+  id        String  @id @default(uuid())
+  modelId   String  @map("model_id")
+  codigo    String // chave ESTÁVEL (cascata/indicadores referenciam por código, não nome)
+  nome      String
+  grupo     String  @default("") // classificacao do BP (AT/AC/AF/AO/ANC/PT/PC/PF/PNC/PL); "" na DRE
+  ordem     Int
+  tipo      String  @default("input") // "input" | "subtotal" | "total"
+  nivel     Int     @default(2)
+  sinal     Int? // convenção de sinal para inputs (+1/-1); null = neutro/subtotal
   descricao String? // guia "o que entra / o que NÃO entra" — exibido nos dropdowns de classificação
 
   model StandardModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
@@ -354,30 +354,30 @@ model StandardModelLine {
 }
 
 model Company {
-  id           String   @id @default(uuid())
-  userId       String   @map("user_id")
-  razaoSocial  String   @map("razao_social")
-  nomeFantasia String?  @map("nome_fantasia")
-  cnpj         String?
-  setor        String?
-  porte        String?
-  uf           String?
-  status       String   @default("ativo")
+  id                  String   @id @default(uuid())
+  userId              String   @map("user_id")
+  razaoSocial         String   @map("razao_social")
+  nomeFantasia        String?  @map("nome_fantasia")
+  cnpj                String?
+  setor               String?
+  porte               String?
+  uf                  String?
+  status              String   @default("ativo")
   // ── Dados da Receita Federal (consulta CNPJ · BrasilAPI) ──
   // Campos promovidos = os que a UI/análise usam direto; cnpjData guarda a
   // RESPOSTA COMPLETA da consulta (nada se perde — QSA, endereço, CNAEs 2os…).
   municipio           String?
   cnae                String? // código CNAE principal (7 dígitos)
-  cnaeDescricao       String? @map("cnae_descricao")
-  naturezaJuridica    String? @map("natureza_juridica")
-  dataInicioAtividade String? @map("data_inicio_atividade") // AAAA-MM-DD
-  situacaoCadastral   String? @map("situacao_cadastral") // ATIVA/SUSPENSA/BAIXADA…
-  capitalSocial       Float?  @map("capital_social")
-  regimeTributario    String? @map("regime_tributario") // MEI/Simples Nacional/Lucro Presumido/Lucro Real
-  cnpjData            Json?   @map("cnpj_data")
-  createdAt    DateTime @default(now()) @map("created_at")
+  cnaeDescricao       String?  @map("cnae_descricao")
+  naturezaJuridica    String?  @map("natureza_juridica")
+  dataInicioAtividade String?  @map("data_inicio_atividade") // AAAA-MM-DD
+  situacaoCadastral   String?  @map("situacao_cadastral") // ATIVA/SUSPENSA/BAIXADA…
+  capitalSocial       Float?   @map("capital_social")
+  regimeTributario    String?  @map("regime_tributario") // MEI/Simples Nacional/Lucro Presumido/Lucro Real
+  cnpjData            Json?    @map("cnpj_data")
+  createdAt           DateTime @default(now()) @map("created_at")
 
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   // ── WORKSPACE FP&A (W2, 2026-07-20) ──
   /// REGIME DE FECHAMENTO da empresa (decisão de 20/07/2026): "contabil" = o
   /// balancete manda no número oficial (gerencial é prévia); "gerencial" = as
@@ -385,14 +385,14 @@ model Company {
   /// QUANDO o mês fecha — o gate da Apresentação de resultados.
   regimeFechamento String @default("contabil") @map("regime_fechamento")
 
-  analyses  Analysis[]
-  documents Document[]
+  analyses     Analysis[]
+  documents    Document[]
   organizacoes OrganizacaoEmpresa[]
-  produtos  ProdutoEmpresa[]
-  periodos  PeriodoEmpresa[]
-  unidades  UnidadeNegocio[]
+  produtos     ProdutoEmpresa[]
+  periodos     PeriodoEmpresa[]
+  unidades     UnidadeNegocio[]
   centrosCusto CentroCusto[]
-  pacotesGmd PacoteGmd[]
+  pacotesGmd   PacoteGmd[]
 
   @@map("companies")
 }
@@ -407,11 +407,11 @@ model Company {
 // FUNDAÇÃO INERTE: as tabelas existem e a resolução de escopo já as entende;
 // nenhuma rota muda de comportamento até a Fase 2 (queries por scopeCompanyIds).
 model Organizacao {
-  id        String   @id @default(uuid())
-  nome      String
-  tipo      String // "grupo" | "parceiro"
-  subtipo   String? // parceiro: "contabilidade" | "advocacia" | "consultoria" | ...
-  cnpj      String?
+  id         String    @id @default(uuid())
+  nome       String
+  tipo       String // "grupo" | "parceiro"
+  subtipo    String? // parceiro: "contabilidade" | "advocacia" | "consultoria" | ...
+  cnpj       String?
   // CICLO DE VIDA (2026-07-17): o status é DERIVADO destes campos (nunca gravado).
   //   dataFim no passado         → "cancelado"  (sem acesso)
   //   dataInicio no futuro       → "agendado"   (sem acesso ainda)
@@ -432,15 +432,15 @@ model Organizacao {
 }
 
 model OrganizacaoMembro {
-  id            String   @id @default(uuid())
-  organizacaoId String   @map("organizacao_id")
-  userId        String   @map("user_id")
-  papel         String   @default("membro") // "gestor" (concede acessos) | "membro"
+  id            String    @id @default(uuid())
+  organizacaoId String    @map("organizacao_id")
+  userId        String    @map("user_id")
+  papel         String    @default("membro") // "gestor" (concede acessos) | "membro"
   // Vigência do ACESSO do membro (saída da organização = preencher dataFim).
   // Fora de [dataInicio, dataFim] o membro não recebe empresa nenhuma no escopo.
   dataInicio    DateTime? @map("data_inicio")
   dataFim       DateTime? @map("data_fim")
-  createdAt     DateTime @default(now()) @map("created_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
   organizacao Organizacao @relation(fields: [organizacaoId], references: [id], onDelete: Cascade)
   user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -554,12 +554,12 @@ model Analysis {
   /// análises com `nextReviewAt <= now+14d` e dispara email ao RT/operator.
   /// Calculado em POST /analyses como createdAt + reviewCadenceDays.
   /// RT pode adiar via POST /analyses/:id/snooze-review (+7d).
-  nextReviewAt          DateTime? @map("next_review_at")
+  nextReviewAt         DateTime? @map("next_review_at")
   /// Última vez que o cron disparou notificação. Usado pra idempotência —
   /// pula registros notificados < 1d antes do próximo review.
-  lastReviewNotifiedAt  DateTime? @map("last_review_notified_at")
+  lastReviewNotifiedAt DateTime? @map("last_review_notified_at")
   /// Cadência em dias entre revisões recorrentes. Default 30 (mensal).
-  reviewCadenceDays     Int       @default(30) @map("review_cadence_days")
+  reviewCadenceDays    Int       @default(30) @map("review_cadence_days")
 
   // ── WORKSPACE FP&A (W1, 2026-07-20) — campos ADITIVOS e anuláveis ──
   /// Envelope de produto ao qual este IBR pertence como VERSÃO (declarado
@@ -568,10 +568,10 @@ model Analysis {
   /// Nº da versão dentro do envelope (monotônico; atribuído ao declarar).
   produtoVersao Int?    @map("produto_versao")
 
-  company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  user        User         @relation(fields: [userId], references: [id])
+  company     Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user        User              @relation(fields: [userId], references: [id])
   /// SetNull: sumir o envelope jamais pode derrubar o IBR (zero retrocesso).
-  produto     ProdutoEmpresa? @relation(fields: [produtoId], references: [id], onDelete: SetNull)
+  produto     ProdutoEmpresa?   @relation(fields: [produtoId], references: [id], onDelete: SetNull)
   documents   Document[]
   engagement  Engagement?
   auditEvents AuditEvent[]
@@ -586,26 +586,26 @@ model Analysis {
 }
 
 model Document {
-  id             String   @id @default(uuid())
+  id                 String   @id @default(uuid())
   /// DATA ROOM ÚNICA (Parte 12 do plano, 2026-07-20): anulável — documento SEM
   /// análise é documento do POOL da empresa (entrada pelo workspace, antes de
   /// qualquer IBR existir). Os fluxos do IBR seguem preenchendo sempre; docs de
   /// pool são invisíveis às telas do IBR por construção (todo filtro é por
   /// analysisId). Fase B: o IBR FIXA documentos do pool em linha própria.
-  analysisId     String?  @map("analysis_id")
-  companyId      String   @map("company_id")
-  nome           String
-  tipo           String
-  competencia    String?
+  analysisId         String?  @map("analysis_id")
+  companyId          String   @map("company_id")
+  nome               String
+  tipo               String
+  competencia        String?
   /// Breve explicação do documento (28/07/2026) — pedida no upload de material
   /// COMPLEMENTAR, que não tem competência nem extração para se explicar
   /// sozinho ("ata da reunião de sócios de março", "contrato de mútuo").
-  descricao      String?
-  moeda          String   @default("BRL")
-  status         String   @default("Pendente")
-  confianca      Int?
-  storagePath    String?  @map("storage_path")
-  hash           String?
+  descricao          String?
+  moeda              String   @default("BRL")
+  status             String   @default("Pendente")
+  confianca          Int?
+  storagePath        String?  @map("storage_path")
+  hash               String?
   dadosExtraidos     Json?    @map("dados_extraidos")
   editadoManualmente Boolean  @default(false) @map("editado_manualmente")
   /// EXTRAÇÃO HERDADA (caso misto da herança, 2026-07-21): dadosExtraidos foi
@@ -618,25 +618,25 @@ model Document {
   // VERSIONAMENTO (política 2026-07-15): documento nunca é deletado depois de
   // processado — é SUBSTITUÍDO. A versão antiga fica com status "Substituído",
   // arquivo preservado no storage (evidência) e o ponteiro para a sucessora.
-  versao              Int      @default(1)
-  substituidoPorId    String?  @map("substituido_por_id")
-  motivoSubstituicao  String?  @map("motivo_substituicao")
+  versao             Int      @default(1)
+  substituidoPorId   String?  @map("substituido_por_id")
+  motivoSubstituicao String?  @map("motivo_substituicao")
   /// FIXAÇÃO (Fase B da Data room única): esta linha é a evidência de um IBR
   /// criada a partir de um documento do POOL — aponta para a linha de origem.
   /// A linha do pool é imutável (substituir cria linha NOVA), então a versao
   /// dela É a proveniência congelada ("usa Balancete jun/26 v3"); pool com
   /// substituidoPorId preenchido = "insumo desatualizado" nos IBRs que a fixaram.
-  fixadoDeId          String?  @map("fixado_de_id")
-  createdAt      DateTime @default(now()) @map("created_at")
+  fixadoDeId         String?  @map("fixado_de_id")
+  createdAt          DateTime @default(now()) @map("created_at")
 
   /// Opcional (pool). Quando presente, o cascade continua: apagar a análise
   /// apaga OS DOCUMENTOS DELA — docs de pool sobrevivem (são fato da empresa)
   /// e caem só com a empresa (cascade abaixo).
-  analysis Analysis? @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  analysis Analysis?  @relation(fields: [analysisId], references: [id], onDelete: Cascade)
   // Cascade TAMBÉM por empresa: sem ele o RESTRICT dispara IMEDIATO no
   // Postgres e excluir empresa com documentos falha — mesmo que a cascata
   // das análises fosse apagar esses documentos logo em seguida.
-  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company  Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
   // SetNull (não Restrict): no cascade da empresa a ordem de exclusão entre
   // pool e fixações não é garantida — Restrict faria a exclusão da empresa
   // falhar. A guarda de negócio (não remover pool fixado) fica na rota.
@@ -666,33 +666,33 @@ model AnalysisVersion {
 }
 
 model Engagement {
-  id                  String    @id @default(uuid())
-  analysisId          String?   @unique @map("analysis_id")
-  userId              String    @map("user_id")
-  rtId                String?   @map("rt_id")
-  companyName         String    @map("company_name")
-  requestedBy         String    @map("requested_by")
-  requestedByType     String    @map("requested_by_type")
-  scope               String    @default("")
-  state               String    @default("lead")
-  deadline            DateTime?
-  feeAmount           Float?    @map("fee_amount")
-  feeCurrency         String    @default("BRL") @map("fee_currency")
-  signedAt            DateTime? @map("signed_at")
-  proposalUrl         String?   @map("proposal_url")
-  contractUrls        Json?     @map("contract_urls")
-  notes               String?
-  letterAcceptedAt    DateTime? @map("letter_accepted_at")
-  letterContentHash   String?   @map("letter_content_hash")
-  letterVersion       String?   @map("letter_version")
+  id                     String    @id @default(uuid())
+  analysisId             String?   @unique @map("analysis_id")
+  userId                 String    @map("user_id")
+  rtId                   String?   @map("rt_id")
+  companyName            String    @map("company_name")
+  requestedBy            String    @map("requested_by")
+  requestedByType        String    @map("requested_by_type")
+  scope                  String    @default("")
+  state                  String    @default("lead")
+  deadline               DateTime?
+  feeAmount              Float?    @map("fee_amount")
+  feeCurrency            String    @default("BRL") @map("fee_currency")
+  signedAt               DateTime? @map("signed_at")
+  proposalUrl            String?   @map("proposal_url")
+  contractUrls           Json?     @map("contract_urls")
+  notes                  String?
+  letterAcceptedAt       DateTime? @map("letter_accepted_at")
+  letterContentHash      String?   @map("letter_content_hash")
+  letterVersion          String?   @map("letter_version")
   /// PDF gerado pelo endpoint generate-proposal (fricção #8).
   /// `proposalUrl` continua válido pra retrocompat (browser-print fallback),
   /// mas o caminho preferido é PDF binário em Spaces servido via signed URL.
   proposalPdfStoragePath String?   @map("proposal_pdf_storage_path")
   proposalPdfHash        String?   @map("proposal_pdf_hash")
   proposalGeneratedAt    DateTime? @map("proposal_generated_at")
-  createdAt           DateTime  @default(now()) @map("created_at")
-  updatedAt           DateTime  @updatedAt @map("updated_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
 
   analysis    Analysis?             @relation(fields: [analysisId], references: [id], onDelete: SetNull)
   rt          User?                 @relation("EngagementRT", fields: [rtId], references: [id], onDelete: SetNull)
@@ -760,25 +760,25 @@ model TimeEntry {
 ///
 /// debtVolume e desiredDeadline ficam para retrocompat com leads históricos.
 model Lead {
-  id                     String   @id @default(uuid())
-  targetCompany          String   @map("target_company")
+  id                     String    @id @default(uuid())
+  targetCompany          String    @map("target_company")
   reason                 String
-  debtVolume             String?  @map("debt_volume")
+  debtVolume             String?   @map("debt_volume")
   desiredDeadline        DateTime? @map("desired_deadline")
-  contactName            String?  @map("contact_name")
-  contactEmail           String   @map("contact_email")
+  contactName            String?   @map("contact_name")
+  contactEmail           String    @map("contact_email")
   notes                  String?
-  status                 String   @default("new")
+  status                 String    @default("new")
   // Pivot B2B-3: campos nominais para qualificação de design partner (opcionais).
-  contactRole            String?  @map("contact_role")
-  contactPhone           String?  @map("contact_phone")
-  firmType               String?  @map("firm_type")
-  portfolioSize          String?  @map("portfolio_size")
-  portfolioMidMarketPct  String?  @map("portfolio_midmarket_pct")
-  teamSize               String?  @map("team_size")
-  consultingPricingModel String?  @map("consulting_pricing_model")
-  weeklyAvailability     Boolean? @map("weekly_availability")
-  createdAt              DateTime @default(now()) @map("created_at")
+  contactRole            String?   @map("contact_role")
+  contactPhone           String?   @map("contact_phone")
+  firmType               String?   @map("firm_type")
+  portfolioSize          String?   @map("portfolio_size")
+  portfolioMidMarketPct  String?   @map("portfolio_midmarket_pct")
+  teamSize               String?   @map("team_size")
+  consultingPricingModel String?   @map("consulting_pricing_model")
+  weeklyAvailability     Boolean?  @map("weekly_availability")
+  createdAt              DateTime  @default(now()) @map("created_at")
 
   @@index([status, createdAt])
   @@index([firmType])
@@ -830,7 +830,7 @@ model EngagementSignature {
 model Invoice {
   id            String    @id @default(uuid())
   engagementId  String    @map("engagement_id")
-  milestone     String    // "entry_50" | "final_50" | "other"
+  milestone     String // "entry_50" | "final_50" | "other"
   amount        Float
   currency      String    @default("BRL")
   status        String    @default("draft") // draft | issued | paid | overdue | cancelled
@@ -853,7 +853,7 @@ model Allocation {
   id           String   @id @default(uuid())
   userId       String   @map("user_id")
   analysisId   String   @map("analysis_id")
-  phase        String   // engagement | collection | analysis | review | delivery
+  phase        String // engagement | collection | analysis | review | delivery
   plannedHours Float    @map("planned_hours")
   startDate    DateTime @map("start_date")
   endDate      DateTime @map("end_date")
@@ -890,8 +890,8 @@ model Covenant {
   id          String   @id @default(uuid())
   analysisId  String   @map("analysis_id")
   name        String
-  metric      String   // chave do indicador: netDebtEbitda, dscr, currentRatio, ebitdaMargin, minCash
-  operator    String   // "<=" | ">=" | "<" | ">" | "=="
+  metric      String // chave do indicador: netDebtEbitda, dscr, currentRatio, ebitdaMargin, minCash
+  operator    String // "<=" | ">=" | "<" | ">" | "=="
   threshold   Float
   periodicity String   @default("quarterly") // monthly | quarterly | annual
   notes       String?
@@ -909,11 +909,11 @@ model Covenant {
 /// Hierarquia opcional via parentCode (ex.: industria_textil → industria).
 /// Source-of-truth pra dropdown do wizard e pra `Analysis.sectorId`.
 model Sector {
-  code              String   @id
-  name              String
-  parentCode        String?  @map("parent_code")
-  active            Boolean  @default(true)
-  createdAt         DateTime @default(now()) @map("created_at")
+  code       String   @id
+  name       String
+  parentCode String?  @map("parent_code")
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
 
   parent            Sector?            @relation("SectorHierarchy", fields: [parentCode], references: [code])
   children          Sector[]           @relation("SectorHierarchy")
@@ -944,7 +944,7 @@ model SectorBenchmark {
   fetchedAt    DateTime @map("fetched_at")
   notes        String?
 
-  sector       Sector   @relation(fields: [sectorCode], references: [code])
+  sector Sector @relation(fields: [sectorCode], references: [code])
 
   @@unique([sectorCode, year, source, metric, percentile])
   @@index([sectorCode, year])
@@ -962,7 +962,7 @@ model CnaeMapping {
   confidence  String   @default("high")
   reviewedAt  DateTime @map("reviewed_at")
 
-  sector      Sector   @relation(fields: [sectorCode], references: [code])
+  sector Sector @relation(fields: [sectorCode], references: [code])
 
   @@index([sectorCode])
   @@map("cnae_mappings")
@@ -971,11 +971,11 @@ model CnaeMapping {
 /// Mapeamento Damodaran (NYU Stern) industries → setor Quantua.
 /// Ex.: "Apparel" → "industria_textil".
 model DamodaranMapping {
-  damodaranIndustry String   @id @map("damodaran_industry")
-  sectorCode        String   @map("sector_code")
+  damodaranIndustry String  @id @map("damodaran_industry")
+  sectorCode        String  @map("sector_code")
   notes             String?
 
-  sector            Sector   @relation(fields: [sectorCode], references: [code])
+  sector Sector @relation(fields: [sectorCode], references: [code])
 
   @@index([sectorCode])
   @@map("damodaran_mappings")
@@ -1072,7 +1072,7 @@ model FinancialModel {
 
   blocks    ModelBlock[]
   scenarios ModelScenario[]
-  produto   ProdutoEmpresa? @relation(fields: [produtoId], references: [id], onDelete: SetNull)
+  produto   ProdutoEmpresa?   @relation(fields: [produtoId], references: [id], onDelete: SetNull)
   snapshots ModelSnapshot[]
   pacotes   PacoteOrcamento[]
 
@@ -1092,21 +1092,21 @@ model FinancialModel {
 /// pelo critério gravado nele. Consolidado = o próprio modelo (soma de tudo);
 /// a visão por unidade é derivada, nunca uma segunda contabilidade.
 model UnidadeNegocio {
-  id        String   @id @default(uuid())
-  companyId String   @map("company_id")
-  nome      String
+  id                String   @id @default(uuid())
+  companyId         String   @map("company_id")
+  nome              String
   /// Código interno ou CNPJ da filial — exibição, opcional.
-  codigo    String?
-  ehMatriz  Boolean  @default(false) @map("eh_matriz")
+  codigo            String?
+  ehMatriz          Boolean  @default(false) @map("eh_matriz")
   /// RESPONSÁVEL pela unidade (F4, colaboração por área): membro da equipe que
   /// preenche o orçamento desta unidade. Papel operator com responsabilidade
   /// atribuída edita SÓ as linhas das suas unidades; partner/reviewer, tudo.
-  responsavelUserId String? @map("responsavel_user_id")
+  responsavelUserId String?  @map("responsavel_user_id")
   /// Desativar em vez de excluir (política da casa): linhas antigas podem
   /// apontar para cá, e histórico não fica órfão.
-  ativo     Boolean  @default(true)
-  ordem     Int      @default(0)
-  createdAt DateTime @default(now()) @map("created_at")
+  ativo             Boolean  @default(true)
+  ordem             Int      @default(0)
+  createdAt         DateTime @default(now()) @map("created_at")
 
   company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   centros CentroCusto[]
@@ -1141,17 +1141,17 @@ model CentroCusto {
 /// o sistema valida e consolida. Status: rascunho → enviado → validado →
 /// consolidado (reabrir volta a rascunho, com trilha).
 model PacoteOrcamento {
-  id        String   @id @default(uuid())
-  modelId   String   @map("model_id")
+  id         String    @id @default(uuid())
+  modelId    String    @map("model_id")
   /// Unidade dona do pacote; NULL = corporativo (CSC + não atribuído).
-  unidadeId String?  @map("unidade_id")
-  status    String   @default("rascunho")
-  enviadoEm DateTime? @map("enviado_em")
+  unidadeId  String?   @map("unidade_id")
+  status     String    @default("rascunho")
+  enviadoEm  DateTime? @map("enviado_em")
   validadoEm DateTime? @map("validado_em")
   /// Quem mexeu por último (a trilha completa fica no audit).
-  userId    String   @map("user_id")
-  updatedAt DateTime @updatedAt @map("updated_at")
-  createdAt DateTime @default(now()) @map("created_at")
+  userId     String    @map("user_id")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
 
   model FinancialModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
 
@@ -1163,15 +1163,15 @@ model PacoteOrcamento {
 /// grupo de CONTAS que cruza todas as unidades, com um DONO próprio. A dupla
 /// checagem: dono do PACOTE (linha da matriz) × responsável da UNIDADE (coluna).
 model PacoteGmd {
-  id          String   @id @default(uuid())
-  companyId   String   @map("company_id")
-  nome        String
+  id         String   @id @default(uuid())
+  companyId  String   @map("company_id")
+  nome       String
   /// Dono do pacote (membro da equipe) — audita a conta em TODAS as unidades.
-  donoUserId  String?  @map("dono_user_id")
+  donoUserId String?  @map("dono_user_id")
   /// Nomes de conta (normalizados) que compõem o pacote.
-  contas      Json
-  ativo       Boolean  @default(true)
-  createdAt   DateTime @default(now()) @map("created_at")
+  contas     Json
+  ativo      Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -1181,24 +1181,24 @@ model PacoteGmd {
 /// analista, nunca inferida por tipo+data (decisão de 20/07/2026 — dois
 /// "Valuation 2026" podem ser trabalhos distintos, não versões).
 model ProdutoEmpresa {
-  id        String @id @default(uuid())
-  companyId String @map("company_id")
+  id              String   @id @default(uuid())
+  companyId       String   @map("company_id")
   /// "ibr" | "valuation" | "orcamento" | "business-plan"
-  tipo      String
+  tipo            String
   /// Rótulo HÍBRIDO: prefixo do sistema + complemento livre ("Orçamento 2027",
   /// "Business Plan — Sementes"; complemento obrigatório no BP).
-  rotulo    String
+  rotulo          String
   /// Rótulo normalizado (sem acentos/caixa/espaços duplos) — trava anti-duplicata:
   /// colisão vira a pergunta "isto é uma nova versão de X?", nunca dois envelopes.
-  rotuloNorm String @map("rotulo_norm")
+  rotuloNorm      String   @map("rotulo_norm")
   /// VIGÊNCIA (decisão de 20/07/2026): para tipo "ibr" este campo fica NULL e a
   /// vigente é DERIVADA (maior produtoVersao com status Concluída) — automática ao
   /// concluir, sem hook no fluxo do IBR. Para os demais, ponteiro MANUAL para o id
   /// do registro vigente ("vigente" é decisão de negócio).
   versaoVigenteId String?  @map("versao_vigente_id")
-  userId    String   @map("user_id")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  userId          String   @map("user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
 
   company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   analyses Analysis[]
@@ -1219,19 +1219,19 @@ model ProdutoEmpresa {
 /// Retificação pós-fechamento também é derivada: versão de documento criada
 /// DEPOIS de fechadoEm ⇒ selo vermelho no workspace.
 model PeriodoEmpresa {
-  id        String    @id @default(uuid())
-  companyId String    @map("company_id")
+  id             String    @id @default(uuid())
+  companyId      String    @map("company_id")
   /// "YYYY-MM".
-  periodo   String
+  periodo        String
   /// null = nunca fechado (estado derivado); preenchido = fechado.
-  fechadoEm     DateTime? @map("fechado_em")
-  fechadoPorId  String?   @map("fechado_por_id")
+  fechadoEm      DateTime? @map("fechado_em")
+  fechadoPorId   String?   @map("fechado_por_id")
   /// Última reabertura (o fechamento atual pode ser posterior a ela).
   reabertoEm     DateTime? @map("reaberto_em")
   reabertoPorId  String?   @map("reaberto_por_id")
   reabertoMotivo String?   @map("reaberto_motivo")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -1289,33 +1289,33 @@ model ModelScenario {
 /// novo NÃO apaga o anterior — só deixa de ser o vigente, e o Orçado ×
 /// Realizado de meses já publicados continua reproduzível.
 model ModelSnapshot {
-  id             String   @id @default(uuid())
-  modelId        String   @map("model_id")
+  id             String    @id @default(uuid())
+  modelId        String    @map("model_id")
   /// Versão monotônica dentro do modelo (1, 2, 3…).
   versao         Int
   nome           String
   /// Cenário ativo no instante do congelamento (selo do CFI).
   cenario        String
-  mesInicial     String   @map("mes_inicial")
-  horizonteMeses Int      @map("horizonte_meses")
+  mesInicial     String    @map("mes_inicial")
+  horizonteMeses Int       @map("horizonte_meses")
   /// { dre: LinhaDre[], bp?: LinhaDre[], fc?: LinhaDre[] } — ver model-orcamento.ts
   conteudo       Json
   /// Hash do conteúdo: prova de que o snapshot não foi adulterado depois.
-  contentHash    String?  @map("content_hash")
+  contentHash    String?   @map("content_hash")
   /// BASELINE do Orçado × Realizado. Desde a F2 (25/07/2026), quem liga isto é
   /// a APROVAÇÃO — congelar cria rascunho (ativo=false); aprovar torna vigente.
-  ativo          Boolean  @default(true)
+  ativo          Boolean   @default(true)
   /// CICLO DE APROVAÇÃO (F2): "rascunho" → "final" (pronto p/ aprovação) →
   /// "aprovado" (trava e vira baseline). Reabrir exige motivo (trilha).
-  status         String   @default("rascunho")
+  status         String    @default("rascunho")
   /// Quem aprovou (papel partner) e quando — assinatura do orçamento.
-  aprovadoPor    String?  @map("aprovado_por")
+  aprovadoPor    String?   @map("aprovado_por")
   aprovadoEm     DateTime? @map("aprovado_em")
   /// Quem congelou.
-  userId         String   @map("user_id")
+  userId         String    @map("user_id")
   /// Motivo/observação do congelamento (entra na trilha).
   observacao     String?
-  createdAt      DateTime @default(now()) @map("created_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
 
   model FinancialModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
 
@@ -1349,4 +1349,130 @@ model SnapshotDiario {
   @@index([entidade, entidadeId, criadoEm])
   @@index([companyId])
   @@map("snapshots_diarios")
+}
+
+/// CONSUMO DE IA — uma linha por CHAMADA FÍSICA a um provedor pago (2026-08-03).
+///
+/// Regra do dono: "sempre precisaremos ter o custo de tudo que usar IA... quando a
+/// Quantua escalar não podemos ser surpreendidos". Custo de IA é matéria-prima do
+/// IBR: sem medição por empresa e por período, a margem só aparece na fatura.
+///
+/// PROVEDOR-AGNÓSTICA DE PROPÓSITO. A Anthropic cobra por TOKEN; o Cloud Vision
+/// cobra por PÁGINA. Por isso `provedor` + `unidade` + `quantidade` são o par
+/// canônico, e os campos de token existem como detalhamento de quem usa token.
+/// Um provedor novo entra sem migração.
+///
+/// PREÇO CARIMBADO NA LINHA. Nenhuma API devolve dólar — o valor sai de tabela
+/// nossa. Sem gravar o preço aplicado, mexer na tabela reescreve todo o histórico
+/// em silêncio e nenhum número passado fica auditável.
+///
+/// Uma RETENTATIVA é linha própria (mesmo `grupoId`, `sequencia` maior): token
+/// gasto é token gasto. Um REAPROVEITAMENTO de cache é linha com `usdTotal = 0` e
+/// `usdOriginal` preenchido — o histórico mostra o que custou, o extrato do mês
+/// não cobra duas vezes.
+model AiUsageEvent {
+  id String @id @default(uuid())
+
+  // ── DE QUEM É O GASTO (escopo de tenant sempre que existir) ──
+  workspaceId String? @map("workspace_id")
+  companyId   String? @map("company_id")
+  analysisId  String? @map("analysis_id")
+  modelId     String? @map("financial_model_id")
+  documentId  String? @map("document_id")
+  /// Autor humano; null = disparo automático (cron, cascata interna).
+  userId      String? @map("user_id")
+  /// Snapshot do nome, como AuditEvent faz — sobrevive à exclusão do usuário.
+  userName    String? @map("user_name")
+
+  // ── O QUE FOI ──
+  /// "IBR" | "Valuation" | "Modelos Financeiros" | "Business Plan" | "Data room"
+  produto       String
+  /// Slug estável da etapa (ver ETAPAS em ai-usage.ts). Nunca vazio: chamada sem
+  /// etapa declarada grava "desconhecida" — honesto, e visível no relatório.
+  etapa         String
+  /// Rota/gatilho: "process" | "generate" | "refold" | "reconcile-ai" | "models" | "auto"
+  origem        String  @default("desconhecida")
+  /// Uma ação do usuário = um grupo. É o que correlaciona retentativas e
+  /// as N chamadas de uma etapa fatiada (OCR por lote, sugestões por fatia).
+  grupoId       String? @map("grupo_id")
+  sequencia     Int     @default(1)
+  ehRetentativa Boolean @default(false) @map("eh_retentativa")
+
+  // ── PROVEDOR E UNIDADE (o par que torna a tabela agnóstica) ──
+  /// "anthropic" | "google-vision" | ...
+  provedor         String
+  /// Identificador do que rodou: id do modelo, ou "DOCUMENT_TEXT_DETECTION".
+  modelo           String
+  /// O que o WORKSPACE pediu (chave de config). Divergir de `modelo` é defeito
+  /// de configuração — flagrado em produção: pedia "sonnet" e rodava opus.
+  modeloSolicitado String? @map("modelo_solicitado")
+  /// "tokens" | "paginas" | "requisicoes"
+  unidade          String
+  /// Quantidade na unidade acima (tokens totais, páginas lidas, requisições).
+  quantidade       Int     @default(0)
+
+  // ── DETALHE DE TOKEN (só para provedor que cobra por token) ──
+  inputTokens        Int @default(0) @map("input_tokens")
+  outputTokens       Int @default(0) @map("output_tokens")
+  /// Escrita e leitura de cache têm preço DIFERENTE do token normal. Nunca eram
+  /// lidos antes de 03/08/2026 — onde havia cache, o custo calculado não batia
+  /// com a fatura.
+  cacheCriacaoTokens Int @default(0) @map("cache_criacao_tokens")
+  cacheLeituraTokens Int @default(0) @map("cache_leitura_tokens")
+  /// Buscas web da ferramenta server-side (cobradas por busca, fora do token).
+  buscasWeb          Int @default(0) @map("buscas_web")
+
+  // ── DINHEIRO ──
+  usdTotal     Float   @default(0) @map("usd_total")
+  brlTotal     Float?  @map("brl_total")
+  /// Cotação APLICADA no momento — BRL recalculado no relatório muda sozinho
+  /// toda semana, e número que o sócio compara mês a mês não pode fazer isso.
+  usdBrl       Float?  @map("usd_brl")
+  cotacaoFonte String? @map("cotacao_fonte")
+
+  // ── PROVA DO PREÇO ──
+  precoVersao       String? @map("preco_versao")
+  /// Preço por unidade aplicado (por Mtok quando token, por página quando página).
+  precoInput        Float?  @map("preco_input")
+  precoOutput       Float?  @map("preco_output")
+  precoCacheCriacao Float?  @map("preco_cache_criacao")
+  precoCacheLeitura Float?  @map("preco_cache_leitura")
+  precoUnitario     Float?  @map("preco_unitario")
+  /// Modelo fora da tabela de preços NÃO pode virar custo zero em silêncio.
+  precoDesconhecido Boolean @default(false) @map("preco_desconhecido")
+
+  // ── TEMPO ──
+  iniciadoEm   DateTime  @map("iniciado_em")
+  finalizadoEm DateTime? @map("finalizado_em")
+  duracaoMs    Int?      @map("duracao_ms")
+
+  // ── RESULTADO ──
+  /// "ok" | "erro" | "truncado" | "preco-desconhecido"
+  status     String  @default("ok")
+  /// "max_tokens" = token gasto e resultado inútil. Precisa ser visível.
+  stopReason String? @map("stop_reason")
+  erroTipo   String? @map("erro_tipo")
+
+  // ── REAPROVEITAMENTO (cache de aplicação: OCR, pesquisa web) ──
+  reaproveitado    Boolean @default(false)
+  usdOriginal      Float?  @map("usd_original")
+  eventoOriginalId String? @map("evento_original_id")
+  hashInsumo       String? @map("hash_insumo")
+
+  // ── PROVENIÊNCIA DO REGISTRO ──
+  /// "medido" | "backfill" | "inferido" — o relatório marca os três diferente.
+  /// Dado recuperado de Json antigo NÃO pode se apresentar como medido.
+  fonte      String  @default("medido")
+  observacao String?
+
+  criadoEm DateTime @default(now()) @map("criado_em")
+
+  @@index([companyId, iniciadoEm])
+  @@index([analysisId, iniciadoEm])
+  @@index([workspaceId, iniciadoEm])
+  @@index([provedor, iniciadoEm])
+  @@index([etapa, iniciadoEm])
+  @@index([userId, iniciadoEm])
+  @@index([grupoId])
+  @@map("ai_usage_events")
 }

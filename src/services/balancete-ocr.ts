@@ -39,6 +39,9 @@ import { PDFDocument } from "pdf-lib";
 import { createWithRetry, calcCusto, type CustoIA } from "./ai-extraction";
 import { parseBalanceteMatriz, type Matriz } from "./balancete-tabular";
 import type { BalanceteParseado, LinhaBalancete } from "./balancete-parser";
+import { lerPDF as lerVision, matrizDasPaginas } from "./ocr-vision";
+import { precificarUnidades } from "./ai-pricing";
+import { ETAPAS } from "./ai-usage";
 
 const MODELO_OCR = "claude-haiku-4-5-20251001";
 /** Páginas por chamada — a transcrição precisa caber FOLGADA em max_tokens. */
@@ -72,6 +75,20 @@ export interface ResultadoOCR {
   suspeitas: Array<{ classificacao: string; nome: string; anterior: number; debito: number; credito: number; atual: number }>;
   /** Quantas contas NÃO fecham a própria equação — o número de verdade, sem teto. */
   naoFecham: number;
+  /**
+   * Qual motor leu: "vision" = OCR determinístico (reconhece caractere, não
+   * inventa) · "llm" = transcrição assistida por IA. A tela PRECISA distinguir:
+   * dizer "OCR (IA)" sobre uma leitura determinística é tão errado quanto o
+   * contrário.
+   */
+  motor?: "vision" | "llm";
+  /**
+   * Custo da leitura em USD, INDEPENDENTE do provedor. O `custo` acima é de
+   * TOKEN e é nulo na via Vision (que cobra por página) — sem este campo o
+   * reaproveitamento de cache gravaria US$ 0 e o histórico do IBR esqueceria
+   * quanto a leitura custou.
+   */
+  custoUsd?: number;
   avisos: string[];
 }
 
@@ -205,7 +222,7 @@ async function transcreverLote(pdfLote: Buffer, nLote: number, total: number): P
         { type: "text", text: `${INSTRUCAO}\n\n(Lote ${nLote} de ${total} — transcreva TODAS as páginas deste lote, na ordem.)` },
       ] as any,
     }],
-  });
+  }, 0, { etapa: ETAPAS.OCR_BALANCETE });
   return {
     texto: msg.content?.[0]?.type === "text" ? msg.content[0].text : "",
     inTok: msg.usage?.input_tokens ?? 0,
@@ -243,10 +260,66 @@ const montarMatriz = (linhas: string[][], periodo: string | null): Matriz =>
  * OCR do balancete escaneado → BalanceteParseado (mesmo contrato das outras
  * duas vias), com auditoria aritmética e releitura dirigida.
  */
-export async function ocrBalancete(buffer: Buffer, competencia?: string | null): Promise<ResultadoOCR> {
+export async function ocrBalancete(buffer: Buffer, competencia?: string | null, documentId?: string | null): Promise<ResultadoOCR> {
   const avisos: string[] = [];
   let inTok = 0, outTok = 0;
   let degradou = false;
+
+  // ── VIA 1: OCR DETERMINÍSTICO (Cloud Vision) ──────────────────────────────
+  // Medido no mesmo tipo de documento: 97,2% de valores exatos e ZERO valor
+  // inventado, contra 35,6% de linhas quebradas e 4 alucinações do LLM — a 1/10
+  // do custo. Vem primeiro porque erro que se declara a prova pega; valor
+  // inventado que fecha a equação, não.
+  //
+  // SEM RETROCESSO: qualquer falha aqui (API desligada, credencial ausente,
+  // cota, leitura pobre) cai no caminho de LLM EXATAMENTE como era antes. O
+  // pior caso do Vision é o comportamento de hoje.
+  try {
+    const r = await lerVision(buffer, documentId ?? null);
+    const matrizV = matrizDasPaginas(r.paginas, null);
+    // PORTÃO DE ACEITE POR PROPORÇÃO, não por número absoluto. O critério
+    // anterior (">= 5 contas") deixaria 5 contas reconhecidas num documento de
+    // 655 passarem como leitura boa — e, pior, serem CACHEADAS. O que importa é
+    // quanto do documento se perdeu: acima de 5% de linhas com cara de conta que
+    // não renderam valor, a leitura não serve e cai para a via de IA.
+    const reconhecidas = matrizV.linhas.length;
+    const perdidas = matrizV.descartadas;
+    const proporcaoPerdida = reconhecidas + perdidas > 0 ? perdidas / (reconhecidas + perdidas) : 1;
+    if (reconhecidas >= 5 && proporcaoPerdida <= 0.05) {
+      const pV = parseBalanceteMatriz(montarMatriz(matrizV.linhas, matrizV.periodo), competenciaComoPeriodo(competencia));
+      const qV = contarNaoFecham(pV.linhas);
+      const avisoV = avisoNaoFecham(qV.total, pV.linhas.length);
+      return {
+        parseado: pV,
+        // O custo do Vision é registrado por página em `ai_usage_events` (é
+        // cobrado em página, não em token) — por isso `custo` de token é nulo.
+        custo: null,
+        custoUsd: precificarUnidades("google-vision:DOCUMENT_TEXT_DETECTION", r.totalPaginas).usdTotal,
+        paginas: r.totalPaginas,
+        suspeitas: qV.amostra,
+        naoFecham: qV.total,
+        degradou: false,
+        avisos: [
+          `Leitura por OCR determinístico (Google Cloud Vision) em ${r.totalPaginas} página(s) — a tabela foi remontada pela posição de cada palavra no papel, não por interpretação de modelo.`,
+          ...(perdidas > 0
+            ? [`${perdidas} linha(s) com cara de conta não renderam os 4 valores e ficaram de fora — confira no documento.`]
+            : []),
+          ...(avisoV ? [avisoV] : []),
+        ],
+        motor: "vision",
+        matriz: { linhas: matrizV.linhas, periodo: matrizV.periodo },
+      };
+    }
+    avisos.push(
+      perdidas > 0
+        ? `A leitura determinística perdeu ${perdidas} de ${reconhecidas + perdidas} linha(s) de conta (${Math.round(100 * proporcaoPerdida)}%) — caindo para a leitura assistida por IA.`
+        : `A leitura determinística reconheceu apenas ${reconhecidas} conta(s) — caindo para a leitura assistida por IA.`,
+    );
+  } catch (e: any) {
+    console.warn("[ocr] Cloud Vision indisponível, usando a via de IA:", e?.message ?? e);
+  }
+
+  // ── VIA 2: leitura assistida por IA (o caminho de sempre, intocado) ────────
 
   const lotes = await fatiarPDF(buffer, PAGINAS_POR_LOTE);
   // TETO DE PÁGINAS (03/08/2026 — caça de regressão): sem ele, um documento de
@@ -316,7 +389,7 @@ export async function ocrBalancete(buffer: Buffer, competencia?: string | null):
   avisos.push(`Números lidos por OCR (${p.linhas.length} contas em ${lotes.length * PAGINAS_POR_LOTE} páginas) — a extração é assistida por IA e as provas de fechamento valem como conferência.`);
 
   return {
-    parseado: p, custo: custoDe(), paginas: lotes.length * PAGINAS_POR_LOTE, suspeitas, naoFecham: quebradas.total, avisos, degradou,
+    parseado: p, custo: custoDe(), custoUsd: custoDe()?.usd ?? 0, paginas: lotes.length * PAGINAS_POR_LOTE, suspeitas, naoFecham: quebradas.total, motor: "llm", avisos, degradou,
     matriz: { linhas: linhasAtuais, periodo },
   };
 }
@@ -355,7 +428,7 @@ Se ao reler a conta continuar nao fechando, transcreva o que esta impresso mesmo
           },
         ] as any,
       }],
-    });
+    }, 0, { etapa: ETAPAS.OCR_BALANCETE_RELEITURA });
     const { linhas: relidas } = tsvParaLinhas(r.content?.[0]?.type === "text" ? r.content[0].text : "");
     const porCodigo = new Map<string, string[]>();
     for (const nova of relidas) {

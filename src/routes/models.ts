@@ -51,6 +51,7 @@ import { montarConteudoModelo, aplicarFotoModelo, hashConteudo, type ConteudoFot
 import { damodaranDoSetorB3, DAMODARAN_PT } from "../services/damodaran-b3";
 import multer from "multer";
 import { parseDocument } from "../services/parser";
+import { middlewareContextoIA, enriquecerContextoIA, resolverAutorIA } from "../services/ai-usage";
 import {
   sugerirMapa, montarHistorico, paraHistoricoAnual, todosDestinos,
   type MapaConfirmado, type LinhaCrua,
@@ -58,6 +59,11 @@ import {
 
 const router = Router();
 router.use(requireAuth);
+// CONTEXTO DE CONSUMO DE IA (03/08/2026): sem isto todo o gasto do produto
+// Modelos Financeiros / Orçamento / Business Plan nasce ÓRFÃO — sem produto,
+// sem autor e sem empresa —, e a regra "custo de tudo que usa IA" não se cumpre.
+router.use("/:id", middlewareContextoIA("Modelos Financeiros"));
+router.use("/:id", async (_req, _res, next: () => void) => { await resolverAutorIA(); next(); });
 // SOMENTE CONSULTA: org suspensa (inadimplência) lê mas não escreve.
 router.use(guardaEscritaSuspensao("model"));
 
@@ -998,6 +1004,7 @@ async function resultadoVivo(modelId: string) {
 router.post("/:id/orcamento/congelar", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
 
   const calc = await resultadoVivo(model.id);
@@ -1051,6 +1058,7 @@ router.post("/:id/orcamento/congelar", async (req: AuthRequest, res: Response): 
 router.get("/:id/orcamento/snapshots", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const snapshots = await prisma.modelSnapshot.findMany({
     where: { modelId: model.id },
     orderBy: { versao: "desc" },
@@ -1073,6 +1081,7 @@ router.get("/:id/orcamento/snapshots", async (req: AuthRequest, res: Response): 
 router.put("/:id/orcamento/snapshots/:sid/status", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const snap = await prisma.modelSnapshot.findFirst({ where: { id: req.params.sid as string, modelId: model.id } });
   if (!snap) { res.status(404).json({ error: "Orçamento congelado não encontrado" }); return; }
 
@@ -1145,6 +1154,7 @@ router.put("/:id/orcamento/snapshots/:sid/status", async (req: AuthRequest, res:
 router.get("/:id/orcamento/snapshots/:sid", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const snap = await prisma.modelSnapshot.findFirst({ where: { id: req.params.sid as string, modelId: model.id } });
   if (!snap) { res.status(404).json({ error: "Orçamento congelado não encontrado" }); return; }
   res.json({ snapshot: snap });
@@ -1159,6 +1169,7 @@ router.get("/:id/orcamento/snapshots/:sid", async (req: AuthRequest, res: Respon
 router.get("/:id/snapshots-diarios", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const fotos = await prisma.snapshotDiario.findMany({
     where: { entidade: "model", entidadeId: model.id },
     orderBy: { criadoEm: "desc" },
@@ -1179,6 +1190,7 @@ router.get("/:id/snapshots-diarios", async (req: AuthRequest, res: Response): Pr
 router.post("/:id/snapshots-diarios/:snapshotId/restaurar", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const foto = await prisma.snapshotDiario.findFirst({
     where: { id: req.params.snapshotId as string, entidade: "model", entidadeId: model.id },
@@ -1229,6 +1241,7 @@ router.post("/:id/snapshots-diarios/:snapshotId/restaurar", async (req: AuthRequ
 router.get("/:id/orcado-realizado", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
 
   // Baseline default (F2): o APROVADO mais recente. Sem nenhum aprovado, cai no
   // último congelamento — e a resposta AVISA que a comparação é contra rascunho.
@@ -1284,6 +1297,7 @@ router.get("/:id/orcado-realizado", async (req: AuthRequest, res: Response): Pro
 router.put("/:id/metas", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
 
   const metasBrutas = (req.body ?? {}).metas;
@@ -1321,6 +1335,7 @@ router.put("/:id/metas", async (req: AuthRequest, res: Response): Promise<void> 
 router.get("/:id/recorte", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const calc = await resultadoVivo(model.id);
   if (!calc) { res.status(409).json({ error: "Não foi possível calcular o modelo." }); return; }
 
@@ -1353,6 +1368,7 @@ router.get("/:id/recorte", async (req: AuthRequest, res: Response): Promise<void
 router.post("/:id/atualizar-indices", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const [y0, m0] = model.mesInicial.split("-").map(Number);
   const anos = [...new Set(Array.from({ length: model.horizonteMeses }, (_, i) => String(y0 + Math.floor((m0 - 1 + i) / 12))))];
@@ -1378,6 +1394,7 @@ router.post("/:id/atualizar-indices", async (req: AuthRequest, res: Response): P
 router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   // Backfill preguiçoso: modelos criados antes dos grupos NÃO OPERACIONAIS
   // ganham os blocos vazios na primeira abertura.
   const tiposExistentes = new Set(
@@ -1595,6 +1612,7 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 router.get("/:id/dfs-origem", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   if (!model.analysisSeedId) { res.json({ temOrigem: false }); return; }
   const analysis = await prisma.analysis.findUnique({
     where: { id: model.analysisSeedId },
@@ -1647,6 +1665,7 @@ router.get("/:id/dfs-origem", async (req: AuthRequest, res: Response): Promise<v
 router.get("/:id/historico-custos", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   if (!model.analysisSeedId) { res.json({ periodos: [], linhas: [] }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
   const linhas = derivarAberturaCustosCanonica(analysis?.dadosEstruturados ?? null);
@@ -1666,6 +1685,7 @@ router.get("/:id/historico-custos", async (req: AuthRequest, res: Response): Pro
 router.get("/:id/historico-imobilizado", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   if (!model.analysisSeedId) { res.json({ periodo: null, itens: [] }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
   res.json(derivarImobilizadoHistorico(analysis?.dadosEstruturados ?? null));
@@ -1678,6 +1698,7 @@ router.get("/:id/historico-imobilizado", async (req: AuthRequest, res: Response)
 router.get("/:id/historico-giro", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   if (!model.analysisSeedId) { res.json({ periodo: null, pmr: null, pme: null, pmp: null, porPeriodo: [], periodos: [], saldosPorConta: {} }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
   const giro = derivarGiroHistorico(analysis?.dadosEstruturados ?? null);
@@ -1715,6 +1736,7 @@ router.get("/:id/historico-giro", async (req: AuthRequest, res: Response): Promi
 router.get("/:id/historico-balanco", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   if (!model.analysisSeedId) { res.json({ periodo: null, itens: [] }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
   res.json(derivarOutrosBalanco(analysis?.dadosEstruturados ?? null));
@@ -1728,6 +1750,7 @@ router.get("/:id/historico-balanco", async (req: AuthRequest, res: Response): Pr
 router.get("/:id/historico-dfs", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const vazio = { temHistorico: false, periodosBP: [], periodosFC: [], bp: {}, fc: {}, avisoFC: null };
 
   // HISTÓRICO GERENCIAL (BP sem IBR): quando o analista importou a planilha da
@@ -1861,6 +1884,7 @@ router.get("/:id/historico-dfs", async (req: AuthRequest, res: Response): Promis
 router.get("/:id/indicadores", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const calc = await calcularEGravar(model.id);
   if (!calc) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
   const anos = [...new Set(calc.resultado.meses.map((m) => m.slice(0, 4)))].sort();
@@ -1916,6 +1940,7 @@ router.get("/:id/indicadores", async (req: AuthRequest, res: Response): Promise<
 router.get("/:id/historico-divida", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   if (!model.analysisSeedId) { res.json({ periodo: null, itens: [], total: 0 }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
   res.json(derivarDividaHistorico(analysis?.dadosEstruturados ?? null));
@@ -1928,6 +1953,7 @@ router.get("/:id/historico-divida", async (req: AuthRequest, res: Response): Pro
 router.get("/:id/por-unidade", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
 
   const [unidades, centros] = await Promise.all([
     prisma.unidadeNegocio.findMany({ where: { companyId: model.companyId }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
@@ -2032,6 +2058,7 @@ function valoresDoNoRaiz(l: Record<string, unknown>): Record<string, number> {
 router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
 
   const [unidades, centros, blocks] = await Promise.all([
     prisma.unidadeNegocio.findMany({ where: { companyId: model.companyId }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
@@ -2144,6 +2171,7 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
 router.post("/:id/grade/regra", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const { blocoId, linhaId, regra, ano, pct, valorAnual } = (req.body ?? {}) as Record<string, unknown>;
   if (typeof blocoId !== "string" || typeof linhaId !== "string" || typeof ano !== "string" ||
       !["repetir", "mais-pct", "anual-sazonal", "pct-receita"].includes(String(regra))) {
@@ -2178,6 +2206,7 @@ router.post("/:id/grade/regra", async (req: AuthRequest, res: Response): Promise
 router.get("/:id/catalogo", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const centros = await prisma.centroCusto.findMany({ where: { companyId: model.companyId, ativo: true } });
   res.json({
     receitas: ["Receita 1", "Receita 2", "Receita 3", "Receita 4"],
@@ -2194,6 +2223,7 @@ router.get("/:id/catalogo", async (req: AuthRequest, res: Response): Promise<voi
 router.post("/:id/esqueleto", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
 
   const centros = await prisma.centroCusto.findMany({ where: { companyId: model.companyId, ativo: true } });
@@ -2243,6 +2273,7 @@ router.post("/:id/esqueleto", async (req: AuthRequest, res: Response): Promise<v
 router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
 
   // Estrutura e blocos ANTES da leitura: a resolução de aba→CC precisa deles.
@@ -3104,6 +3135,7 @@ function acharLinha(blocks: Array<{ id: string; tipo: string; config: unknown }>
 router.put("/:id/linhas/:linhaId/classificacao", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
 
   const tipo = req.body?.tipo;
@@ -3238,6 +3270,7 @@ router.put("/:id/linhas/:linhaId/classificacao", async (req: AuthRequest, res: R
 router.post("/:id/codificar-contas", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
 
   const blocks = await prisma.modelBlock.findMany({ where: { modelId: model.id } });
@@ -3293,6 +3326,7 @@ router.post("/:id/codificar-contas", async (req: AuthRequest, res: Response): Pr
 router.post("/:id/classificar-de-para", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
 
   const blocks = await prisma.modelBlock.findMany({ where: { modelId: model.id } });
@@ -3416,6 +3450,7 @@ const STATUS_PACOTE = ["rascunho", "enviado", "validado", "consolidado"] as cons
 router.get("/:id/pacotes", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const [unidades, registros] = await Promise.all([
     prisma.unidadeNegocio.findMany({ where: { companyId: model.companyId, ativo: true }, orderBy: [{ ordem: "asc" }, { createdAt: "asc" }] }),
     prisma.pacoteOrcamento.findMany({ where: { modelId: model.id } }),
@@ -3447,6 +3482,7 @@ router.get("/:id/pacotes", async (req: AuthRequest, res: Response): Promise<void
 router.put("/:id/pacotes/status", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const { unidadeId, status } = (req.body ?? {}) as { unidadeId?: string | null; status?: string };
   if (!STATUS_PACOTE.includes(status as typeof STATUS_PACOTE[number])) {
     res.status(400).json({ error: `status deve ser: ${STATUS_PACOTE.join(" | ")}` });
@@ -3487,6 +3523,7 @@ router.put("/:id/pacotes/status", async (req: AuthRequest, res: Response): Promi
 router.get("/:id/matriz-gmd", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const ano = /^\d{4}$/.test(String(req.query.ano ?? "")) ? String(req.query.ano) : model.mesInicial.slice(0, 4);
   const meses = mesesDoAnoNoHorizonte(model.mesInicial, model.horizonteMeses, ano);
 
@@ -3539,6 +3576,7 @@ router.get("/:id/matriz-gmd", async (req: AuthRequest, res: Response): Promise<v
 router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const { nome, visao, cenarioAtivoId, status, horizonteMeses, mesInicial, tipoOrcamento } = req.body ?? {};
   // F9 (OBZ): o tipo do orçamento é do cabeçalho — "base-zero" liga a exigência
@@ -3607,6 +3645,7 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 router.put("/:id/blocks/:blockId", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
   if (!block) { res.status(404).json({ error: "Bloco não encontrado" }); return; }
@@ -3701,6 +3740,7 @@ router.put("/:id/blocks/:blockId", async (req: AuthRequest, res: Response): Prom
 router.post("/:id/blocks/:blockId/linhas", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
   if (!block || block.tipo !== "receitas") { res.status(404).json({ error: "Bloco de receitas não encontrado" }); return; }
@@ -3727,6 +3767,7 @@ router.post("/:id/blocks/:blockId/linhas", async (req: AuthRequest, res: Respons
 router.post("/:id/blocks/:blockId/linhas/importar-skus", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
   if (!block || block.tipo !== "receitas") { res.status(404).json({ error: "Bloco de receitas não encontrado" }); return; }
@@ -3793,6 +3834,7 @@ router.post("/:id/blocks/:blockId/linhas/importar-skus", async (req: AuthRequest
 router.put("/:id/blocks/:blockId/linhas/:linhaId/template", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
   if (!block || block.tipo !== "receitas") { res.status(404).json({ error: "Bloco de receitas não encontrado" }); return; }
@@ -3820,6 +3862,7 @@ router.put("/:id/blocks/:blockId/linhas/:linhaId/template", async (req: AuthRequ
 router.post("/:id/blocks/:blockId/linhas/:linhaId/gerar-formula", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const block = await prisma.modelBlock.findFirst({ where: { id: req.params.blockId as string, modelId: model.id } });
   if (!block) { res.status(404).json({ error: "Bloco não encontrado" }); return; }
@@ -3943,6 +3986,7 @@ SUA RESPOSTA ANTERIOR FOI REJEITADA: "${r.formula ?? ""}" — problema: ${r.prob
 router.put("/:id/scenarios/:sid", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   const cenario = await prisma.modelScenario.findFirst({ where: { id: req.params.sid as string, modelId: model.id } });
   if (!cenario) { res.status(404).json({ error: "Cenário não encontrado" }); return; }
@@ -3970,6 +4014,7 @@ router.put("/:id/scenarios/:sid", async (req: AuthRequest, res: Response): Promi
 router.post("/:id/incluir-realizado", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   if (!model.analysisSeedId) { res.status(400).json({ error: "Modelo sem análise-fonte para buscar o realizado" }); return; }
   const analysis = await prisma.analysis.findUnique({ where: { id: model.analysisSeedId }, select: { dadosEstruturados: true } });
@@ -4002,6 +4047,7 @@ router.post("/:id/incluir-realizado", async (req: AuthRequest, res: Response): P
 router.post("/:id/calcular", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const calc = await calcularEGravar(model.id);
   res.json({ ok: true, cenario: calc?.cenario, resultado: calc?.resultado });
 });
@@ -4011,6 +4057,7 @@ router.post("/:id/calcular", async (req: AuthRequest, res: Response): Promise<vo
 router.post("/:id/simular", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const completo = await prisma.financialModel.findUnique({
     where: { id: model.id },
     include: { blocks: { orderBy: { ordem: "asc" } } },
@@ -4033,6 +4080,7 @@ router.post("/:id/simular", async (req: AuthRequest, res: Response): Promise<voi
 router.post("/:id/monte-carlo", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const completo = await prisma.financialModel.findUnique({
     where: { id: model.id },
     include: { blocks: { orderBy: { ordem: "asc" } }, scenarios: true },
@@ -4098,6 +4146,7 @@ router.post("/:id/monte-carlo", async (req: AuthRequest, res: Response): Promise
 router.post("/:id/reforma", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const completo = await prisma.financialModel.findUnique({
     where: { id: model.id },
     include: { blocks: { orderBy: { ordem: "asc" } }, scenarios: true },
@@ -4130,6 +4179,7 @@ router.post("/:id/reforma", async (req: AuthRequest, res: Response): Promise<voi
 router.put("/:id/status", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   const { status, motivo } = (req.body ?? {}) as { status?: string; motivo?: string };
   const atual = model.status === "Rascunho" ? "Em produção" : model.status; // legado
   const TRANSICOES: Record<string, string[]> = {
@@ -4155,6 +4205,7 @@ router.put("/:id/status", async (req: AuthRequest, res: Response): Promise<void>
 router.delete("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   // POLÍTICA (2026-07-15): modelo Concluído/Cancelado é produto emitido — nunca
   // some da base. Excluir só enquanto "Em produção" (ou legado "Rascunho").
   if (model.status === "Concluído" || model.status === "Cancelado") {
@@ -4191,6 +4242,7 @@ const uploadHist = multer({
 router.post("/:id/historico-gerencial/analisar", uploadHist.single("file"), async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
   if (!req.file) { res.status(400).json({ error: "Envie a planilha (campo 'file')." }); return; }
 
@@ -4221,6 +4273,7 @@ router.post("/:id/historico-gerencial/analisar", uploadHist.single("file"), asyn
 router.post("/:id/historico-gerencial/importar", async (req: AuthRequest, res: Response): Promise<void> => {
   const model = await modelNoEscopo(req.params.id as string, req);
   if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  enriquecerContextoIA({ companyId: (model as any).companyId ?? null, modelId: (model as any).id ?? null });
   { const trava = travaEdicao(model); if (trava) { res.status(409).json({ error: trava }); return; } }
 
   const { periodos, linhas, mapa, semear } = (req.body ?? {}) as {

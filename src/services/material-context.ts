@@ -15,6 +15,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../db/client";
 import { downloadFile } from "./storage";
 import { modeloAnaliseId, calcCusto, createWithRetry, type CustoIA } from "./ai-extraction";
+import { ETAPAS } from "./ai-usage";
 
 /** Valor de Document.tipo que marca um material complementar (pula a extração financeira). */
 export const MATERIAL_TIPO = "Material complementar";
@@ -115,7 +116,7 @@ export async function buildMateriaisContext(
         model,
         max_tokens: 600,
         messages: [{ role: "user", content: promptResumo(doc.nome, texto) }],
-      });
+      }, 0, { etapa: ETAPAS.RESUMO_MATERIAIS });
       const resumo = (msg.content?.[0]?.type === "text" ? msg.content[0].text : "").trim();
       if (!resumo) continue;
 
