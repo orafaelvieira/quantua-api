@@ -4,7 +4,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/permissions";
 import { getPeerDistribution } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
-import { sincronizarArquivoCvm, sincronizarHistoricoCvm, sincronizarPendentesCvm, pendentesCvm, recalcularIndicadoresTudo, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados, modoDoSnapshot } from "../services/cvm-sync";
+import { sincronizarArquivoCvm, sincronizarHistoricoCvm, sincronizarPendentesCvm, pendentesCvm, recalcularIndicadoresTudo, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados, modoDoSnapshot, situacaoDoArquivo, situacaoDaBase } from "../services/cvm-sync";
 import { INDICADORES_TEMPLATE } from "../services/financial-templates";
 import { runtimeState } from "../services/runtime-state";
 
@@ -25,8 +25,30 @@ router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void
     prisma.systemNotice.findMany({ where: { tipo: "cvm_update", lida: false }, orderBy: { createdAt: "desc" } }),
     estadoHistorico(),
   ]);
+  // SITUAÇÃO, calculada no servidor (04/08/2026). A tela não deve derivar "está
+  // tudo ok" de uma data: `processadoEm` diz quando NÓS rodamos, não se estamos
+  // na versão que a CVM publicou. A regra do verde mora num lugar só, aqui.
+  const arquivosDoPlano = planoHistorico().map(({ tipo, ano }) => `${tipo}_${ano}`);
+  const porArquivoEstado = new Map(estados.map((e) => [e.arquivo, e]));
+  const agora = new Date();
+  const situacoes = new Map(
+    arquivosDoPlano.map((a) => [a, situacaoDoArquivo(porArquivoEstado.get(a), agora)]),
+  );
+  const pendentesLista = (await pendentesCvm()).map((f) => f.arquivo);
+  const base = situacaoDaBase(
+    porArquivoEstado,
+    arquivosDoPlano,
+    new Map([...situacoes].map(([a, s]) => [a, s.situacao])),
+    pendentesLista,
+  );
+
   res.json({
     vigiados: arquivosVigiados().map(({ tipo, ano }) => `${tipo}_${ano}`),
+    /** O selo único: responde "preciso fazer alguma coisa?" sem o usuário ter de
+     *  interpretar datas e contagens. */
+    base,
+    /** Situação por arquivo, na mesma chave do `plano`. */
+    situacoes: Object.fromEntries(situacoes),
     // Plano INTEIRO (32 arquivos, do mais recente para o mais antigo): a tabela lista
     // todos os anos — antes mostrava só os 3 vigiados e não havia como ressincronizar
     // um DFP 2019 sem esperar um aviso da CVM aparecer.
@@ -51,7 +73,7 @@ router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void
     historico: { ...historico, planoTotal: planoHistorico().length, ...modoDoSnapshot(historico) },
     // Fila = avisos não lidos, na ordem do plano. Alimenta o botão único
     // "Sincronizar pendentes (N)", em vez de um clique por arquivo.
-    pendentes: (await pendentesCvm()).map((f) => f.arquivo),
+    pendentes: pendentesLista,
     seedsRodando: runtimeState.seedsRodando,
   });
 });
@@ -64,11 +86,17 @@ router.post("/cvm/verificar", async (_req: AuthRequest, res: Response): Promise<
   try {
     const resultados = await checarAtualizacoesCvm();
     const novos = resultados.filter((r) => r.novo).map((r) => r.arquivo);
+    // FALHA NÃO É "SEM NOVIDADES". Antes `verificados` contava TODOS os
+    // resultados, inclusive os que não conseguiram falar com a CVM — e a tela
+    // então afirmava "verificados 32 arquivos: a base está na mesma versão
+    // publicada". Afirmar que está tudo bem sem ter conseguido perguntar é o
+    // pior defeito possível numa tela de vigilância.
+    const falharam = resultados.filter((r) => !r.ok).map((r) => r.arquivo);
     const avisos = await prisma.systemNotice.findMany({
       where: { tipo: "cvm_update", lida: false },
       orderBy: { createdAt: "desc" },
     });
-    res.json({ ok: true, verificados: resultados.length, novos, avisos });
+    res.json({ ok: true, verificados: resultados.length - falharam.length, tentados: resultados.length, falharam, novos, avisos });
   } catch (e) {
     console.error("[peers/cvm/verificar] falhou:", e);
     res.status(502).json({ error: e instanceof Error ? e.message : "Falha ao consultar a CVM" });

@@ -298,10 +298,23 @@ export async function sincronizarCvm(
   );
   await marcaFase(`${arquivo}: gravando estado`);
 
+  // BAIXAR DA CVM VALE COMO TER PERGUNTADO À CVM — e vale mais que o HEAD, porque
+  // veio o arquivo inteiro. Sem isto o selo contradizia a ação que ele mesmo
+  // pediu: logo depois de uma ressincronização bem-sucedida, `versaoPublicada`
+  // continuava congelada na checagem anterior e a tela voltava a acusar "há
+  // versão nova" — sobre a versão que acabara de entrar.
+  //
+  // SÓ QUANDO A ORIGEM É A CVM. Vindo do espelho no Spaces, nenhuma consulta à
+  // CVM aconteceu (o etag sai dos metadados do objeto e pode até ser nulo);
+  // carimbar prova ali seria fabricar o verde — exatamente o que esta mudança
+  // existe para impedir.
+  const provaDaCvm = baixado.origem === "cvm"
+    ? { verificadoEm: new Date(), versaoPublicada: etag ?? lastModified ?? null, verificacaoErro: null }
+    : {};
   await prisma.cvmSyncState.upsert({
     where: { arquivo },
-    update: { etag, lastModified, processadoEm: new Date(), empresas, periodos },
-    create: { arquivo, etag, lastModified, processadoEm: new Date(), empresas, periodos },
+    update: { etag, lastModified, processadoEm: new Date(), empresas, periodos, ...provaDaCvm },
+    create: { arquivo, etag, lastModified, processadoEm: new Date(), empresas, periodos, ...provaDaCvm },
   });
   if (progHist.emAndamento) {
     progHist.checkpoint = null; // arquivo fechado: nada pendente para retomar
@@ -972,36 +985,201 @@ export function arquivosVigiados(hoje = new Date()): Array<{ tipo: "itr" | "dfp"
   ];
 }
 
-/** Checa a CVM (HEAD) e cria SystemNotice quando há versão nova não processada.
- *  Vigia TODOS os arquivos do plano (2010→hoje), não só os recentes: reapresentação
- *  de ano antigo também vira aviso no Inbox. Custo ~zero (só cabeçalhos HTTP). */
-export async function checarAtualizacoesCvm(): Promise<Array<{ arquivo: string; novo: boolean }>> {
-  const resultados: Array<{ arquivo: string; novo: boolean }> = [];
+/**
+ * Checa a CVM (HEAD) e cria SystemNotice quando há versão nova não processada.
+ * Vigia TODOS os arquivos do plano (2010→hoje), não só os recentes: reapresentação
+ * de ano antigo também vira aviso no Inbox. Custo ~zero (só cabeçalhos HTTP).
+ *
+ * GRAVA O RESULTADO DA CHECAGEM, e não só o da sincronização (04/08/2026). Antes,
+ * uma checagem que não conseguia falar com a CVM era indistinguível de uma que
+ * confirmou "está tudo em dia": as duas devolviam `novo: false` e não deixavam
+ * marca nenhuma. A tela então dizia "a base está na mesma versão publicada pela
+ * CVM" sem nunca ter conseguido perguntar.
+ */
+/** Causa em uma frase, sem rastro de infraestrutura — este texto aparece na tela. */
+function resumoDoErro(msg: string): string {
+  const m = msg.toLowerCase();
+  if (m.includes("timeout") || m.includes("etimedout") || m.includes("abort")) return "a CVM não respondeu a tempo";
+  if (m.includes("enotfound") || m.includes("eai_again") || m.includes("dns")) return "o endereço da CVM não pôde ser resolvido";
+  if (m.includes("econnrefused") || m.includes("econnreset") || m.includes("socket")) return "a conexão com a CVM caiu";
+  if (m.includes("certificate") || m.includes("tls") || m.includes("ssl")) return "o certificado da CVM não pôde ser validado";
+  return "a consulta de versão à CVM falhou";
+}
+
+export async function checarAtualizacoesCvm(): Promise<Array<{ arquivo: string; novo: boolean; ok: boolean }>> {
+  const resultados: Array<{ arquivo: string; novo: boolean; ok: boolean }> = [];
+  /** Registra o que a checagem descobriu. Só escreve se o arquivo já tem linha —
+   *  arquivo nunca carregado não ganha estado aqui (quem cria é a sincronização,
+   *  que é quem sabe `processadoEm`). */
+  const anotar = async (arquivo: string, dados: { verificadoEm?: Date; versaoPublicada?: string | null; verificacaoErro: string | null }): Promise<void> => {
+    await prisma.cvmSyncState.updateMany({ where: { arquivo }, data: dados });
+  };
   for (const { tipo, ano } of planoHistorico()) {
     const arquivo = arquivoId(tipo, ano);
     try {
       const meta = await checarCvmAtualizacao(CVM_URLS[tipo](ano));
-      if (!meta) { resultados.push({ arquivo, novo: false }); continue; }
+      if (!meta) {
+        // HEAD respondeu não-OK: NÃO é "sem novidades", é "não deu para saber".
+        await anotar(arquivo, { verificacaoErro: "a CVM não respondeu à consulta de versão" });
+        resultados.push({ arquivo, novo: false, ok: false });
+        continue;
+      }
       const estado = await prisma.cvmSyncState.findUnique({ where: { arquivo } });
       const mudou = !estado || (meta.etag ?? meta.lastModified) !== (estado.etag ?? estado.lastModified);
-      resultados.push({ arquivo, novo: mudou });
-      if (!mudou) continue;
-      const chave = `cvm:${arquivo}:${meta.etag ?? meta.lastModified ?? "s/versao"}`;
-      await prisma.systemNotice.upsert({
-        where: { chave },
-        update: {}, // já avisado desta versão — não duplica
-        create: {
-          tipo: "cvm_update",
-          chave,
-          titulo: `Base CVM atualizada: ${arquivo.toUpperCase().replace("_", " ")}`,
-          corpo: `A CVM publicou uma nova versão (${meta.lastModified ?? meta.etag ?? "data não informada"}). Sincronize a base de pares para atualizar a comparação setorial.`,
-          href: "/admin/pares",
-        },
+      await anotar(arquivo, {
+        verificadoEm: new Date(),
+        versaoPublicada: meta.etag ?? meta.lastModified ?? null,
+        verificacaoErro: null,
       });
+      resultados.push({ arquivo, novo: mudou, ok: true });
+      if (!mudou) continue;
+      // AVISO EM TRY PRÓPRIO: a checagem já deu certo e já foi registrada. Se a
+      // gravação do aviso falhar (dois laços concorrentes disputando a mesma
+      // chave única, por exemplo), isso não pode transformar uma checagem
+      // bem-sucedida em "não verificado" nem empurrar um segundo resultado para
+      // o mesmo arquivo — que era o que o catch de fora fazia.
+      try {
+        const chave = `cvm:${arquivo}:${meta.etag ?? meta.lastModified ?? "s/versao"}`;
+        await prisma.systemNotice.upsert({
+          where: { chave },
+          update: {}, // já avisado desta versão — não duplica
+          create: {
+            tipo: "cvm_update",
+            chave,
+            titulo: `Base CVM atualizada: ${arquivo.toUpperCase().replace("_", " ")}`,
+            corpo: `A CVM publicou uma nova versão (${meta.lastModified ?? meta.etag ?? "data não informada"}). A sincronização roda sozinha logo em seguida; o botão Ressincronizar refaz na hora.`,
+            href: "/admin/pares",
+          },
+        });
+      } catch (e) {
+        console.warn(`[cvm-sync] aviso de ${arquivo} não pôde ser gravado:`, e instanceof Error ? e.message : e);
+      }
     } catch (e) {
-      console.warn(`[cvm-sync] checagem ${arquivo} falhou:`, e instanceof Error ? e.message : e);
-      resultados.push({ arquivo, novo: false });
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[cvm-sync] checagem ${arquivo} falhou:`, msg);
+      // Mensagem SANEADA: o texto vai para a tela e um erro de infraestrutura
+      // pode trazer host/porta do banco junto. Guarda-se a causa, não o rastro.
+      await anotar(arquivo, { verificacaoErro: resumoDoErro(msg) }).catch(() => undefined);
+      resultados.push({ arquivo, novo: false, ok: false });
     }
   }
   return resultados;
+}
+
+/** Quantos dias uma checagem pode ficar velha antes de a base deixar de poder
+ *  afirmar "em dia". O cron é semanal, então 8 dias cobre uma rodada perdida sem
+ *  alarme falso — e acusa a segunda semana seguida sem checagem, que foi
+ *  exatamente o que passou despercebido em 19/07/2026 (crons desligados em
+ *  produção por env var não aplicada). */
+export const DIAS_CHECAGEM_VALIDA = 8;
+
+export type SituacaoArquivo = "em-dia" | "desatualizado" | "nunca-carregado" | "nao-verificado";
+
+interface EstadoParaSituacao {
+  etag?: string | null;
+  lastModified?: string | null;
+  processadoEm?: Date | string | null;
+  verificadoEm?: Date | string | null;
+  versaoPublicada?: string | null;
+  verificacaoErro?: string | null;
+}
+
+/**
+ * SITUAÇÃO DE UM ARQUIVO — "em dia" só com prova.
+ *
+ * Regra dura: verde exige (a) uma checagem bem-sucedida recente E (b) a versão
+ * publicada batendo com a carregada. Faltando qualquer das duas o arquivo é
+ * "não verificado", nunca verde — porque não saber não é o mesmo que estar bem,
+ * e é justamente a confusão entre as duas que faz a tela mentir sem quebrar.
+ */
+export function situacaoDoArquivo(
+  e: EstadoParaSituacao | null | undefined,
+  agora: Date = new Date(),
+): { situacao: SituacaoArquivo; motivo: string } {
+  if (!e || !e.processadoEm) {
+    return { situacao: "nunca-carregado", motivo: "este arquivo nunca foi carregado na base" };
+  }
+  if (e.verificacaoErro) {
+    return { situacao: "nao-verificado", motivo: `a última checagem falhou: ${e.verificacaoErro}` };
+  }
+  if (!e.verificadoEm) {
+    return { situacao: "nao-verificado", motivo: "a versão publicada pela CVM ainda não foi consultada" };
+  }
+  const dias = (agora.getTime() - new Date(e.verificadoEm).getTime()) / 86_400_000;
+  if (dias > DIAS_CHECAGEM_VALIDA) {
+    return { situacao: "nao-verificado", motivo: `a última checagem tem ${Math.floor(dias)} dias — a vigilância semanal pode ter parado` };
+  }
+  const carregada = e.etag ?? e.lastModified ?? null;
+  if (!e.versaoPublicada || !carregada) {
+    return { situacao: "nao-verificado", motivo: "não há versão comparável entre o publicado e o carregado" };
+  }
+  return e.versaoPublicada === carregada
+    ? { situacao: "em-dia", motivo: "a versão carregada é a mesma publicada pela CVM" }
+    : { situacao: "desatualizado", motivo: "a CVM publicou uma versão mais nova que a carregada" };
+}
+
+/**
+ * SITUAÇÃO DA BASE INTEIRA — o selo único que responde "preciso fazer alguma
+ * coisa?". Pior caso manda: um único arquivo desatualizado tira o verde de todos.
+ * `pendentes` (avisos ainda não sincronizados) também derruba, porque nesse caso
+ * há trabalho enfileirado mesmo que a comparação de versões já esteja igual.
+ */
+export function situacaoDaBase(
+  estadosPorArquivo: Map<string, EstadoParaSituacao>,
+  arquivosDoPlano: string[],
+  porArquivo: Map<string, SituacaoArquivo>,
+  pendentes: string[],
+): {
+  situacao: SituacaoArquivo; motivo: string;
+  desatualizados: number; naoVerificados: number; nuncaCarregados: number;
+  verificadoEm: string | null;
+} {
+  const lista = arquivosDoPlano.map((a) => porArquivo.get(a) ?? "nunca-carregado");
+  const desatualizados = lista.filter((s) => s === "desatualizado").length;
+  const naoVerificados = lista.filter((s) => s === "nao-verificado").length;
+  const nuncaCarregados = lista.filter((s) => s === "nunca-carregado").length;
+
+  // COBERTURA É DO PLANO INTEIRO. Descartar os arquivos sem carimbo (que é como
+  // todos nascem) e tirar o mínimo do que sobrou produzia a pior frase possível:
+  // "toda a base verificada desde <data recente>" numa faixa que, ao lado, dizia
+  // que N arquivos não puderam ser verificados. Ausência de carimbo é ausência
+  // de prova — some com a data em vez de afirmar cobertura que não existe.
+  const carimbos = arquivosDoPlano.map((a) => estadosPorArquivo.get(a)?.verificadoEm ?? null);
+  const verificadoEm = carimbos.every(Boolean)
+    ? new Date(Math.min(...carimbos.map((d) => new Date(d as string | Date).getTime()))).toISOString()
+    : null;
+
+  // O motivo cita TODAS as dimensões não-zero: cada ramo devolvendo uma frase
+  // única apagava as demais, e quem lia "falta carregar 1 arquivo" não ficava
+  // sabendo que outros 31 estavam sem checagem nenhuma.
+  const plural = (n: number, um: string, muitos: string): string => `${n} ${n === 1 ? um : muitos}`;
+  const partes = [
+    desatualizados ? plural(desatualizados, "atrás da versão publicada", "atrás da versão publicada") : null,
+    naoVerificados ? plural(naoVerificados, "sem checagem válida", "sem checagem válida") : null,
+    nuncaCarregados ? plural(nuncaCarregados, "nunca carregado", "nunca carregados") : null,
+  ].filter(Boolean);
+  const detalhe = partes.length ? ` (${partes.join(" · ")})` : "";
+  const conta = { desatualizados, naoVerificados, nuncaCarregados, verificadoEm };
+
+  // ORDEM = SEVERIDADE. "Não verificado" vem ANTES de "nunca carregado": um
+  // arquivo faltando é um buraco conhecido; a vigilância morta é um buraco que
+  // esconde todos os outros — foi assim que os crons ficaram semanas desligados
+  // em produção sem ninguém perceber (19/07/2026).
+  // Frase-guia curta + o detalhe com TODAS as contagens. Repetir a dimensão
+  // vencedora na frase e no detalhe deixava o texto ("1 arquivo atrás da versão
+  // publicada (1 atrás da versão publicada · 30 nunca carregados)") difícil de
+  // ler justamente na hora em que precisa ser lido rápido.
+  if (naoVerificados) {
+    return { situacao: "nao-verificado", motivo: `não dá para afirmar que a base está em dia${detalhe}`, ...conta };
+  }
+  if (pendentes.length) {
+    return { situacao: "desatualizado", motivo: `${plural(pendentes.length, "arquivo com versão nova aguardando", "arquivos com versão nova aguardando")} sincronização${detalhe}`, ...conta };
+  }
+  if (desatualizados) {
+    return { situacao: "desatualizado", motivo: `a base está atrás da versão publicada pela CVM${detalhe}`, ...conta };
+  }
+  if (nuncaCarregados) {
+    return { situacao: "nunca-carregado", motivo: `faltam arquivos do plano na base${detalhe}`, ...conta };
+  }
+  return { situacao: "em-dia", motivo: "todos os arquivos do plano estão na versão publicada pela CVM", ...conta };
 }

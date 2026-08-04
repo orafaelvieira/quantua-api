@@ -277,6 +277,18 @@ model CvmSyncState {
   empresas     Int      @default(0)
   periodos     Int      @default(0)
 
+  // CHECAGEM ≠ SINCRONIZAÇÃO (04/08/2026). `processadoEm` diz quando NÓS rodamos;
+  // não diz se estamos na versão que a CVM publicou — e as duas coisas divergem
+  // em silêncio (basta a checagem semanal não rodar, ou falhar a rede). Estes
+  // três campos guardam a outra metade da verdade, e são o que permite a tela
+  // afirmar "em dia" com prova em vez de com uma data.
+  /// Última checagem BEM-SUCEDIDA na CVM (HEAD respondido). Null = nunca verificado.
+  verificadoEm    DateTime? @map("verificado_em")
+  /// Versão que a CVM devolveu nessa checagem (ETag, ou Last-Modified na falta dele).
+  versaoPublicada String?   @map("versao_publicada")
+  /// Por que a ÚLTIMA tentativa de checagem falhou. Null = a última deu certo.
+  verificacaoErro String?   @map("verificacao_erro")
+
   @@map("cvm_sync_state")
 }
 
