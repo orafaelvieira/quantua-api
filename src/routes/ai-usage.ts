@@ -17,10 +17,16 @@
  */
 import { Router, type Response } from "express";
 import { prisma } from "../db/client";
-import { requireAuth, type AuthRequest } from "../middleware/auth";
+import { requireAuth, requireQuantua, type AuthRequest } from "../middleware/auth";
 
 const router = Router();
 router.use(requireAuth);
+// SOMENTE EQUIPE QUANTUA (04/08/2026, decisão do dono). Custo de IA é margem da
+// operação: cliente, empresa e parceiro NÃO podem ver — nem o próprio gasto, que
+// revelaria a estrutura de custo do produto que compram. `requireQuantua` é
+// fail-closed e bloqueia portal (role "client") e SaaS externo
+// (tipoUsuario "empresa"/"parceiro"), independentemente dos filtros de query.
+router.use(requireQuantua);
 
 /**
  * Janela padrão: mês corrente. Datas em ISO (yyyy-mm-dd).
@@ -39,12 +45,9 @@ function janela(req: AuthRequest): { de: Date; ate: Date } {
 }
 
 /**
- * Filtro de tenant. Externo enxerga só as empresas da lista fechada; equipe
- * Quantua (scopeCompanyIds null) enxerga tudo.
- *
- * Eventos SEM empresa (etapa disparada fora de um IBR/modelo) só aparecem para a
- * equipe — para um cliente eles seriam gasto de origem desconhecida, e mostrar
- * gasto alheio é vazamento.
+ * Filtro de tenant. Mesmo depois do gate de equipe, o escopo continua valendo:
+ * uma FIRMA parceira que use a plataforma não pode ver o consumo de outra. Para
+ * a equipe Quantua (`scopeCompanyIds` nulo) não há filtro — é a visão do dono.
  */
 function escopo(req: AuthRequest): Record<string, unknown> {
   if (!req.scopeCompanyIds) return {};
