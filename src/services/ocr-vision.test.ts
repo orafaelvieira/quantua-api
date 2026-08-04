@@ -6,7 +6,7 @@
  * remontagem com a mesma forma de dado que o Vision devolve.
  */
 import { describe, it, expect } from "vitest";
-import { agruparLinhas, costurarNumeros, matrizDasPaginas, palavrasDaResposta } from "./ocr-vision";
+import { agruparLinhas, costurarNumeros, matrizDasPaginas, palavrasDaResposta, textoLayoutDasPaginas } from "./ocr-vision";
 
 const P = (t: string, x: number, y: number, w = t.length * 8, h = 14) => ({ t, x, y, w, h });
 
@@ -182,5 +182,82 @@ describe("achados que barraram o deploy", () => {
   it("documento limpo não acusa descarte", () => {
     const m = matrizDasPaginas([{ palavras: conta(100, "1", "ATIVO", ["1,00", "0,00", "0,00", "1,00"]) }], null);
     expect(m.descartadas).toBe(0);
+  });
+});
+
+/**
+ * TEXTO COM LAYOUT — o formato que o BP/DRE escaneado passa a alimentar.
+ * Precisa sair equivalente ao `renderPageLayout` do PDF legível, senão o
+ * extrator determinístico a jusante não reconhece a estrutura.
+ */
+describe("textoLayoutDasPaginas reproduz o layout do papel", () => {
+  // GEOMETRIA REAL, não inventada. A revisão adversarial mediu nos documentos do
+  // corpus que o passo entre níveis de hierarquia é MENOR que um caractere:
+  // 0,48 no AOCP, 1,07 no K&A SPED, 1,19 no Fibracabos. Os testes antigos usavam
+  // 5 caracteres por nível e passavam por construção — 1028 verdes enquanto 60 de
+  // 138 documentos do corpus tinham a hierarquia alterada.
+  const LARGURA_CHAR = 19.66;              // medido no AOCP @300dpi
+  const P = (t: string, x: number, y: number, w = t.length * LARGURA_CHAR, h = 24) => ({ t, x, y, w, h });
+
+  it("passo de 0,48 caractere por nível (AOCP) NÃO colapsa a escada", () => {
+    const txt = textoLayoutDasPaginas([{ palavras: [
+      P("ATIVO", 171, 100), P("1.000,00", 900, 100),
+      P("ATIVO CIRCULANTE", 180, 130), P("600,00", 900, 130),
+      P("DISPONIBILIDADE", 189, 160), P("400,00", 900, 160),
+      P("CAIXA", 199, 190), P("10,00", 900, 190),
+    ] }]);
+    const recuo = (s: string) => s.length - s.trimStart().length;
+    const l = txt.split("\n");
+    // Quatro níveis distintos, estritamente crescentes — era isto que o
+    // Math.round por largura de caractere destruía (4 níveis viravam 2).
+    expect(recuo(l[0])).toBeLessThan(recuo(l[1]));
+    expect(recuo(l[1])).toBeLessThan(recuo(l[2]));
+    expect(recuo(l[2])).toBeLessThan(recuo(l[3]));
+    expect(new Set(l.map(recuo)).size).toBe(4);
+  });
+
+  it("número partido pelo OCR NÃO ganha espaço no meio (erro de 1000x)", () => {
+    // "614.387,53" chega como "614." + "387,53" colados. Um espaço no meio faz o
+    // extrator ler R$ 387,53 — e passa calado, porque a folha corrompida não move
+    // o Ativo nem o Passivo, que vêm das raízes declaradas.
+    const l = textoLayoutDasPaginas([{ palavras: [
+      P("CAIXA", 171, 100), P("614.", 700, 100, 60), P("387,53", 760, 100, 95),
+    ] }]);
+    expect(l).toContain("614.387,53");
+    expect(l).not.toContain("614. 387,53");
+  });
+
+  it("contas do MESMO nível ficam com o mesmo recuo", () => {
+    const l = textoLayoutDasPaginas([{ palavras: [
+      P("CAIXA", 199, 100), P("10,00", 900, 100),
+      P("BANCOS", 199, 130), P("20,00", 900, 130),
+    ] }]).split("\n");
+    const recuo = (s: string) => s.length - s.trimStart().length;
+    expect(recuo(l[0])).toBe(recuo(l[1]));
+  });
+
+  it("separa nome e valor por lacuna visual, na mesma linha", () => {
+    const l = textoLayoutDasPaginas([{ palavras: [P("CAIXA", 171, 100), P("22.004,95", 900, 100)] }]);
+    expect(l).toMatch(/CAIXA\s{2,}22\.004,95/);
+    expect(l.split("\n")).toHaveLength(1);
+  });
+
+  it("palavras coladas do mesmo nome não viram colunas", () => {
+    const l = textoLayoutDasPaginas([{ palavras: [
+      P("BANCO", 171, 100), P("ITAU", 285, 100), P("S/A", 368, 100), P("569.127,56", 900, 100),
+    ] }]);
+    expect(l).toContain("BANCO ITAU S/A");
+  });
+
+  it("várias páginas viram um texto só, na ordem", () => {
+    const t = textoLayoutDasPaginas([
+      { palavras: [P("PAGINA1", 171, 100), P("1,00", 900, 100)] },
+      { palavras: [P("PAGINA2", 171, 100), P("2,00", 900, 100)] },
+    ]);
+    expect(t.indexOf("PAGINA1")).toBeLessThan(t.indexOf("PAGINA2"));
+  });
+
+  it("página vazia não gera linha em branco", () => {
+    expect(textoLayoutDasPaginas([{ palavras: [] }])).toBe("");
   });
 });

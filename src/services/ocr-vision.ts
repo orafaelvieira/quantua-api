@@ -101,7 +101,14 @@ async function fatiar(buffer: Buffer, porLote: number): Promise<Buffer[]> {
  * Lê um PDF ESCANEADO pelo Cloud Vision e devolve as páginas com geometria.
  * Registra o consumo por PÁGINA — a unidade que o Vision cobra.
  */
-export async function lerPDF(buffer: Buffer, documentId?: string | null): Promise<{ paginas: PaginaVision[]; totalPaginas: number }> {
+export async function lerPDF(
+  buffer: Buffer,
+  documentId?: string | null,
+  // A ETAPA VEM DE FORA: o mesmo `lerPDF` serve balancete e BP/DRE, e gravar
+  // tudo como "ocr-balancete-vision" faria o relatório mentir sobre qual etapa
+  // gastou — justamente o que a tabela existe para responder.
+  etapa: string = ETAPAS.OCR_BALANCETE_VISION,
+): Promise<{ paginas: PaginaVision[]; totalPaginas: number }> {
   // TETO ANTES DE GASTAR. Sem isto a constante era documentação: um PDF de 200
   // páginas viraria 40 requisições SEQUENCIAIS e prenderia a instância única do
   // Cloud Run em "Extraindo" — exatamente o cenário que o teto da via LLM existe
@@ -136,7 +143,7 @@ export async function lerPDF(buffer: Buffer, documentId?: string | null): Promis
     const erro = j?.error ?? j?.responses?.[0]?.error;
     if (!resp.ok || erro) {
       void registrarUsoIA({
-        etapa: ETAPAS.OCR_BALANCETE_VISION, provedor: "google-vision", modelo: FEATURE,
+        etapa, provedor: "google-vision", modelo: FEATURE,
         iniciadoEm, documentId,
         unidades: { chave: `google-vision:${FEATURE}`, unidade: "paginas", quantidade: 0 },
         status: "erro", erroTipo: String(erro?.status ?? resp.status),
@@ -146,7 +153,7 @@ export async function lerPDF(buffer: Buffer, documentId?: string | null): Promis
 
     // A COBRANÇA É POR PÁGINA ENVIADA, inclusive a que voltar vazia.
     void registrarUsoIA({
-      etapa: ETAPAS.OCR_BALANCETE_VISION, provedor: "google-vision", modelo: FEATURE,
+      etapa, provedor: "google-vision", modelo: FEATURE,
       iniciadoEm, documentId,
       unidades: { chave: `google-vision:${FEATURE}`, unidade: "paginas", quantidade: nesteLote },
     });
@@ -290,4 +297,96 @@ export function matrizDasPaginas(
     }
   }
   return { linhas, periodo, descartadas };
+}
+
+/**
+ * ⚠️ NÃO LIGADA A NENHUM FLUXO — ver o aviso ao fim deste comentário.
+ *
+ * TEXTO COM LAYOUT a partir da geometria — o mesmo formato que o
+ * `renderPageLayout` do parser produz para PDF legível (lacuna visual vira
+ * espaço proporcional, indentação medida da margem esquerda da página).
+ *
+ * Por que importa: o BP e a DRE escaneados iam para transcrição por LLM, com a
+ * mesma exposição a valor inventado que derrubou o balancete Budel. Devolvendo
+ * ESTE formato, o documento escaneado passa a alimentar o MESMO extrator
+ * determinístico que já atende o PDF com texto — em vez de uma passada de IA.
+ * Ganha-se duas vezes: sai a alucinação e sai o custo da IA de extração.
+ *
+ * ⚠️ POR QUE AINDA NÃO ESTÁ EM USO (03/08/2026). A revisão adversarial mediu,
+ * rodando o pipeline REAL sobre 138 PDFs do corpus, que a primeira versão
+ * alterava a escada de hierarquia em 60 deles — e em 4 BPs da família AOCP
+ * derrubava a árvore determinística, disparando a poda que APAGA linhas
+ * (76→12 contas). Nada pegava, porque Ativo = Passivo vem das raízes
+ * DECLARADAS e não da soma das folhas.
+ *
+ * A causa: o passo entre níveis nos ERPs brasileiros é MENOR que um caractere
+ * (0,48 no AOCP, 1,07 no K&A SPED), e o `renderPageLayout` nem usa geometria
+ * nesses documentos — a indentação chega como ESPAÇOS LITERAIS dentro do run do
+ * pdfjs e é copiada verbatim.
+ *
+ * Esta versão já corrige o que foi apontado (escada ORDINAL em vez de
+ * quantização por largura de caractere, e `costurarNumeros` antes da montagem),
+ * mas o A/B de `scripts/ab-layout-vision.ts` ainda acusa divergência de escada
+ * em boa parte do corpus. ANTES DE LIGAR em `parser.ts`, o critério de aceite
+ * tem de ser a ÁRVORE que `construirArvoreBPporIndentacao` monta — não a
+ * contagem de recuos — e ela precisa bater com a do texto original.
+ */
+export function textoLayoutDasPaginas(paginas: PaginaVision[]): string {
+  const saida: string[] = [];
+  for (const pg of paginas) {
+    if (pg.palavras.length === 0) continue;
+    const linhas = agruparLinhas(pg.palavras).map(costurarNumeros);
+    if (linhas.length === 0) continue;
+
+    const comLargura = pg.palavras.filter((p) => p.w > 0 && p.t.length > 0);
+    const larguraChar = comLargura.length
+      ? comLargura.reduce((s, p) => s + p.w / p.t.length, 0) / comLargura.length
+      : 6;
+
+    // ── INDENTAÇÃO POR POSTO, NÃO POR LARGURA DE CARACTERE ──────────────────
+    // Quantizar o recuo dividindo por `larguraChar` COLAPSA a hierarquia: nos
+    // ERPs brasileiros o passo entre níveis é MENOR que um caractere (medido:
+    // 0,48 no AOCP, 1,07 no K&A SPED). Math.round() transformava a escada de 4
+    // níveis em 2 e a conta-folha virava irmã do próprio grupo — em 60 de 138
+    // documentos do corpus, com Ativo=Passivo continuando a fechar porque os
+    // totais vêm das raízes declaradas. Aqui os x de início de linha viram uma
+    // ESCADA ORDINAL: o que importa a jusante é a ORDEM dos níveis, não a
+    // distância em caracteres.
+    const inicios = [...new Set(linhas.map((l) => Math.round(l[0].x)))].sort((a, b) => a - b);
+    const tolerancia = Math.max(3, larguraChar * 0.35);
+    const postos: number[] = [];
+    for (const x of inicios) {
+      if (postos.length === 0 || x - postos[postos.length - 1] > tolerancia) postos.push(x);
+    }
+    const postoDe = (x: number): number => {
+      let melhor = 0;
+      for (let i = 0; i < postos.length; i++) if (x >= postos[i] - tolerancia) melhor = i;
+      return melhor;
+    };
+
+    for (const linha of linhas) {
+      let montado = "";
+      for (let i = 0; i < linha.length; i++) {
+        if (i > 0) {
+          const ant = linha[i - 1];
+          const larguraAnt = ant.t.length > 0 && ant.w > 0 ? ant.w / ant.t.length : larguraChar;
+          const lacuna = linha[i].x - (ant.x + ant.w);
+          // Lacuna grande vira coluna (espaços proporcionais); lacuna pequena é
+          // separação de palavra e vira UM espaço.
+          //
+          // O número partido pelo OCR ("614." + "387,53") NÃO chega aqui: a
+          // `costurarNumeros` acima já o remontou. Foi esse o defeito que a
+          // revisão pegou — sem a costura, o espaço obrigatório entre palavras
+          // fazia o extrator ler R$ 387,53 no lugar de R$ 614.387,53, e passava
+          // calado porque a folha corrompida não move o Ativo nem o Passivo.
+          if (lacuna > larguraAnt * 1.5) montado += " ".repeat(Math.max(1, Math.round(lacuna / larguraAnt)));
+          else montado += " ";
+        }
+        montado += linha[i].t;
+      }
+      // 2 espaços por nível: escada inequívoca para quem lê indentação.
+      saida.push("  ".repeat(postoDe(linha[0].x)) + montado);
+    }
+  }
+  return saida.join("\n");
 }

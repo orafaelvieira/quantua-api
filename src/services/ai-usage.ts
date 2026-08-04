@@ -31,6 +31,7 @@ export const ETAPAS = {
   OCR_BALANCETE: "ocr-balancete",
   OCR_BALANCETE_RELEITURA: "ocr-balancete-releitura",
   OCR_BALANCETE_VISION: "ocr-balancete-vision",
+  OCR_DEMONSTRACAO_VISION: "ocr-demonstracao-vision",
   SUGESTOES_CLASSIFICACAO: "sugestoes-classificacao",
   PESQUISA_WEB_EMPRESA: "pesquisa-web-empresa",
   PESQUISA_WEB_PARES: "pesquisa-web-pares",
