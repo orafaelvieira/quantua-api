@@ -57,6 +57,38 @@ import {
   type MapaConfirmado, type LinhaCrua,
 } from "../services/historico-gerencial";
 
+/**
+ * DE-PARA DECLARADO NA PLANILHA — a regra num lugar só (04/08/2026).
+ *
+ * A coluna "Grupo de contas" do modelo do orçamento deixa o analista ESCOLHER o
+ * de-para numa lista. Três invariantes que a revisão adversarial mostrou serem
+ * fáceis de perder, e que valem igual para conta de gasto e de receita:
+ *
+ *  1. CÉLULA EM BRANCO NÃO APAGA. Em branco quer dizer "não sei" — reimportar
+ *     uma planilha antiga (sem a coluna) zeraria o de-para do orçamento inteiro.
+ *  2. O SINAL SOBREVIVE. A planilha só carrega a CONTA; reescrever o destino
+ *     com `sinal: "soma"` transformava crédito em despesa. Uma linha de
+ *     "Créditos de PIS/COFINS" que ABATIA R$ 200 mil passaria a SOMAR R$ 200
+ *     mil — R$ 400 mil de oscilação no Lucro Bruto, e nenhuma pista na tela.
+ *  3. IGUAL AO QUE JÁ ESTÁ NÃO É MUDANÇA. Sem isto todo round-trip anunciaria
+ *     "grupo alterado" para contas que ninguém tocou, e o aviso viraria ruído.
+ *
+ * Devolve `null` quando não há nada a fazer.
+ */
+export function aplicarDeParaDeclarado(
+  destinoAtual: { conta?: string; sinal?: "soma" | "reduz" } | null | undefined,
+  canonDeclarada: string | null,
+  nomeDaLinha: string,
+): { destino: { conta: string; sinal: "soma" | "reduz" }; rotulo: string } | null {
+  if (!canonDeclarada) return null;
+  if ((destinoAtual?.conta ?? null) === canonDeclarada) return null;
+  const sinal = destinoAtual?.sinal ?? "soma";
+  return {
+    destino: { conta: canonDeclarada, sinal },
+    rotulo: `${nomeDaLinha} → ${canonDeclarada}${sinal === "reduz" ? " (mantido como (−) reduz)" : ""}`,
+  };
+}
+
 const router = Router();
 router.use(requireAuth);
 // CONTEXTO DE CONSUMO DE IA (03/08/2026): sem isto todo o gasto do produto
@@ -2295,7 +2327,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   let janela: string[] = [];
   // Linhas da aba "Receitas" do modelo multi-aba — processadas à parte, porque
   // receita mora no bloco de receitas (linhas com driver), não no plano de contas.
-  let contasReceita: Array<{ nome: string; codigo?: string; valores: Record<string, number> }> = [];
+  let contasReceita: Array<{ nome: string; codigo?: string; destino?: string; valores: Record<string, number> }> = [];
   /** Linha "Deduções da receita" da planilha → série mensal do bloco (não é conta). */
   let deducoesDaPlanilha: Record<string, number> | null = null;
   // MEMÓRIA DE CÁLCULO (29/07/2026): linhas de receita cuja conta veio pronta
@@ -2350,7 +2382,11 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     // PRÓPRIO analista (rascunhos, memórias) são ignoradas E LISTADAS — o
     // contrato é: só entra o que casa com a estrutura, e nada some em silêncio.
     const entradas = (req.body.abas as Array<{ nome?: unknown; linhas?: unknown }>).slice(0, 40);
-    const reservada = (n: string) => /^(consolidado|leia ?-?me|quantua ?-?meta|instru)/.test(normContaGmd(n));
+    // `quantua-*` cobre o carimbo (`quantua-meta`) E a aba oculta de listas do
+    // dropdown (`quantua-listas`, 04/08/2026): sem isso a planilha de apoio
+    // voltaria como se fosse um centro de custo cheio de contas chamadas
+    // "Receita bruta", "Custo da mercadoria"… — criando contas do nada.
+    const reservada = (n: string) => /^(consolidado|leia ?-?me|quantua ?-?|instru)/.test(normContaGmd(n));
     // Aba "Receitas" (28/07/2026): as linhas de receita do modelo baixado voltam
     // por ela — não é CC nem conta de gasto, então sai da contagem de "úteis"
     // (senão a planilha sem estrutura, com Receitas + Orçamento, deixava de ser
@@ -2424,9 +2460,14 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         // O CÓDIGO DA RECEITA VIAJA JUNTO (30/07/2026): a aba Receitas tem a
         // coluna Código como a de gastos, mas o mapeamento a jogava fora — as
         // linhas entravam com "—" e o PROCV do analista não achava nada.
+        // O GRUPO DE CONTAS DA RECEITA TAMBÉM VIAJA (04/08/2026): a aba Receita
+        // ganhou o dropdown de grupo, e este `.map` jogava `c.destino` fora —
+        // o analista escolhia na lista e nada acontecia, enquanto o Leia-me do
+        // próprio arquivo prometia que o escolhido MANDA. Coluna com lista que
+        // não faz nada é pior que coluna nenhuma.
         contasReceita = li.contas
           .filter((c) => !consumidos.has(normContaGmd(c.nome)) && !ehDeducao(c.nome))
-          .map((c) => ({ nome: c.nome, codigo: (c.codigo ?? "").trim(), valores: (c.valores ?? {}) as Record<string, number> }));
+          .map((c) => ({ nome: c.nome, codigo: (c.codigo ?? "").trim(), destino: (c.destino ?? "").trim(), valores: (c.valores ?? {}) as Record<string, number> }));
         janela = [...new Set([...janela, ...li.meses])];
         abasLidas.push({ aba: nomeAba, contas: contasReceita.length + mem.linhas.length, linhaCabecalho: li.linhaCabecalho });
         continue;
@@ -2607,10 +2648,39 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   // valores → os meses da janela são regravados (vazio na planilha limpa o
   // mês). Linha detalhada perde o detalhamento (o número importado é o fato);
   // linha em % vira série. É o que faz o round-trip do modelo funcionar.
+  /** Contas cujo de-para MUDOU por escolha declarada na planilha — vai no resumo
+   *  da importação: mudança silenciosa de roll-up é a que ninguém confere. */
+  const deParaAtualizado: string[] = [];
+  /** Contas de CAPEX cuja escolha de grupo foi descartada — capex não tem
+   *  destino na DRE, mas quem preencheu precisa saber que não valeu. */
+  const grupoIgnoradoCapex: string[] = [];
   const atualizadas = atualizar.map((up) => {
     const linha = linhasCusto.find((l) => l.id === up.id) ?? linhasDespesa.find((l) => l.id === up.id)
       ?? linhasNaoOp.find((l) => l.id === up.id) ?? linhasCapex.find((l) => l.id === up.id);
     if (!linha) return null;
+    // DE-PARA DECLARADO numa conta que já existe (04/08/2026). Só entra quando a
+    // célula veio preenchida E o texto casa com uma conta canônica: em branco
+    // quer dizer "não sei" e NÃO pode apagar o de-para que já estava lá —
+    // reimportar uma planilha antiga (sem a coluna) zeraria o trabalho todo.
+    // Capex fica de fora: conta de investimento não tem destino na DRE.
+    const canonDeclarada = up.destino ? canonPorNorm.get(normContaGmd(String(up.destino))) ?? null : null;
+    const ehCapex = linhasCapex.some((l) => l.id === linha.id);
+    if (canonDeclarada && !ehCapex) {
+      const troca = aplicarDeParaDeclarado(
+        (linha as { destino?: { conta?: string; sinal?: "soma" | "reduz" } }).destino,
+        canonDeclarada, linha.nome,
+      );
+      if (troca) {
+        (linha as { destino?: { conta: string; sinal: "soma" | "reduz" } }).destino = troca.destino;
+        deParaAtualizado.push(troca.rotulo);
+      }
+    } else if (canonDeclarada && ehCapex) {
+      // CAPEX NÃO TEM DESTINO NA DRE (investimento vira ativo e volta como
+      // depreciação), mas a planilha não sabe disso: a linha viaja numa aba de
+      // gasto e recebe o mesmo dropdown. Descartar em silêncio fazia o analista
+      // repetir o gesto todo ciclo, achando que a importação estava quebrada.
+      grupoIgnoradoCapex.push(linha.nome);
+    }
     if (modoRealizado) {
       // O ORÇADO da linha fica intacto: só o realizado daquele ano é regravado.
       realPorLinha.set(linha.id, {
@@ -2740,6 +2810,13 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         return !(codCr && codL && codL.toLowerCase() !== codCr.toLowerCase());
       });
       const idx = idxPorCodigo >= 0 ? idxPorCodigo : idxPorNome;
+      // GRUPO DE CONTAS DECLARADO NA ABA RECEITA (04/08/2026). Mesma régua do
+      // lado dos gastos: só vale preenchido e casando com uma conta canônica;
+      // em branco quer dizer "não sei" e preserva o que já estava. Sem isto o
+      // dropdown da aba Receita era enfeite — o analista escolhia e a linha
+      // continuava somando em Receita Bruta.
+      const canonCr = cr.destino ? canonPorNorm.get(normContaGmd(String(cr.destino))) ?? null : null;
+      const destinoDaLinha = canonCr ? { destino: { conta: canonCr, sinal: "soma" as const } } : destinoReceita;
       if (modoRealizado) {
         // REALIZADO da receita: linha existente recebe a série em
         // realizado.porLinha (a árvore de drivers do orçamento fica intacta);
@@ -2760,7 +2837,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
           codigosUsados.add(codigoNovo);
           linhasReceita.push({
             id: linhaId, nome: cr.nome, codigo: codigoNovo, template: "generico", nodeRaiz: `${linhaId}_receita`,
-            ...destinoReceita,
+            ...destinoDaLinha,
             nodes: [{
               id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${cr.nome}`, unidade: "R$",
               params: { modoPreenchimento: "mes", valores: {}, valorMensal: 0, crescimentoAnual: 0 },
@@ -2812,6 +2889,16 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
           linhasReceita[idx] = { ...linhasReceita[idx]!, codigo: codCr } as (typeof linhasReceita)[number];
           codigosUsados.add(codCr);
         }
+        // O grupo declarado troca o destino da receita JÁ EXISTENTE — o sinal
+        // que estava lá sobrevive (o analista declarou o grupo, não o sinal).
+        const trocaCr = aplicarDeParaDeclarado(
+          (linhasReceita[idx] as { destino?: { conta?: string; sinal?: "soma" | "reduz" } }).destino,
+          canonCr, alvo.nome,
+        );
+        if (trocaCr) {
+          linhasReceita[idx] = { ...linhasReceita[idx]!, destino: trocaCr.destino } as (typeof linhasReceita)[number];
+          deParaAtualizado.push(trocaCr.rotulo);
+        }
         receitas.atualizadas.push({
           nome: alvo.nome,
           meses: Object.keys(valores).length,
@@ -2828,7 +2915,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         codigosUsados.add(codigoNovo);
         linhasReceita.push({
           id: linhaId, nome: cr.nome, codigo: codigoNovo, template: "generico", nodeRaiz: `${linhaId}_receita`,
-          ...destinoReceita,
+          ...destinoDaLinha,
           nodes: [{
             id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${cr.nome}`, unidade: "R$",
             params: { modoPreenchimento: "mes", valores, valorMensal: 0, crescimentoAnual: 0 },
@@ -2873,6 +2960,8 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       criadas, atualizadas, ignoradas, semLotacao, duplicadasNaPlanilha, mesmoNomeContasDistintas,
       receitas,
       deParaSugerido: sugeridas,
+      deParaAtualizado,
+      grupoIgnoradoCapex,
       abas: abasLidas,
       mesesFora,
       horizonte: { de: model.mesInicial, meses: model.horizonteMeses },
@@ -3021,6 +3110,13 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         ? { motorAjustado } : {}),
       abas: abasLidas.map((a) => `${a.aba}${a.ignorada ? ` (${a.ignorada})` : ` (${a.contas})`}`),
       amostra: criadas.slice(0, 10).map((x) => `${x.codigo ?? "—"} ${x.nome} (${x.lotacao})`),
+      // ROLL-UP TROCADO PELO HUMANO também vai para a trilha. Sem isto, a única
+      // forma de mexer no destino de uma conta que NÃO deixava rastro era
+      // justamente a declarada por gente — enquanto a automática deixava. Três
+      // meses depois, "por que o Lucro Bruto subiu?" não teria resposta: o aviso
+      // do resumo é efêmero, some com o reload.
+      ...(deParaAtualizado.length > 0 ? { deParaDeclarado: deParaAtualizado } : {}),
+      ...(grupoIgnoradoCapex.length > 0 ? { grupoIgnoradoCapex } : {}),
       // Registro do custo de IA da etapa ([[registrar-custo-ia]]).
       ...(deParaAuto ? {
         deParaAutomatico: deParaAuto.classificadas.map((c) => `${c.nome} → ${c.conta} (${c.via})`),
@@ -3052,6 +3148,8 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     /** De-para proposto pelo sistema (nome → conta canônica) e o que ficou sem:
      *  é o que o analista revisa, em vez de escolher conta a conta. */
     deParaSugerido: sugeridas,
+    deParaAtualizado,
+    grupoIgnoradoCapex,
     deParaAuto: deParaAuto ? {
       classificadas: deParaAuto.classificadas.map((c) => ({ nome: c.nome, conta: c.conta, via: c.via, porque: c.porque })),
       semSugestao: deParaAuto.semSugestao,

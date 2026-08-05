@@ -65,7 +65,15 @@ export interface PlanoImportacao {
    *  round-trip "baixar modelo → preencher → importar" vive disso. `janela` é
    *  o conjunto de meses que a planilha COBRE — mês da janela sem valor é
    *  apagado (célula esvaziada fala), mês fora dela fica intocado. */
-  atualizar: Array<{ id: string; nome: string; valores: Record<string, number>; janela: string[] }>;
+  atualizar: Array<{
+    id: string; nome: string; valores: Record<string, number>; janela: string[];
+    /** DE-PARA DECLARADO na planilha para uma conta que JÁ existe (04/08/2026).
+     *  Sem isto, preencher "Grupo de contas" numa conta existente e reimportar
+     *  não fazia nada — e é justamente o gesto de quem já tem o orçamento
+     *  montado e quer arrumar o de-para em lote. `null` = célula em branco, que
+     *  quer dizer "não sei": o de-para atual fica como está. */
+    destino: string | null;
+  }>;
   /** Já existiam E vieram sem valores — nada a fazer. */
   ignoradas: string[];
   /** Traziam CC/unidade que não existe na estrutura — entraram sem lotação. */
@@ -189,7 +197,7 @@ export function planejarImportacaoPlanoContas(entrada: {
     if (existente) {
       const temValor = Object.keys(valores).length > 0;
       if (existente.id && (temValor || janela.length > 0)) {
-        atualizar.push({ id: existente.id, nome: existente.nome, valores, janela });
+        atualizar.push({ id: existente.id, nome: existente.nome, valores, janela, destino: (c.destino ?? "").trim() || null });
         continue;
       }
       // Repetida DENTRO da planilha trazendo valor: completa os meses que a

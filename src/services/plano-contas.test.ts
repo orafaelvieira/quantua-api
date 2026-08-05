@@ -225,7 +225,32 @@ describe("reimportação: atualizar em vez de duplicar", () => {
       janela: ["2027-01", "2027-02"],
     });
     expect(r.criar).toEqual([]);
-    expect(r.atualizar).toEqual([{ id: "L1", nome: "Viagens e hospedagem", valores: { "2027-01": 5000 }, janela: ["2027-01", "2027-02"] }]);
+    expect(r.atualizar).toEqual([{ id: "L1", nome: "Viagens e hospedagem", valores: { "2027-01": 5000 }, janela: ["2027-01", "2027-02"], destino: null }]);
+  });
+
+  /** DE-PARA DECLARADO em conta que JÁ existe (04/08/2026). A coluna "Grupo de
+   *  contas" voltou ao modelo baixado com lista na célula; sem carregar essa
+   *  escolha até a rota, preencher a coluna numa conta existente e reimportar
+   *  não fazia absolutamente nada — que é o gesto de quem já tem o orçamento
+   *  montado e quer arrumar o de-para em lote. */
+  it("conta existente carrega o Grupo de contas declarado na planilha", () => {
+    const r = planejarImportacaoPlanoContas({
+      contas: [{ nome: "Viagens e hospedagem", centroCusto: "Comercial", destino: "Despesas com vendas", valores: { "2027-01": 5000 } }],
+      existentes, unidades: [], centros,
+      janela: ["2027-01"],
+    });
+    expect(r.atualizar[0]?.destino).toBe("Despesas com vendas");
+  });
+
+  it("célula de Grupo em branco NÃO vira destino — em branco quer dizer 'não sei'", () => {
+    // Trava contra o pior caminho: reimportar planilha antiga (sem a coluna)
+    // apagaria o de-para de todas as contas do orçamento.
+    const r = planejarImportacaoPlanoContas({
+      contas: [{ nome: "Viagens e hospedagem", centroCusto: "Comercial", destino: "   ", valores: { "2027-01": 5000 } }],
+      existentes, unidades: [], centros,
+      janela: ["2027-01"],
+    });
+    expect(r.atualizar[0]?.destino).toBeNull();
   });
 
   it("casa pelo CÓDIGO mesmo se o nome mudou na planilha", () => {

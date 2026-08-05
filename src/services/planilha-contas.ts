@@ -59,8 +59,15 @@ const NOMES_CONTA = ["conta", "contas", "nome", "nome da conta", "descricao", "h
 const NOMES_CODIGO = ["codigo", "cod", "cod.", "conta contabil", "classificacao", "codigo da conta", "codigo contabil", "reduzido"];
 const NOMES_CC = ["centro de custo", "centro custo", "cc", "c custo", "departamento", "depto", "setor", "area"];
 const NOMES_UNIDADE = ["unidade", "filial", "estabelecimento", "loja", "empresa"];
-const NOMES_TIPO = ["tipo", "natureza", "grupo", "classificacao gerencial"];
-const NOMES_DESTINO = ["conta canonica", "destino", "conta gerencial", "de para", "de-para", "depara", "conta dre"];
+// "tipo de lcto" é o cabeçalho do modelo desde 04/08/2026 (o dono renomeou
+// "Tipo" para deixar claro que é o tipo do LANÇAMENTO, não o grupo). O "tipo"
+// seco fica na lista para sempre: planilha antiga tem de continuar voltando.
+// A comparação é EXATA (ver `casa`), então cada grafia precisa estar aqui.
+const NOMES_TIPO = ["tipo", "tipo de lcto", "tipo lcto", "tipo de lancamento", "tipo do lancamento", "natureza", "grupo", "classificacao gerencial"];
+// "grupo de contas" é o de-para para o plano canônico da empresa. Cuidado ao
+// mexer: NOMES_TIPO tem o "grupo" seco, e só o casamento EXATO impede que a
+// coluna nova seja lida como se fosse a de tipo.
+const NOMES_DESTINO = ["conta canonica", "destino", "conta gerencial", "de para", "de-para", "depara", "conta dre", "grupo de contas", "grupo de conta"];
 
 /** Rótulo de mês → número (1-12) + ano quando o rótulo traz. */
 export function lerMes(rotulo: unknown): { mes: number; ano?: number } | null {

@@ -214,3 +214,48 @@ describe("planilha de DRE com cabeçalho fora do padrão", () => {
     expect(r.contas[0]!.codigo).toBe("03.1.1.01.003");
   });
 });
+
+/**
+ * CABEÇALHO DO MODELO BAIXADO (04/08/2026). O modelo passou a sair com
+ * "Tipo de Lcto" e ganhou "Grupo de contas". O casamento de cabeçalho é EXATO
+ * (`nomes.includes(norm(celula))`), então cada grafia precisa estar declarada —
+ * e a armadilha mora aqui: NOMES_TIPO tem o "grupo" seco, e por um triz a
+ * coluna nova não é lida como se fosse a de tipo.
+ */
+describe("modelo do orçamento — Tipo de Lcto + Grupo de contas", () => {
+  const cab = ["Código", "Conta", "Tipo de Lcto", "Grupo de contas", "Jan/26", "Fev/26"];
+  const linhas: unknown[][] = [
+    ["Orçamento — Despesas · exercício 2026"],
+    ["Preencha os meses."],
+    cab,
+    ["4.1.1", "Fretes sobre vendas", "Despesa", "Despesas com vendas", 100, 200],
+    ["4.1.2", "Energia elétrica", "Custo", "", 50, 50],
+  ];
+
+  it("lê o tipo da coluna 'Tipo de Lcto'", () => {
+    const r = lerPlanilhaDeContas(linhas, "2026");
+    expect(r.contas[0]!.tipo).toBe("Despesa");
+    expect(r.contas[1]!.tipo).toBe("Custo");
+  });
+
+  it("lê o de-para da coluna 'Grupo de contas' — e não o confunde com o tipo", () => {
+    const r = lerPlanilhaDeContas(linhas, "2026");
+    expect(r.contas[0]!.destino).toBe("Despesas com vendas");
+    expect(r.contas[0]!.tipo).not.toBe("Despesas com vendas");
+    expect(r.contas[1]!.destino).toBe("");   // célula em branco = "não sei"
+  });
+
+  it("planilha ANTIGA, com a coluna 'Tipo' seca, continua voltando", () => {
+    // Sem esta garantia, todo arquivo baixado antes de 04/08/2026 perderia a
+    // classificação na reimportação — e capex viraria despesa em silêncio.
+    const antigas: unknown[][] = [
+      ["Orçamento — Despesas"],
+      [""],
+      ["Código", "Conta", "Tipo", "Jan/26", "Fev/26"],
+      ["4.1.1", "Fretes sobre vendas", "Capex (investimento)", 100, 200],
+    ];
+    const r = lerPlanilhaDeContas(antigas, "2026");
+    expect(r.contas[0]!.tipo).toBe("Capex (investimento)");
+    expect(r.contas[0]!.valores).toEqual({ "2026-01": 100, "2026-02": 200 });
+  });
+});
