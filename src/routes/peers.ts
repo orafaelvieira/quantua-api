@@ -4,7 +4,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { requireRole } from "../middleware/permissions";
 import { getPeerDistribution } from "../services/peer-benchmark";
 import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
-import { sincronizarArquivoCvm, sincronizarHistoricoCvm, sincronizarPendentesCvm, pendentesCvm, recalcularIndicadoresTudo, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados, modoDoSnapshot, situacaoDoArquivo, situacaoDaBase } from "../services/cvm-sync";
+import { sincronizarArquivoCvm, sincronizarHistoricoCvm, sincronizarPendentesCvm, pendentesCvm, recalcularIndicadoresTudo, getProgressoHistorico, estadoHistorico, planoHistorico, checarAtualizacoesCvm, arquivosVigiados, modoDoSnapshot, situacaoDoArquivo, situacaoDaBase, aindaNaoPublicado } from "../services/cvm-sync";
 import { INDICADORES_TEMPLATE } from "../services/financial-templates";
 import { runtimeState } from "../services/runtime-state";
 
@@ -31,13 +31,23 @@ router.get("/cvm/status", async (_req: AuthRequest, res: Response): Promise<void
   const arquivosDoPlano = planoHistorico().map(({ tipo, ano }) => `${tipo}_${ano}`);
   const porArquivoEstado = new Map(estados.map((e) => [e.arquivo, e]));
   const agora = new Date();
+  // O que a CVM ainda não publicou nesta época do ano não é cobrado do selo —
+  // e só vale para arquivo que também não está na base (se já foi carregado,
+  // vale a regra normal). Ver `aindaNaoPublicado`: é o alarme falso que apareceria
+  // todo 1º de janeiro, quando o plano ganha o ITR do ano e o DFP do ano fechado.
+  const semPublicacao = (a: string): boolean => aindaNaoPublicado(a, agora) && !porArquivoEstado.get(a);
   const situacoes = new Map(
-    arquivosDoPlano.map((a) => [a, situacaoDoArquivo(porArquivoEstado.get(a), agora)]),
+    arquivosDoPlano.map((a) => [
+      a,
+      semPublicacao(a)
+        ? { situacao: "ainda-nao-publicado" as const, motivo: "a CVM ainda não publica este arquivo nesta época do ano" }
+        : situacaoDoArquivo(porArquivoEstado.get(a), agora),
+    ]),
   );
   const pendentesLista = (await pendentesCvm()).map((f) => f.arquivo);
   const base = situacaoDaBase(
     porArquivoEstado,
-    arquivosDoPlano,
+    arquivosDoPlano.filter((a) => !semPublicacao(a)),
     new Map([...situacoes].map(([a, s]) => [a, s.situacao])),
     pendentesLista,
   );

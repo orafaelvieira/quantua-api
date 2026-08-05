@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { situacaoDoArquivo, situacaoDaBase, DIAS_CHECAGEM_VALIDA } from "./cvm-sync";
+import { situacaoDoArquivo, situacaoDaBase, aindaNaoPublicado, DIAS_CHECAGEM_VALIDA } from "./cvm-sync";
 
 /**
  * SITUAÇÃO DA BASE CVM — "verde só com prova" (04/08/2026).
@@ -74,6 +74,49 @@ describe("situacaoDoArquivo — o verde exige prova", () => {
     const r = situacaoDoArquivo({ ...emDia, etag: null, lastModified: null }, AGORA);
     expect(r.situacao).toBe("nao-verificado");
     expect(r.motivo).toContain("comparável");
+  });
+});
+
+/**
+ * O ALARME FALSO DE JANEIRO. Todo 1º de janeiro o plano ganha o ITR do ano que
+ * começou e o DFP do ano que fechou — que a CVM só publica meses depois. Sem
+ * esta regra a faixa acusaria "faltam 2 arquivos" de janeiro a maio, todo ano,
+ * sem nada errado e sem ação possível.
+ *
+ * A regra é de CALENDÁRIO por decisão explícita: a alternativa mexeria na tabela
+ * de estado da ingestão, onde `sincronizarHistoricoCvm` decide o que pular pela
+ * existência do registro — um arquivo apenas checado passaria a ser pulado para
+ * sempre, faltando um ano inteiro de dados em silêncio.
+ */
+describe("aindaNaoPublicado — não cobrar o que a CVM ainda não publicou", () => {
+  const em = (iso: string) => new Date(iso);
+
+  it("1º de janeiro: nem o ITR do ano nem o DFP do ano fechado são cobrados", () => {
+    expect(aindaNaoPublicado("itr_2027", em("2027-01-01T12:00:00Z"))).toBe(true);
+    expect(aindaNaoPublicado("dfp_2026", em("2027-01-01T12:00:00Z"))).toBe(true);
+  });
+
+  it("DFP passa a ser cobrado em maio do ano seguinte (entrega vai até 31/03)", () => {
+    expect(aindaNaoPublicado("dfp_2026", em("2027-04-30T12:00:00Z"))).toBe(true);
+    expect(aindaNaoPublicado("dfp_2026", em("2027-05-01T12:00:00Z"))).toBe(false);
+  });
+
+  it("ITR passa a ser cobrado em julho do próprio ano (1º trimestre vai até ~15/05)", () => {
+    expect(aindaNaoPublicado("itr_2027", em("2027-06-30T12:00:00Z"))).toBe(true);
+    expect(aindaNaoPublicado("itr_2027", em("2027-07-01T12:00:00Z"))).toBe(false);
+  });
+
+  it("ano passado é sempre cobrado — a regra não pode virar desculpa para arquivo velho", () => {
+    expect(aindaNaoPublicado("itr_2025", em("2026-08-04T12:00:00Z"))).toBe(false);
+    expect(aindaNaoPublicado("dfp_2024", em("2026-08-04T12:00:00Z"))).toBe(false);
+    expect(aindaNaoPublicado("dfp_2010", em("2026-08-04T12:00:00Z"))).toBe(false);
+  });
+
+  it("nome de arquivo estranho não vira desculpa: na dúvida, COBRA", () => {
+    // Fail-closed: se a regra não entende o arquivo, ele continua sendo exigido.
+    expect(aindaNaoPublicado("_historico", em("2027-01-01T12:00:00Z"))).toBe(false);
+    expect(aindaNaoPublicado("itr_abc", em("2027-01-01T12:00:00Z"))).toBe(false);
+    expect(aindaNaoPublicado("qualquer_2030", em("2027-01-01T12:00:00Z"))).toBe(false);
   });
 });
 

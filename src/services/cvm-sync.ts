@@ -1073,7 +1073,45 @@ export async function checarAtualizacoesCvm(): Promise<Array<{ arquivo: string; 
  *  produção por env var não aplicada). */
 export const DIAS_CHECAGEM_VALIDA = 8;
 
-export type SituacaoArquivo = "em-dia" | "desatualizado" | "nunca-carregado" | "nao-verificado";
+export type SituacaoArquivo = "em-dia" | "desatualizado" | "nunca-carregado" | "nao-verificado" | "ainda-nao-publicado";
+
+/**
+ * A CVM AINDA NÃO PUBLICOU ESTE ARQUIVO NESTA ÉPOCA DO ANO.
+ *
+ * Todo 1º de janeiro o plano ganha o ITR do ano que começou e o DFP do ano que
+ * fechou — arquivos que a CVM só publica meses depois. Sem esta distinção a
+ * faixa acusaria "faltam 2 arquivos" de janeiro até maio, TODO ANO, sem que nada
+ * estivesse errado e sem ação possível. Alarme falso recorrente é pior que
+ * nenhum alarme: ensina a ignorar a faixa.
+ *
+ * É REGRA DE CALENDÁRIO, DE PROPÓSITO. A alternativa — deixar a checagem criar
+ * registro para o arquivo ainda não carregado — encostaria na tabela de estado
+ * da ingestão, e ali `sincronizarHistoricoCvm` decide o que pular pela EXISTÊNCIA
+ * do registro (linha ~588). Um arquivo apenas checado ganharia registro e o
+ * carregamento do histórico passaria a pulá-lo para sempre: um ano inteiro de
+ * dados faltando, em silêncio. Esta função não cria registro, não altera tabela
+ * e não muda o que é baixado — ela só deixa de COBRAR o que ainda não existe.
+ *
+ * As margens são folgadas, e isso não custa nada: a detecção de verdade continua
+ * sendo o HEAD. No dia em que a CVM publicar, a checagem acha, cria o aviso e a
+ * fila sincroniza — independentemente do que o calendário aqui diga.
+ */
+export function aindaNaoPublicado(arquivo: string, hoje: Date = new Date()): boolean {
+  const [tipo, anoTexto] = arquivo.split("_");
+  const ano = Number(anoTexto);
+  if (!Number.isInteger(ano) || ano <= 0) return false;
+  const anoHoje = hoje.getUTCFullYear();
+  const mesHoje = hoje.getUTCMonth() + 1; // 1–12
+  if (tipo === "dfp") {
+    // DFP do ano N: entrega até 31/03 de N+1. Só passa a ser cobrado em maio.
+    return anoHoje < ano + 1 || (anoHoje === ano + 1 && mesHoje < 5);
+  }
+  if (tipo === "itr") {
+    // ITR do ano N: o 1º trimestre vai até ~15/05 de N. Cobrado a partir de julho.
+    return anoHoje < ano || (anoHoje === ano && mesHoje < 7);
+  }
+  return false;
+}
 
 interface EstadoParaSituacao {
   etag?: string | null;
