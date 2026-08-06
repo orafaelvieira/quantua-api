@@ -79,14 +79,34 @@ export function aplicarDeParaDeclarado(
   destinoAtual: { conta?: string; sinal?: "soma" | "reduz" } | null | undefined,
   canonDeclarada: string | null,
   nomeDaLinha: string,
+  /** Sinal declarado na coluna "Sinal" da planilha (05/08/2026) — null quando a
+   *  célula veio em branco: aí vale o que já está (planilha antiga não desfaz). */
+  sinalDeclarado?: "soma" | "reduz" | null,
 ): { destino: { conta: string; sinal: "soma" | "reduz" }; rotulo: string } | null {
-  if (!canonDeclarada) return null;
-  if ((destinoAtual?.conta ?? null) === canonDeclarada) return null;
-  const sinal = destinoAtual?.sinal ?? "soma";
+  const contaFinal = canonDeclarada ?? destinoAtual?.conta ?? null;
+  // Sem conta não há roll-up para ter sinal: sinal declarado numa conta sem
+  // grupo é gesto sem alvo — a importação lista isso à parte, não aqui.
+  if (!contaFinal) return null;
+  const sinalFinal = sinalDeclarado ?? destinoAtual?.sinal ?? "soma";
+  const mudouConta = contaFinal !== (destinoAtual?.conta ?? null);
+  const mudouSinal = sinalFinal !== (destinoAtual?.sinal ?? "soma");
+  if (!mudouConta && !mudouSinal) return null;
+  const pedacos: string[] = [];
+  if (mudouConta) pedacos.push(`→ ${contaFinal}`);
+  if (mudouSinal) pedacos.push(sinalFinal === "reduz" ? "agora (−) reduz" : "agora (+) soma");
+  else if (sinalFinal === "reduz") pedacos.push("(mantido como (−) reduz)");
   return {
-    destino: { conta: canonDeclarada, sinal },
-    rotulo: `${nomeDaLinha} → ${canonDeclarada}${sinal === "reduz" ? " (mantido como (−) reduz)" : ""}`,
+    destino: { conta: contaFinal, sinal: sinalFinal },
+    rotulo: `${nomeDaLinha} ${pedacos.join(" ")}`,
   };
+}
+
+/** "(+) soma"/"(−) reduz" (e variações digitadas) → sinal; null = em branco. */
+export function sinalDoTexto(texto: string | null | undefined): "soma" | "reduz" | null {
+  const s = (texto ?? "").toLowerCase();
+  if (/reduz|abate|credito|crédito/.test(s)) return "reduz";
+  if (/soma/.test(s)) return "soma";
+  return null;
 }
 
 const router = Router();
@@ -2364,7 +2384,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   let janela: string[] = [];
   // Linhas da aba "Receitas" do modelo multi-aba — processadas à parte, porque
   // receita mora no bloco de receitas (linhas com driver), não no plano de contas.
-  let contasReceita: Array<{ nome: string; codigo?: string; destino?: string; tipoTexto?: string | null; valores: Record<string, number> }> = [];
+  let contasReceita: Array<{ nome: string; codigo?: string; destino?: string; tipoTexto?: string | null; sinalTexto?: string | null; valores: Record<string, number> }> = [];
   /** Linha "Deduções da receita" da planilha → série mensal do bloco (não é conta). */
   let deducoesDaPlanilha: Record<string, number> | null = null;
   // MEMÓRIA DE CÁLCULO (29/07/2026): linhas de receita cuja conta veio pronta
@@ -2514,7 +2534,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         // erro, com o rótulo dizendo o contrário.
         contasReceita = li.contas
           .filter((c) => !consumidos.has(normContaGmd(c.nome)) && !ehDeducao(c.nome))
-          .map((c) => ({ nome: c.nome, codigo: (c.codigo ?? "").trim(), destino: (c.destino ?? "").trim(), tipoTexto: (c.tipo ?? "").trim() || null, valores: (c.valores ?? {}) as Record<string, number> }));
+          .map((c) => ({ nome: c.nome, codigo: (c.codigo ?? "").trim(), destino: (c.destino ?? "").trim(), tipoTexto: (c.tipo ?? "").trim() || null, sinalTexto: (c.sinal ?? "").trim() || null, valores: (c.valores ?? {}) as Record<string, number> }));
         janela = [...new Set([...janela, ...li.meses])];
         abasLidas.push({ aba: nomeAba, contas: contasReceita.length + mem.linhas.length, linhaCabecalho: li.linhaCabecalho });
         continue;
@@ -2682,7 +2702,9 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       valores: modoRealizado ? {} : c.valores,
       ...(c.centroCustoId ? { centroCustoId: c.centroCustoId } : {}),
       ...(c.unidadeId ? { unidadeId: c.unidadeId } : {}),
-      ...(destino ? { destino: { conta: destino, sinal: "soma" as const } } : {}),
+      // Sinal declarado na planilha entra já na criação — "(−) reduz" faz a
+      // conta nascer redutora (crédito/devolução abate do grupo).
+      ...(destino ? { destino: { conta: destino, sinal: sinalDoTexto(c.sinalTexto) ?? ("soma" as const) } } : {}),
       // Capex sem taxa nunca depreciaria — 10% a.a. é o default do catálogo.
       ...(tipoDaConta === "capex" ? { depreciacaoAnual: 0.1 } : {}),
       // A classe fiscal viaja com a linha — é ela que o motor lê para tirar o
@@ -2724,11 +2746,12 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     // reimportar uma planilha antiga (sem a coluna) zeraria o trabalho todo.
     // Capex fica de fora: conta de investimento não tem destino na DRE.
     const canonDeclarada = up.destino ? canonPorNorm.get(normContaGmd(String(up.destino))) ?? null : null;
+    const sinalDeclarado = sinalDoTexto(up.sinalTexto);
     const ehCapex = linhasCapex.some((l) => l.id === linha.id);
-    if (canonDeclarada && !ehCapex) {
+    if ((canonDeclarada || sinalDeclarado) && !ehCapex) {
       const troca = aplicarDeParaDeclarado(
         (linha as { destino?: { conta?: string; sinal?: "soma" | "reduz" } }).destino,
-        canonDeclarada, linha.nome,
+        canonDeclarada, linha.nome, sinalDeclarado,
       );
       if (troca) {
         (linha as { destino?: { conta: string; sinal: "soma" | "reduz" } }).destino = troca.destino;
@@ -2888,7 +2911,8 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       // dropdown da aba Receita era enfeite — o analista escolhia e a linha
       // continuava somando em Receita Bruta.
       const canonCr = cr.destino ? canonPorNorm.get(normContaGmd(String(cr.destino))) ?? null : null;
-      const destinoDaLinha = canonCr ? { destino: { conta: canonCr, sinal: "soma" as const } } : destinoReceita;
+      const sinalCr = sinalDoTexto(cr.sinalTexto);
+      const destinoDaLinha = canonCr ? { destino: { conta: canonCr, sinal: sinalCr ?? ("soma" as const) } } : destinoReceita;
       // CLASSE FISCAL declarada no Tipo da aba Receita (revisão adversarial):
       // "Dedução da receita" escolhida no dropdown precisa VALER — antes era
       // descartada e a devolução entrava SOMANDO na receita bruta. Set-only:
@@ -2967,11 +2991,11 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
           linhasReceita[idx] = { ...linhasReceita[idx]!, codigo: codCr } as (typeof linhasReceita)[number];
           codigosUsados.add(codCr);
         }
-        // O grupo declarado troca o destino da receita JÁ EXISTENTE — o sinal
-        // que estava lá sobrevive (o analista declarou o grupo, não o sinal).
+        // Grupo e SINAL declarados valem na receita já existente; célula em
+        // branco preserva o que está (planilha antiga não desfaz nada).
         const trocaCr = aplicarDeParaDeclarado(
           (linhasReceita[idx] as { destino?: { conta?: string; sinal?: "soma" | "reduz" } }).destino,
-          canonCr, alvo.nome,
+          canonCr, alvo.nome, sinalCr,
         );
         if (trocaCr) {
           linhasReceita[idx] = { ...linhasReceita[idx]!, destino: trocaCr.destino } as (typeof linhasReceita)[number];

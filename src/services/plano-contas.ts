@@ -24,6 +24,8 @@ export interface ContaImportada {
   unidade?: string | null;
   /** Conta canônica da DRE em que esta conta soma (o de-para do roll-up). */
   destino?: string | null;
+  /** "(+) soma"/"(−) reduz" — declara conta REDUTORA já na planilha. */
+  sinal?: string | null;
   /** ORÇAMENTO PRONTO: valores por mês ("2026-01": 15000). Quando a planilha
    *  do cliente já traz os números (contas nas linhas, meses nas colunas), a
    *  conta nasce preenchida em vez de vazia. */
@@ -49,6 +51,8 @@ export interface ContaPlanejada {
   /** Texto CRU da coluna "Tipo" — a rota traduz em custo/despesa/financeira/
    *  capex (o modelo baixado leva o rótulo em português na volta). */
   tipoTexto: string | null;
+  /** Texto CRU do "Sinal" — "(+) soma"/"(−) reduz" declara conta redutora. */
+  sinalTexto: string | null;
   unidadeId: string | null;
   centroCustoId: string | null;
   destino: string | null;
@@ -77,6 +81,9 @@ export interface PlanoImportacao {
      *  em conta existente (set-only): marcar "Imposto sobre faturamento" na
      *  planilha reclassifica; célula vazia nunca apaga classe posta na grade. */
     tipoTexto: string | null;
+    /** Texto CRU do "Sinal" — "(+) soma"/"(−) reduz". Set-only: em branco
+     *  preserva o sinal do sistema (planilha antiga não pode desfazer). */
+    sinalTexto: string | null;
   }>;
   /** Já existiam E vieram sem valores — nada a fazer. */
   ignoradas: string[];
@@ -201,7 +208,7 @@ export function planejarImportacaoPlanoContas(entrada: {
     if (existente) {
       const temValor = Object.keys(valores).length > 0;
       if (existente.id && (temValor || janela.length > 0)) {
-        atualizar.push({ id: existente.id, nome: existente.nome, valores, janela, destino: (c.destino ?? "").trim() || null, tipoTexto: (c.tipo ?? "").trim() || null });
+        atualizar.push({ id: existente.id, nome: existente.nome, valores, janela, destino: (c.destino ?? "").trim() || null, tipoTexto: (c.tipo ?? "").trim() || null, sinalTexto: (c.sinal ?? "").trim() || null });
         continue;
       }
       // Repetida DENTRO da planilha trazendo valor: completa os meses que a
@@ -230,6 +237,7 @@ export function planejarImportacaoPlanoContas(entrada: {
       nome, codigo,
       ehCusto: (c.tipo ?? "").toLowerCase().startsWith("cust"),
       tipoTexto: (c.tipo ?? "").trim() || null,
+      sinalTexto: (c.sinal ?? "").trim() || null,
       unidadeId, centroCustoId, destino, valores,
       lotacao: centroCustoId ? nomeDe(centroCustoId, centros) : unidadeId ? nomeDe(unidadeId, unidades) : "não atribuído",
     };

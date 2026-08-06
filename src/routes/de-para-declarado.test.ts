@@ -13,7 +13,7 @@
  * analista nem a tela tinham como suspeitar.
  */
 import { describe, it, expect } from "vitest";
-import { aplicarDeParaDeclarado } from "./models";
+import { aplicarDeParaDeclarado, sinalDoTexto } from "./models";
 
 describe("aplicarDeParaDeclarado", () => {
   it("célula em branco NÃO mexe no de-para — em branco quer dizer 'não sei'", () => {
@@ -47,5 +47,52 @@ describe("aplicarDeParaDeclarado", () => {
   it("destino sem sinal declarado assume soma (dado legado)", () => {
     const r = aplicarDeParaDeclarado({ conta: "Custo Operacional" }, "Despesas com Fretes", "Fretes");
     expect(r?.destino.sinal).toBe("soma");
+  });
+});
+
+/**
+ * COLUNA "Sinal" DA PLANILHA (05/08/2026, Frente 3). A planilha não tinha como
+ * declarar conta REDUTORA — "(-) PIS s/ Fretes", "(-) Devolução de Compras"
+ * exigiam abrir o sistema e trocar conta a conta. Agora o "(−) reduz" viaja na
+ * célula, com a mesma regra de tudo aqui: em branco preserva.
+ */
+describe("sinal declarado na planilha", () => {
+  it("'(−) reduz' declarado troca o sinal mantendo o grupo", () => {
+    const r = aplicarDeParaDeclarado({ conta: "Despesas com Fretes", sinal: "soma" }, null, "(-) PIS s/ Fretes", "reduz");
+    expect(r?.destino).toEqual({ conta: "Despesas com Fretes", sinal: "reduz" });
+    expect(r?.rotulo).toContain("agora (−) reduz");
+  });
+
+  it("grupo E sinal declarados juntos aplicam os dois", () => {
+    const r = aplicarDeParaDeclarado({ conta: "Custo Operacional", sinal: "soma" }, "Despesas com Fretes", "(-) Anulação de Frete", "reduz");
+    expect(r?.destino).toEqual({ conta: "Despesas com Fretes", sinal: "reduz" });
+  });
+
+  it("célula de sinal em branco preserva o reduz que já estava", () => {
+    const r = aplicarDeParaDeclarado({ conta: "Custo Operacional", sinal: "reduz" }, "Despesas com Fretes", "Créditos", null);
+    expect(r?.destino.sinal).toBe("reduz");
+  });
+
+  it("sinal sem grupo nenhum (nem gravado) não faz nada — não há roll-up para ter sinal", () => {
+    expect(aplicarDeParaDeclarado(undefined, null, "Conta solta", "reduz")).toBeNull();
+  });
+
+  it("nada declarado e nada mudado devolve null — sem falso 'alterado' no resumo", () => {
+    expect(aplicarDeParaDeclarado({ conta: "Custo Operacional", sinal: "soma" }, "Custo Operacional", "Fretes", null)).toBeNull();
+  });
+});
+
+describe("sinalDoTexto", () => {
+  it("lê as duas opções do dropdown e variações digitadas", () => {
+    expect(sinalDoTexto("(−) reduz")).toBe("reduz");
+    expect(sinalDoTexto("(-) reduz")).toBe("reduz");
+    expect(sinalDoTexto("reduz")).toBe("reduz");
+    expect(sinalDoTexto("(+) soma")).toBe("soma");
+    expect(sinalDoTexto("soma")).toBe("soma");
+  });
+  it("em branco é null — 'não sei', nunca 'soma'", () => {
+    expect(sinalDoTexto("")).toBeNull();
+    expect(sinalDoTexto(null)).toBeNull();
+    expect(sinalDoTexto("x")).toBeNull();
   });
 });

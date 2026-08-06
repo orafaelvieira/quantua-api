@@ -20,6 +20,10 @@ export interface ContaDaPlanilha {
   unidade: string;
   tipo: string;
   destino: string;
+  /** Texto CRU da coluna "Sinal" (05/08/2026) — "(+) soma" / "(−) reduz".
+   *  Declara conta REDUTORA (crédito, devolução) direto na planilha; em branco
+   *  preserva o sinal que já está no sistema. */
+  sinal: string;
   /** "YYYY-MM" → valor. Vazio quando a planilha traz só a estrutura. */
   valores: Record<string, number>;
 }
@@ -68,6 +72,8 @@ const NOMES_TIPO = ["tipo", "tipo de lcto", "tipo lcto", "tipo de lancamento", "
 // mexer: NOMES_TIPO tem o "grupo" seco, e só o casamento EXATO impede que a
 // coluna nova seja lida como se fosse a de tipo.
 const NOMES_DESTINO = ["conta canonica", "destino", "conta gerencial", "de para", "de-para", "depara", "conta dre", "grupo de contas", "grupo de conta"];
+// A coluna do modelo chama "Sinal"; as variantes cobrem quem escreve por extenso.
+const NOMES_SINAL = ["sinal", "soma/reduz", "soma reduz", "soma ou reduz"];
 
 /** Rótulo de mês → número (1-12) + ano quando o rótulo traz. */
 export function lerMes(rotulo: unknown): { mes: number; ano?: number } | null {
@@ -145,6 +151,7 @@ export function lerPlanilhaDeContas(linhas: unknown[][], anoExercicio: string): 
   let cUnidade = acha(NOMES_UNIDADE);
   const cTipo = acha(NOMES_TIPO);
   const cDestino = acha(NOMES_DESTINO);
+  const cSinal = acha(NOMES_SINAL);
 
   // "Unidade" nem sempre é filial: em planilha de DRE a coluna costuma ser a
   // UNIDADE DE MEDIDA ("[R$]", "%"). Se o conteúdo é isso, não é dimensão —
@@ -177,7 +184,7 @@ export function lerPlanilhaDeContas(linhas: unknown[][], anoExercicio: string): 
   // "Produto | Preço | Qtd" — viraria plano de contas, e o sistema perderia a
   // capacidade de dizer "não entendi esta planilha", que vale mais.
   if (cNome < 0 && (cCodigo >= 0 || colunasMes.length >= 3)) {
-    const usadas = new Set([cCodigo, cCc, cUnidade, cTipo, cDestino, ...colunasMes.map((c) => c.col)]);
+    const usadas = new Set([cCodigo, cCc, cUnidade, cTipo, cDestino, cSinal, ...colunasMes.map((c) => c.col)]);
     const corpo = linhas.slice(idxCab + 1, idxCab + 200);
     let melhor = { col: -1, pontos: 0 };
     const largura = Math.max(...corpo.map((l) => (l ?? []).length), original.length);
@@ -236,7 +243,7 @@ export function lerPlanilhaDeContas(linhas: unknown[][], anoExercicio: string): 
     const txt = (c: number) => (c >= 0 ? String(linha[c] ?? "").trim() : "");
     contas.push({
       nome, codigo: codigoDaLinha, centroCusto: txt(cCc), unidade: txt(cUnidade),
-      tipo: txt(cTipo), destino: txt(cDestino), valores,
+      tipo: txt(cTipo), destino: txt(cDestino), sinal: txt(cSinal), valores,
     });
   }
 

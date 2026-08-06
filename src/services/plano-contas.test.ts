@@ -225,7 +225,7 @@ describe("reimportação: atualizar em vez de duplicar", () => {
       janela: ["2027-01", "2027-02"],
     });
     expect(r.criar).toEqual([]);
-    expect(r.atualizar).toEqual([{ id: "L1", nome: "Viagens e hospedagem", valores: { "2027-01": 5000 }, janela: ["2027-01", "2027-02"], destino: null, tipoTexto: null }]);
+    expect(r.atualizar).toEqual([{ id: "L1", nome: "Viagens e hospedagem", valores: { "2027-01": 5000 }, janela: ["2027-01", "2027-02"], destino: null, tipoTexto: null, sinalTexto: null }]);
   });
 
   /** DE-PARA DECLARADO em conta que JÁ existe (04/08/2026). A coluna "Grupo de
