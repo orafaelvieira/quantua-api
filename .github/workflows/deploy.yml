@@ -13,7 +13,9 @@ permissions:
   id-token: write
   contents: read
 
-concurrency: deploy-api
+# Grupo renomeado em 06/08/2026: o incidente do GitHub deixou um re-run em
+# limbo ("has not yet queued", incancelável) entupindo o grupo "deploy-api".
+concurrency: deploy-api-2
 
 jobs:
   deploy:
