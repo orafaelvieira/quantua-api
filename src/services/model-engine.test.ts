@@ -2014,3 +2014,84 @@ describe("cascata fiscal — correções da revisão adversarial", () => {
     expect(r.series["receita_total"]!["2026-01"]).toBeCloseTo(100_000, 2);
   });
 });
+
+/**
+ * ALÍQUOTA POR LINHA DE RECEITA (06/08/2026, Frente 2) — "tem empresas com ISS
+ * diferente por tipo de receita" (dono). A linha declara `aliquotas` e o
+ * componente é somado linha a linha, com a base rateando as deduções na
+ * proporção da receita. Sem linha declarada, o cálculo é o de sempre.
+ */
+describe("alíquota por linha de receita", () => {
+  const blocoImp = (impostos: Record<string, unknown>): BlocoModelo =>
+    ({ id: "b10", tipo: "impostos", nome: "Impostos", ativo: true, config: { impostos } as BlocoModelo["config"] });
+  const duasLinhas = (aliqLinha2?: Record<string, number>): BlocoModelo => ({
+    id: "br2", tipo: "receitas", nome: "Receitas", ativo: true,
+    config: {
+      linhasReceita: [
+        { id: "r1", nome: "Comércio", nodeRaiz: "v_r1", nodes: [{ id: "v_r1", tipo: "serie", nome: "Comércio", unidade: "R$", params: { valorMensal: 60_000 } }] },
+        { id: "r2", nome: "Serviços", nodeRaiz: "v_r2", ...(aliqLinha2 ? { aliquotas: aliqLinha2 } : {}), nodes: [{ id: "v_r2", tipo: "serie", nome: "Serviços", unidade: "R$", params: { valorMensal: 40_000 } }] },
+      ],
+    } as unknown as BlocoModelo["config"],
+  });
+
+  it("ISS declarado numa linha incide só sobre a receita DELA", () => {
+    // Modelo sem ISS global; linha Serviços declara 5%: ISS = 40k × 5% = 2.000.
+    const r = calcularModelo(inputDe([duasLinhas({ issPct: 0.05 }), blocoImp({ regime: "presumido" })]));
+    expect(r.series["impostos_iss"]!["2026-01"]).toBeCloseTo(2_000, 2);
+    // PIS/COFINS continua global (3,65% de 100k) — o override foi só do ISS.
+    expect(r.series["impostos_pis_cofins"]!["2026-01"]).toBeCloseTo(3_650, 2);
+  });
+
+  it("a base da linha RATEIA as deduções — mesma base fiscal, repartida", () => {
+    // Dedução de 10% da bruta: base da linha Serviços = 40k × 0,9 = 36k → ISS 1.800.
+    const bloco = duasLinhas({ issPct: 0.05 });
+    (bloco.config as { deducoesPct?: number }).deducoesPct = 0.1;
+    const r = calcularModelo(inputDe([bloco, blocoImp({ regime: "presumido" })]));
+    expect(r.series["impostos_iss"]!["2026-01"]).toBeCloseTo(1_800, 2);
+  });
+
+  it("SEM linha declarada, os números são idênticos aos de antes (regressão zero)", () => {
+    const r = calcularModelo(inputDe([duasLinhas(), blocoImp({ regime: "presumido", issPct: 0.03 })]));
+    // Caminho antigo: base 100k × 3% = 3.000, exatamente como sempre.
+    expect(r.series["impostos_iss"]!["2026-01"]).toBeCloseTo(3_000, 2);
+    expect(r.dre.find((l) => l.id === "impostos-receita")!.valores["2026-01"]).toBeCloseTo(6_650, 2);
+  });
+
+  it("override + alíquota global convivem: cada linha paga a sua", () => {
+    // ISS global 3%; Serviços declara 5%: Comércio 60k×0,9(?)… sem deduções:
+    // 60k×3% + 40k×5% = 1.800 + 2.000 = 3.800.
+    const r = calcularModelo(inputDe([duasLinhas({ issPct: 0.05 }), blocoImp({ regime: "presumido", issPct: 0.03 })]));
+    expect(r.series["impostos_iss"]!["2026-01"]).toBeCloseTo(3_800, 2);
+  });
+
+  it("componente desligado zera também o override da linha", () => {
+    const r = calcularModelo(inputDe([duasLinhas({ issPct: 0.05 }), blocoImp({ regime: "presumido", desativados: ["iss"] })]));
+    expect(r.series["impostos_iss"]).toBeUndefined();
+  });
+
+  it("linha com destino REDUZ entra NEGATIVA no rateio (devolução devolve imposto)", () => {
+    // Revisão adversarial 06/08: sem o sinal, a anulação era TRIBUTADA (base
+    // pré-destino somava 60k + 40k + 10k = 110k > bruta 90k). Com o sinal:
+    // bruta = 60k + 40k − 10k = 90k; ISS = 60k×0 + 40k×5% − 10k×0 = 2.000;
+    // PIS/COFINS (global 3,65%) = (60k + 40k − 10k) × 3,65% = 3.285.
+    const bloco = duasLinhas({ issPct: 0.05 });
+    (bloco.config as unknown as { linhasReceita: Array<Record<string, unknown>> }).linhasReceita.push({
+      id: "r3", nome: "(-) Anulação de vendas", nodeRaiz: "v_r3",
+      destino: { conta: "Comércio", sinal: "reduz" },
+      nodes: [{ id: "v_r3", tipo: "serie", nome: "Anulação", unidade: "R$", params: { valorMensal: 10_000 } }],
+    });
+    const r = calcularModelo(inputDe([bloco, blocoImp({ regime: "presumido" })]));
+    expect(r.series["impostos_iss"]!["2026-01"]).toBeCloseTo(2_000, 2);
+    expect(r.series["impostos_pis_cofins"]!["2026-01"]).toBeCloseTo(3_285, 2);
+    // E a devolução com alíquota PRÓPRIA devolve o imposto na alíquota dela.
+    const bloco2 = duasLinhas({ issPct: 0.05 });
+    (bloco2.config as unknown as { linhasReceita: Array<Record<string, unknown>> }).linhasReceita.push({
+      id: "r3", nome: "(-) Anulação de serviços", nodeRaiz: "v_r3",
+      destino: { conta: "Serviços", sinal: "reduz" }, aliquotas: { issPct: 0.05 },
+      nodes: [{ id: "v_r3", tipo: "serie", nome: "Anulação", unidade: "R$", params: { valorMensal: 10_000 } }],
+    });
+    const r2 = calcularModelo(inputDe([bloco2, blocoImp({ regime: "presumido" })]));
+    // ISS = 40k×5% − 10k×5% = 1.500 (líquido dos serviços × 5%).
+    expect(r2.series["impostos_iss"]!["2026-01"]).toBeCloseTo(1_500, 2);
+  });
+});

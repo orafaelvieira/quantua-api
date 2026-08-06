@@ -166,6 +166,14 @@ export interface LinhaReceita {
   /** DESTINO na DRE (2026-07-16): idem LinhaCusto.destino — soma/reduz numa
    *  conta canônica em vez de virar linha própria. */
   destino?: { conta: string; sinal: "soma" | "reduz" };
+  /** CLASSE FISCAL (05/08/2026): "deducaoReceita" etc. — o motor extrai o valor
+   *  da linha para o ponto certo da cascata (ver separarClasse). */
+  classe?: string;
+  /** ALÍQUOTAS PRÓPRIAS da linha (06/08/2026 — "ISS diferente por tipo de
+   *  receita"). Fração (0.05 = 5%); componente ausente cai na alíquota do
+   *  modelo (aba Impostos). Só vale em Presumido/Real — o Simples é DAS único
+   *  por lei. A base da linha rateia as deduções na proporção da receita. */
+  aliquotas?: { pisCofinsPct?: number; issPct?: number; icmsPct?: number };
   /** Posição de exibição na lista (nova linha = fim). Metadado da tela. */
   ordem?: number;
 }
@@ -2267,21 +2275,71 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     const pisCofins = impDesligado.has("pisCofins") ? 0 : Math.max(0, num(cfgImp!.pisCofinsPct, regime === "presumido" ? 0.0365 : 0.0925));
     const iss = impDesligado.has("iss") ? 0 : Math.max(0, num(cfgImp!.issPct));
     const icms = impDesligado.has("icms") ? 0 : Math.max(0, num(cfgImp!.icmsPct));
+    // ALÍQUOTA POR LINHA DE RECEITA (06/08/2026, Frente 2 — pedido do dono:
+    // "tem empresas com ISS diferente por tipo de receita"). A linha pode
+    // declarar `aliquotas: { pisCofinsPct?/issPct?/icmsPct? }`; sem declarar,
+    // vale a alíquota do modelo. O imposto vira a soma por linha, com a base de
+    // cada uma RATEANDO as deduções na proporção da receita (fator base/bruta)
+    // — mesma base fiscal de sempre, só repartida. Sem nenhuma linha declarada,
+    // Σ(valor_linha × fator) = receitaBase e o total é IDÊNTICO ao de antes:
+    // regressão zero por construção.
+    // Valores pré-destino (linhasCalculadas) COM O SINAL DO DESTINO (revisão
+    // adversarial 06/08): linha com destino "reduz" (ex.: anulação de frete
+    // reduzindo a conta de fretes) entra NEGATIVA — devolve o imposto na
+    // alíquota dela (ou do modelo). Sem o sinal, a soma das bases estourava a
+    // receita bruta e a devolução era TRIBUTADA em vez de devolvida. Com o
+    // sinal, Σ(valor × sinal) = receitaTotal pós-destino, exato. Linha com
+    // classe fiscal fica fora — não é receita. Componente desligado zera
+    // também o override da linha.
+    // Mesma varredura da coleta de linhas (TODOS os blocos de receita ativos —
+    // não só o primeiro): Σ(valor × sinal) tem de bater com receitaTotal.
+    const linhasAliquota = input.blocks
+      .filter((b) => b.ativo && b.tipo === "receitas")
+      .flatMap((b) => b.config.linhasReceita ?? [])
+      .filter((l) => !(l as { classe?: string }).classe)
+      .map((l) => ({
+        valores: linhasCalculadas[l.id] ?? {},
+        sinal: l.destino?.sinal === "reduz" ? -1 : 1,
+        aliq: (l as { aliquotas?: { pisCofinsPct?: number; issPct?: number; icmsPct?: number } }).aliquotas,
+      }));
+    const temAliquotaPropria = linhasAliquota.some((l) => l.aliq && (l.aliq.pisCofinsPct != null || l.aliq.issPct != null || l.aliq.icmsPct != null));
     // Componentes ABERTOS (o resumo da aba e o Excel detalham a composição).
     const sPisCofins: Serie = {};
     const sIss: Serie = {};
     const sIcms: Serie = {};
     for (const mes of meses) {
       const rec = receitaBase[mes] ?? 0; // base já líquida das deduções
-      sPisCofins[mes] = rec * pisCofins;
-      sIss[mes] = rec * iss;
-      sIcms[mes] = rec * icms;
+      // bruta=0 com base≠0 (mês só de dedução): não há o que ratear — cai na
+      // fórmula do modelo para não perder o estorno que o caminho legado dá.
+      if (temAliquotaPropria && (receitaTotal[mes] ?? 0) !== 0) {
+        const bruta = receitaTotal[mes] ?? 0;
+        const fator = rec / bruta;
+        let pc = 0, is = 0, ic = 0;
+        for (const l of linhasAliquota) {
+          const base = (l.valores[mes] ?? 0) * l.sinal * fator;
+          pc += base * (impDesligado.has("pisCofins") ? 0 : Math.max(0, l.aliq?.pisCofinsPct ?? pisCofins));
+          is += base * (impDesligado.has("iss") ? 0 : Math.max(0, l.aliq?.issPct ?? iss));
+          ic += base * (impDesligado.has("icms") ? 0 : Math.max(0, l.aliq?.icmsPct ?? icms));
+        }
+        sPisCofins[mes] = pc; sIss[mes] = is; sIcms[mes] = ic;
+      } else {
+        sPisCofins[mes] = rec * pisCofins;
+        sIss[mes] = rec * iss;
+        sIcms[mes] = rec * icms;
+      }
       impostosReceita[mes] = sPisCofins[mes] + sIss[mes] + sIcms[mes];
     }
-    if (pisCofins > 0) series["impostos_pis_cofins"] = sPisCofins;
-    if (iss > 0) series["impostos_iss"] = sIss;
-    if (icms > 0) series["impostos_icms"] = sIcms;
+    // O gate olha a SÉRIE, não a alíquota do modelo: com override por linha o
+    // componente pode existir mesmo com a alíquota global zerada.
+    const temValor = (s: Serie) => meses.some((m) => (s[m] ?? 0) !== 0);
+    if (temValor(sPisCofins)) series["impostos_pis_cofins"] = sPisCofins;
+    if (temValor(sIss)) series["impostos_iss"] = sIss;
+    if (temValor(sIcms)) series["impostos_icms"] = sIcms;
     provaImpostos = `${regime === "presumido" ? "Presumido" : "Real"}: ${((pisCofins + iss + icms) * 100).toFixed(2)}% sobre a receita (PIS/COFINS${iss ? " + ISS" : ""}${icms ? " + ICMS" : ""}) + IRPJ/CSLL abaixo do resultado`;
+    if (temAliquotaPropria) {
+      const n = linhasAliquota.filter((l) => l.aliq && (l.aliq.pisCofinsPct != null || l.aliq.issPct != null || l.aliq.icmsPct != null)).length;
+      provaImpostos += ` · ${n} linha(s) de receita com alíquota própria (base rateada pelas deduções)`;
+    }
     if (impDesligado.size > 0) provaImpostos += ` · componente(s) DESLIGADO(S) na aba Impostos (o imposto entra pelas contas importadas): ${[...impDesligado].join(", ")}`;
     // ELEGIBILIDADE do Presumido: receita ANUAL acima de R$ 78 mi obriga o
     // Lucro Real no ano seguinte (art. 13 da Lei 9.718). A presunção NÃO muda
