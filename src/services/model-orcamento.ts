@@ -44,6 +44,26 @@ export interface SnapshotOrcamento {
   cenario: string;
   mesInicial: string;
   horizonteMeses: number;
+  /**
+   * PROVENIÊNCIA DA ESTRUTURA (05/08/2026). O congelamento sempre foi imune a
+   * alteração posterior — os números são clonados. Mas era ANÔNIMO: ninguém
+   * conseguia responder "contra qual versão do modelo de DRE/BP este orçamento
+   * foi montado?". Com a política da casa de versionar dicionário, DRE e BP
+   * justamente para o passado não se mexer, faltava carimbar QUAL versão valia.
+   *
+   * Não muda número nenhum — acrescenta a etiqueta que torna o número
+   * defensável seis meses depois.
+   */
+  estrutura?: {
+    /** Versão do modelo de DRE/BP vigente no congelamento e de ONDE ela veio
+     *  (o modelo é copy-on-write por empresa: "global" e "empresa" são versões
+     *  diferentes). Mesmo formato de `getActiveModelVersions`, que o IBR já usa
+     *  — a etiqueta do orçamento passa a ser comparável com a da análise. */
+    dre: number | null;
+    bp: number | null;
+    dreEscopo: "global" | "empresa" | null;
+    bpEscopo: "global" | "empresa" | null;
+  };
   /** DRE congelada — mesma forma da saída do motor. */
   dre: LinhaDre[];
   bp?: LinhaDre[];
@@ -414,7 +434,12 @@ export function calcularOrcadoRealizado(input: OrcadoRealizadoInput): ResultadoO
   // congelado não as previa. Avisar em vez de omitir silenciosamente — é
   // exatamente o modo de falha registrado no Claude Log da planilha.
   const idsSnapshot = new Set(snapshot.dre.map((l) => l.id));
-  const novas = dreRealizada.filter((l) => !idsSnapshot.has(l.id) && somaJanela(l.valores, meses) !== 0);
+  // Linhas ESTRUTURAIS da cascata ficam fora do aviso (05/08/2026): a DRE
+  // passou a ter sempre Receita líquida/impostos/IRPJ — snapshot congelado
+  // antes dessa mudança não as tem, e o aviso trataria um subtotal que o
+  // MOTOR criou como se fosse conta imprevista, em toda abertura da tela.
+  const ESTRUTURAIS = new Set(["receita-liquida", "impostos-receita", "irpj-csll", "deducoes-receita", "lucro-liquido"]);
+  const novas = dreRealizada.filter((l) => !idsSnapshot.has(l.id) && !ESTRUTURAIS.has(l.id) && somaJanela(l.valores, meses) !== 0);
   if (novas.length > 0) {
     avisos.push(
       `${novas.length} ${novas.length === 1 ? "linha existe" : "linhas existem"} no realizado e não ${novas.length === 1 ? "estava" : "estavam"} no orçamento congelado: ${novas.map((l) => l.nome).join(", ")}.`
@@ -444,6 +469,7 @@ export function congelarOrcamento(params: {
   bp?: LinhaDre[];
   fc?: LinhaDre[];
   criadoEm?: string;
+  estrutura?: SnapshotOrcamento["estrutura"];
 }): SnapshotOrcamento {
   return {
     id: params.id,
@@ -452,6 +478,7 @@ export function congelarOrcamento(params: {
     cenario: params.cenario,
     mesInicial: params.mesInicial,
     horizonteMeses: params.horizonteMeses,
+    ...(params.estrutura ? { estrutura: params.estrutura } : {}),
     // Clona: o snapshot não pode mudar quando o modelo vivo mudar.
     dre: JSON.parse(JSON.stringify(params.dre)) as LinhaDre[],
     bp: params.bp ? (JSON.parse(JSON.stringify(params.bp)) as LinhaDre[]) : undefined,

@@ -73,6 +73,10 @@ export interface PlanoImportacao {
      *  montado e quer arrumar o de-para em lote. `null` = célula em branco, que
      *  quer dizer "não sei": o de-para atual fica como está. */
     destino: string | null;
+    /** Texto CRU do "Tipo de Lcto" (05/08/2026) — a rota aplica CLASSE FISCAL
+     *  em conta existente (set-only): marcar "Imposto sobre faturamento" na
+     *  planilha reclassifica; célula vazia nunca apaga classe posta na grade. */
+    tipoTexto: string | null;
   }>;
   /** Já existiam E vieram sem valores — nada a fazer. */
   ignoradas: string[];
@@ -197,7 +201,7 @@ export function planejarImportacaoPlanoContas(entrada: {
     if (existente) {
       const temValor = Object.keys(valores).length > 0;
       if (existente.id && (temValor || janela.length > 0)) {
-        atualizar.push({ id: existente.id, nome: existente.nome, valores, janela, destino: (c.destino ?? "").trim() || null });
+        atualizar.push({ id: existente.id, nome: existente.nome, valores, janela, destino: (c.destino ?? "").trim() || null, tipoTexto: (c.tipo ?? "").trim() || null });
         continue;
       }
       // Repetida DENTRO da planilha trazendo valor: completa os meses que a

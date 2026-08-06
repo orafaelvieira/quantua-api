@@ -37,10 +37,10 @@ import { rodarMonteCarlo, McVariavelSpec } from "../services/monte-carlo";
 import { ConfigReforma } from "../services/reforma-tributaria";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
 import { resolveSectorPremises } from "../services/sector-benchmark";
-import { loadActiveDREModel, loadActiveBPModel } from "../services/model-version";
+import { loadActiveDREModel, loadActiveBPModel, getActiveModelVersions } from "../services/model-version";
 import { sugerirContaCanonica } from "../services/sugerir-conta-canonica";
 import { classificarDeParaOrcamento, opcoesDeParaOrcamento } from "../services/classificar-de-para-orcamento";
-import { TIPOS_CONTA, type TipoConta, ehTipoConta, blocoDoTipo, tipoDaLinha, proximoCodigo, codificarLinhas, tipoDoTextoDaPlanilha } from "../services/classificacao-conta";
+import { TIPOS_CONTA, type TipoConta, ehTipoConta, blocoDoTipo, tipoDaLinha, proximoCodigo, codificarLinhas, tipoDoTextoDaPlanilha, classeDoTipo } from "../services/classificacao-conta";
 import { montarReceitasDeMemoria, type LinhaReceitaMontada } from "../services/memoria-calculo-receita";
 import { aliquotaEfetivaSimples } from "../services/model-engine";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
@@ -1050,6 +1050,14 @@ router.post("/:id/orcamento/congelar", async (req: AuthRequest, res: Response): 
   const ultima = await prisma.modelSnapshot.findFirst({ where: { modelId: model.id }, orderBy: { versao: "desc" }, select: { versao: true } });
   const versao = (ultima?.versao ?? 0) + 1;
 
+  // PROVENIÊNCIA DA ESTRUTURA (05/08/2026): o congelamento já era imune a
+  // alteração posterior (os números são clonados), mas era ANÔNIMO — não dizia
+  // contra QUAL versão do modelo de DRE/BP foi montado. A política da casa
+  // versiona dicionário, DRE e BP justamente para o passado não se mexer;
+  // faltava carimbar a etiqueta. `getActiveModelVersions` já é o que o IBR usa,
+  // então orçamento e análise passam a falar a mesma língua.
+  const estrutura = await getActiveModelVersions((model as { companyId?: string | null }).companyId ?? null);
+
   const snap = congelarOrcamento({
     id: "", // o id real é o do registro; o conteúdo guarda só a fotografia
     nome: nome?.trim() || `Orçamento v${versao}`,
@@ -1059,8 +1067,13 @@ router.post("/:id/orcamento/congelar", async (req: AuthRequest, res: Response): 
     dre: calc.resultado.dre,
     bp: calc.resultado.bp,
     fc: calc.resultado.fc,
+    estrutura,
   });
-  const conteudo = { dre: snap.dre, bp: snap.bp, fc: snap.fc };
+  // A ESTRUTURA VAI NO CONTEÚDO (revisão adversarial: a 1ª versão calculava a
+  // etiqueta e a jogava fora — `snap.estrutura` morria na memória e a pergunta
+  // "contra qual versão do modelo?" continuava sem resposta). Dentro do
+  // conteúdo, o contentHash SELA a proveniência junto com os números.
+  const conteudo = { dre: snap.dre, bp: snap.bp, fc: snap.fc, ...(snap.estrutura ? { estrutura: snap.estrutura } : {}) };
   const contentHash = crypto.createHash("sha256").update(JSON.stringify(conteudo)).digest("hex");
 
   // F2 (25/07/2026): congelar cria RASCUNHO — a baseline (ativo) passa a ser
@@ -1078,7 +1091,7 @@ router.post("/:id/orcamento/congelar", async (req: AuthRequest, res: Response): 
   await registrarAuditoria({
     userId: req.userId!, analysisId: model.analysisSeedId ?? null,
     entity: "model_snapshot", entityId: criado.id, field: "congelamento do orçamento",
-    after: { versao, nome: criado.nome, cenario: criado.cenario, linhas: snap.dre.length, contentHash },
+    after: { versao, nome: criado.nome, cenario: criado.cenario, linhas: snap.dre.length, contentHash, ...(snap.estrutura ? { estrutura: snap.estrutura } : {}) },
     source: "models", reason: observacao?.trim().slice(0, 300) || undefined,
   });
 
@@ -2133,7 +2146,7 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
           codigo: typeof l.codigo === "string" ? l.codigo : null,
           /** O que o ANALISTA declarou que a conta é (coluna Tipo da grade) —
            *  derivado do bloco em que ela mora, que é quem manda no cálculo. */
-          tipoConta: tipoDaLinha(b.tipo, l as { codigo?: string | null; nome?: string; destino?: { conta?: string } | null }),
+          tipoConta: tipoDaLinha(b.tipo, l as { codigo?: string | null; nome?: string; destino?: { conta?: string } | null; classe?: string | null }),
           destino: l.destino && typeof l.destino === "object" ? (l.destino as { conta: string; sinal: string }) : null,
           /** Receita: nó onde o valor digitado mora (a grade escreve nele). */
           nodeRaiz: typeof l.nodeRaiz === "string" ? l.nodeRaiz : null,
@@ -2168,7 +2181,31 @@ router.get("/:id/grade", async (req: AuthRequest, res: Response): Promise<void> 
       return { blocoId: b.id, tipo: b.tipo, nome: b.nome, linhas };
     });
 
+  // DE-PARA ÓRFÃO (05/08/2026, exigência do dono): "não ter grupos de contas no
+  // orçamento que não estejam no modelo de DRE/BP da empresa". O modelo é vivo
+  // (renomear/remover grupo lá deixa contas daqui apontando para o nada), e até
+  // hoje a órfã era CONSERVADA em silêncio — a grade desenhava o valor gravado,
+  // o motor recriava a linha com o nome morto. Aqui ela vira PENDÊNCIA visível.
+  // Só o orçamento VIVO é cobrado: congelado é fotografia, e o passado não se
+  // mexe (regra do dono; snapshots nem passam por esta rota).
+  const [dreCheck, bpCheck] = await Promise.all([loadActiveDREModel(model.companyId), loadActiveBPModel(model.companyId)]);
+  const gruposValidos = new Set([
+    ...dreCheck.lines.filter((l) => !l.subtotal).map((l) => normContaGmd(l.conta)),
+    ...bpCheck.lines.filter((l) => l.tipo === "input").map((l) => normContaGmd(l.conta)),
+  ]);
+  // Conta com CLASSE FISCAL fica fora da cobrança: o motor a extrai antes do
+  // roll-up, então o destino dela é vínculo morto — cobrar órfão ali seria
+  // acender alerta vermelho para um vínculo que nunca teve efeito.
+  const deParaOrfao = grupos.flatMap((g) =>
+    g.linhas
+      .filter((l) => !(l as { classe?: string }).classe && l.destino?.conta && !gruposValidos.has(normContaGmd(l.destino.conta)))
+      .map((l) => ({ id: l.id, nome: l.nome, destino: l.destino!.conta })),
+  );
+
   res.json({
+    /** Contas apontando para grupo que NÃO existe mais no modelo de DRE/BP da
+     *  empresa — pendência a reclassificar (o botão de de-para resolve). */
+    deParaOrfao,
     anos: [...new Set(calc.resultado.meses.map((m) => m.slice(0, 4)))],
     anoExercicio: model.mesInicial.slice(0, 4),
     mesInicial: model.mesInicial,
@@ -2327,7 +2364,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   let janela: string[] = [];
   // Linhas da aba "Receitas" do modelo multi-aba — processadas à parte, porque
   // receita mora no bloco de receitas (linhas com driver), não no plano de contas.
-  let contasReceita: Array<{ nome: string; codigo?: string; destino?: string; valores: Record<string, number> }> = [];
+  let contasReceita: Array<{ nome: string; codigo?: string; destino?: string; tipoTexto?: string | null; valores: Record<string, number> }> = [];
   /** Linha "Deduções da receita" da planilha → série mensal do bloco (não é conta). */
   let deducoesDaPlanilha: Record<string, number> | null = null;
   // MEMÓRIA DE CÁLCULO (29/07/2026): linhas de receita cuja conta veio pronta
@@ -2443,7 +2480,13 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         // dedução é guardada positiva e o motor subtrai.
         for (const c of li.contas) {
           const k = normContaGmd(c.nome);
-          if (!(/^deducoes?\b/.test(k) && k.includes("receita"))) continue;
+          // Casamento EXATO com a linha única (revisão adversarial): o prefixo
+          // /^deducoes/ engolia uma CONTA chamada "Deduções da receita - ICMS
+          // ST" — a conta ficava com os valores antigos E deducoesValores
+          // ganhava os mesmos meses: dedução em dobro, crescendo a cada
+          // round-trip. Conta de dedução tem nome próprio e código; a linha
+          // única do bloco é exatamente "(-) Deduções da receita".
+          if (!/^\(?\s*-?\s*\)?\s*deducoes? da receita$/.test(k)) continue;
           if (modoRealizado) {
             avisosMemoria.push(`"${c.nome}" não foi importada: o realizado das deduções ainda não tem série própria — informe as deduções realizadas dentro das contas.`);
             continue;
@@ -2456,7 +2499,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
             }
           }
         }
-        const ehDeducao = (nome: string) => { const k = normContaGmd(nome); return /^deducoes?\b/.test(k) && k.includes("receita"); };
+        const ehDeducao = (nome: string) => /^\(?\s*-?\s*\)?\s*deducoes? da receita$/.test(normContaGmd(nome));
         // O CÓDIGO DA RECEITA VIAJA JUNTO (30/07/2026): a aba Receitas tem a
         // coluna Código como a de gastos, mas o mapeamento a jogava fora — as
         // linhas entravam com "—" e o PROCV do analista não achava nada.
@@ -2465,9 +2508,13 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         // o analista escolhia na lista e nada acontecia, enquanto o Leia-me do
         // próprio arquivo prometia que o escolhido MANDA. Coluna com lista que
         // não faz nada é pior que coluna nenhuma.
+        // O TIPO DA RECEITA TAMBÉM VIAJA (revisão adversarial, 05/08/2026): sem
+        // ele, "Dedução da receita" escolhida no dropdown da aba Receita era
+        // ignorada e a devolução entrava SOMANDO na receita bruta — o dobro do
+        // erro, com o rótulo dizendo o contrário.
         contasReceita = li.contas
           .filter((c) => !consumidos.has(normContaGmd(c.nome)) && !ehDeducao(c.nome))
-          .map((c) => ({ nome: c.nome, codigo: (c.codigo ?? "").trim(), destino: (c.destino ?? "").trim(), valores: (c.valores ?? {}) as Record<string, number> }));
+          .map((c) => ({ nome: c.nome, codigo: (c.codigo ?? "").trim(), destino: (c.destino ?? "").trim(), tipoTexto: (c.tipo ?? "").trim() || null, valores: (c.valores ?? {}) as Record<string, number> }));
         janela = [...new Set([...janela, ...li.meses])];
         abasLidas.push({ aba: nomeAba, contas: contasReceita.length + mem.linhas.length, linhaCabecalho: li.linhaCabecalho });
         continue;
@@ -2601,16 +2648,26 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
   // TIPO DECLARADO NA PLANILHA (29/07/2026): o modelo baixado leva a coluna
   // "Tipo" — na volta, uma conta marcada como capex ou despesa financeira vai
   // para o BLOCO certo do motor, senão o round-trip rebaixaria capex a despesa.
+  // Os tipos com CLASSE FISCAL moram no bloco de despesas (a conta fica onde o
+  // cliente a cadastrou; o VALOR é extraído pela classe no motor). "Dedução da
+  // receita" é a exceção: mora no bloco de receitas — mas as contas de receita
+  // têm pipeline próprio, então aqui ela cai em despesas apenas se vier no lado
+  // de gasto da planilha (célula errada é melhor visível que descartada).
   const listaDoTipo = (t: TipoConta) =>
     t === "custo" ? linhasCusto : t === "despesaFinanceira" ? linhasNaoOp : t === "capex" ? linhasCapex : linhasDespesa;
 
   const stamp = Date.now().toString(36);
   const criadas = criar.map((c, i) => {
     const tipoDaConta = tipoDoTextoDaPlanilha(c.tipoTexto, c.ehCusto);
+    // CONTA COM CLASSE FISCAL NÃO GANHA DE-PARA (revisão adversarial): o motor
+    // a extrai ANTES do roll-up, então qualquer destino nela é vínculo morto —
+    // sugerir/gravar um fazia a grade exibir um de-para que nunca teve efeito,
+    // e o chip de órfão cobrava um vínculo inexistente. Mesma regra do capex.
+    const semDestinoPorNatureza = tipoDaConta === "capex" || !!classeDoTipo(tipoDaConta);
     const destinoDeclarado = c.destino ? canonPorNorm.get(normContaGmd(String(c.destino))) ?? null : null;
-    const sugestao = destinoDeclarado ? null : sugerirContaCanonica(c.nome, opcoesSugestao, { grupo: c.ehCusto ? "custo" : "despesa" });
-    const destino = tipoDaConta === "capex" ? null : destinoDeclarado ?? sugestao?.conta ?? null;
-    if (sugestao && tipoDaConta !== "capex") sugeridas.push(`${c.nome} → ${sugestao.conta}`);
+    const sugestao = destinoDeclarado || semDestinoPorNatureza ? null : sugerirContaCanonica(c.nome, opcoesSugestao, { grupo: c.ehCusto ? "custo" : "despesa" });
+    const destino = semDestinoPorNatureza ? null : destinoDeclarado ?? sugestao?.conta ?? null;
+    if (sugestao && !semDestinoPorNatureza) sugeridas.push(`${c.nome} → ${sugestao.conta}`);
     const codigo = c.codigo && !codigosUsados.has(String(c.codigo).trim())
       ? String(c.codigo).trim()
       : proximoCodigo(tipoDaConta, codigosUsados);
@@ -2628,6 +2685,9 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       ...(destino ? { destino: { conta: destino, sinal: "soma" as const } } : {}),
       // Capex sem taxa nunca depreciaria — 10% a.a. é o default do catálogo.
       ...(tipoDaConta === "capex" ? { depreciacaoAnual: 0.1 } : {}),
+      // A classe fiscal viaja com a linha — é ela que o motor lê para tirar o
+      // imposto/dedução do EBITDA e levá-lo ao ponto certo da cascata.
+      ...(classeDoTipo(tipoDaConta) ? { classe: classeDoTipo(tipoDaConta) } : {}),
     };
     listaDoTipo(tipoDaConta).push(linha);
     if (modoRealizado) {
@@ -2681,11 +2741,23 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       // repetir o gesto todo ciclo, achando que a importação estava quebrada.
       grupoIgnoradoCapex.push(linha.nome);
     }
+    // CLASSE FISCAL declarada no Tipo em conta EXISTENTE (revisão adversarial):
+    // trocar "Despesa" → "Imposto sobre faturamento" na planilha e reimportar
+    // não fazia nada — o resumo dizia "atualizada" e o ICMS seguia no EBITDA.
+    // Set-only: tipo comum/célula vazia não apaga classe posta pela grade.
+    const classeDeclarada = up.tipoTexto ? classeDoTipo(tipoDoTextoDaPlanilha(up.tipoTexto, false)) : undefined;
+    if (classeDeclarada && (linha as { classe?: string }).classe !== classeDeclarada) {
+      (linha as { classe?: string }).classe = classeDeclarada;
+    }
     if (modoRealizado) {
       // O ORÇADO da linha fica intacto: só o realizado daquele ano é regravado.
+      // Conta com CLASSE FISCAL sai dos grupos de custo/despesa do comparativo
+      // (o orçado também a exclui — comparar grupos com réguas diferentes
+      // acusava desvio falso do tamanho do imposto a partir da 2ª importação).
       realPorLinha.set(linha.id, {
         valores: up.valores,
-        grupo: linhasCusto.some((l) => l.id === linha.id) ? "custos"
+        grupo: (linha as { classe?: string }).classe ? "outros"
+          : linhasCusto.some((l) => l.id === linha.id) ? "custos"
           : linhasDespesa.some((l) => l.id === linha.id) ? "despesas" : "outros",
       });
     } else {
@@ -2817,6 +2889,11 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       // continuava somando em Receita Bruta.
       const canonCr = cr.destino ? canonPorNorm.get(normContaGmd(String(cr.destino))) ?? null : null;
       const destinoDaLinha = canonCr ? { destino: { conta: canonCr, sinal: "soma" as const } } : destinoReceita;
+      // CLASSE FISCAL declarada no Tipo da aba Receita (revisão adversarial):
+      // "Dedução da receita" escolhida no dropdown precisa VALER — antes era
+      // descartada e a devolução entrava SOMANDO na receita bruta. Set-only:
+      // célula vazia ou tipo comum não apaga classe posta pela grade.
+      const classeCr = cr.tipoTexto ? classeDoTipo(tipoDoTextoDaPlanilha(cr.tipoTexto, false)) : undefined;
       if (modoRealizado) {
         // REALIZADO da receita: linha existente recebe a série em
         // realizado.porLinha (a árvore de drivers do orçamento fica intacta);
@@ -2838,6 +2915,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
           linhasReceita.push({
             id: linhaId, nome: cr.nome, codigo: codigoNovo, template: "generico", nodeRaiz: `${linhaId}_receita`,
             ...destinoDaLinha,
+            ...(classeCr ? { classe: classeCr } : {}),
             nodes: [{
               id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${cr.nome}`, unidade: "R$",
               params: { modoPreenchimento: "mes", valores: {}, valorMensal: 0, crescimentoAnual: 0 },
@@ -2899,6 +2977,13 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
           linhasReceita[idx] = { ...linhasReceita[idx]!, destino: trocaCr.destino } as (typeof linhasReceita)[number];
           deParaAtualizado.push(trocaCr.rotulo);
         }
+        // CLASSE FISCAL em conta de receita JÁ EXISTENTE (set-only): marcar
+        // "Dedução da receita" na planilha reclassifica; tipo comum ou célula
+        // vazia NÃO apaga uma classe posta pela grade — planilha antiga não
+        // pode desfazer classificação.
+        if (classeCr && (linhasReceita[idx] as { classe?: string }).classe !== classeCr) {
+          linhasReceita[idx] = { ...linhasReceita[idx]!, classe: classeCr } as unknown as (typeof linhasReceita)[number];
+        }
         receitas.atualizadas.push({
           nome: alvo.nome,
           meses: Object.keys(valores).length,
@@ -2916,6 +3001,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         linhasReceita.push({
           id: linhaId, nome: cr.nome, codigo: codigoNovo, template: "generico", nodeRaiz: `${linhaId}_receita`,
           ...destinoDaLinha,
+          ...(classeCr ? { classe: classeCr } : {}),
           nodes: [{
             id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${cr.nome}`, unidade: "R$",
             params: { modoPreenchimento: "mes", valores, valorMensal: 0, crescimentoAnual: 0 },
@@ -3034,13 +3120,15 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     return { ...atual, meses, porLinha, porGrupo } as object;
   })();
 
-  // ── MOTOR × PLANILHA (30/07/2026, pedido do usuário): a planilha importada
-  // pode JÁ trazer o cálculo dos impostos (ICMS/PIS/COFINS/ISS, provisão de
-  // IRPJ/CSLL) e a depreciação do capex como CONTAS. Se o motor também
-  // calculasse, contaria DUAS VEZES — a importação detecta e DESLIGA o
-  // componente correspondente (checks nas abas Impostos/Investimentos; o
-  // analista pode religar — considerar os dois é decisão dele).
+  // ── MOTOR × PLANILHA (reescrito 05/08/2026, decisão do dono): "o que tiver
+  // no motor é fato" — a importação NÃO tem mais nenhuma ação sobre os checks.
+  // Antes ela DESLIGAVA sozinha os componentes do motor ao detectar contas de
+  // imposto/depreciação; agora ela apenas AVISA que motor e conta vão SOMAR, e
+  // a decisão de desligar é do analista, nas abas Impostos/Investimentos.
+  // (Modelos com componentes já desligados por importações antigas ficam como
+  // estão — nada é religado retroativamente.)
   const motorAjustado = { impostosDesativados: [] as string[], depreciacaoCapexDesligada: false };
+  const avisoDuplaContagem = { impostos: [] as string[], depreciacaoCapex: false };
   if (!modoRealizado) {
     const componentes = new Set<string>();
     let temContaDepreciacao = false;
@@ -3055,25 +3143,50 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     };
     for (const c of criadas) detectar(c.nome);
     for (const a of atualizadas) detectar(a.nome);
+    // A CLASSE também conta (revisão adversarial): o regex de nome perdia uma
+    // conta "Tributos s/ vendas" declarada como imposto pelo TIPO — que soma
+    // GARANTIDO com o motor, o caso mais certo do aviso. Conta classe
+    // impostoReceita soma com TODO componente de receita que o motor estiver
+    // calculando; a expansão para os componentes do regime acontece adiante.
+    const temContaImpostoReceita = criadas.some((c) => c.tipo === "impostoReceita");
+    if (criadas.some((c) => c.tipo === "impostoResultado")) componentes.add("irCsll");
 
-    const blocoImp = blocks.find((b) => b.tipo === "impostos");
-    if (componentes.size > 0 && blocoImp) {
-      const cfgI = (blocoImp.config ?? {}) as { impostos?: { desativados?: string[] } };
-      const atuais = new Set(cfgI.impostos?.desativados ?? []);
-      const novos = [...componentes].filter((c) => !atuais.has(c));
-      if (novos.length > 0) {
-        motorAjustado.impostosDesativados = novos;
-        await prisma.modelBlock.update({
-          where: { id: blocoImp.id },
-          data: { config: { ...(blocoImp.config as object), impostos: { ...(cfgI.impostos ?? {}), desativados: [...atuais, ...novos] } } as object },
-        });
+    // O aviso só dispara quando o motor está de fato CALCULANDO o componente:
+    // bloco ATIVO (o motor exige — bloco desativado com regime gravado não
+    // calcula nada), regime configurado, componente não desligado E produzindo
+    // valor naquele regime. Sem isso o aviso gritava à toa — Simples só calcula
+    // o DAS, e "o motor está calculando ICMS" era mentira que ensinava o
+    // analista a ignorar o aviso, inclusive quando fosse verdadeiro.
+    const blocoImp = blocks.find((b) => b.tipo === "impostos" && b.ativo);
+    const cfgI = (blocoImp?.config ?? {}) as { impostos?: { regime?: string; desativados?: string[]; pisCofinsPct?: number; issPct?: number; icmsPct?: number } };
+    const regime = cfgI.impostos?.regime;
+    const regimeAtivo = !!regime && regime !== "nenhum";
+    const jaDesligados = new Set(cfgI.impostos?.desativados ?? []);
+    /** O componente produz valor NESTE regime? Simples: só o DAS. Presumido/
+     *  Real: PIS/COFINS tem default > 0; ISS e ICMS só se a alíquota foi dada. */
+    const calculaNoRegime = (c: string): boolean => {
+      if (regime === "simples") return c === "simples" || c === "irCsll";
+      if (c === "simples") return false;
+      if (c === "iss") return (cfgI.impostos?.issPct ?? 0) > 0;
+      if (c === "icms") return (cfgI.impostos?.icmsPct ?? 0) > 0;
+      return true; // pisCofins (default 3,65/9,25%) e irCsll
+    };
+    // Conta com CLASSE de imposto sobre receita soma com tudo que o motor
+    // calcula sobre a receita neste regime — expande para os componentes vivos.
+    if (temContaImpostoReceita && regimeAtivo) {
+      if (regime === "simples") componentes.add("simples");
+      else {
+        componentes.add("pisCofins");
+        if ((cfgI.impostos?.issPct ?? 0) > 0) componentes.add("iss");
+        if ((cfgI.impostos?.icmsPct ?? 0) > 0) componentes.add("icms");
       }
     }
-    // Depreciação importada + capex no orçamento = a derivada do motor sai.
+    if (regimeAtivo && componentes.size > 0) {
+      avisoDuplaContagem.impostos = [...componentes].filter((c) => !jaDesligados.has(c) && calculaNoRegime(c));
+    }
     if (temContaDepreciacao && blocoCapexOrc && linhasCapex.length > 0
         && (blocoCapexOrc.config as { depreciarCapex?: boolean }).depreciarCapex !== false) {
-      motorAjustado.depreciacaoCapexDesligada = true;
-      (blocoCapexOrc.config as { depreciarCapex?: boolean }).depreciarCapex = false;
+      avisoDuplaContagem.depreciacaoCapex = true;
     }
   }
 
@@ -3106,8 +3219,8 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     after: {
       criadas: criadas.length, atualizadas: atualizadas.length, ignoradas: ignoradas.length, semLotacao: semLotacao.length,
       receitas: { criadas: receitas.criadas.length, atualizadas: receitas.atualizadas.length },
-      ...(motorAjustado.impostosDesativados.length > 0 || motorAjustado.depreciacaoCapexDesligada
-        ? { motorAjustado } : {}),
+      ...(avisoDuplaContagem.impostos.length > 0 || avisoDuplaContagem.depreciacaoCapex
+        ? { avisoDuplaContagem } : {}),
       abas: abasLidas.map((a) => `${a.aba}${a.ignorada ? ` (${a.ignorada})` : ` (${a.contas})`}`),
       amostra: criadas.slice(0, 10).map((x) => `${x.codigo ?? "—"} ${x.nome} (${x.lotacao})`),
       // ROLL-UP TROCADO PELO HUMANO também vai para a trilha. Sem isto, a única
@@ -3138,9 +3251,15 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     /** Mesmo nome, códigos diferentes = contas SEPARADAS (o plano do cliente
      *  manda) — a grade mostra duas linhas homônimas e a tela explica por quê. */
     mesmoNomeContasDistintas,
-    /** O que a importação DESLIGOU no motor para não contar duas vezes
-     *  (impostos que vieram como conta; depreciação do capex importada). */
+    /** A importação NÃO mexe mais nos checks (05/08/2026, decisão do dono: "o
+     *  que tiver no motor é fato"). O campo fica vazio por retrocompatibilidade
+     *  de shape; o que vale é o AVISO abaixo. */
     motorAjustado,
+    /** DUPLA CONTAGEM À VISTA: o motor está calculando estes componentes E a
+     *  planilha trouxe contas do mesmo tributo (ou depreciação com capex ativo).
+     *  Os dois vão SOMAR — desligar (aba Impostos/Investimentos) é decisão do
+     *  analista, não da importação. */
+    avisoDuplaContagem,
     /** Linha "Deduções da receita" da planilha → preencheu a linha de deduções
      *  do bloco (meses digitados), sem criar conta. */
     deducoesImportadas: deducoesNovas ? Object.keys(deducoesDaPlanilha ?? {}).length : 0,
@@ -3155,7 +3274,9 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       semSugestao: deParaAuto.semSugestao,
       custoUsd: deParaAuto.custo?.usd ?? 0,
     } : null,
-    semDePara: [...linhasCusto, ...linhasDespesa].filter((l) => !l.destino?.conta).map((l) => l.nome),
+    // Conta com classe fiscal não entra: de-para nela é vínculo morto (o motor
+    // extrai a linha antes do roll-up) — cobrar seria pedir trabalho sem efeito.
+    semDePara: [...linhasCusto, ...linhasDespesa].filter((l) => !l.destino?.conta && !(l as { classe?: string }).classe).map((l) => l.nome),
     abas: abasLidas,
     // O que foi entendido da planilha — a UI mostra para o analista conferir.
     leitura: leitura ? {
@@ -3270,6 +3391,17 @@ router.put("/:id/linhas/:linhaId/classificacao", async (req: AuthRequest, res: R
 
   const { linha: convertida, perdeuDrivers } = converterLinhaParaBloco(achado.linha, blocoAlvo.tipo);
   const nova: LinhaQualquer = { ...convertida };
+
+  // CLASSE FISCAL acompanha o tipo (05/08/2026): reclassificar "Despesa" →
+  // "Imposto sobre faturamento" é O gesto de quem importou o ICMS errado — a
+  // classe é o que faz o valor sair do EBITDA e subir para a cascata. E no
+  // sentido inverso (imposto → despesa comum), a classe é REMOVIDA, senão o
+  // motor continuaria extraindo a conta.
+  {
+    const classeNova = classeDoTipo(tipo);
+    if (classeNova) (nova as { classe?: string }).classe = classeNova;
+    else delete (nova as { classe?: string }).classe;
+  }
 
   // CAPEX precisa de taxa para depreciar; sem ela a compra vira ativo que nunca
   // desce para o resultado. 10% a.a. é o default do catálogo (ajustável).

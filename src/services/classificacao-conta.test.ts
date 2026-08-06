@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { proximoCodigo, codificarLinhas, tipoDaLinha, blocoDoTipo, ehTipoConta } from "./classificacao-conta";
+import { proximoCodigo, codificarLinhas, tipoDaLinha, blocoDoTipo, ehTipoConta, tipoDoTextoDaPlanilha } from "./classificacao-conta";
 
 /**
  * O código é IDENTIFICADOR (o PROCV do analista depende dele): nunca repete,
@@ -90,5 +90,42 @@ describe("tipo ↔ bloco", () => {
     expect(ehTipoConta("despesa")).toBe(true);
     expect(ehTipoConta("imposto")).toBe(false);
     expect(ehTipoConta(null)).toBe(false);
+  });
+});
+
+/**
+ * O TEXTO DO TIPO SÓ CLASSIFICA COMO FISCAL POR DECLARAÇÃO EXATA (05/08/2026).
+ *
+ * Esta coluna não recebe só o dropdown do modelo: NOMES_TIPO também casa os
+ * cabeçalhos "Natureza"/"Grupo"/"Classificação gerencial" da planilha DO
+ * CLIENTE. A primeira versão usava regex solto (/imposto|tributo|.../) e um
+ * grupo gerencial "Impostos e Taxas" — IPTU, IPVA, alvará, despesa operacional
+ * comum — reclassificaria o grupo inteiro para fora do EBITDA ao reimportar
+ * uma planilha antiga, sem aviso. Classe fiscal move dinheiro de lugar: só
+ * entra por declaração inequívoca.
+ */
+describe("tipoDoTextoDaPlanilha — classes fiscais só por rótulo exato", () => {
+  it("os rótulos do dropdown classificam", () => {
+    expect(tipoDoTextoDaPlanilha("Imposto sobre faturamento", false)).toBe("impostoReceita");
+    expect(tipoDoTextoDaPlanilha("Impostos s/ Faturamento", false)).toBe("impostoReceita");
+    expect(tipoDoTextoDaPlanilha("IRPJ/CSLL", false)).toBe("impostoResultado");
+    expect(tipoDoTextoDaPlanilha("Dedução da receita", false)).toBe("deducaoReceita");
+  });
+
+  it("texto GENÉRICO de plano gerencial do cliente NÃO reclassifica (regressão)", () => {
+    // Cada um destes caía nos regex soltos da 1ª versão e mudaria a DRE de uma
+    // importação antiga refeita:
+    expect(tipoDoTextoDaPlanilha("Impostos e Taxas", true)).toBe("custo");           // IPTU/IPVA/alvará
+    expect(tipoDoTextoDaPlanilha("Impostos e Taxas", false)).toBe("despesa");
+    expect(tipoDoTextoDaPlanilha("Contribuição Social s/ Folha", false)).toBe("despesa"); // INSS patronal
+    expect(tipoDoTextoDaPlanilha("Deduções de Vendas", false)).toBe("despesa");
+    expect(tipoDoTextoDaPlanilha("ICMS", false)).toBe("despesa");                    // nome de tributo NÃO é declaração de tipo
+  });
+
+  it("os rótulos antigos continuam valendo (planilha baixada antes de hoje)", () => {
+    expect(tipoDoTextoDaPlanilha("Custo", false)).toBe("custo");
+    expect(tipoDoTextoDaPlanilha("Despesa", true)).toBe("despesa");
+    expect(tipoDoTextoDaPlanilha("Despesa financeira", false)).toBe("despesaFinanceira");
+    expect(tipoDoTextoDaPlanilha("Capex (investimento)", false)).toBe("capex");
   });
 });

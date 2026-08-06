@@ -28,7 +28,13 @@ export type Serie = Record<string, number>;
 
 /** Linha de DRE em construção que pode carregar um DESTINO (soma/reduz numa
  *  conta canônica). Compartilhada por receitas, custos e despesas. */
-type LinhaComDestino = { id: string; nome: string; valores: Serie; destino?: { conta: string; sinal: "soma" | "reduz" } };
+type LinhaComDestino = {
+  id: string; nome: string; valores: Serie;
+  destino?: { conta: string; sinal: "soma" | "reduz" };
+  /** Classe fiscal declarada pelo analista (imposto/dedução) — decide o PONTO
+   *  da cascata em que o valor entra, e viaja com a linha desde o bloco. */
+  classe?: string;
+};
 
 /** Normaliza nome de conta para casar destino ↔ linha canônica (acentos/caixa/espaços). */
 function normNomeConta(s: string): string {
@@ -45,6 +51,43 @@ export function ehLinhaDeFolha(l: { folha?: boolean; destino?: { conta: string }
   if (alvo && CONTAS_DE_FOLHA.includes(normNomeConta(alvo))) return true;
   // Sem de-para declarado, o nome resolve: "Salários e encargos (Comercial)".
   return /^salarios? e encargos/.test(normNomeConta(l.nome ?? ""));
+}
+
+/**
+ * CLASSE FISCAL DA CONTA (05/08/2026) — a conta mora onde o cliente a colocou,
+ * mas o VALOR entra onde a contabilidade manda.
+ *
+ * No plano de contas do cliente, ICMS e PIS são contas de despesa; devolução de
+ * venda é conta de receita. Só que imposto sobre faturamento e devolução DEDUZEM
+ * A RECEITA BRUTA — ficam ACIMA da Receita Líquida e fora do EBITDA. Lançados
+ * como despesa comum, comiam o EBITDA e inflavam a Receita Líquida.
+ *
+ * A classe é um campo da LINHA, não um bloco novo: nada de migração de schema,
+ * e a conta continua visível no grupo em que o analista a cadastrou. Quem lê a
+ * DRE vê cada conta pelo NOME (a Belagro tem duas devoluções, Mercado Interno e
+ * Externo — o dono pediu que aparecessem abertas, não somadas numa linha só).
+ */
+export type ClasseFiscal = "impostoReceita" | "impostoResultado" | "deducaoReceita";
+
+/** Separa as linhas de uma classe fiscal do resto do grupo. Roda ANTES de
+ *  `aplicarDestinos`: se o destino engolisse a linha primeiro, a conta de
+ *  imposto viraria parte de outra e não haveria mais o que extrair. */
+function separarClasse<T extends { classe?: string }>(linhas: T[], classe: ClasseFiscal): { resto: T[]; extraidas: T[] } {
+  const resto: T[] = [];
+  const extraidas: T[] = [];
+  for (const l of linhas) (l.classe === classe ? extraidas : resto).push(l);
+  return { resto, extraidas };
+}
+
+/** Soma mês a mês das linhas extraídas (o total que entra na cascata). */
+function somaMensal(linhas: Array<{ valores?: Serie }>, meses: string[]): Serie {
+  const s: Serie = {};
+  for (const mes of meses) {
+    let t = 0;
+    for (const l of linhas) t += l.valores?.[mes] ?? 0;
+    s[mes] = t;
+  }
+  return s;
 }
 
 /** Aplica os DESTINOS de um grupo (2026-07-16): linhas COM destino não viram
@@ -699,6 +742,11 @@ export interface LinhaDre {
   grupo: "receita" | "custos" | "despesas" | "subtotal";
   valores: Serie;
   pctReceita: Serie;
+  /** ABERTURA informativa de um total fiscal (conta classificada exibida sob
+   *  "(−) Impostos sobre a receita"/"(−) Deduções"). O VALOR dela já está no
+   *  total logo acima — quem soma ou particiona a DRE deve pular estas linhas,
+   *  senão conta duas vezes (foi o defeito da visão por unidade). */
+  abertura?: boolean;
 }
 
 export interface ResultadoModelo {
@@ -1279,7 +1327,14 @@ function resolverNos(
     const raizes: string[] = [];
     for (const b of blocks) {
       if (!b.ativo || b.tipo !== "receitas") continue;
-      for (const l of b.config.linhasReceita ?? []) if (nos.has(l.nodeRaiz)) raizes.push(l.nodeRaiz);
+      // Linha com CLASSE FISCAL fica de fora do nó (revisão adversarial): uma
+      // devolução classificada mora no bloco de receitas mas NÃO é receita —
+      // somá-la aqui inflava a base de toda fórmula "% × receita_total",
+      // divergindo do modo pctReceita, que usa a receita já sem as extraídas.
+      for (const l of b.config.linhasReceita ?? []) {
+        if ((l as { classe?: string }).classe) continue;
+        if (nos.has(l.nodeRaiz)) raizes.push(l.nodeRaiz);
+      }
     }
     const expr = raizes.length ? raizes.join(" + ") : "0";
     const node: DriverNode = { id: "receita_total", tipo: "formula", nome: "Receita total", unidade: "R$", params: { expr } };
@@ -1565,13 +1620,26 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
       if (raiz.node.unidade !== "R$") {
         dimProblemas.push(`Linha de receita "${linha.nome}" fecha em [${raiz.node.unidade}], deveria fechar em [R$]`);
       }
-      linhasReceita.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {}, destino: linha.destino });
+      linhasReceita.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {}, destino: linha.destino, classe: (linha as { classe?: string }).classe });
     }
   }
   // Série POR LINHA (antes do destino): a grade orçamentária mostra a linha do
   // analista, que pode estar somando dentro de uma conta canônica.
   const linhasCalculadas: Record<string, Serie> = {};
   for (const l of linhasReceita) linhasCalculadas[l.id] = l.valores;
+  // CONTAS COM CLASSE FISCAL saem da receita ANTES do destino — e a extração é
+  // SIMÉTRICA de propósito (05/08/2026, revisão adversarial): a primeira versão
+  // só tirava dedução da receita e imposto do gasto, e uma conta classificada
+  // no bloco "errado" ficava com o rótulo de um tratamento e a matemática de
+  // outro — a grade dizia "Dedução da receita" e o EBITDA pagava a conta. A
+  // classe declara O QUE a conta é; o bloco onde mora não pode mudar isso.
+  const sepDed = separarClasse(linhasReceita as Array<LinhaComDestino & { classe?: string }>, "deducaoReceita");
+  const sepImpRecR = separarClasse(sepDed.resto, "impostoReceita");
+  const sepIrR = separarClasse(sepImpRecR.resto, "impostoResultado");
+  const contasDeducao = sepDed.extraidas;
+  const contasImpostoReceitaDoLadoReceita = sepImpRecR.extraidas;
+  const contasImpostoResultadoDoLadoReceita = sepIrR.extraidas;
+  linhasReceita = sepIrR.resto;
   // DESTINO: linha de receita direcionada SOMA/REDUZ num produto canônico
   // (não vira linha própria). A receita total é a mesma; muda quais linhas aparecem.
   linhasReceita = aplicarDestinos(linhasReceita, meses);
@@ -1695,14 +1763,14 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
             }
           }
         }
-        out.push({ id: linha.id, nome: linha.nome, valores, destino: linha.destino });
+        out.push({ id: linha.id, nome: linha.nome, valores, destino: linha.destino, classe: (linha as { classe?: string }).classe });
       }
       // Linhas com ÁRVORE DE DRIVERS (mesma estrutura das receitas): o valor da
       // linha é a série do nó raiz — % via fórmula (pode referenciar receita_total
       // e raízes de receita), variável do negócio × custo unitário, crescimento…
       for (const linha of b.config.linhasReceita ?? []) {
         if (!nos.has(linha.nodeRaiz)) continue; // erro já registrado acima
-        out.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {}, destino: linha.destino });
+        out.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {}, destino: linha.destino, classe: (linha as { classe?: string }).classe });
       }
     }
     return out;
@@ -1747,8 +1815,22 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   const brutasDespesas = zerarFolhaCoberta(calcularGrupo("despesas"), linhasCfgDespesas);
   // Idem para custo/despesa: fotografa antes de o destino engolir a linha.
   for (const l of [...brutasCustos, ...brutasDespesas]) linhasCalculadas[l.id] = l.valores;
-  const linhasCustos = aplicarDestinos(brutasCustos, meses);
-  const linhasDespesas = aplicarDestinos(brutasDespesas, meses);
+  // CONTAS DE IMPOSTO saem do custo/despesa antes do destino. O tributo sobre
+  // faturamento sobe para a cascata da receita; IRPJ/CSLL desce para depois do
+  // LAIR. Nos dois casos, fora do EBITDA — que é o ponto de toda esta mudança.
+  const sepImpC = separarClasse(brutasCustos as Array<LinhaComDestino & { classe?: string }>, "impostoReceita");
+  const sepImpD = separarClasse(brutasDespesas as Array<LinhaComDestino & { classe?: string }>, "impostoReceita");
+  const sepIrC = separarClasse(sepImpC.resto, "impostoResultado");
+  const sepIrD = separarClasse(sepImpD.resto, "impostoResultado");
+  // SIMETRIA (revisão adversarial): dedução também sai do lado do gasto — uma
+  // devolução de venda importada numa aba de despesas é dedução do mesmo jeito.
+  const sepDedC = separarClasse(sepIrC.resto, "deducaoReceita");
+  const sepDedD = separarClasse(sepIrD.resto, "deducaoReceita");
+  const contasImpostoReceita = [...contasImpostoReceitaDoLadoReceita, ...sepImpC.extraidas, ...sepImpD.extraidas];
+  const contasImpostoResultado = [...contasImpostoResultadoDoLadoReceita, ...sepIrC.extraidas, ...sepIrD.extraidas];
+  contasDeducao.push(...sepDedC.extraidas, ...sepDedD.extraidas);
+  const linhasCustos = aplicarDestinos(sepDedC.resto, meses);
+  const linhasDespesas = aplicarDestinos(sepDedD.resto, meses);
 
   // ── B4: PESSOAS (folha por posição) ──
   const blocoFolha = input.blocks.find((b) => b.ativo && b.tipo === "folha");
@@ -2114,6 +2196,23 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     }
     if (deducoes[mes] !== 0) temDeducoes = true;
   }
+  // CONTAS de dedução somam à linha do % / série. As duas fontes convivem: quem
+  // usa só o percentual continua igual; quem trouxe as contas (Devoluções
+  // Mercado Interno/Externo) as vê abertas E dentro da base fiscal.
+  //
+  // SOMA CRUA, SEM Math.abs (revisão adversarial): a convenção declarada é
+  // "valor positivo, o motor subtrai" — e um mês NEGATIVO é estorno legítimo,
+  // que devolve. O abs transformava estorno em acréscimo (jan +100k, fev −20k
+  // virava 120k de dedução em vez de 80k) e fazia o total divergir das linhas
+  // abertas logo abaixo, que sempre mostraram o valor cru.
+  const totalContasDeducao = somaMensal(contasDeducao, meses);
+  for (const mes of meses) {
+    const v = totalContasDeducao[mes] ?? 0;
+    if (v !== 0) { deducoes[mes] = (deducoes[mes] ?? 0) + v; temDeducoes = true; }
+  }
+  // Conta classificada mas ainda sem valor CONTINUA na Demonstração, zerada —
+  // sumir da DRE ao ganhar a classe parecia que a classificação apagou a conta.
+  if (contasDeducao.length > 0) temDeducoes = true;
   // Base fiscal = bruta − deduções (usada por TODOS os regimes e pela reforma).
   const receitaBase: Serie = {};
   for (const mes of meses) receitaBase[mes] = (receitaTotal[mes] ?? 0) - (deducoes[mes] ?? 0);
@@ -2247,7 +2346,8 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   } else if (input.reforma && regime === "simples") {
     provaImpostos += " · reforma: permanece no DAS (carga própria inalterada; efeito é no crédito do comprador — LC 214, art. 47 §9º)";
   }
-  if (regime) series["impostos_receita_total"] = impostosReceita;
+  // (a série é publicada mais abaixo, DEPOIS da soma das contas classificadas —
+  //  publicar aqui deixava o caso "regime nenhum + contas" com a série vazia.)
 
   // A DRE SEMPRE abre por produto/linha (nomes são do analista; esconder a linha
   // única fazia o produto "sumir" da Demonstração).
@@ -2257,9 +2357,42 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
 
   // Cascata contábil: BRUTA → (−) deduções (vendas canceladas/abatimentos) →
   // (−) impostos sobre a receita → RECEITA LÍQUIDA; o lucro bruto parte dela.
+  // A CASCATA É SEMPRE A MESMA (05/08/2026, decisão do dono: "sem impostos deve
+  // apenas ZERAR as alíquotas e MANTER as linhas").
+  //
+  // Antes, regime "nenhum" não zerava imposto: ele apagava a estrutura. Sumiam
+  // a linha de impostos, o subtotal RECEITA LÍQUIDA, a linha de IRPJ/CSLL e o
+  // subtotal LUCRO LÍQUIDO — a DRE parava no LAIR, e o fluxo de caixa indireto
+  // passava a partir dele. Quem calcula o próprio imposto por fora não tinha
+  // como usar essa opção: perdia a demonstração inteira junto com o cálculo.
+  //
+  // Agora "nenhum" quer dizer alíquota zero. A DRE de um modelo sem regime é a
+  // mesma de um com regime, com zeros no lugar dos tributos — e comparável com
+  // qualquer outra. Os VALORES não mudam para quem já tinha regime: as séries
+  // de imposto continuam vindo do mesmo cálculo.
+  // ZERO DECLARADO, NÃO CÉLULA VAZIA: sem regime nenhum ramo acima preenche a
+  // série, e a linha sairia na DRE com os meses ausentes — em branco na tela e
+  // fora de qualquer soma. "Alíquota zero" precisa ser um zero de verdade.
+  for (const mes of meses) if (typeof impostosReceita[mes] !== "number") impostosReceita[mes] = 0;
+
+  // CONTAS DE IMPOSTO SOMAM AO QUE O MOTOR CALCULOU (05/08/2026, decisão do
+  // dono: "o que tiver no motor é fato"). Não há desligamento automático: se o
+  // analista deixar o regime ligado E trouxer a conta, os dois entram — e a
+  // importação AVISA que isso vai acontecer. Quem calcula por fora deixa o
+  // regime em "nenhum" (alíquota zero) e só as contas contam.
+  const totalContasImpReceita = somaMensal(contasImpostoReceita, meses);
+  const totalContasImpResultado = somaMensal(contasImpostoResultado, meses);
+  for (const mes of meses) impostosReceita[mes] = (impostosReceita[mes] ?? 0) + (totalContasImpReceita[mes] ?? 0);
+  // A SÉRIE ACOMPANHA A LINHA DA DRE, SEMPRE (revisão adversarial): ela só era
+  // publicada com regime, e o caso-bandeira desta mudança — "calculo por fora",
+  // regime nenhum + contas — deixava o valuation (NOPAT/FCFF), o item de
+  // balanço de obrigações tributárias, o Dashboard e o Excel lendo ZERO
+  // enquanto a DRE imprimia o imposto. Número contando histórias diferentes.
+  series["impostos_receita_total"] = impostosReceita;
+
   const receitaLiquida: Serie = {};
   for (const mes of meses) {
-    receitaLiquida[mes] = (receitaTotal[mes] ?? 0) - (deducoes[mes] ?? 0) - (regime ? impostosReceita[mes] ?? 0 : 0);
+    receitaLiquida[mes] = (receitaTotal[mes] ?? 0) - (deducoes[mes] ?? 0) - (impostosReceita[mes] ?? 0);
   }
   if (temDeducoes) {
     dre.push({
@@ -2267,17 +2400,23 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
       nome: "(−) Deduções da receita (vendas canceladas e abatimentos)",
       grupo: "despesas", valores: deducoes, pctReceita: pctDe(deducoes),
     });
+    // ABERTA POR CONTA (pedido do dono): a Belagro tem "(-) Devoluções/
+    // Cancelamentos Mercado Interno" e "…Externo". Somadas numa linha só, o
+    // analista não sabe de qual mercado veio a devolução. Cada conta aparece
+    // com o próprio nome, logo abaixo do total.
+    for (const c of contasDeducao) {
+      dre.push({ id: c.id, nome: c.nome, grupo: "despesas", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
+    }
   }
-  if (regime) {
-    dre.push({
-      id: "impostos-receita",
-      nome: regime === "simples" ? "(−) Simples Nacional (DAS)" : "(−) Impostos sobre a receita",
-      grupo: "despesas", valores: impostosReceita, pctReceita: pctDe(impostosReceita),
-    });
+  dre.push({
+    id: "impostos-receita",
+    nome: regime === "simples" ? "(−) Simples Nacional (DAS)" : "(−) Impostos sobre a receita",
+    grupo: "despesas", valores: impostosReceita, pctReceita: pctDe(impostosReceita),
+  });
+  for (const c of contasImpostoReceita) {
+    dre.push({ id: c.id, nome: c.nome, grupo: "despesas", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
   }
-  if (regime || temDeducoes) {
-    dre.push({ id: "receita-liquida", nome: "Receita líquida", grupo: "subtotal", valores: receitaLiquida, pctReceita: pctDe(receitaLiquida) });
-  }
+  dre.push({ id: "receita-liquida", nome: "Receita líquida", grupo: "subtotal", valores: receitaLiquida, pctReceita: pctDe(receitaLiquida) });
 
   const custosTotal: Serie = {};
   const despesasTotal: Serie = {};
@@ -2364,7 +2503,9 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   // Presumido: base presumida sobre a receita (15% + adicional de 10% acima de
   // R$ 20 mil/mês; CSLL 9%). Real: sobre o resultado do MÊS, com PREJUÍZO
   // FISCAL acumulado (corkscrew) compensável até a TRAVA de 30% da base.
-  // Simples: já está no DAS — vai direto ao lucro líquido.
+  // Simples: já está no DAS — vai direto ao lucro líquido. Sem regime, o `else`
+  // lá embaixo publica IRPJ/CSLL zerado e o Lucro Líquido: a estrutura da DRE
+  // não depende de haver regime (só os números dependem).
   if (regime) {
     const irpjCsll: Serie = {};
     if (impDesligado.has("irCsll")) {
@@ -2420,10 +2561,24 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     } else {
       for (const mes of meses) irpjCsll[mes] = 0;
     }
+    // A provisão que veio como CONTA soma ao que o motor calculou — mesma regra
+    // do imposto sobre a receita: motor é fato, conta é fato, os dois entram.
+    // Soma CRUA (estorno é mês negativo legítimo; abs o transformava em cobrança).
+    for (const mes of meses) irpjCsll[mes] = (irpjCsll[mes] ?? 0) + (totalContasImpResultado[mes] ?? 0);
+    // Publicada SEMPRE que a linha existe (revisão adversarial): o valuation lê
+    // esta série para o NOPAT — sem ela, FCFF/EV saíam superestimados no Simples
+    // e no caso com componente desligado.
+    series["irpj_csll_total"] = irpjCsll;
     const lucroLiquido: Serie = {};
     for (const mes of meses) lucroLiquido[mes] = (resultadoCorrente[mes] ?? 0) - (irpjCsll[mes] ?? 0);
-    if (regime !== "simples") {
+    // No Simples o DAS já embute IRPJ/CSLL e a linha não existia — mas a CONTA
+    // lançada à parte precisa aparecer: descontar do Lucro líquido sem linha
+    // visível deixava a Demonstração sem fechar aos olhos de quem soma.
+    if (regime !== "simples" || contasImpostoResultado.length > 0) {
       dre.push({ id: "irpj-csll", nome: "(−) IRPJ e CSLL", grupo: "despesas", valores: irpjCsll, pctReceita: pctDe(irpjCsll) });
+      for (const c of contasImpostoResultado) {
+        dre.push({ id: c.id, nome: c.nome, grupo: "despesas", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
+      }
     }
     dre.push({ id: "lucro-liquido", nome: "Lucro líquido", grupo: "subtotal", valores: lucroLiquido, pctReceita: pctDe(lucroLiquido) });
     series["lucro_liquido"] = lucroLiquido;
@@ -2440,12 +2595,25 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
         : provaImpostos,
     });
   } else {
-    // Sem regime configurado (bloco Impostos vazio): IR ZERADO declarado — a
-    // cascata fecha no Lucro Líquido mesmo assim (estrutura do modelo padrão
-    // sempre completa; configurar o regime muda os números, não a estrutura).
-    dre.push({ id: "irpj-csll", nome: "(−) IRPJ e CSLL", grupo: "despesas", valores: zeroSerie, pctReceita: pctDe(zeroSerie) });
-    dre.push({ id: "lucro-liquido", nome: "Lucro líquido", grupo: "subtotal", valores: { ...resultadoCorrente }, pctReceita: pctDe(resultadoCorrente) });
-    series["lucro_liquido"] = { ...resultadoCorrente };
+    // Sem regime configurado: o motor não calcula NADA — mas a provisão que a
+    // empresa lançou como CONTA continua valendo. É exatamente o caso "calculo
+    // meus impostos por fora": regime "nenhum" (alíquota zero) + contas.
+    const irSemRegime: Serie = {};
+    for (const mes of meses) irSemRegime[mes] = totalContasImpResultado[mes] ?? 0;
+    // O valuation lê esta série para o NOPAT — é o caso-bandeira "calculo por
+    // fora", e sem a publicação o FCFF saía sem imposto nenhum.
+    series["irpj_csll_total"] = irSemRegime;
+    const lucroSemRegime: Serie = {};
+    for (const mes of meses) lucroSemRegime[mes] = (resultadoCorrente[mes] ?? 0) - irSemRegime[mes];
+    dre.push({ id: "irpj-csll", nome: "(−) IRPJ e CSLL", grupo: "despesas", valores: irSemRegime, pctReceita: pctDe(irSemRegime) });
+    for (const c of contasImpostoResultado) {
+      dre.push({ id: c.id, nome: c.nome, grupo: "despesas", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
+    }
+    dre.push({ id: "lucro-liquido", nome: "Lucro líquido", grupo: "subtotal", valores: lucroSemRegime, pctReceita: pctDe(lucroSemRegime) });
+    series["lucro_liquido"] = lucroSemRegime;
+    // O FC indireto parte do ÚLTIMO subtotal: sem isto, a provisão lançada como
+    // conta sairia do resultado mas não do caixa — e o balanço não fecharia.
+    resultadoCorrente = lucroSemRegime;
   }
 
   // ── F2: FLUXO DE CAIXA INDIRETO + BALANÇO PROJETADO (com prova) ──

@@ -1449,13 +1449,37 @@ describe("F3 — impostos (Simples, Presumido, Real)", () => {
     expect(r.dre.find((l) => l.id === "lucro-liquido")!.valores["2026-03"]).toBeCloseTo(78_200, 2);
   });
 
-  it("sem regime configurado: IR zerado DECLARADO e Lucro Líquido = LAIR (cascata completa)", () => {
+  /**
+   * "SEM IMPOSTOS" ZERA A ALÍQUOTA, NÃO APAGA A DEMONSTRAÇÃO (05/08/2026,
+   * decisão do dono). Este teste afirmava o contrário — que sem regime NÃO
+   * existia linha de imposto —, e essa regra deixava sem saída quem calcula o
+   * próprio tributo por fora: escolher "nenhum" custava a linha de impostos, o
+   * subtotal Receita Líquida e, com eles, a comparabilidade da DRE.
+   *
+   * Agora a estrutura é sempre a mesma; só os números mudam com o regime.
+   */
+  it("sem regime configurado: cascata COMPLETA com os tributos zerados", () => {
     const r = calcularModelo(inputDe([blocoReceitaSerie({ valorMensal: 100_000 }), blocoImp({})]));
-    expect(r.dre.find((l) => l.id === "impostos-receita")).toBeUndefined();
-    expect(r.dre.find((l) => l.id === "irpj-csll")!.valores["2026-01"]).toBe(0);
-    expect(r.dre.find((l) => l.id === "lucro-liquido")!.valores["2026-01"])
-      .toBeCloseTo(r.dre.find((l) => l.id === "lair")!.valores["2026-01"], 2);
-    expect(r.dre.find((l) => l.id === "lucro-bruto")!.valores["2026-01"]).toBeCloseTo(100_000, 2);
+    const linha = (id: string) => r.dre.find((l) => l.id === id);
+    // As quatro linhas que sumiam continuam na DRE, zeradas.
+    expect(linha("impostos-receita")!.valores["2026-01"]).toBe(0);
+    expect(linha("irpj-csll")!.valores["2026-01"]).toBe(0);
+    // Sem tributo, a Receita Líquida é a própria receita — e o subtotal EXISTE,
+    // que é o ponto: antes a DRE pulava da receita direto para os custos.
+    expect(linha("receita-liquida")!.valores["2026-01"]).toBeCloseTo(100_000, 2);
+    expect(linha("lucro-liquido")!.valores["2026-01"])
+      .toBeCloseTo(linha("lair")!.valores["2026-01"], 2);
+    expect(linha("lucro-bruto")!.valores["2026-01"]).toBeCloseTo(100_000, 2);
+  });
+
+  it("com regime, os NÚMEROS não mudaram — a estrutura nova não mexeu no cálculo", () => {
+    // Trava contra o risco desta mudança: mexer na cascata alterar o imposto de
+    // quem já tem regime. Presumido 3,65% sobre 100k = 3.650, Receita Líquida
+    // 96.350 — exatamente como antes.
+    const r = calcularModelo(inputDe([blocoReceitaSerie({ valorMensal: 100_000 }), blocoImp({ regime: "presumido" })]));
+    const linha = (id: string) => r.dre.find((l) => l.id === id);
+    expect(linha("impostos-receita")!.valores["2026-01"]).toBeCloseTo(3_650, 2);
+    expect(linha("receita-liquida")!.valores["2026-01"]).toBeCloseTo(96_350, 2);
   });
 });
 
@@ -1794,5 +1818,199 @@ describe("motor × planilha importada: componentes desligados (30/07/2026)", () 
     expect(com.series["depreciacao_total"]["2026-06"]).toBeGreaterThan(1_000);
     // O capex em si continua saindo no fluxo de investimento (nada some do FCI).
     expect(sem.series["capex_total"]["2026-06"]).toBeCloseTo(12_000, 2);
+  });
+});
+
+/**
+ * CONTAS COM CLASSE FISCAL (05/08/2026) — a conta mora onde o cliente a
+ * cadastrou; o VALOR entra onde a contabilidade manda.
+ *
+ * No plano do cliente, ICMS e PIS são contas de DESPESA e devolução de venda é
+ * conta de RECEITA. Lançados assim, o imposto sobre faturamento comia o EBITDA
+ * e a Receita Líquida saía inflada — a Belagro tinha exatamente isso
+ * (03.1.2.02.001 ICMS, .002 PIS, .003 COFINS na aba Despesas).
+ *
+ * Regra de fundo (decisão do dono): o que está no motor é FATO e o que está na
+ * conta é FATO — os dois somam. Quem calcula por fora deixa o regime em
+ * "nenhum" (alíquota zero) e só as contas contam.
+ */
+describe("classe fiscal da conta — imposto e dedução no lugar certo da DRE", () => {
+  const blocoImp = (impostos: Record<string, unknown>): BlocoModelo =>
+    ({ id: "b10", tipo: "impostos", nome: "Impostos", ativo: true, config: { impostos } as BlocoModelo["config"] });
+  /** Bloco de despesas com uma conta classificada (ICMS, IRPJ…). */
+  const blocoGastoClassificado = (nome: string, classe: string, valorMensal: number): BlocoModelo =>
+    ({
+      id: "bg1", tipo: "despesas", nome: "Despesas", ativo: true,
+      config: { linhasCusto: [{ id: "lg1", nome, classe, modo: "serie", valores: { "2026-01": valorMensal, "2026-02": valorMensal, "2026-03": valorMensal } }] } as unknown as BlocoModelo["config"],
+    });
+
+  it("imposto sobre faturamento sai do EBITDA e sobe para a cascata da receita", () => {
+    // 100k de receita e 10k de ICMS lançado como conta de despesa.
+    const r = calcularModelo(inputDe([
+      blocoReceitaSerie({ valorMensal: 100_000 }),
+      blocoGastoClassificado("ICMS", "impostoReceita", 10_000),
+    ]));
+    const linha = (id: string) => r.dre.find((l) => l.id === id);
+    // O imposto entra ANTES da Receita Líquida…
+    expect(linha("impostos-receita")!.valores["2026-01"]).toBeCloseTo(10_000, 2);
+    expect(linha("receita-liquida")!.valores["2026-01"]).toBeCloseTo(90_000, 2);
+    // …e NÃO pesa mais no EBITDA (antes desta mudança, EBITDA seria 90k).
+    expect(r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"]).toBeCloseTo(90_000, 2);
+    // A conta aparece com o NOME dela, não diluída num total anônimo.
+    expect(r.dre.some((l) => l.nome === "ICMS")).toBe(true);
+  });
+
+  it("IRPJ/CSLL lançado como conta desce para depois do LAIR", () => {
+    const r = calcularModelo(inputDe([
+      blocoReceitaSerie({ valorMensal: 100_000 }),
+      blocoGastoClassificado("Provisão de IRPJ", "impostoResultado", 8_000),
+    ]));
+    const linha = (id: string) => r.dre.find((l) => l.id === id);
+    expect(linha("irpj-csll")!.valores["2026-01"]).toBeCloseTo(8_000, 2);
+    // Lucro líquido = LAIR − provisão; e o EBITDA não sentiu.
+    expect(r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"]).toBeCloseTo(100_000, 2);
+    expect(linha("lucro-liquido")!.valores["2026-01"])
+      .toBeCloseTo(linha("lair")!.valores["2026-01"] - 8_000, 2);
+  });
+
+  it("MOTOR + CONTA somam quando o analista deixa o regime ligado", () => {
+    // A decisão do dono: nada é desligado automaticamente. Presumido 3,65% de
+    // 100k = 3.650, mais 10k da conta = 13.650.
+    const r = calcularModelo(inputDe([
+      blocoReceitaSerie({ valorMensal: 100_000 }),
+      blocoGastoClassificado("ICMS", "impostoReceita", 10_000),
+      blocoImp({ regime: "presumido" }),
+    ]));
+    expect(r.dre.find((l) => l.id === "impostos-receita")!.valores["2026-01"]).toBeCloseTo(13_650, 2);
+  });
+
+  it("deduções por CONTA aparecem abertas e reduzem a base fiscal", () => {
+    // O caso da Belagro: duas devoluções, Mercado Interno e Externo. Somadas
+    // numa linha só, ninguém sabe de qual mercado veio.
+    const bloco: BlocoModelo = {
+      id: "br1", tipo: "receitas", nome: "Receitas", ativo: true,
+      config: {
+        linhasReceita: [
+          { id: "r1", nome: "Vendas", nodeRaiz: "v_r1", nodes: [{ id: "v_r1", tipo: "serie", nome: "Vendas", unidade: "R$", params: { valorMensal: 100_000 } }] },
+          { id: "d1", nome: "(-) Devoluções Mercado Interno", classe: "deducaoReceita", nodeRaiz: "v_d1", nodes: [{ id: "v_d1", tipo: "serie", nome: "Dev. MI", unidade: "R$", params: { valorMensal: 4_000 } }] },
+          { id: "d2", nome: "(-) Devoluções Mercado Externo", classe: "deducaoReceita", nodeRaiz: "v_d2", nodes: [{ id: "v_d2", tipo: "serie", nome: "Dev. ME", unidade: "R$", params: { valorMensal: 6_000 } }] },
+        ],
+      } as unknown as BlocoModelo["config"],
+    };
+    const r = calcularModelo(inputDe([bloco, blocoImp({ regime: "presumido" })]));
+    const linha = (id: string) => r.dre.find((l) => l.id === id);
+    // A receita BRUTA não inclui as devoluções (elas saem antes de somar).
+    expect(linha("receita-total")!.valores["2026-01"]).toBeCloseTo(100_000, 2);
+    expect(linha("deducoes-receita")!.valores["2026-01"]).toBeCloseTo(10_000, 2);
+    // Cada uma com o próprio nome — o pedido do dono.
+    expect(r.dre.some((l) => l.nome === "(-) Devoluções Mercado Interno")).toBe(true);
+    expect(r.dre.some((l) => l.nome === "(-) Devoluções Mercado Externo")).toBe(true);
+    // BASE FISCAL menor: imposto de 3,65% sobre 90k (não sobre 100k) = 3.285.
+    expect(linha("impostos-receita")!.valores["2026-01"]).toBeCloseTo(3_285, 2);
+    expect(linha("receita-liquida")!.valores["2026-01"]).toBeCloseTo(86_715, 2);
+  });
+
+  it("conta SEM classe continua exatamente onde estava (sem regressão)", () => {
+    const r = calcularModelo(inputDe([
+      blocoReceitaSerie({ valorMensal: 100_000 }),
+      blocoGastoClassificado("Aluguel", "", 10_000),
+    ]));
+    // Despesa comum: pesa no EBITDA e não encosta na cascata da receita.
+    expect(r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"]).toBeCloseTo(90_000, 2);
+    expect(r.dre.find((l) => l.id === "impostos-receita")!.valores["2026-01"]).toBe(0);
+  });
+});
+
+/**
+ * CORREÇÕES DA REVISÃO ADVERSARIAL (05/08/2026) — os defeitos que a primeira
+ * versão da cascata fiscal deixou passar, travados um a um.
+ */
+describe("cascata fiscal — correções da revisão adversarial", () => {
+  const blocoImp = (impostos: Record<string, unknown>): BlocoModelo =>
+    ({ id: "b10", tipo: "impostos", nome: "Impostos", ativo: true, config: { impostos } as BlocoModelo["config"] });
+  const blocoGasto = (nome: string, classe: string, valores: Record<string, number>): BlocoModelo =>
+    ({
+      id: "bg9", tipo: "despesas", nome: "Despesas", ativo: true,
+      config: { linhasCusto: [{ id: "lg9", nome, classe, modo: "serie", valores }] } as unknown as BlocoModelo["config"],
+    });
+  const v3 = (v: number) => ({ "2026-01": v, "2026-02": v, "2026-03": v });
+
+  it("SIMETRIA: dedução lançada num bloco de GASTO reduz a receita do mesmo jeito", () => {
+    // A 1ª versão só extraía dedução do bloco de receitas — a grade dizia
+    // "Dedução da receita" e o EBITDA pagava a conta.
+    const r = calcularModelo(inputDe([
+      blocoReceitaSerie({ valorMensal: 100_000 }),
+      blocoGasto("(-) Devoluções", "deducaoReceita", v3(10_000)),
+      blocoImp({ regime: "presumido" }),
+    ]));
+    const linha = (id: string) => r.dre.find((l) => l.id === id);
+    expect(linha("deducoes-receita")!.valores["2026-01"]).toBeCloseTo(10_000, 2);
+    expect(r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"]).toBeCloseTo(86_715, 2);
+    // Base fiscal 90k → imposto 3.285, não 3.650.
+    expect(linha("impostos-receita")!.valores["2026-01"]).toBeCloseTo(3_285, 2);
+  });
+
+  it("ESTORNO: mês negativo devolve, em vez de virar cobrança (abs quebrava)", () => {
+    const r = calcularModelo(inputDe([
+      blocoReceitaSerie({ valorMensal: 100_000 }),
+      blocoGasto("ICMS", "impostoReceita", { "2026-01": 10_000, "2026-02": -2_000, "2026-03": 10_000 }),
+    ]));
+    const imp = r.dre.find((l) => l.id === "impostos-receita")!.valores;
+    expect(imp["2026-01"]).toBeCloseTo(10_000, 2);
+    expect(imp["2026-02"]).toBeCloseTo(-2_000, 2); // estorno DEVOLVE
+    expect(r.dre.find((l) => l.id === "receita-liquida")!.valores["2026-02"]).toBeCloseTo(102_000, 2);
+  });
+
+  it("SÉRIES publicadas sem regime: valuation e balanço leem o mesmo número da DRE", () => {
+    // FCFF lia irpj_csll_total ?? 0 — sem a publicação, o valuation saía sem
+    // imposto nenhum exatamente no caso "calculo por fora".
+    const r = calcularModelo(inputDe([
+      blocoReceitaSerie({ valorMensal: 100_000 }),
+      blocoGasto("Provisão IRPJ", "impostoResultado", v3(8_000)),
+    ]));
+    expect(r.series["irpj_csll_total"]!["2026-01"]).toBeCloseTo(8_000, 2);
+    const r2 = calcularModelo(inputDe([
+      blocoReceitaSerie({ valorMensal: 100_000 }),
+      blocoGasto("ICMS", "impostoReceita", v3(10_000)),
+    ]));
+    expect(r2.series["impostos_receita_total"]!["2026-01"]).toBeCloseTo(10_000, 2);
+  });
+
+  it("SIMPLES + conta IRPJ: a linha aparece — descontar sem linha deixava a DRE sem fechar", () => {
+    const r = calcularModelo(inputDe([
+      blocoReceitaSerie({ valorMensal: 100_000 }),
+      blocoGasto("Provisão IRPJ", "impostoResultado", v3(5_000)),
+      blocoImp({ regime: "simples", anexo: "III", rbt12Inicial: 1_200_000 }),
+    ]));
+    const linha = r.dre.find((l) => l.id === "irpj-csll");
+    expect(linha).toBeDefined();
+    expect(linha!.valores["2026-01"]).toBeCloseTo(5_000, 2);
+  });
+
+  it("ABERTURAS marcadas: quem particiona a DRE sabe que o valor já está no total", () => {
+    const r = calcularModelo(inputDe([
+      blocoReceitaSerie({ valorMensal: 100_000 }),
+      blocoGasto("ICMS", "impostoReceita", v3(10_000)),
+    ]));
+    const abertura = r.dre.find((l) => l.nome === "ICMS");
+    expect(abertura?.abertura).toBe(true);
+    // O total NÃO é abertura — ele é quem vale na soma.
+    expect(r.dre.find((l) => l.id === "impostos-receita")!.abertura).toBeUndefined();
+  });
+
+  it("receita_total (nó de fórmula) NÃO inclui a linha de dedução", () => {
+    // Comissão "% × receita_total" divergia do modo pctReceita: o nó somava a
+    // devolução como se fosse receita.
+    const bloco: BlocoModelo = {
+      id: "br9", tipo: "receitas", nome: "Receitas", ativo: true,
+      config: {
+        linhasReceita: [
+          { id: "r1", nome: "Vendas", nodeRaiz: "v_r1", nodes: [{ id: "v_r1", tipo: "serie", nome: "Vendas", unidade: "R$", params: { valorMensal: 100_000 } }] },
+          { id: "d1", nome: "(-) Devoluções", classe: "deducaoReceita", nodeRaiz: "v_d1", nodes: [{ id: "v_d1", tipo: "serie", nome: "Dev", unidade: "R$", params: { valorMensal: 10_000 } }] },
+        ],
+      } as unknown as BlocoModelo["config"],
+    };
+    const r = calcularModelo(inputDe([bloco]));
+    expect(r.series["receita_total"]!["2026-01"]).toBeCloseTo(100_000, 2);
   });
 });

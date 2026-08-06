@@ -20,6 +20,14 @@ export const TIPOS_CONTA = [
   { tipo: "despesa", rotulo: "Despesa", bloco: "despesas", prefixo: "4.2", ajuda: "abaixo do Lucro Bruto — despesa operacional (pesa no EBITDA)" },
   { tipo: "despesaFinanceira", rotulo: "Despesa financeira", bloco: "despesasNaoOp", prefixo: "4.3", ajuda: "abaixo do EBITDA — juros, tarifas, IOF (não pesa no EBITDA)" },
   { tipo: "capex", rotulo: "Capex (investimento)", bloco: "capex", prefixo: "1.2", ajuda: "não é resultado: vira ativo e desce como depreciação" },
+  // CLASSE FISCAL (05/08/2026) — o valor sai do EBITDA e vai para o ponto certo
+  // da cascata. A conta CONTINUA no bloco em que o cliente a cadastrou (imposto
+  // é conta de despesa no plano dele); quem muda de lugar é o VALOR. Por isso
+  // estes tipos declaram `classe` em vez de um bloco próprio: sem migração de
+  // schema, e a conta não some do grupo onde o analista a procura.
+  { tipo: "impostoReceita", rotulo: "Imposto sobre faturamento", bloco: "despesas", classe: "impostoReceita", prefixo: "4.6", ajuda: "ICMS/PIS/COFINS/ISS — deduz a receita bruta, ACIMA da Receita Líquida (não pesa no EBITDA)" },
+  { tipo: "impostoResultado", rotulo: "IRPJ/CSLL", bloco: "despesas", classe: "impostoResultado", prefixo: "4.7", ajuda: "provisão de IR e contribuição — entra DEPOIS do resultado (não pesa no EBITDA)" },
+  { tipo: "deducaoReceita", rotulo: "Dedução da receita", bloco: "receitas", classe: "deducaoReceita", prefixo: "3.5", ajuda: "devolução, cancelamento e abatimento — reduz a receita bruta e a base fiscal" },
   { tipo: "receitaOperacional", rotulo: "Receita operacional", bloco: "receitas", prefixo: "3.1", ajuda: "receita do negócio — base da Receita Líquida" },
   { tipo: "receitaFinanceira", rotulo: "Receita financeira", bloco: "receitasNaoOp", prefixo: "3.2", ajuda: "abaixo do EBITDA — rendimento de aplicação, juros recebidos" },
   { tipo: "outrasReceitas", rotulo: "Outras receitas", bloco: "receitasNaoOp", prefixo: "3.9", ajuda: "abaixo do EBITDA — venda de ativo, aluguel recebido, indenização" },
@@ -36,12 +44,23 @@ export function blocoDoTipo(tipo: TipoConta): string {
   return POR_TIPO.get(tipo)!.bloco;
 }
 
+/** Classe fiscal do tipo (imposto/dedução) — `undefined` para os tipos comuns.
+ *  É ela que o motor lê para tirar o valor do EBITDA e levá-lo para a cascata. */
+export function classeDoTipo(tipo: TipoConta): string | undefined {
+  return (POR_TIPO.get(tipo) as { classe?: string } | undefined)?.classe;
+}
+
 /**
  * Tipo de uma linha a partir do bloco em que ela está hoje. `receitasNaoOp`
  * hospeda duas famílias (financeira × outras) — o código, quando existe, desempata;
  * senão o nome decide, e o default é "outras receitas".
  */
-export function tipoDaLinha(blocoTipo: string, linha: { codigo?: string | null; nome?: string; destino?: { conta?: string } | null }): TipoConta {
+export function tipoDaLinha(blocoTipo: string, linha: { codigo?: string | null; nome?: string; destino?: { conta?: string } | null; classe?: string | null }): TipoConta {
+  // A CLASSE MANDA (05/08/2026): imposto e dedução moram no bloco de despesa/
+  // receita como qualquer conta, então o bloco não os distingue. A classe é
+  // declaração explícita do analista — vem antes de qualquer heurística.
+  const porClasse = TIPOS_CONTA.find((t) => (t as { classe?: string }).classe && (t as { classe?: string }).classe === linha.classe);
+  if (porClasse) return porClasse.tipo;
   if (blocoTipo === "custos") return "custo";
   if (blocoTipo === "despesas") return "despesa";
   if (blocoTipo === "despesasNaoOp") return "despesaFinanceira";
@@ -64,9 +83,25 @@ export function tipoDaLinha(blocoTipo: string, linha: { codigo?: string | null; 
 export function tipoDoTextoDaPlanilha(texto: string | null | undefined, fallbackEhCusto: boolean): TipoConta {
   const s = (texto ?? "").normalize("NFD").replace(new RegExp("[\\u0300-\\u036f]", "g"), "").toLowerCase().trim();
   if (!s) return fallbackEhCusto ? "custo" : "despesa";
+  // CLASSES FISCAIS (05/08/2026) — casamento ESTRITO com os rótulos do
+  // dropdown, e não regex solto. A primeira versão usava /imposto|tributo|.../
+  // e a revisão adversarial mostrou o estrago: esta coluna também recebe a
+  // "Natureza"/"Grupo" da planilha DO CLIENTE (NOMES_TIPO casa esses
+  // cabeçalhos), e um grupo gerencial "Impostos e Taxas" — que carrega
+  // IPTU/IPVA/alvará, despesa operacional comum — reclassificaria o grupo
+  // inteiro para fora do EBITDA, mudando a DRE de importação antiga refeita,
+  // sem aviso. Classe fiscal move dinheiro de lugar: só entra por DECLARAÇÃO
+  // inequívoca, nunca por semelhança.
+  if (/^imposto(s)? (sobre|s\/|s) faturamento$/.test(s) || s === "imposto sobre a receita") return "impostoReceita";
+  if (/^irpj\s*\/?\s*csll$/.test(s) || s === "irpj e csll") return "impostoResultado";
+  if (/^deducao (da|de) receita$/.test(s) || s === "deducoes da receita") return "deducaoReceita";
   if (/capex|investiment|imobiliz|ativo fixo/.test(s)) return "capex";
   if (/financeir/.test(s)) return "despesaFinanceira";
   if (/^cust/.test(s)) return "custo";
+  // "Despesa" explícita VENCE o fallback (05/08/2026): numa aba de centro de
+  // custo o fallback é "custo", e a escolha do dropdown era ignorada — o
+  // analista marcava Despesa e a conta voltava custo, sem aviso.
+  if (/^despes/.test(s)) return "despesa";
   return fallbackEhCusto ? "custo" : "despesa";
 }
 

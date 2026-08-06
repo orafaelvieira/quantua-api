@@ -298,8 +298,11 @@ export function calcularPorUnidade(input: {
   const idxEbitda = dre.findIndex((l) => l.id === "ebitda");
   const acimaDoEbitda = idxEbitda >= 0 ? dre.slice(0, idxEbitda) : dre;
   // Só linhas de VALOR (as de config); subtotais ficam de fora — são derivados,
-  // e derivado se recalcula, não se rateia.
-  const linhasValor = acimaDoEbitda.filter((l) => l.grupo !== "subtotal");
+  // e derivado se recalcula, não se rateia. ABERTURAS fiscais também ficam de
+  // fora (05/08/2026): o valor delas já está dentro do total "(−) Impostos
+  // sobre a receita"/"(−) Deduções", que é rateado — particioná-las de novo
+  // descontava o imposto DUAS vezes por unidade e quebrava a prova de partição.
+  const linhasValor = acimaDoEbitda.filter((l) => l.grupo !== "subtotal" && !(l as { abertura?: boolean }).abertura);
 
   /** Resolve o destino da linha: unidade direta, CC compartilhado ou nada. */
   function destinoDe(linhaId: string): { unidadeId: string | null; cc: CentroCustoDim | null } {
