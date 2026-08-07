@@ -805,6 +805,28 @@ describe("não operacionais (abaixo do EBITDA)", () => {
     expect(r.dre.find((l) => l.id === "alugueis")!.valores["2026-01"]).toBeCloseTo(5_000, 6);
   });
 
+  it("nao-op parte do EBIT vigente — D&A de conta NAO some no caminho (Belagro R$ 309,17/mes)", () => {
+    // Validação do dono (07/08/2026): com conta de D&A e seção não-op presente,
+    // o LL saía exatamente a D&A acima do Excel — a base era o EBITDA.
+    const despesasComDA: BlocoModelo = {
+      id: "b6b", tipo: "despesas", nome: "Despesas", ativo: true,
+      config: { linhasCusto: [
+        { id: "da1", nome: "Depreciação e amortização", modo: "fixoReajuste", valorMensal: 309.17, reajusteAnual: 0, destino: { conta: "Depreciação e Amortização", sinal: "soma" } },
+      ] },
+    };
+    const recNaoOp: BlocoModelo = {
+      id: "b5b", tipo: "receitasNaoOp", nome: "Receitas não operacionais", ativo: true,
+      config: { linhasCusto: [{ id: "alug2", nome: "Aluguéis recebidos", modo: "fixoReajuste", valorMensal: 1_000, reajusteAnual: 0 }] },
+    };
+    const r = calcularModelo(inputDe([blocoReceitaSerie({ valorMensal: 100_000 }), blocoCustosSimples(), despesasComDA, recNaoOp]));
+    const ebit = r.dre.find((l) => l.id === "ebit")!.valores["2026-01"];
+    const apos = r.dre.find((l) => l.id === "resultado-apos-naoop")!.valores["2026-01"];
+    expect(apos).toBeCloseTo(ebit + 1_000, 2);
+    // E o lucro líquido carrega a D&A (não volta a somar 309,17).
+    const ebitda = r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"];
+    expect(ebit).toBeCloseTo(ebitda - 309.17, 2);
+  });
+
   it("sem linhas não operacionais a DRE não ganha a seção (modelos antigos intactos)", () => {
     const r = calcularModelo(inputDe([blocoReceitaSerie({ valorMensal: 100_000 }), blocoCustosSimples()]));
     expect(r.dre.some((l) => l.id === "rec-naoop-total")).toBe(false);

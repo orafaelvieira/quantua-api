@@ -761,7 +761,7 @@ export interface LinhaDre {
 /** VERSÃO DO MOTOR (07/08/2026): carimbada no resultado — cache calculado por
  *  versão anterior é recalculado na abertura do modelo (sem isto, um deploy do
  *  motor deixava a aba DFs exibindo números velhos até alguém editar algo). */
-export const MOTOR_VERSAO = 5;
+export const MOTOR_VERSAO = 6;
 
 export interface ResultadoModelo {
   /** Versão do motor que calculou — ver MOTOR_VERSAO. */
@@ -2642,7 +2642,11 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     const recNaoOpTotal: Serie = {};
     const despNaoOpTotal: Serie = {};
     const resultadoAposNaoOp: Serie = {};
-    const baseNaoOp = temCapex ? ebit : ebitda; // não-op parte do último subtotal operacional
+    // Base = o EBIT VIGENTE (resultadoCorrente), nunca o EBITDA: a regra
+    // antiga "sem capex, parte do EBITDA" perdia a D&A DE CONTA e a
+    // equivalência — o LL do sistema saía R$ 309,17/mês acima do Excel da
+    // Belagro (validação do dono, 07/08/2026; diferença provada = D&A).
+    const baseNaoOp = resultadoCorrente;
     for (const mes of meses) {
       recNaoOpTotal[mes] = outrasRecNaoOp.reduce((sm, l) => sm + (l.valores[mes] ?? 0), 0);
       despNaoOpTotal[mes] = linhasOutrasDespNaoOp.reduce((sm, l) => sm + (l.valores[mes] ?? 0), 0);
