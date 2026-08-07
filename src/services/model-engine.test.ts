@@ -2159,6 +2159,25 @@ describe("grupo abaixo do EBITDA move a conta", () => {
     expect(r.checks.find((c) => c.id === "bp-fecha")!.ok).toBe(true);
   });
 
+  it("SIMETRIA: linha de RECEITA apontada para Receitas Financeiras sai da receita bruta", () => {
+    // "receita financeira com receita bruta, que padrão contábil é este?" (dono).
+    const receitas: BlocoModelo = {
+      id: "br9", tipo: "receitas", nome: "Receitas", ativo: true,
+      config: { linhasReceita: [
+        { id: "rv", nome: "Vendas", nodeRaiz: "v_rv", nodes: [{ id: "v_rv", tipo: "serie", nome: "Vendas", unidade: "R$", params: { valorMensal: 100_000 } }] },
+        { id: "rf", nome: "Rendimentos", nodeRaiz: "v_rf", destino: { conta: "Receitas Financeiras", sinal: "soma" },
+          nodes: [{ id: "v_rf", tipo: "serie", nome: "Rendimentos", unidade: "R$", params: { valorMensal: 2_000 } }] },
+      ] } as unknown as BlocoModelo["config"],
+    };
+    const r = calcularModelo(inputDe([receitas, { id: "bi9", tipo: "impostos", nome: "Impostos", ativo: true, config: { impostos: { regime: "presumido" } } as BlocoModelo["config"] }]));
+    // Receita bruta SEM os rendimentos — e a base fiscal também.
+    expect(r.dre.find((l) => l.id === "receita-total")!.valores["2026-01"]).toBeCloseTo(100_000, 2);
+    expect(r.series["impostos_pis_cofins"]!["2026-01"]).toBeCloseTo(100_000 * 0.0365, 2);
+    // O valor aparece no resultado financeiro, antes do LAIR.
+    expect(r.dre.find((l) => l.id === "rec-financeiras")!.valores["2026-01"]).toBeCloseTo(2_000, 2);
+    expect(r.checks.find((c) => c.id === "bp-fecha")!.ok).toBe(true);
+  });
+
   it("sem conta nesses grupos, NADA muda (regressão zero)", () => {
     const r = calcularModelo(inputDe([receita(), gasto("Despesa comum", 2_000, "Despesas Gerais e Administrativas")]));
     expect(r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"]).toBeCloseTo(88_000, 2);

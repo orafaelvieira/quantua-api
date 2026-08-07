@@ -760,7 +760,7 @@ export interface LinhaDre {
 /** VERSÃO DO MOTOR (07/08/2026): carimbada no resultado — cache calculado por
  *  versão anterior é recalculado na abertura do modelo (sem isto, um deploy do
  *  motor deixava a aba DFs exibindo números velhos até alguém editar algo). */
-export const MOTOR_VERSAO = 2;
+export const MOTOR_VERSAO = 3;
 
 export interface ResultadoModelo {
   /** Versão do motor que calculou — ver MOTOR_VERSAO. */
@@ -1659,6 +1659,31 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   // (não vira linha própria). A receita total é a mesma; muda quais linhas aparecem.
   linhasReceita = aplicarDestinos(linhasReceita, meses);
 
+  // ── GRUPO ABAIXO DO EBITDA — coletores e extração SIMÉTRICA (07/08/2026) ──
+  // A extração vale para RECEITA, custos e despesas ("receita financeira com
+  // receita bruta, que padrão contábil é este?" — dono). A linha canônica com
+  // um destes nomes sai do bloco em que mora e o valor entra no ponto certo
+  // da cascata (a receita-side TEM de sair ANTES da soma da receita bruta —
+  // senão vira base de imposto). Mesma lição da simetria das classes fiscais.
+  const normCanonAbaixo = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  const GRUPOS_ABAIXO_EBITDA: Record<string, "da" | "equiv" | "recFin" | "despFin" | "recNaoOpX" | "despNaoOpX"> = {
+    "depreciacao e amortizacao": "da",
+    "equivalencia patrimonial": "equiv",
+    "receitas financeiras": "recFin",
+    "despesas financeiras": "despFin",
+    "outras receitas nao operacionais": "recNaoOpX",
+    "outras despesas nao operacionais": "despNaoOpX",
+  };
+  const abaixoEbitda: Record<"da" | "equiv" | "recFin" | "despFin" | "recNaoOpX" | "despNaoOpX", Array<{ id: string; nome: string; valores: Serie }>> =
+    { da: [], equiv: [], recFin: [], despFin: [], recNaoOpX: [], despNaoOpX: [] };
+  const extrairAbaixoEbitdaDe = (linhas: Array<{ id: string; nome: string; valores: Serie }>) => {
+    for (let i = linhas.length - 1; i >= 0; i--) {
+      const chave = GRUPOS_ABAIXO_EBITDA[normCanonAbaixo(linhas[i].nome)];
+      if (chave) abaixoEbitda[chave].unshift(...linhas.splice(i, 1));
+    }
+  };
+  extrairAbaixoEbitdaDe(linhasReceita);
+
   // Linhas de CUSTOS/DESPESAS (operacionais e não operacionais) com drivers:
   // a raiz também deve fechar em R$.
   for (const b of input.blocks) {
@@ -1943,27 +1968,22 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   // somou as contas com sinal), a linha canônica é EXTRAÍDA do bloco e o valor
   // entra no ponto certo da cascata. A extração é por NOME canônico — mesmo
   // critério do fold do IBR.
-  const normCanon = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-  const extrairPorNome = (linhas: Array<{ id: string; nome: string; valores: Serie }>, alvos: string[]) => {
-    const extraidas: Array<{ id: string; nome: string; valores: Serie }> = [];
-    for (let i = linhas.length - 1; i >= 0; i--) {
-      if (alvos.includes(normCanon(linhas[i].nome))) extraidas.unshift(...linhas.splice(i, 1));
-    }
-    return extraidas;
-  };
+  // Custos e despesas passam pelos MESMOS coletores da receita (simetria).
+  extrairAbaixoEbitdaDe(linhasCustos);
+  extrairAbaixoEbitdaDe(linhasDespesas);
   const somaLinhasDe = (linhas: Array<{ valores: Serie }>): Serie => {
     const s: Serie = {};
     for (const mes of meses) s[mes] = linhas.reduce((sm, l) => sm + (l.valores[mes] ?? 0), 0);
     return s;
   };
-  const contasDeDA = [...extrairPorNome(linhasCustos, ["depreciacao e amortizacao"]), ...extrairPorNome(linhasDespesas, ["depreciacao e amortizacao"])];
-  const contasEquivalencia = [...extrairPorNome(linhasCustos, ["equivalencia patrimonial"]), ...extrairPorNome(linhasDespesas, ["equivalencia patrimonial"])];
-  const contasRecFinanceiras = [...extrairPorNome(linhasCustos, ["receitas financeiras"]), ...extrairPorNome(linhasDespesas, ["receitas financeiras"])];
-  const contasDespFinanceiras = [...extrairPorNome(linhasCustos, ["despesas financeiras"]), ...extrairPorNome(linhasDespesas, ["despesas financeiras"])];
+  const contasDeDA = abaixoEbitda.da;
+  const contasEquivalencia = abaixoEbitda.equiv;
+  const contasRecFinanceiras = abaixoEbitda.recFin;
+  const contasDespFinanceiras = abaixoEbitda.despFin;
   // Outras Não Operacionais: entram nos grupos não-op EXISTENTES — mesma
   // seção, mesmos totais, mesma leitura de sempre.
-  linhasRecNaoOp.push(...extrairPorNome(linhasCustos, ["outras receitas nao operacionais"]), ...extrairPorNome(linhasDespesas, ["outras receitas nao operacionais"]));
-  linhasDespNaoOp.push(...extrairPorNome(linhasCustos, ["outras despesas nao operacionais"]), ...extrairPorNome(linhasDespesas, ["outras despesas nao operacionais"]));
+  linhasRecNaoOp.push(...abaixoEbitda.recNaoOpX);
+  linhasDespNaoOp.push(...abaixoEbitda.despNaoOpX);
   const depContasDre = somaLinhasDe(contasDeDA);
   const equivContas = somaLinhasDe(contasEquivalencia);
   const recFinContas = somaLinhasDe(contasRecFinanceiras);
