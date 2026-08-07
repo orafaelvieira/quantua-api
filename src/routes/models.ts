@@ -32,6 +32,8 @@ import type { SemaforoDef } from "../services/indicator-calculator";
 import { ERP_REFERENCIA, BETAS_EMERGING, BETAS_DATA, KROLL_DECIS, KROLL_FONTE, CSRP_FATORES } from "../services/wacc-referencias";
 import { perguntarJson } from "../services/ai-extraction";
 import { montarLinhaReceita, TEMPLATES_RECEITA } from "../services/model-templates";
+import { derivarRealizadoMensal } from "../services/realizado-balancete";
+import type { LeituraPortaConteudo } from "../services/leitura-porta";
 import { derivarSeed, derivarHistoricoAnual, derivarRealizadoParcial, derivarAberturaReceita, derivarAberturaCustos, derivarAberturaCustosCanonica, derivarImobilizadoHistorico, derivarGiroHistorico, derivarDividaHistorico, derivarCaixaHistorico, derivarOutrosBalanco, regraDaConta } from "../services/model-seed";
 import { rodarMonteCarlo, McVariavelSpec } from "../services/monte-carlo";
 import { ConfigReforma } from "../services/reforma-tributaria";
@@ -2374,6 +2376,66 @@ router.post("/:id/esqueleto", async (req: AuthRequest, res: Response): Promise<v
       { nome: "(-) Deduções da receita", classe: "deducaoReceita" },
     ],
   });
+});
+
+// POST /models/:id/realizado-balancete/preparar — F2 do realizado-sem-IBR
+// (08/08/2026, GO do dono). A partir das LEITURAS da porta (F1), deriva o
+// MENSAL por conta (critério YTD do balancete) e devolve, POR ANO, as
+// matrizes no MESMO formato da importação de planilha — o app alimenta o
+// importador EXISTENTE (POST /plano-contas modo realizado): mesmo casamento
+// por código/nome, mesma conciliação (conta nova zerada), mesma trilha e o
+// mesmo resumo. Nada aqui grava: é preparação, leitura pura.
+router.post("/:id/realizado-balancete/preparar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const model = await modelNoEscopo(req.params.id as string, req);
+  if (!model) { res.status(404).json({ error: "Modelo não encontrado" }); return; }
+  const documentIds = Array.isArray(req.body?.documentIds) ? (req.body.documentIds as string[]).slice(0, 200) : undefined;
+  const docs = await prisma.document.findMany({
+    where: {
+      companyId: model.companyId, analysisId: null,
+      status: { not: "Substituído" },
+      ...(documentIds ? { id: { in: documentIds } } : {}),
+    },
+    include: { leituraPorta: { select: { conteudo: true, hashArquivo: true } } },
+  });
+  const leituras: Array<{ documentId: string; nome: string; periodoInicio: string | null; periodoFim: string | null; linhas: LeituraPortaConteudo["linhas"] }> = [];
+  const semLeitura: Array<{ documentId: string; nome: string; motivo: string }> = [];
+  for (const d of docs) {
+    if (!/balancete/i.test(d.tipo)) continue;
+    const lp = d.leituraPorta;
+    const c = lp?.conteudo as unknown as LeituraPortaConteudo | undefined;
+    if (!lp || (d.hash && lp.hashArquivo !== d.hash) || !c || c.erro) {
+      semLeitura.push({ documentId: d.id, nome: d.nome, motivo: c?.erro ?? "ainda sem leitura da porta — abra a Data room da empresa (a leitura roda sozinha) e tente de novo" });
+      continue;
+    }
+    leituras.push({ documentId: d.id, nome: d.nome, periodoInicio: c.periodoInicio, periodoFim: c.periodoFim, linhas: c.linhas });
+  }
+  const der = derivarRealizadoMensal(leituras);
+  const anoExercicio = Number(model.mesInicial.slice(0, 4));
+  const porAno = new Map<string, string[]>();
+  for (const m of der.meses) porAno.set(m.slice(0, 4), [...(porAno.get(m.slice(0, 4)) ?? []), m]);
+  const avisos = [...der.avisos];
+  const anos: Array<{ ano: string; meses: string[]; contas: number; abas: Array<{ nome: string; linhas: unknown[][] }> }> = [];
+  for (const [ano, meses] of [...porAno.entries()].sort()) {
+    if (Number(ano) >= anoExercicio) {
+      // Realizado é passado (mesma régua do importador): o exercício corrente
+      // é o próprio orçamento — fica de fora, declarado.
+      avisos.push(`${meses.length} mês(es) de ${ano} fora da importação: realizado precisa ser anterior ao exercício (${anoExercicio}).`);
+      continue;
+    }
+    const cabecalho = ["Código", "Conta", ...meses];
+    const linhaDe = (c: (typeof der.contas)[number]) =>
+      [c.codigo, c.nome, ...meses.map((m) => (c.meses[m] !== undefined ? c.meses[m] : ""))];
+    const receitas = der.contas.filter((c) => c.natureza === "receita" && meses.some((m) => c.meses[m] !== undefined));
+    const gastos = der.contas.filter((c) => c.natureza === "gasto" && meses.some((m) => c.meses[m] !== undefined));
+    anos.push({
+      ano, meses, contas: receitas.length + gastos.length,
+      abas: [
+        { nome: "Receita", linhas: [cabecalho, ...receitas.map(linhaDe)] },
+        { nome: "Despesas", linhas: [cabecalho, ...gastos.map(linhaDe)] },
+      ],
+    });
+  }
+  res.json({ anos, ignorados: [...der.ignorados, ...semLeitura], avisos, contas: der.contas.length });
 });
 
 // POST /models/:id/plano-contas — IMPORTA O PLANO DE CONTAS DO CLIENTE
