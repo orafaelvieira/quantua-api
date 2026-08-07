@@ -34,6 +34,8 @@ export interface DocFechamento {
   createdAt: Date;
   /** Moeda/unidade ("BRL (mil)") — só transporte p/ a cura na Data room. */
   moeda?: string | null;
+  /** Hash do arquivo — a leitura da porta confere se leu ESTA versão. */
+  hash?: string | null;
 }
 
 /** Registro de fechamento (espelho do PeriodoEmpresa). */

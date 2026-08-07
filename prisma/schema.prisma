@@ -654,8 +654,28 @@ model Document {
   // falhar. A guarda de negócio (não remover pool fixado) fica na rota.
   fixadoDe Document?  @relation("FixacaoPool", fields: [fixadoDeId], references: [id], onDelete: SetNull)
   fixacoes Document[] @relation("FixacaoPool")
+  leituraPorta DocumentoLeitura?
 
   @@map("documents")
+}
+
+/// LEITURA NA PORTA (08/08/2026, F1 do realizado-sem-IBR): resultado
+/// DETERMINÍSTICO da leitura de um documento contábil do POOL da Data room —
+/// linhas no plano do cliente + provas aritméticas, sem IA e sem OCR.
+/// Tabela PRÓPRIA de propósito, não Document.dadosExtraidos: aquele campo
+/// participa das regras do IBR (herança de resumo na fixação, trava de
+/// exclusão "já processado") e a leitura da porta não pode mudar nenhuma
+/// delas. Aditiva e anulável — o `db push` do boot cria sozinho.
+model DocumentoLeitura {
+  id          String   @id @default(uuid())
+  documentId  String   @unique @map("document_id")
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  /// hash do ARQUIVO lido — substituição troca o arquivo e invalida a leitura.
+  hashArquivo String?  @map("hash_arquivo")
+  conteudo    Json
+  criadoEm    DateTime @default(now()) @map("criado_em")
+
+  @@map("documento_leitura")
 }
 
 // HASH DE VERSÃO por extração (política 2026-07-15): cada processamento grava a

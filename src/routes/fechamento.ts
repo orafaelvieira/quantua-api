@@ -11,6 +11,7 @@
  */
 import { Router, Response } from "express";
 import { requireAuth, AuthRequest } from "../middleware/auth";
+import { gravarLeituraPorta, resumoDaLeitura, type LeituraPortaConteudo } from "../services/leitura-porta";
 import { whereEmpresaVisivel, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
@@ -72,6 +73,18 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     prisma.document.findMany({ where: { companyId, analysisId: null }, select: { id: true } }),
   ]);
   const poolIds = new Set(poolDocs.map((d) => d.id));
+  // LEITURA NA PORTA (F1): resumo por documento + backfill preguiçoso dos
+  // balancetes que subiram antes da porta existir (best-effort, background).
+  const leituras = await prisma.documentoLeitura.findMany({
+    where: { documentId: { in: [...poolIds] } },
+    select: { documentId: true, hashArquivo: true, conteudo: true },
+  });
+  const leituraPorDoc = new Map(leituras.map((l) => [l.documentId, l]));
+  for (const d of docs) {
+    if (!poolIds.has(d.id) || !/balancete/i.test(d.tipo) || d.status === "Substituído") continue;
+    const lp = leituraPorDoc.get(d.id);
+    if (!lp || lp.hashArquivo !== d.hash) void gravarLeituraPorta(d.id);
+  }
   const logicos = derivarDocumentosLogicos(docs);
   const porPeriodo = new Map<string, typeof logicos>();
   for (const l of logicos) {
@@ -102,6 +115,14 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
         versoes: d.versoes.map((v, i) => ({ id: v.id, nome: v.nome, status: v.status, criadoEm: v.createdAt, exibicao: i + 1 })),
         // CURA pela Data room: só documento de POOL é editável por aqui.
         editavel: poolIds.has(d.vigente.id),
+        // Leitura da porta (F1): o que o documento DIZ, com prova — null
+        // enquanto não lido (ou leitura de arquivo já substituído).
+        leitura: (() => {
+          const lp = leituraPorDoc.get(d.vigente.id);
+          const hashVigente = (d.vigente as { hash?: string | null }).hash ?? null;
+          if (!lp || (hashVigente && lp.hashArquivo !== hashVigente)) return null;
+          return resumoDaLeitura(lp.conteudo as unknown as LeituraPortaConteudo);
+        })(),
       })),
     };
   });

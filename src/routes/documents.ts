@@ -14,6 +14,7 @@ import { acharDuplicadoPorHash, mensagemDuplicado, produtosQueUsamDocumento, avi
 import { downloadFile } from "../services/storage";
 import { extrairTextoLayoutPDF } from "../services/parser";
 import { parseBalanceteTexto } from "../services/balancete-parser";
+import { gravarLeituraPorta } from "../services/leitura-porta";
 
 const router = Router();
 router.use(requireAuth);
@@ -101,8 +102,19 @@ router.get("/pool", async (req: AuthRequest, res: Response): Promise<void> => {
   const docs = await prisma.document.findMany({
     where: { companyId, analysisId: null },
     orderBy: { createdAt: "asc" },
+    include: { leituraPorta: { select: { conteudo: true, hashArquivo: true } } },
   });
   const porId = new Map(docs.map((d) => [d.id, d]));
+  // BACKFILL PREGUIÇOSO da leitura (F1): balancete do pool sem leitura (ou com
+  // leitura de arquivo substituído) é lido em background na primeira listagem —
+  // os documentos que subiram ANTES da porta existir ganham leitura sem
+  // re-upload. Best-effort: a resposta atual sai sem esperar.
+  for (const d of docs) {
+    const lp = (d as { leituraPorta?: { hashArquivo: string | null } | null }).leituraPorta;
+    if (/balancete/i.test(d.tipo) && d.status !== "Substituído" && (!lp || lp.hashArquivo !== d.hash)) {
+      void gravarLeituraPorta(d.id);
+    }
+  }
   const logicos = derivarDocumentosLogicos(docs);
   const documentos = logicos.map((l) => {
     const v = porId.get(l.vigente.id)!;
@@ -111,6 +123,19 @@ router.get("/pool", async (req: AuthRequest, res: Response): Promise<void> => {
       id: v.id, nome: v.nome, tipo: v.tipo, competencia: v.competencia, moeda: v.moeda,
       versao: v.versao, status: v.status, tamanho: v.tamanho, criadoEm: v.createdAt,
       totalVersoes: l.versoes.length, temResumo: !!cache?.resumo,
+      // LEITURA NA PORTA (F1): resumo curto para a tela — o miolo fica no registro.
+      leitura: (() => {
+        const lp = (v as { leituraPorta?: { conteudo: unknown; hashArquivo: string | null } | null }).leituraPorta;
+        if (!lp || lp.hashArquivo !== v.hash) return null;
+        const c = lp.conteudo as { totalContas?: number; periodoInicio?: string | null; periodoFim?: string | null; erro?: string; provas?: { fechamento?: { ok?: boolean }; linhas?: { ok?: boolean } } | null };
+        return {
+          ok: !c.erro,
+          contas: c.totalContas ?? 0,
+          periodo: c.periodoInicio && c.periodoFim ? `${c.periodoInicio} a ${c.periodoFim}` : null,
+          fechamentoOk: c.provas ? !!(c.provas.fechamento?.ok && c.provas.linhas?.ok) : null,
+          erro: c.erro ?? null,
+        };
+      })(),
     };
   });
   res.json({ documentos, faltantes: periodosFaltantes(logicos, new Date()) });
@@ -338,6 +363,9 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
 
   // Upload de POOL é mutação da Data room da empresa — trilha (regra da casa).
   if (!analysisId) {
+    // LEITURA NA PORTA (F1, 08/08/2026): balancete do pool é lido em
+    // BACKGROUND, deterministicamente — o upload não espera nem quebra.
+    void gravarLeituraPorta(doc.id);
     await registrarAuditoria({
       userId: req.userId!, entity: "document", entityId: doc.id,
       field: "upload na Data room da empresa",
@@ -545,6 +573,8 @@ router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, r
         versao: vigente.versao + 1,
       },
     });
+    // Leitura na porta da VERSÃO NOVA (a leitura antiga fica na linha antiga).
+    void gravarLeituraPorta(novoPool.id);
     await prisma.document.update({
       where: { id: vigente.id },
       data: { status: "Substituído", substituidoPorId: novoPool.id, motivoSubstituicao: motivo },
