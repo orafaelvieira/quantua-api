@@ -17,6 +17,7 @@
 
 // Sem ciclo em runtime: reforma-tributaria só importa TIPOS deste arquivo.
 import { calcularImpostosReforma } from "./reforma-tributaria";
+import { tipoDaLinha } from "./classificacao-conta";
 
 // ── Tipos ──────────────────────────────────────────────────────────────────
 
@@ -760,7 +761,7 @@ export interface LinhaDre {
 /** VERSÃO DO MOTOR (07/08/2026): carimbada no resultado — cache calculado por
  *  versão anterior é recalculado na abertura do modelo (sem isto, um deploy do
  *  motor deixava a aba DFs exibindo números velhos até alguém editar algo). */
-export const MOTOR_VERSAO = 4;
+export const MOTOR_VERSAO = 5;
 
 export interface ResultadoModelo {
   /** Versão do motor que calculou — ver MOTOR_VERSAO. */
@@ -1807,14 +1808,14 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
             }
           }
         }
-        out.push({ id: linha.id, nome: linha.nome, valores, destino: linha.destino, classe: (linha as { classe?: string }).classe, grupoDre: (linha as { grupoDre?: string }).grupoDre } as LinhaComDestino);
+        out.push({ id: linha.id, nome: linha.nome, valores, destino: linha.destino, classe: (linha as { classe?: string }).classe, grupoDre: (linha as { grupoDre?: string }).grupoDre, codigo: (linha as { codigo?: string }).codigo } as LinhaComDestino);
       }
       // Linhas com ÁRVORE DE DRIVERS (mesma estrutura das receitas): o valor da
       // linha é a série do nó raiz — % via fórmula (pode referenciar receita_total
       // e raízes de receita), variável do negócio × custo unitário, crescimento…
       for (const linha of b.config.linhasReceita ?? []) {
         if (!nos.has(linha.nodeRaiz)) continue; // erro já registrado acima
-        out.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {}, destino: linha.destino, classe: (linha as { classe?: string }).classe, grupoDre: (linha as { grupoDre?: string }).grupoDre } as LinhaComDestino);
+        out.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {}, destino: linha.destino, classe: (linha as { classe?: string }).classe, grupoDre: (linha as { grupoDre?: string }).grupoDre, codigo: (linha as { codigo?: string }).codigo } as LinhaComDestino);
       }
     }
     return out;
@@ -1988,10 +1989,8 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   const contasEquivalencia = abaixoEbitda.equiv;
   const contasRecFinanceiras = abaixoEbitda.recFin;
   const contasDespFinanceiras = abaixoEbitda.despFin;
-  // Outras Não Operacionais: entram nos grupos não-op EXISTENTES — mesma
-  // seção, mesmos totais, mesma leitura de sempre.
-  linhasRecNaoOp.push(...abaixoEbitda.recNaoOpX);
-  linhasDespNaoOp.push(...abaixoEbitda.despNaoOpX);
+  // Outras Não Operacionais extraídas (grupo declarado) entram DIRETO na
+  // seção não operacional — sem passar pelo split por tipo (o grupo manda).
   const depContasDre = somaLinhasDe(contasDeDA);
   const equivContas = somaLinhasDe(contasEquivalencia);
   const recFinContas = somaLinhasDe(contasRecFinanceiras);
@@ -2621,44 +2620,60 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   dre.push({ id: "ebit", nome: "EBIT (resultado operacional)", grupo: "subtotal", valores: ebit, pctReceita: pctDe(ebit) });
   // Último subtotal da cascata (EBIT → após não-op) — base dos juros.
   let resultadoCorrente: Serie = ebit;
-  if (linhasRecNaoOp.length || linhasDespNaoOp.length) {
+  // ── ABAIXO DO EBIT NA SEMÂNTICA DO PRODUTO (07/08/2026, dono: "tarifa
+  // bancária e juros são despesa FINANCEIRA") ──
+  // O bloco despesasNaoOp É o balde de "Despesa financeira" (tipoDaLinha):
+  // TODAS as linhas dele entram em "(−) Despesas financeiras". O bloco
+  // receitasNaoOp hospeda duas famílias — código 3.2/nome financeiro vai para
+  // "(+) Receitas financeiras", o resto para "(+) Receitas não operacionais".
+  // A seção NÃO OPERACIONAL fica só com as "Outras" (inclui contas com grupo
+  // "Outras … Não Operacionais" extraídas dos blocos operacionais).
+  const recFinDoBloco: typeof linhasRecNaoOp = [];
+  const outrasRecNaoOp: typeof linhasRecNaoOp = [];
+  for (const l of linhasRecNaoOp) {
+    (tipoDaLinha("receitasNaoOp", { codigo: (l as { codigo?: string }).codigo ?? null, nome: l.nome }) === "receitaFinanceira"
+      ? recFinDoBloco : outrasRecNaoOp).push(l);
+  }
+  const contasRecFinTot = [...contasRecFinanceiras, ...recFinDoBloco];
+  const contasDespFinTot = [...contasDespFinanceiras, ...linhasDespNaoOp];
+  const linhasOutrasDespNaoOp = abaixoEbitda.despNaoOpX;
+  outrasRecNaoOp.push(...abaixoEbitda.recNaoOpX);
+  if (outrasRecNaoOp.length || linhasOutrasDespNaoOp.length) {
     const recNaoOpTotal: Serie = {};
     const despNaoOpTotal: Serie = {};
     const resultadoAposNaoOp: Serie = {};
     const baseNaoOp = temCapex ? ebit : ebitda; // não-op parte do último subtotal operacional
     for (const mes of meses) {
-      recNaoOpTotal[mes] = linhasRecNaoOp.reduce((sm, l) => sm + (l.valores[mes] ?? 0), 0);
-      despNaoOpTotal[mes] = linhasDespNaoOp.reduce((sm, l) => sm + (l.valores[mes] ?? 0), 0);
+      recNaoOpTotal[mes] = outrasRecNaoOp.reduce((sm, l) => sm + (l.valores[mes] ?? 0), 0);
+      despNaoOpTotal[mes] = linhasOutrasDespNaoOp.reduce((sm, l) => sm + (l.valores[mes] ?? 0), 0);
       resultadoAposNaoOp[mes] = baseNaoOp[mes] + recNaoOpTotal[mes] - despNaoOpTotal[mes];
     }
     dre.push({ id: "rec-naoop-total", nome: "(+) Receitas não operacionais", grupo: "subtotal", valores: recNaoOpTotal, pctReceita: pctDe(recNaoOpTotal) });
-    for (const l of linhasRecNaoOp) dre.push({ id: l.id, nome: l.nome, grupo: "receita", valores: l.valores, pctReceita: pctDe(l.valores) });
+    for (const l of outrasRecNaoOp) dre.push({ id: l.id, nome: l.nome, grupo: "receita", valores: l.valores, pctReceita: pctDe(l.valores), abertura: true });
     dre.push({ id: "desp-naoop-total", nome: "(−) Despesas não operacionais", grupo: "subtotal", valores: despNaoOpTotal, pctReceita: pctDe(despNaoOpTotal) });
-    for (const l of linhasDespNaoOp) dre.push({ id: l.id, nome: l.nome, grupo: "despesas", valores: l.valores, pctReceita: pctDe(l.valores) });
+    for (const l of linhasOutrasDespNaoOp) dre.push({ id: l.id, nome: l.nome, grupo: "despesas", valores: l.valores, pctReceita: pctDe(l.valores), abertura: true });
     dre.push({ id: "resultado-apos-naoop", nome: "Resultado após não operacionais", grupo: "subtotal", valores: resultadoAposNaoOp, pctReceita: pctDe(resultadoAposNaoOp) });
     resultadoCorrente = resultadoAposNaoOp;
   }
-  // B8: juros da dívida descem para a DRE; LAIR fecha a cascata (IR na F3).
-  // Sem dívida configurada, a linha vem ZERADA — a estrutura não some.
+  // B8: RESULTADO FINANCEIRO na ordem do modelo — Receitas financeiras →
+  // Despesas financeiras (contas: juros, tarifas, IOF) → juros da dívida
+  // estruturada → LAIR. Sem dívida, a linha de juros vem zerada.
   {
     const jurosExibidos = temDivida ? jurosDividaTotal : zeroSerie;
+    const recFinTotS = somaLinhasDe(contasRecFinTot);
+    const despFinTotS = somaLinhasDe(contasDespFinTot);
     const lair: Serie = {};
-    // RESULTADO FINANCEIRO COMPLETO (07/08/2026): contas com grupo "Receitas
-    // Financeiras"/"Despesas Financeiras" entram AQUI (fora do EBITDA), ao
-    // lado dos juros da dívida — receitas somam, despesas abatem.
     for (const mes of meses) {
       lair[mes] = resultadoCorrente[mes] - (jurosExibidos[mes] ?? 0)
-        + (temFinContas ? (recFinContas[mes] ?? 0) - (despFinContas[mes] ?? 0) : 0);
+        + (recFinTotS[mes] ?? 0) - (despFinTotS[mes] ?? 0);
     }
-    // Ordem do modelo padrão: Receitas Financeiras → Despesas Financeiras →
-    // juros da dívida (a linha estrutural fecha o bloco).
-    if (contasRecFinanceiras.length > 0) {
-      dre.push({ id: "rec-financeiras", nome: "(+) Receitas financeiras", grupo: "receita", valores: recFinContas, pctReceita: pctDe(recFinContas) });
-      for (const c of contasRecFinanceiras) dre.push({ id: c.id, nome: c.nome, grupo: "receita", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
+    if (contasRecFinTot.length > 0) {
+      dre.push({ id: "rec-financeiras", nome: "(+) Receitas financeiras", grupo: "receita", valores: recFinTotS, pctReceita: pctDe(recFinTotS) });
+      for (const c of contasRecFinTot) dre.push({ id: c.id, nome: c.nome, grupo: "receita", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
     }
-    if (contasDespFinanceiras.length > 0) {
-      dre.push({ id: "desp-financeiras", nome: "(−) Despesas financeiras", grupo: "despesas", valores: despFinContas, pctReceita: pctDe(despFinContas) });
-      for (const c of contasDespFinanceiras) dre.push({ id: c.id, nome: c.nome, grupo: "despesas", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
+    if (contasDespFinTot.length > 0) {
+      dre.push({ id: "desp-financeiras", nome: "(−) Despesas financeiras", grupo: "despesas", valores: despFinTotS, pctReceita: pctDe(despFinTotS) });
+      for (const c of contasDespFinTot) dre.push({ id: c.id, nome: c.nome, grupo: "despesas", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
     }
     dre.push({ id: "juros-divida", nome: "(−) Juros de empréstimos e financiamentos", grupo: "despesas", valores: jurosExibidos, pctReceita: pctDe(jurosExibidos) });
     dre.push({ id: "lair", nome: "Resultado antes dos impostos", grupo: "subtotal", valores: lair, pctReceita: pctDe(lair) });

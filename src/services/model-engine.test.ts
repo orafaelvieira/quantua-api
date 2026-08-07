@@ -790,12 +790,17 @@ describe("não operacionais (abaixo do EBITDA)", () => {
     const r = calcularModelo(inputDe([blocoReceitaSerie({ valorMensal: 100_000 }), blocoCustosSimples(), recNaoOp, despNaoOp]));
     expect(r.erros).toEqual([]);
     const ids = r.dre.map((l) => l.id);
-    // ordem: EBITDA → (+) rec não op → linhas → (−) desp não op → linhas → resultado
+    // SEMÂNTICA DO PRODUTO (07/08/2026): o bloco despesasNaoOp é o balde de
+    // DESPESA FINANCEIRA — as linhas dele fecham em "(−) Despesas financeiras"
+    // antes do LAIR (para mantê-las no não-op, declara-se o grupo "Outras
+    // Despesas Não Operacionais"). Aluguéis recebidos (sem código 3.2, nome
+    // não financeiro) seguem em "(+) Receitas não operacionais".
     expect(ids.indexOf("rec-naoop-total")).toBeGreaterThan(ids.indexOf("ebitda"));
-    expect(ids.indexOf("resultado-apos-naoop")).toBeGreaterThan(ids.indexOf("desp-naoop-total"));
     const ebitda = r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"];
-    const final = r.dre.find((l) => l.id === "resultado-apos-naoop")!.valores["2026-01"];
-    expect(final).toBeCloseTo(ebitda + 5_000 - 2_000, 6);
+    const aposNaoOp = r.dre.find((l) => l.id === "resultado-apos-naoop")!.valores["2026-01"];
+    expect(aposNaoOp).toBeCloseTo(ebitda + 5_000, 6);
+    expect(r.dre.find((l) => l.id === "desp-financeiras")!.valores["2026-01"]).toBeCloseTo(2_000, 6);
+    expect(r.dre.find((l) => l.id === "lair")!.valores["2026-01"]).toBeCloseTo(ebitda + 5_000 - 2_000, 6);
     // linha individual aberta
     expect(r.dre.find((l) => l.id === "alugueis")!.valores["2026-01"]).toBeCloseTo(5_000, 6);
   });
