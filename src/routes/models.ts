@@ -102,6 +102,20 @@ export function aplicarDeParaDeclarado(
 }
 
 /** "(+) soma"/"(−) reduz" (e variações digitadas) → sinal; null = em branco. */
+/** GRUPO DE CONTAS FISCAL ⇒ CLASSE (07/08/2026): "Impostos s/ Faturamento" e
+ *  "IR e CSLL" voltaram às escolhas de grupo do lado gasto (pedido do dono).
+ *  O motor NÃO honra esses nomes como DESTINO (o valor viraria despesa e
+ *  pesaria no EBITDA — medido em 05/08); o que ele honra é a CLASSE. Então o
+ *  grupo fiscal declarado grava a classe junto, e o valor sai para o ponto
+ *  certo da cascata. Mesma regra da grade (GRUPO_FISCAL no front). */
+export function classeDoGrupoFiscal(canon: string | null | undefined): "impostoReceita" | "impostoResultado" | "deducaoReceita" | null {
+  const n = normContaGmd(String(canon ?? ""));
+  if (n === "impostos s faturamento") return "impostoReceita";
+  if (n === "ir e csll") return "impostoResultado";
+  if (n === "deducoes da receita bruta") return "deducaoReceita";
+  return null;
+}
+
 export function sinalDoTexto(texto: string | null | undefined): "soma" | "reduz" | null {
   const s = (texto ?? "").toLowerCase();
   if (/reduz|abate|credito|crédito/.test(s)) return "reduz";
@@ -2728,8 +2742,11 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       // Capex sem taxa nunca depreciaria — 10% a.a. é o default do catálogo.
       ...(tipoDaConta === "capex" ? { depreciacaoAnual: 0.1 } : {}),
       // A classe fiscal viaja com a linha — é ela que o motor lê para tirar o
-      // imposto/dedução do EBITDA e levá-lo ao ponto certo da cascata.
-      ...(classeDoTipo(tipoDaConta) ? { classe: classeDoTipo(tipoDaConta) } : {}),
+      // imposto/dedução do EBITDA e levá-lo ao ponto certo da cascata. Vem do
+      // TIPO declarado ou, desde 07/08, do GRUPO fiscal escolhido no dropdown.
+      ...(classeDoTipo(tipoDaConta) ?? classeDoGrupoFiscal(destinoDeclarado)
+        ? { classe: classeDoTipo(tipoDaConta) ?? classeDoGrupoFiscal(destinoDeclarado) }
+        : {}),
     };
     listaDoTipo(tipoDaConta).push(linha);
     if (modoRealizado) {
@@ -2788,9 +2805,16 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     // trocar "Despesa" → "Imposto sobre faturamento" na planilha e reimportar
     // não fazia nada — o resumo dizia "atualizada" e o ICMS seguia no EBITDA.
     // Set-only: tipo comum/célula vazia não apaga classe posta pela grade.
-    const classeDeclarada = up.tipoTexto ? classeDoTipo(tipoDoTextoDaPlanilha(up.tipoTexto, false)) : undefined;
+    // Desde 07/08 o GRUPO fiscal declarado também vale (mesma régua da grade):
+    // grupo "Impostos s/ Faturamento" ⇒ classe impostoReceita. O Tipo declarado
+    // tem precedência; grupo COMUM declarado numa conta com classe a limpa
+    // (reclassificação consciente — igual à grade), salvo Tipo fiscal junto.
+    const classeDeclarada = (up.tipoTexto ? classeDoTipo(tipoDoTextoDaPlanilha(up.tipoTexto, false)) : undefined)
+      ?? classeDoGrupoFiscal(canonDeclarada) ?? undefined;
     if (classeDeclarada && (linha as { classe?: string }).classe !== classeDeclarada) {
       (linha as { classe?: string }).classe = classeDeclarada;
+    } else if (!classeDeclarada && canonDeclarada && (linha as { classe?: string }).classe && !ehCapex) {
+      delete (linha as { classe?: string }).classe;
     }
     if (modoRealizado) {
       // O ORÇADO da linha fica intacto: só o realizado daquele ano é regravado.
@@ -2945,7 +2969,11 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
       // "Dedução da receita" escolhida no dropdown precisa VALER — antes era
       // descartada e a devolução entrava SOMANDO na receita bruta. Set-only:
       // célula vazia ou tipo comum não apaga classe posta pela grade.
-      const classeCr = cr.tipoTexto ? classeDoTipo(tipoDoTextoDaPlanilha(cr.tipoTexto, false)) : undefined;
+      // Desde 07/08 o GRUPO fiscal declarado também vale ("Deduções da Receita
+      // Bruta" no dropdown de grupo ⇒ classe deducaoReceita) — o Tipo, quando
+      // declarado, tem precedência.
+      const classeCr = (cr.tipoTexto ? classeDoTipo(tipoDoTextoDaPlanilha(cr.tipoTexto, false)) : undefined)
+        ?? classeDoGrupoFiscal(canonCr) ?? undefined;
       if (modoRealizado) {
         // REALIZADO da receita: linha existente recebe a série em
         // realizado.porLinha (a árvore de drivers do orçamento fica intacta);
@@ -3035,6 +3063,11 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         // pode desfazer classificação.
         if (classeCr && (linhasReceita[idx] as { classe?: string }).classe !== classeCr) {
           linhasReceita[idx] = { ...linhasReceita[idx]!, classe: classeCr } as unknown as (typeof linhasReceita)[number];
+        } else if (!classeCr && canonCr && (linhasReceita[idx] as { classe?: string }).classe) {
+          // Grupo COMUM declarado numa conta com classe = reclassificação
+          // consciente (mesma régua do gasto e da grade): a classe sai.
+          const { classe: _cl, ...resto } = linhasReceita[idx] as unknown as { classe?: string } & Record<string, unknown>;
+          linhasReceita[idx] = resto as unknown as (typeof linhasReceita)[number];
         }
         receitas.atualizadas.push({
           nome: alvo.nome,
