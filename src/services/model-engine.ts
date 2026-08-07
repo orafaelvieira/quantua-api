@@ -1926,6 +1926,45 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   const linhasRecNaoOp = calcularGrupo("receitasNaoOp");
   const linhasDespNaoOp = calcularGrupo("despesasNaoOp");
 
+  // ── GRUPO ABAIXO DO EBITDA MOVE A CONTA (07/08/2026, "a estrutura das DFs
+  // deve obrigatoriamente seguir as regras contábeis") ──
+  // Conta do orçamento cujo GRUPO DE CONTAS aponta para uma conta canônica
+  // ABAIXO do EBITDA (D&A, Equivalência, Receitas/Despesas Financeiras, Outras
+  // Não Operacionais) estava presa no bloco de custos/despesas e PESAVA no
+  // EBITDA — a D&A de conta aparecia duas vezes na leitura (na despesa e
+  // zerada na linha oficial). Aqui, DEPOIS do destino (a linha canônica já
+  // somou as contas com sinal), a linha canônica é EXTRAÍDA do bloco e o valor
+  // entra no ponto certo da cascata. A extração é por NOME canônico — mesmo
+  // critério do fold do IBR.
+  const normCanon = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  const extrairPorNome = (linhas: Array<{ id: string; nome: string; valores: Serie }>, alvos: string[]) => {
+    const extraidas: Array<{ id: string; nome: string; valores: Serie }> = [];
+    for (let i = linhas.length - 1; i >= 0; i--) {
+      if (alvos.includes(normCanon(linhas[i].nome))) extraidas.unshift(...linhas.splice(i, 1));
+    }
+    return extraidas;
+  };
+  const somaLinhasDe = (linhas: Array<{ valores: Serie }>): Serie => {
+    const s: Serie = {};
+    for (const mes of meses) s[mes] = linhas.reduce((sm, l) => sm + (l.valores[mes] ?? 0), 0);
+    return s;
+  };
+  const contasDeDA = [...extrairPorNome(linhasCustos, ["depreciacao e amortizacao"]), ...extrairPorNome(linhasDespesas, ["depreciacao e amortizacao"])];
+  const contasEquivalencia = [...extrairPorNome(linhasCustos, ["equivalencia patrimonial"]), ...extrairPorNome(linhasDespesas, ["equivalencia patrimonial"])];
+  const contasRecFinanceiras = [...extrairPorNome(linhasCustos, ["receitas financeiras"]), ...extrairPorNome(linhasDespesas, ["receitas financeiras"])];
+  const contasDespFinanceiras = [...extrairPorNome(linhasCustos, ["despesas financeiras"]), ...extrairPorNome(linhasDespesas, ["despesas financeiras"])];
+  // Outras Não Operacionais: entram nos grupos não-op EXISTENTES — mesma
+  // seção, mesmos totais, mesma leitura de sempre.
+  linhasRecNaoOp.push(...extrairPorNome(linhasCustos, ["outras receitas nao operacionais"]), ...extrairPorNome(linhasDespesas, ["outras receitas nao operacionais"]));
+  linhasDespNaoOp.push(...extrairPorNome(linhasCustos, ["outras despesas nao operacionais"]), ...extrairPorNome(linhasDespesas, ["outras despesas nao operacionais"]));
+  const depContasDre = somaLinhasDe(contasDeDA);
+  const equivContas = somaLinhasDe(contasEquivalencia);
+  const recFinContas = somaLinhasDe(contasRecFinanceiras);
+  const despFinContas = somaLinhasDe(contasDespFinanceiras);
+  const temDepContas = contasDeDA.length > 0;
+  const temEquivContas = contasEquivalencia.length > 0;
+  const temFinContas = contasRecFinanceiras.length > 0 || contasDespFinanceiras.length > 0;
+
   // ── B6: CAPEX e DEPRECIAÇÃO (waterfall por safra) ──
   // Cada mês de investimento é uma SAFRA que deprecia LINEAR pela taxa da linha,
   // começando no MÊS SEGUINTE (o ativo entra em operação), até esgotar o valor.
@@ -2523,9 +2562,27 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   // omitida (o realizado do IBR acompanha ao lado; zero não muda os números).
   const zeroSerie: Serie = {};
   for (const mes of meses) zeroSerie[mes] = 0;
+  // D&A = capex (waterfall) + CONTAS com grupo "Depreciação e Amortização"
+  // (07/08/2026): a conta declarada sai do EBITDA e soma aqui, aberta abaixo
+  // do total com o próprio nome.
+  const depExibida: Serie = {};
+  for (const mes of meses) depExibida[mes] = (temCapex ? depreciacaoTotal[mes] ?? 0 : 0) + (temDepContas ? depContasDre[mes] ?? 0 : 0);
   const ebit: Serie = {};
-  for (const mes of meses) ebit[mes] = ebitda[mes] - (temCapex ? depreciacaoTotal[mes] ?? 0 : 0);
-  dre.push({ id: "depreciacao-total", nome: "(−) Depreciação e amortização", grupo: "despesas", valores: temCapex ? depreciacaoTotal : zeroSerie, pctReceita: pctDe(temCapex ? depreciacaoTotal : zeroSerie) });
+  for (const mes of meses) ebit[mes] = ebitda[mes] - depExibida[mes];
+  dre.push({ id: "depreciacao-total", nome: "(−) Depreciação e amortização", grupo: "despesas", valores: depExibida, pctReceita: pctDe(depExibida) });
+  for (const c of contasDeDA) {
+    dre.push({ id: c.id, nome: c.nome, grupo: "despesas", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
+  }
+  // EQUIVALÊNCIA PATRIMONIAL: resultado de participações — entra DEPOIS da
+  // D&A e ANTES do EBIT (posição do modelo padrão). Conta declarada SOMA no
+  // resultado (o sinal do roll-up já veio aplicado do destino).
+  if (temEquivContas) {
+    for (const mes of meses) ebit[mes] += equivContas[mes] ?? 0;
+    dre.push({ id: "equivalencia-patrimonial", nome: "(+) Equivalência patrimonial", grupo: "receita", valores: equivContas, pctReceita: pctDe(equivContas) });
+    for (const c of contasEquivalencia) {
+      dre.push({ id: c.id, nome: c.nome, grupo: "receita", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
+    }
+  }
   dre.push({ id: "ebit", nome: "EBIT (resultado operacional)", grupo: "subtotal", valores: ebit, pctReceita: pctDe(ebit) });
   // Último subtotal da cascata (EBIT → após não-op) — base dos juros.
   let resultadoCorrente: Serie = ebit;
@@ -2551,8 +2608,22 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   {
     const jurosExibidos = temDivida ? jurosDividaTotal : zeroSerie;
     const lair: Serie = {};
-    for (const mes of meses) lair[mes] = resultadoCorrente[mes] - (jurosExibidos[mes] ?? 0);
+    // RESULTADO FINANCEIRO COMPLETO (07/08/2026): contas com grupo "Receitas
+    // Financeiras"/"Despesas Financeiras" entram AQUI (fora do EBITDA), ao
+    // lado dos juros da dívida — receitas somam, despesas abatem.
+    for (const mes of meses) {
+      lair[mes] = resultadoCorrente[mes] - (jurosExibidos[mes] ?? 0)
+        + (temFinContas ? (recFinContas[mes] ?? 0) - (despFinContas[mes] ?? 0) : 0);
+    }
     dre.push({ id: "juros-divida", nome: "(−) Juros de empréstimos e financiamentos", grupo: "despesas", valores: jurosExibidos, pctReceita: pctDe(jurosExibidos) });
+    if (contasRecFinanceiras.length > 0) {
+      dre.push({ id: "rec-financeiras", nome: "(+) Receitas financeiras", grupo: "receita", valores: recFinContas, pctReceita: pctDe(recFinContas) });
+      for (const c of contasRecFinanceiras) dre.push({ id: c.id, nome: c.nome, grupo: "receita", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
+    }
+    if (contasDespFinanceiras.length > 0) {
+      dre.push({ id: "desp-financeiras", nome: "(−) Despesas financeiras", grupo: "despesas", valores: despFinContas, pctReceita: pctDe(despFinContas) });
+      for (const c of contasDespFinanceiras) dre.push({ id: c.id, nome: c.nome, grupo: "despesas", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
+    }
     dre.push({ id: "lair", nome: "Resultado antes dos impostos", grupo: "subtotal", valores: lair, pctReceita: pctDe(lair) });
     resultadoCorrente = lair;
   }
@@ -2744,13 +2815,26 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   const acS: Serie = {}; const ancS: Serie = {}; const pcS: Serie = {}; const pncS: Serie = {};
   let saldoCaixa = caixaInicial;
   let plAcum = 0;
+  // CONTAS ABAIXO DO EBITDA no FC/BP (07/08/2026): a D&A de CONTA é não-caixa
+  // (volta no FCO e ACUMULA como redutora do ativo); a equivalência é receita
+  // não-caixa (sai do FCO e acumula em Investimentos). Sem os dois lados, o
+  // fechamento Ativo = Passivo + PL quebraria na primeira conta declarada.
+  let depContasAcum = 0;
+  let equivAcum = 0;
+  const depContasAcumS: Serie = {};
+  const equivAcumS: Serie = {};
   const difMax = { v: 0, mes: "" };
   const caixaMin = { v: Number.POSITIVE_INFINITY, mes: "" };
   for (let i = 0; i < meses.length; i++) {
     const mes = meses[i];
-    const depr = temCapex ? depreciacaoTotal[mes] ?? 0 : 0;
+    const depr = (temCapex ? depreciacaoTotal[mes] ?? 0 : 0) + (temDepContas ? depContasDre[mes] ?? 0 : 0);
+    const equivMes = temEquivContas ? equivContas[mes] ?? 0 : 0;
+    depContasAcum += temDepContas ? depContasDre[mes] ?? 0 : 0;
+    equivAcum += equivMes;
+    depContasAcumS[mes] = depContasAcum;
+    equivAcumS[mes] = equivAcum;
     const dNcg = temGiro ? series["delta_ncg"]?.[mes] ?? 0 : 0;
-    fcoS[mes] = (resultadoFinal[mes] ?? 0) + depr - dNcg + (deltaOutros[mes] ?? 0);
+    fcoS[mes] = (resultadoFinal[mes] ?? 0) + depr - equivMes - dNcg + (deltaOutros[mes] ?? 0);
     fciS[mes] = -(temCapex ? capexTotal[mes] ?? 0 : 0);
     fcfS[mes] = temDivida ? (captacaoDividaTotal[mes] ?? 0) - (amortizacaoDividaTotal[mes] ?? 0) : 0;
     variacaoS[mes] = fcoS[mes] + fciS[mes] + fcfS[mes];
@@ -2762,7 +2846,7 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     const cr = temGiro ? series["contas_a_receber"]?.[mes] ?? 0 : 0;
     const est = temGiro ? series["estoques_giro"]?.[mes] ?? 0 : 0;
     const forn = temGiro ? series["fornecedores_giro"]?.[mes] ?? 0 : 0;
-    const imob = temCapex ? imobilizadoLiquido[mes] ?? 0 : 0;
+    const imob = (temCapex ? imobilizadoLiquido[mes] ?? 0 : 0) - depContasAcum + equivAcum;
     const dividaCp = temDivida ? dividaCpTotal[mes] ?? 0 : 0;
     const dividaLp = temDivida ? dividaLpTotal[mes] ?? 0 : 0;
     let outrosAc = 0, outrosAnc = 0, outrosPc = 0, outrosPnc = 0;
@@ -2807,7 +2891,8 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   // BP usa o FIM do ano por ser saldo).
   const fc: LinhaDre[] = [
     { id: "fc-resultado", nome: "Lucro Líquido do período", grupo: "subtotal", valores: resultadoFinal, pctReceita: pctDe(resultadoFinal) },
-    ...(temCapex ? [{ id: "fc-depreciacao", nome: "(+) Depreciação e Amortização (não-caixa)", grupo: "receita" as const, valores: depreciacaoTotal, pctReceita: pctDe(depreciacaoTotal) }] : []),
+    ...(temCapex || temDepContas ? [{ id: "fc-depreciacao", nome: "(+) Depreciação e Amortização (não-caixa)", grupo: "receita" as const, valores: depExibida, pctReceita: pctDe(depExibida) }] : []),
+    ...(temEquivContas ? [{ id: "fc-equivalencia", nome: "(−) Equivalência patrimonial (não-caixa)", grupo: "despesas" as const, valores: negativoDe(equivContas, meses), pctReceita: pctDe(equivContas) }] : []),
     ...(temGiro ? [{ id: "fc-ncg", nome: "(−) Variação do capital de giro (NCG)", grupo: "despesas" as const, valores: negativoDe(series["delta_ncg"], meses), pctReceita: pctDe(series["delta_ncg"]) }] : []),
     ...(itensCalc.length ? [{ id: "fc-outros", nome: "(±) Variação de outros itens do balanço", grupo: "despesas" as const, valores: deltaOutros, pctReceita: pctDe(deltaOutros) }] : []),
     { id: "fc-fco", nome: "Caixa das operações (FCO)", grupo: "subtotal", valores: fcoS, pctReceita: pctDe(fcoS) },
@@ -2840,6 +2925,9 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   // ESTRUTURA FIXA do modelo padrão do IBR (2026-07-16): as linhas-padrão
   // aparecem SEMPRE — bloco não configurado = ZERO na projeção, nunca omissão
   // (as colunas de realizado do IBR acompanham cada linha).
+  // Depreciação acumulada EXIBIDA = capex + contas de D&A do orçamento.
+  const deprAcumExibida: Serie = {};
+  for (const m of meses) deprAcumExibida[m] = -((temCapex ? deprAcumS[m] ?? 0 : 0) + (depContasAcumS[m] ?? 0));
   const bp: LinhaDre[] = [
     { id: "bp-ativo", nome: "Ativo Total", grupo: "subtotal", valores: ativoS, pctReceita: pctDe(ativoS) },
     { id: "bp-ativo-circ", nome: "Ativo Circulante", grupo: "subtotal", valores: acS, pctReceita: pctDe(acS) },
@@ -2851,9 +2939,12 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
     // Segregação BP v3 (2026-07-16): BRUTO + redutora por natureza — a soma das
     // 4 linhas É o líquido do corkscrew (identidade garantida no waterfall).
     { id: "bp-imobilizado", nome: "Imobilizado", grupo: "receita", valores: temCapex ? brutoImobS : zeroSerie, pctReceita: pctDe(temCapex ? brutoImobS : zeroSerie) },
-    { id: "bp-depreciacao", nome: "(-) Depreciação", grupo: "receita", valores: temCapex ? negativoDe(deprAcumS, meses) : zeroSerie, pctReceita: pctDe(temCapex ? negativoDe(deprAcumS, meses) : zeroSerie) },
+    // (-) Depreciação soma a acumulada do capex com a das CONTAS de D&A do
+    // orçamento (ativos existentes não modelados — 07/08/2026).
+    { id: "bp-depreciacao", nome: "(-) Depreciação", grupo: "receita", valores: deprAcumExibida, pctReceita: pctDe(deprAcumExibida) },
     { id: "bp-intangivel", nome: "Intangível", grupo: "receita", valores: temCapex ? brutoIntangS : zeroSerie, pctReceita: pctDe(temCapex ? brutoIntangS : zeroSerie) },
     { id: "bp-amortizacao", nome: "(-) Amortização", grupo: "receita", valores: temCapex ? negativoDe(amortAcumS, meses) : zeroSerie, pctReceita: pctDe(temCapex ? negativoDe(amortAcumS, meses) : zeroSerie) },
+    ...(temEquivContas ? [{ id: "bp-investimentos", nome: "Investimentos", grupo: "receita" as const, valores: equivAcumS, pctReceita: pctDe(equivAcumS) }] : []),
     ...linhasItens("anc"),
     { id: "bp-passivo-pl", nome: "Passivo Total", grupo: "subtotal", valores: somaDe(passivoS, plS, meses), pctReceita: pctDe(ativoS) },
     { id: "bp-passivo-circ", nome: "Passivo Circulante", grupo: "subtotal", valores: pcS, pctReceita: pctDe(pcS) },

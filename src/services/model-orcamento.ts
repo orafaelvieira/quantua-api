@@ -438,7 +438,7 @@ export function calcularOrcadoRealizado(input: OrcadoRealizadoInput): ResultadoO
   // passou a ter sempre Receita líquida/impostos/IRPJ — snapshot congelado
   // antes dessa mudança não as tem, e o aviso trataria um subtotal que o
   // MOTOR criou como se fosse conta imprevista, em toda abertura da tela.
-  const ESTRUTURAIS = new Set(["receita-liquida", "impostos-receita", "irpj-csll", "deducoes-receita", "lucro-liquido"]);
+  const ESTRUTURAIS = new Set(["receita-liquida", "impostos-receita", "irpj-csll", "deducoes-receita", "lucro-liquido", "equivalencia-patrimonial", "rec-financeiras", "desp-financeiras"]);
   const novas = dreRealizada.filter((l) => !idsSnapshot.has(l.id) && !ESTRUTURAIS.has(l.id) && somaJanela(l.valores, meses) !== 0);
   if (novas.length > 0) {
     avisos.push(

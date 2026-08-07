@@ -2095,3 +2095,75 @@ describe("alíquota por linha de receita", () => {
     expect(r2.series["impostos_iss"]!["2026-01"]).toBeCloseTo(1_500, 2);
   });
 });
+
+/**
+ * GRUPO ABAIXO DO EBITDA MOVE A CONTA (07/08/2026) — "a estrutura das DFs deve
+ * obrigatoriamente seguir as regras contábeis" (dono). Conta cujo Grupo de
+ * contas aponta para D&A/Equivalência/Financeiras/Outras Não Op sai do bloco
+ * operacional e entra no ponto certo da cascata — e o FC/BP acompanham (D&A e
+ * equivalência são não-caixa; o balanço tem de continuar fechando).
+ */
+describe("grupo abaixo do EBITDA move a conta", () => {
+  const receita = () => blocoReceitaSerie({ valorMensal: 100_000 });
+  const gasto = (nome: string, valor: number, destino: string, sinal: "soma" | "reduz" = "soma"): BlocoModelo => ({
+    id: "bg1", tipo: "despesas", nome: "Despesas", ativo: true,
+    config: { linhasCusto: [
+      { id: "op", nome: "Despesa operacional", modo: "fixoReajuste", valorMensal: 10_000, reajusteAnual: 0 },
+      { id: "alvo", nome, modo: "fixoReajuste", valorMensal: valor, reajusteAnual: 0, destino: { conta: destino, sinal } },
+    ] },
+  });
+
+  it("conta de D&A NÃO pesa no EBITDA e soma na linha oficial de depreciação", () => {
+    const r = calcularModelo(inputDe([receita(), gasto("Depreciação de máquinas", 2_000, "Depreciação e Amortização")]));
+    expect(r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"]).toBeCloseTo(90_000, 2);
+    expect(r.dre.find((l) => l.id === "depreciacao-total")!.valores["2026-01"]).toBeCloseTo(2_000, 2);
+    expect(r.dre.find((l) => l.id === "ebit")!.valores["2026-01"]).toBeCloseTo(88_000, 2);
+    // Abertura colada ao total com o nome do GRUPO (o destino já consolidou
+    // as contas; o drill-down por conta é o da aba DFs, no cliente).
+    expect(r.dre.some((l) => l.nome === "Depreciação e Amortização" && (l as { abertura?: boolean }).abertura)).toBe(true);
+    // Não-caixa: o FC devolve — caixa do mês = lucro + D&A; balanço fecha.
+    const fcDep = r.fc!.find((l) => l.id === "fc-depreciacao")!;
+    expect(fcDep.valores["2026-01"]).toBeCloseTo(2_000, 2);
+    expect(r.checks.find((c) => c.id === "bp-fecha")!.ok).toBe(true);
+  });
+
+  it("equivalência patrimonial SOMA depois do EBITDA (não-caixa, balanço fecha)", () => {
+    const r = calcularModelo(inputDe([receita(), gasto("Resultado de participações", 5_000, "Equivalência Patrimonial")]));
+    expect(r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"]).toBeCloseTo(90_000, 2);
+    expect(r.dre.find((l) => l.id === "equivalencia-patrimonial")!.valores["2026-01"]).toBeCloseTo(5_000, 2);
+    expect(r.dre.find((l) => l.id === "ebit")!.valores["2026-01"]).toBeCloseTo(95_000, 2);
+    // FC tira a receita não-caixa; o BP ganha "Investimentos" acumulando.
+    expect(r.fc!.find((l) => l.id === "fc-equivalencia")!.valores["2026-01"]).toBeCloseTo(-5_000, 2);
+    expect(r.bp!.find((l) => l.id === "bp-investimentos")!.valores["2026-02"]).toBeCloseTo(10_000, 2);
+    expect(r.checks.find((c) => c.id === "bp-fecha")!.ok).toBe(true);
+  });
+
+  it("despesas e receitas financeiras entram no LAIR, fora do EBITDA", () => {
+    const desp = gasto("Tarifas e juros", 3_000, "Despesas Financeiras");
+    (desp.config as unknown as { linhasCusto: Array<Record<string, unknown>> }).linhasCusto.push(
+      { id: "rf", nome: "Rendimento de aplicação", modo: "fixoReajuste", valorMensal: 1_000, reajusteAnual: 0, destino: { conta: "Receitas Financeiras", sinal: "soma" } },
+    );
+    const r = calcularModelo(inputDe([receita(), desp]));
+    expect(r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"]).toBeCloseTo(90_000, 2);
+    expect(r.dre.find((l) => l.id === "desp-financeiras")!.valores["2026-01"]).toBeCloseTo(3_000, 2);
+    expect(r.dre.find((l) => l.id === "rec-financeiras")!.valores["2026-01"]).toBeCloseTo(1_000, 2);
+    expect(r.dre.find((l) => l.id === "lair")!.valores["2026-01"]).toBeCloseTo(88_000, 2);
+    expect(r.checks.find((c) => c.id === "bp-fecha")!.ok).toBe(true);
+  });
+
+  it("outras despesas não operacionais caem na seção não operacional existente", () => {
+    const r = calcularModelo(inputDe([receita(), gasto("Multa contratual", 4_000, "Outras Despesas Não Operacionais")]));
+    expect(r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"]).toBeCloseTo(90_000, 2);
+    expect(r.dre.find((l) => l.id === "desp-naoop-total")!.valores["2026-01"]).toBeCloseTo(4_000, 2);
+    expect(r.dre.find((l) => l.id === "resultado-apos-naoop")!.valores["2026-01"]).toBeCloseTo(86_000, 2);
+    expect(r.checks.find((c) => c.id === "bp-fecha")!.ok).toBe(true);
+  });
+
+  it("sem conta nesses grupos, NADA muda (regressão zero)", () => {
+    const r = calcularModelo(inputDe([receita(), gasto("Despesa comum", 2_000, "Despesas Gerais e Administrativas")]));
+    expect(r.dre.find((l) => l.id === "ebitda")!.valores["2026-01"]).toBeCloseTo(88_000, 2);
+    expect(r.dre.find((l) => l.id === "depreciacao-total")!.valores["2026-01"]).toBe(0);
+    expect(r.dre.some((l) => l.id === "equivalencia-patrimonial")).toBe(false);
+    expect(r.dre.some((l) => l.id === "rec-financeiras")).toBe(false);
+  });
+});
