@@ -760,7 +760,7 @@ export interface LinhaDre {
 /** VERSÃO DO MOTOR (07/08/2026): carimbada no resultado — cache calculado por
  *  versão anterior é recalculado na abertura do modelo (sem isto, um deploy do
  *  motor deixava a aba DFs exibindo números velhos até alguém editar algo). */
-export const MOTOR_VERSAO = 3;
+export const MOTOR_VERSAO = 4;
 
 export interface ResultadoModelo {
   /** Versão do motor que calculou — ver MOTOR_VERSAO. */
@@ -1676,9 +1676,13 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   };
   const abaixoEbitda: Record<"da" | "equiv" | "recFin" | "despFin" | "recNaoOpX" | "despNaoOpX", Array<{ id: string; nome: string; valores: Serie }>> =
     { da: [], equiv: [], recFin: [], despFin: [], recNaoOpX: [], despNaoOpX: [] };
-  const extrairAbaixoEbitdaDe = (linhas: Array<{ id: string; nome: string; valores: Serie }>) => {
+  const extrairAbaixoEbitdaDe = (linhas: Array<{ id: string; nome: string; valores: Serie; grupoDre?: string }>) => {
     for (let i = linhas.length - 1; i >= 0; i--) {
-      const chave = GRUPOS_ABAIXO_EBITDA[normCanonAbaixo(linhas[i].nome)];
+      // O NOME canônico manda; sem ele, vale o grupoDre da conta SEMEADA do
+      // IBR ("Tarifas bancárias" nasce com grupoDre Despesas Financeiras e
+      // estava presa no não operacional — apontado pelo dono, 07/08).
+      const chave = GRUPOS_ABAIXO_EBITDA[normCanonAbaixo(linhas[i].nome)]
+        ?? (linhas[i].grupoDre ? GRUPOS_ABAIXO_EBITDA[normCanonAbaixo(linhas[i].grupoDre!)] : undefined);
       if (chave) abaixoEbitda[chave].unshift(...linhas.splice(i, 1));
     }
   };
@@ -1803,14 +1807,14 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
             }
           }
         }
-        out.push({ id: linha.id, nome: linha.nome, valores, destino: linha.destino, classe: (linha as { classe?: string }).classe });
+        out.push({ id: linha.id, nome: linha.nome, valores, destino: linha.destino, classe: (linha as { classe?: string }).classe, grupoDre: (linha as { grupoDre?: string }).grupoDre } as LinhaComDestino);
       }
       // Linhas com ÁRVORE DE DRIVERS (mesma estrutura das receitas): o valor da
       // linha é a série do nó raiz — % via fórmula (pode referenciar receita_total
       // e raízes de receita), variável do negócio × custo unitário, crescimento…
       for (const linha of b.config.linhasReceita ?? []) {
         if (!nos.has(linha.nodeRaiz)) continue; // erro já registrado acima
-        out.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {}, destino: linha.destino, classe: (linha as { classe?: string }).classe });
+        out.push({ id: linha.id, nome: linha.nome, valores: series[linha.nodeRaiz] ?? {}, destino: linha.destino, classe: (linha as { classe?: string }).classe, grupoDre: (linha as { grupoDre?: string }).grupoDre } as LinhaComDestino);
       }
     }
     return out;
@@ -1968,9 +1972,13 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   // somou as contas com sinal), a linha canônica é EXTRAÍDA do bloco e o valor
   // entra no ponto certo da cascata. A extração é por NOME canônico — mesmo
   // critério do fold do IBR.
-  // Custos e despesas passam pelos MESMOS coletores da receita (simetria).
+  // Custos, despesas e os blocos NÃO OPERACIONAIS passam pelos MESMOS
+  // coletores da receita (simetria completa): financeira semeada no não-op
+  // move para o resultado financeiro.
   extrairAbaixoEbitdaDe(linhasCustos);
   extrairAbaixoEbitdaDe(linhasDespesas);
+  extrairAbaixoEbitdaDe(linhasRecNaoOp);
+  extrairAbaixoEbitdaDe(linhasDespNaoOp);
   const somaLinhasDe = (linhas: Array<{ valores: Serie }>): Serie => {
     const s: Serie = {};
     for (const mes of meses) s[mes] = linhas.reduce((sm, l) => sm + (l.valores[mes] ?? 0), 0);
@@ -2642,7 +2650,8 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
       lair[mes] = resultadoCorrente[mes] - (jurosExibidos[mes] ?? 0)
         + (temFinContas ? (recFinContas[mes] ?? 0) - (despFinContas[mes] ?? 0) : 0);
     }
-    dre.push({ id: "juros-divida", nome: "(−) Juros de empréstimos e financiamentos", grupo: "despesas", valores: jurosExibidos, pctReceita: pctDe(jurosExibidos) });
+    // Ordem do modelo padrão: Receitas Financeiras → Despesas Financeiras →
+    // juros da dívida (a linha estrutural fecha o bloco).
     if (contasRecFinanceiras.length > 0) {
       dre.push({ id: "rec-financeiras", nome: "(+) Receitas financeiras", grupo: "receita", valores: recFinContas, pctReceita: pctDe(recFinContas) });
       for (const c of contasRecFinanceiras) dre.push({ id: c.id, nome: c.nome, grupo: "receita", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
@@ -2651,6 +2660,7 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
       dre.push({ id: "desp-financeiras", nome: "(−) Despesas financeiras", grupo: "despesas", valores: despFinContas, pctReceita: pctDe(despFinContas) });
       for (const c of contasDespFinanceiras) dre.push({ id: c.id, nome: c.nome, grupo: "despesas", valores: c.valores ?? {}, pctReceita: pctDe(c.valores ?? {}), abertura: true });
     }
+    dre.push({ id: "juros-divida", nome: "(−) Juros de empréstimos e financiamentos", grupo: "despesas", valores: jurosExibidos, pctReceita: pctDe(jurosExibidos) });
     dre.push({ id: "lair", nome: "Resultado antes dos impostos", grupo: "subtotal", valores: lair, pctReceita: pctDe(lair) });
     resultadoCorrente = lair;
   }
