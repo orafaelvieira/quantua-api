@@ -2344,7 +2344,13 @@ router.post("/:id/esqueleto", async (req: AuthRequest, res: Response): Promise<v
     // as quatro linhas de receita voltaram para CÁ — quem escolhe tê-las é o
     // analista, ao pedir a estrutura padrão. Nomes genéricos e renomeáveis: a
     // empresa costuma ter algumas fontes (serviços, insumos, grãos…).
-    receitas: ["Receita 1", "Receita 2", "Receita 3", "Receita 4"],
+    // DEDUÇÕES COMO CONTA PADRÃO (07/08/2026, pedido do dono): a linha fixa
+    // "solta" saiu da grade — a dedução agora é conta normal com classe
+    // fiscal, nasce aqui e sai pelo "Excluir todas" como qualquer outra.
+    receitas: [
+      "Receita 1", "Receita 2", "Receita 3", "Receita 4",
+      { nome: "(-) Deduções da receita", classe: "deducaoReceita" },
+    ],
   });
 });
 
@@ -2498,15 +2504,26 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         // LINHA de deduções do bloco (deducoesValores), nunca vira conta (era
         // o caminho para duplicar). Valor negativo da planilha entra em módulo:
         // dedução é guardada positiva e o motor subtrai.
+        // DEDUÇÃO COMO CONTA (07/08/2026): quando o modelo já tem a conta de
+        // dedução (classe deducaoReceita — a padrão nasce assim), ou a própria
+        // linha declara o Tipo "Dedução da receita", os valores atualizam a
+        // CONTA pelo pipeline de classe — o acumulador legado fica de fora,
+        // senão os mesmos meses entrariam DUAS vezes (conta + config antiga).
+        const linhasRecCfg = ((blocks.find((b) => b.tipo === "receitas")?.config ?? {}) as { linhasReceita?: Array<{ nome?: string; classe?: string }> }).linhasReceita ?? [];
+        const temContaDeducao = linhasRecCfg.some((l) =>
+          (l as { classe?: string }).classe === "deducaoReceita"
+          || /^\(?\s*-?\s*\)?\s*deducoes? da receita$/.test(normContaGmd(String(l.nome ?? ""))));
+        const declaraDeducao = (tipo?: string | null) => /^deducao (da|de) receita$/.test(normContaGmd(String(tipo ?? "")));
+        const vaiProAcumulador = (nome: string, tipo?: string | null) =>
+          /^\(?\s*-?\s*\)?\s*deducoes? da receita$/.test(normContaGmd(nome)) && !temContaDeducao && !declaraDeducao(tipo);
         for (const c of li.contas) {
-          const k = normContaGmd(c.nome);
           // Casamento EXATO com a linha única (revisão adversarial): o prefixo
           // /^deducoes/ engolia uma CONTA chamada "Deduções da receita - ICMS
           // ST" — a conta ficava com os valores antigos E deducoesValores
           // ganhava os mesmos meses: dedução em dobro, crescendo a cada
           // round-trip. Conta de dedução tem nome próprio e código; a linha
           // única do bloco é exatamente "(-) Deduções da receita".
-          if (!/^\(?\s*-?\s*\)?\s*deducoes? da receita$/.test(k)) continue;
+          if (!vaiProAcumulador(c.nome, c.tipo)) continue;
           if (modoRealizado) {
             avisosMemoria.push(`"${c.nome}" não foi importada: o realizado das deduções ainda não tem série própria — informe as deduções realizadas dentro das contas.`);
             continue;
@@ -2519,7 +2536,10 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
             }
           }
         }
-        const ehDeducao = (nome: string) => /^\(?\s*-?\s*\)?\s*deducoes? da receita$/.test(normContaGmd(nome));
+        // Fica fora de contasReceita SÓ o que o acumulador legado consumiu —
+        // a linha que declara Tipo (ou tem conta correspondente) segue como
+        // conta normal e atualiza a própria conta de dedução.
+        const ehDeducao = (nome: string, tipo?: string | null) => vaiProAcumulador(nome, tipo);
         // O CÓDIGO DA RECEITA VIAJA JUNTO (30/07/2026): a aba Receitas tem a
         // coluna Código como a de gastos, mas o mapeamento a jogava fora — as
         // linhas entravam com "—" e o PROCV do analista não achava nada.
@@ -2533,7 +2553,7 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
         // ignorada e a devolução entrava SOMANDO na receita bruta — o dobro do
         // erro, com o rótulo dizendo o contrário.
         contasReceita = li.contas
-          .filter((c) => !consumidos.has(normContaGmd(c.nome)) && !ehDeducao(c.nome))
+          .filter((c) => !consumidos.has(normContaGmd(c.nome)) && !ehDeducao(c.nome, c.tipo))
           .map((c) => ({ nome: c.nome, codigo: (c.codigo ?? "").trim(), destino: (c.destino ?? "").trim(), tipoTexto: (c.tipo ?? "").trim() || null, sinalTexto: (c.sinal ?? "").trim() || null, valores: (c.valores ?? {}) as Record<string, number> }));
         janela = [...new Set([...janela, ...li.meses])];
         abasLidas.push({ aba: nomeAba, contas: contasReceita.length + mem.linhas.length, linhaCabecalho: li.linhaCabecalho });
@@ -2827,13 +2847,21 @@ router.post("/:id/plano-contas", async (req: AuthRequest, res: Response): Promis
     const stampR = `pad${Date.now().toString(36)}`;
     let seqR = 0;
     for (const bruto of (req.body.receitas as unknown[]).slice(0, 20)) {
-      const nome = String(bruto ?? "").trim().slice(0, 120);
+      // Item pode ser string ("Receita 1") ou objeto com CLASSE FISCAL
+      // (07/08/2026): a dedução padrão nasce como conta de verdade —
+      // { nome: "(-) Deduções da receita", classe: "deducaoReceita" }.
+      const obj = bruto && typeof bruto === "object" ? (bruto as { nome?: unknown; classe?: unknown }) : null;
+      const nome = String((obj ? obj.nome : bruto) ?? "").trim().slice(0, 120);
+      const classeR = obj && typeof obj.classe === "string"
+        && ["deducaoReceita", "impostoReceita", "impostoResultado"].includes(obj.classe) ? obj.classe : null;
       if (!nome) continue;
       if (linhasReceita.some((l) => normContaGmd(l.nome) === normContaGmd(nome))) { receitas.ignoradas.push(`${nome} — já existia`); continue; }
       const linhaId = `${stampR}_${seqR++}`;
       linhasReceita.push({
         id: linhaId, nome, template: "generico", nodeRaiz: `${linhaId}_receita`,
-        ...destinoReceita,
+        // Conta com classe NÃO ganha destino (o motor a extrai da receita; um
+        // de-para para "Receita Bruta" seria link morto e dupla mensagem).
+        ...(classeR ? { classe: classeR } : destinoReceita),
         nodes: [{
           id: `${linhaId}_receita`, tipo: "serie", nome: `Memória de Cálculo — ${nome}`, unidade: "R$",
           params: { modoPreenchimento: "mes", valores: {}, valorMensal: 0, crescimentoAnual: 0 },
