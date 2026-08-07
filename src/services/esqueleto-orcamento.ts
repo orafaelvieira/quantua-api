@@ -64,7 +64,10 @@ export const CENTROS_PADRAO: CentroPadrao[] = [
       { nome: "Telefonia e internet", tipo: "despesa", destino: "Despesas com Energia, Água, Telefone e Internet" },
       { nome: "Material de escritório e copa", tipo: "despesa", destino: "Despesas Gerais e Administrativas" },
       { nome: "Seguros", tipo: "despesa", destino: "Despesas com Seguros" },
-      { nome: "Honorários contábeis e jurídicos", tipo: "despesa", destino: "Despesas com Terceiros" },
+      // Separadas em 06/08/2026 (pedido do dono): contábil e jurídico são
+      // fornecedores e orçamentos diferentes — uma conta só escondia os dois.
+      { nome: "Honorários contábeis", tipo: "despesa", destino: "Despesas com Terceiros" },
+      { nome: "Honorários jurídicos", tipo: "despesa", destino: "Despesas com Terceiros" },
       { nome: "Veículos (combustível e manutenção)", tipo: "despesa", destino: "Despesas com Veículos" },
     ],
   },
