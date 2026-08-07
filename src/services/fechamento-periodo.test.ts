@@ -164,6 +164,25 @@ describe("periodosFaltantes", () => {
     expect(periodosFaltantes(docs, hoje)).toEqual(["2026-05", "2026-06"]);
   });
 
+  it("balancete ACUMULADO estende a série e mostra o buraco depois dele (caso Belagro)", () => {
+    // Jan-Set/25 acumulado + mensais desde Jan/26: "sai de set/25 e volta em
+    // jan/26" (dono, 07/08/2026) — Out·Nov·Dez/25 têm de aparecer no aviso.
+    const docs = derivarDocumentosLogicos([
+      doc({ tipo: "Balancete", competencia: "2025-01..2025-09" }),
+      doc({ tipo: "Balancete", competencia: "2026-01" }),
+      doc({ tipo: "Balancete", competencia: "2026-02" }),
+      doc({ tipo: "Balancete", competencia: "2026-03" }),
+      doc({ tipo: "Balancete", competencia: "2026-04" }),
+      doc({ tipo: "Balancete", competencia: "2026-05" }),
+    ]);
+    expect(periodosFaltantes(docs, hoje)).toEqual(["2025-10", "2025-11", "2025-12", "2026-06"]);
+  });
+
+  it("SÓ acumulado (sem balancete mensal) não infere cadência — sem alarme falso", () => {
+    const docs = derivarDocumentosLogicos([doc({ tipo: "Balancete", competencia: "2025-01..2025-09" })]);
+    expect(periodosFaltantes(docs, hoje)).toEqual([]);
+  });
+
   it("sem NENHUMA competência válida, não inventa aviso", () => {
     const docs = derivarDocumentosLogicos([doc({ tipo: "DRE" }), doc({ tipo: "Contrato", competencia: "dez/25" })]);
     expect(periodosFaltantes(docs, hoje)).toEqual([]);

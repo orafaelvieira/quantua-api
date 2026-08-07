@@ -184,6 +184,18 @@ export function periodosFaltantes(documentos: DocumentoLogico[], hoje: Date): st
   if (comPeriodo.length === 0) return [];
 
   const presentes = new Set(comPeriodo.map((d) => d.competencia!));
+  // Balancete ACUMULADO ("YYYY-MM..YYYY-MM") cobre o intervalo INTEIRO e
+  // estende o início da série (07/08/2026 — caso Belagro: Jan-Set/25 acumulado
+  // + mensais desde Jan/26 escondia o buraco Out·Nov·Dez/25 — "sai de set/25
+  // e volta em jan/26"). Ele só complementa: a cadência mensal continua
+  // nascendo de ao menos um balancete mensal (guarda acima).
+  const RE_ACUMULADO = /^(\d{4}-\d{2})\.\.(\d{4}-\d{2})$/;
+  for (const d of documentos) {
+    if (!d.competencia || !/balancete/i.test(d.tipo)) continue;
+    const acum = RE_ACUMULADO.exec(d.competencia);
+    if (!acum || acum[1] > acum[2]) continue;
+    for (let m = acum[1], passos = 0; m <= acum[2] && passos < 240; m = mesAdd(m, 1), passos++) presentes.add(m);
+  }
   const primeiro = [...presentes].sort()[0]!;
   const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
   const limite = mesAdd(mesAtual, -1);
