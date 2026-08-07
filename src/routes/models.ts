@@ -11,7 +11,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { whereEmpresaVisivel, guardaEscritaSuspensao, empresaVisivel } from "../services/escopo-empresa";
 import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
-import { calcularModelo, validarFormula, backfillPremissasAoRecuar, BlocoModelo, ScenarioOverrides, RealizadoModelo, IndicesMacroSnapshot, SERIES_MACRO, MACRO_CAMBIO, ResultadoModelo, LinhaDre } from "../services/model-engine";
+import { calcularModelo, validarFormula, backfillPremissasAoRecuar, BlocoModelo, ScenarioOverrides, RealizadoModelo, IndicesMacroSnapshot, SERIES_MACRO, MACRO_CAMBIO, ResultadoModelo, LinhaDre, MOTOR_VERSAO } from "../services/model-engine";
 import { calcularOrcadoRealizado, congelarOrcamento } from "../services/model-orcamento";
 import { calcularPorUnidade, decomporFolha, validarEdicaoRestrita, RateioCC, CentroCustoDim } from "../services/estrutura-dimensional";
 import { aplicarRegraGrade, mesesDoAnoNoHorizonte, refAnualDaLinha, RegraGrade } from "../services/grade-orcamentaria";
@@ -1569,6 +1569,14 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     }
   }
 
+  // MOTOR NOVO INVALIDA O CACHE (07/08/2026): deploy do motor mudava o
+  // cálculo, mas o modelo seguia exibindo o resultado VELHO até alguém editar
+  // — "ainda não ajustou" (dono, aba DFs). A versão vai carimbada no resultado;
+  // cache de versão diferente recalcula aqui, antes da resposta.
+  {
+    const vCache = (model.resultadoCache as { motorVersao?: number } | null)?.motorVersao;
+    if (model.resultadoCache && vCache !== MOTOR_VERSAO) await calcularEGravar(model.id).catch(() => null);
+  }
   const completo = await prisma.financialModel.findUnique({
     where: { id: model.id },
     include: { blocks: { orderBy: { ordem: "asc" } }, scenarios: { orderBy: { createdAt: "asc" } } },

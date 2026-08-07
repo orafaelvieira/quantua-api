@@ -757,7 +757,14 @@ export interface LinhaDre {
   abertura?: boolean;
 }
 
+/** VERSÃO DO MOTOR (07/08/2026): carimbada no resultado — cache calculado por
+ *  versão anterior é recalculado na abertura do modelo (sem isto, um deploy do
+ *  motor deixava a aba DFs exibindo números velhos até alguém editar algo). */
+export const MOTOR_VERSAO = 2;
+
 export interface ResultadoModelo {
+  /** Versão do motor que calculou — ver MOTOR_VERSAO. */
+  motorVersao?: number;
   meses: string[];
   /** Selo por mês: valores observados (real) ou projetados (proj). */
   statusMes: Record<string, "real" | "proj">;
@@ -3087,5 +3094,5 @@ export function calcularModelo(input: ModeloInput): ResultadoModelo {
   }
   if (churnId) kpis.push({ id: "churn", nome: "Churn mensal de clientes", valores: series[churnId] });
 
-  return { meses, statusMes, series, dre, fc, bp, agregacoes: { anual }, linhasCalculadas, linhasFolhaSubstituidas, folhaPorCentro, kpis, checks, erros };
+  return { motorVersao: MOTOR_VERSAO, meses, statusMes, series, dre, fc, bp, agregacoes: { anual }, linhasCalculadas, linhasFolhaSubstituidas, folhaPorCentro, kpis, checks, erros };
 }
