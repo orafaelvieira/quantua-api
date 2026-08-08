@@ -14,6 +14,7 @@ import { acharDuplicadoPorHash, mensagemDuplicado, produtosQueUsamDocumento, avi
 import { downloadFile } from "../services/storage";
 import { extrairTextoLayoutPDF } from "../services/parser";
 import { parseBalanceteTexto } from "../services/balancete-parser";
+import { parseBalanceteTabular, ehArquivoTabular } from "../services/balancete-tabular";
 import { gravarLeituraPorta } from "../services/leitura-porta";
 
 const router = Router();
@@ -336,7 +337,15 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
           competenciaFinal = det.competencia;
           avisos.push(`Competência identificada pelo conteúdo: ${det.competencia}.`);
         } else if (competenciaFinal !== det.competencia) {
-          avisos.push(`Competência declarada (${competenciaFinal}) difere da identificada no conteúdo (${det.competencia}) — confira.`);
+          if (det.competenciaForte) {
+            // O DOCUMENTO MANDA (08/08/2026, caso Belagro): o cabeçalho do
+            // balancete declara o período — competência digitada divergente é
+            // CORRIGIDA, com aviso; antes só avisava e o 2026 errado ficou.
+            avisos.push(`Competência corrigida pelo conteúdo: você declarou ${rotuloCompetencia(competenciaFinal)}, mas o documento diz ${rotuloCompetencia(det.competencia)}.`);
+            competenciaFinal = det.competencia;
+          } else {
+            avisos.push(`Competência declarada (${competenciaFinal}) difere da identificada no conteúdo (${det.competencia}) — confira.`);
+          }
         }
       }
       curadoria = { tipoDetectado: det.tipo, competenciaDetectada: det.competencia, evidencias: det.evidencias, avisos };
@@ -451,19 +460,30 @@ router.put("/:id/tipo", async (req: AuthRequest, res: Response): Promise<void> =
       res.status(400).json({ error: "competencia deve ser YYYY-MM (mês), YYYY (ano fechado) ou YYYY-MM..YYYY-MM (período acumulado, de ≤ até)" });
       return;
     }
-    if (/balancete/i.test(tipo) && /\.pdf$/i.test(doc.nome) && doc.storagePath && compNova !== doc.competencia) {
+    // A régua vale para PDF **e** TABULAR (08/08/2026, caso Belagro: o CSV
+    // ficou fora da checagem e um 2026 errado passou pela cura). E vale mesmo
+    // quando a competência "não mudou" — salvar um valor errado é recusado.
+    if (/balancete/i.test(tipo) && doc.storagePath) {
       try {
-        const texto = await extrairTextoLayoutPDF(await downloadFile(doc.storagePath));
-        if (texto && texto.length > 300) {
-          const p = parseBalanceteTexto(texto);
-          const real = competenciaDoPeriodoBalancete(p.periodoInicio, p.periodoFim);
-          if (real && real !== compNova) {
-            res.status(422).json({
-              error: `O documento diz "${p.periodoInicio ?? "?"} a ${p.periodoFim ?? "?"}" — a competência informada (${rotuloCompetencia(compNova)}) não bate. A correta é ${rotuloCompetencia(real)}.`,
-              competenciaCorreta: real,
-            });
-            return;
+        let periodoIni: string | null = null;
+        let periodoFim: string | null = null;
+        if (/\.pdf$/i.test(doc.nome)) {
+          const texto = await extrairTextoLayoutPDF(await downloadFile(doc.storagePath));
+          if (texto && texto.length > 300) {
+            const p = parseBalanceteTexto(texto);
+            periodoIni = p.periodoInicio; periodoFim = p.periodoFim;
           }
+        } else if (ehArquivoTabular(doc.nome)) {
+          const p = parseBalanceteTabular(await downloadFile(doc.storagePath), doc.nome, null);
+          if (p.linhas.length >= 10 && !p.periodoAssumido) { periodoIni = p.periodoInicio; periodoFim = p.periodoFim; }
+        }
+        const real = competenciaDoPeriodoBalancete(periodoIni, periodoFim);
+        if (real && real !== compNova) {
+          res.status(422).json({
+            error: `O documento diz "${periodoIni ?? "?"} a ${periodoFim ?? "?"}" — a competência informada (${rotuloCompetencia(compNova)}) não bate. A correta é ${rotuloCompetencia(real)}.`,
+            competenciaCorreta: real,
+          });
+          return;
         }
       } catch (e) {
         console.warn(`[cura] conferência do período falhou para ${doc.nome} (segue sem checar):`, e instanceof Error ? e.message : e);

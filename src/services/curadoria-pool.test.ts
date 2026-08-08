@@ -9,6 +9,7 @@ import {
   competenciaDoCabecalho,
   competenciaDosPeriodos,
   tipoPorKeywords,
+  curarUpload,
 } from "./curadoria-pool";
 
 // Texto longo o bastante (>100 chars) com assinatura de balancete.
@@ -168,5 +169,23 @@ describe("competência × período do balancete (30/07/2026 — caso Belagro)", 
     expect(competenciaValida("2025-09..2025-01")).toBe(false);
     expect(competenciaValida("2025-09..2025-09")).toBe(false);
     expect(competenciaValida("2025-13")).toBe(false);
+  });
+});
+
+describe("curadoria de balancete TABULAR (08/08/2026 — caso Belagro do CSV com ano errado)", () => {
+  const CSV = [
+    "Balancete Consolidado de 01/01/2025 a 30/11/2025;;;;;;",
+    "Empresa: 185 - EXEMPLO LTDA;;;;;;",
+    "",
+    "Conta;Classificação;Nome da conta contábil;Saldo anterior;Débito;Crédito;Saldo atual",
+    ...Array.from({ length: 12 }, (_, i) =>
+      `${100 + i};01.1.${String(i + 1).padStart(2, "0")};Conta ${i + 1};0,00;100,00;0,00;100,00`),
+  ].join(String.fromCharCode(10));
+
+  it("detecta o período do CABEÇALHO e devolve competência FORTE (documento manda)", async () => {
+    const r = await curarUpload(Buffer.from(CSV, "utf-8"), "balancete.csv");
+    expect(r.tipo).toBe("Balancete");
+    expect(r.competencia).toBe("2025-01..2025-11");
+    expect(r.competenciaForte).toBe(true);
   });
 });

@@ -15,12 +15,18 @@
  */
 import * as XLSX from "xlsx";
 import { parseDocument, extrairTextoLayoutPDF } from "./parser";
+import { parseBalanceteTabular, ehArquivoTabular } from "./balancete-tabular";
 import { pareceBalancete } from "./balancete-parser";
 
 export interface Curadoria {
   tipo: "Balancete" | "DRE" | "Balanço Patrimonial" | null;
   /** "YYYY-MM" (mensal) ou "YYYY" (exercício/ano fechado). */
   competencia: string | null;
+  /** true = a competência veio do PERÍODO DECLARADO NO DOCUMENTO (cabeçalho
+   *  de balancete) — evidência forte: o upload CORRIGE a declarada divergente
+   *  (com aviso), em vez de só avisar (08/08/2026, caso Belagro: CSV de
+   *  01/01/2025 a 30/11/2025 subiu como 2026 e ninguém barrou). */
+  competenciaForte?: boolean;
   evidencias: string[];
 }
 
@@ -164,6 +170,26 @@ export async function curarUpload(buffer: Buffer, nome: string): Promise<Curador
     if (!texto || texto.length < 300) return { ...VAZIA, texto: texto ?? "" }; // escaneado/sem texto
     return { ...curarConteudo(texto), texto };
   }
+  // BALANCETE TABULAR PRIMEIRO (08/08/2026, caso Belagro): o parseDocument
+  // devolve a TABELA reconhecida e perde o cabeçalho onde mora o período
+  // ("Balancete Consolidado de 01/01/2025 a 30/11/2025") — o CSV subiu
+  // declarado como 2026 e nada barrou. O parser determinístico do balancete
+  // lê o período direto; a competência dele é EVIDÊNCIA FORTE (documento manda).
+  try {
+    if (ehArquivoTabular(nome)) {
+      const p = parseBalanceteTabular(buffer, nome, null);
+      if (p.linhas.length >= 10 && !p.periodoAssumido) {
+        const comp = competenciaDoPeriodoBalancete(p.periodoInicio, p.periodoFim);
+        if (comp) {
+          return {
+            tipo: "Balancete", competencia: comp, competenciaForte: true,
+            evidencias: [`balancete tabular: ${p.linhas.length} contas · período ${p.periodoInicio} a ${p.periodoFim}`],
+            texto: textoBrutoPlanilha(buffer, nome),
+          };
+        }
+      }
+    }
+  } catch { /* não é balancete tabular — segue o caminho genérico */ }
   // Planilha/CSV: o parser tabular dá tipo/período, mas seu `raw` já é a TABELA
   // reconhecida — o cabeçalho (onde mora o nome da empresa) fica de fora. Para
   // a validação de empresa devolvemos o texto BRUTO da planilha inteira.
