@@ -25,6 +25,8 @@ import { foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { ordPeriodo } from "../services/account-mapper";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
 import { resolverCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
+import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
+import type { BPLineItem, DRELineItem } from "../types/financial";
 import {
   REGIMES,
   RegimeFechamento,
@@ -349,13 +351,16 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   const bpModel = await loadActiveBPModel(companyId);
   const dreModel = await loadActiveDREModel(companyId);
 
-  type Item = { conta: string; valores: Record<string, number> };
+  // Os itens carregam TUDO que o fold devolve (nivel, classificacao…) — o
+  // Fluxo de Caixa indireto lê nivel/classificacao do BP; só os `valores`
+  // são mesclados entre períodos.
+  type Item = { conta: string; valores: Record<string, number> } & Record<string, unknown>;
   const bp: Item[] = [];
   const dre: Item[] = [];
   const mergeItens = (alvo: Item[], novos: Item[]) => {
     for (const n of novos) {
       const ex = alvo.find((x) => x.conta === n.conta);
-      if (!ex) { alvo.push({ conta: n.conta, valores: { ...n.valores } }); continue; }
+      if (!ex) { alvo.push({ ...n, valores: { ...n.valores } }); continue; }
       for (const [pk, v] of Object.entries(n.valores)) ex.valores[pk] = v;
     }
   };
@@ -381,10 +386,10 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
       origemPorPeriodo[periodo] = f.nome;
       provasPorPeriodo[periodo] = conv.provas;
       const rBP = foldBP(conv.arvoreBP, [periodo], dictRows, bpModel);
-      mergeItens(bp, rBP.bp as Item[]);
+      mergeItens(bp, rBP.bp as unknown as Item[]);
       naoMapeados.push(...rBP.naoMapeados);
       const rDRE = foldDRE(conv.arvoreDRE, [periodo], dictRows, dreModel);
-      mergeItens(dre, rDRE.dre as Item[]);
+      mergeItens(dre, rDRE.dre as unknown as Item[]);
       naoMapeados.push(...rDRE.naoMapeados);
     } catch (e) {
       avisos.push(`${f.nome}: conversão falhou (${e instanceof Error ? e.message : String(e)}).`);
@@ -402,9 +407,18 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     pendMap.set(k, atual);
   }
 
+  // FLUXO DE CAIXA INDIRETO (pedido do dono, 08/08: "faltou o Fluxo de
+  // Caixa"): o MESMO serviço do IBR, sobre o BP/DRE dobrados acima. Null com
+  // menos de 2 períodos — sem variação não há método indireto.
+  const fc = periodos.length >= 2
+    ? buildIndirectCashFlow(bp as unknown as BPLineItem[], dre as unknown as DRELineItem[], periodos)
+    : null;
+  if (periodos.length === 1) avisos.push("Fluxo de Caixa precisa de pelo menos 2 períodos lidos (método indireto compara balanços).");
+
   const versoes = await getActiveModelVersions(companyId);
   res.json({
     periodos,
+    fc,
     origemPorPeriodo,
     provasPorPeriodo,
     bp,
