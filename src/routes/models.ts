@@ -2410,6 +2410,57 @@ router.post("/:id/realizado-balancete/preparar", async (req: AuthRequest, res: R
     leituras.push({ documentId: d.id, nome: d.nome, periodoInicio: c.periodoInicio, periodoFim: c.periodoFim, linhas: c.linhas });
   }
   const der = derivarRealizadoMensal(leituras);
+
+  // ── PORTÃO DE VALIDAÇÃO DO DICIONÁRIO (08/08/2026, dono: "não quero
+  // lançar balancete no orçamento sem passar pela validação") ──
+  // Cada conta derivada precisa de um LAR conhecido antes de importar:
+  //  1) casa com o plano do orçamento (código idêntico; ou nome igual sem
+  //     conflito de código declarado) → já mora aqui, validada quando entrou;
+  //  2) tem entrada DRE válida no dicionário (empresa vence global) → o
+  //     de-para vira o Grupo de contas da conta criada;
+  //  3) senão → PENDÊNCIA: o app bloqueia a importação até o analista
+  //     validar — e a validação grava no dicionário DA EMPRESA, valendo para
+  //     IBR, orçamento e o que vier.
+  const blocosPlano = await prisma.modelBlock.findMany({ where: { modelId: model.id } });
+  const linhasPlano: Array<{ codigo: string; nome: string }> = [];
+  for (const b of blocosPlano) {
+    const cfg = (b.config ?? {}) as { linhasCusto?: Array<{ codigo?: string; nome?: string }>; linhasReceita?: Array<{ codigo?: string; nome?: string }> };
+    for (const l of [...(cfg.linhasCusto ?? []), ...(cfg.linhasReceita ?? [])]) {
+      if (l?.nome) linhasPlano.push({ codigo: String(l.codigo ?? "").trim().toLowerCase(), nome: String(l.nome) });
+    }
+  }
+  const codigosPlano = new Set(linhasPlano.map((l) => l.codigo).filter(Boolean));
+  const nomesPlano = new Map<string, string>(); // norm(nome) -> codigo
+  for (const l of linhasPlano) if (!nomesPlano.has(normContaGmd(l.nome))) nomesPlano.set(normContaGmd(l.nome), l.codigo);
+  const entradasDic = await prisma.accountDictionary.findMany({
+    where: {
+      tipo: "DRE",
+      OR: [{ companyId: model.companyId }, { companyId: null }],
+      NOT: { revisao: { in: ["reprovada", "cancelada"] } },
+    },
+    select: { nomeOriginal: true, contaDestino: true, companyId: true },
+  });
+  const dicPorNome = new Map<string, string>();
+  // Global primeiro; a EMPRESA sobrescreve (vence na cascata).
+  for (const e of [...entradasDic].sort((x, y) => Number(!!x.companyId) - Number(!!y.companyId))) {
+    dicPorNome.set(normContaGmd(e.nomeOriginal), e.contaDestino);
+  }
+  const grupoDaConta = new Map<string, string>();
+  const pendencias: Array<{ codigo: string; nome: string; natureza: "receita" | "gasto"; meses: number; total: number }> = [];
+  for (const c of der.contas) {
+    const cod = c.codigo.trim().toLowerCase();
+    if (cod && codigosPlano.has(cod)) continue; // casa por código
+    const codDoNome = nomesPlano.get(normContaGmd(c.nome));
+    if (codDoNome !== undefined && !(cod && codDoNome && codDoNome !== cod)) continue; // casa por nome (sem conflito de código)
+    const dePara = dicPorNome.get(normContaGmd(c.nome));
+    if (dePara && dePara !== "__IGNORAR__") { grupoDaConta.set(c.codigo, dePara); continue; }
+    pendencias.push({
+      codigo: c.codigo, nome: c.nome, natureza: c.natureza,
+      meses: Object.keys(c.meses).length,
+      total: Object.values(c.meses).reduce((sm, v) => sm + v, 0),
+    });
+  }
+
   const anoExercicio = Number(model.mesInicial.slice(0, 4));
   const porAno = new Map<string, string[]>();
   for (const m of der.meses) porAno.set(m.slice(0, 4), [...(porAno.get(m.slice(0, 4)) ?? []), m]);
@@ -2422,9 +2473,9 @@ router.post("/:id/realizado-balancete/preparar", async (req: AuthRequest, res: R
       avisos.push(`${meses.length} mês(es) de ${ano} fora da importação: realizado precisa ser anterior ao exercício (${anoExercicio}).`);
       continue;
     }
-    const cabecalho = ["Código", "Conta", ...meses];
+    const cabecalho = ["Código", "Conta", "Grupo de contas", ...meses];
     const linhaDe = (c: (typeof der.contas)[number]) =>
-      [c.codigo, c.nome, ...meses.map((m) => (c.meses[m] !== undefined ? c.meses[m] : ""))];
+      [c.codigo, c.nome, grupoDaConta.get(c.codigo) ?? "", ...meses.map((m) => (c.meses[m] !== undefined ? c.meses[m] : ""))];
     const receitas = der.contas.filter((c) => c.natureza === "receita" && meses.some((m) => c.meses[m] !== undefined));
     const gastos = der.contas.filter((c) => c.natureza === "gasto" && meses.some((m) => c.meses[m] !== undefined));
     anos.push({
@@ -2435,7 +2486,7 @@ router.post("/:id/realizado-balancete/preparar", async (req: AuthRequest, res: R
       ],
     });
   }
-  res.json({ anos, ignorados: [...der.ignorados, ...semLeitura], avisos, contas: der.contas.length });
+  res.json({ anos, ignorados: [...der.ignorados, ...semLeitura], avisos, contas: der.contas.length, pendencias });
 });
 
 // POST /models/:id/plano-contas — IMPORTA O PLANO DE CONTAS DO CLIENTE
