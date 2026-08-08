@@ -20,6 +20,11 @@ import { competenciaValida, competenciaDoPeriodoBalancete, rotuloCompetencia } f
 import { downloadFile } from "../services/storage";
 import { extrairTextoLayoutPDF } from "../services/parser";
 import { parseBalanceteTexto } from "../services/balancete-parser";
+import { converterBalancete } from "../services/balancete-conversao";
+import { foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
+import { ordPeriodo } from "../services/account-mapper";
+import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
+import { resolverCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
 import {
   REGIMES,
   RegimeFechamento,
@@ -301,6 +306,114 @@ router.post("/reabrir", async (req: AuthRequest, res: Response): Promise<void> =
     reason: motivo!.trim().slice(0, 300), source: "fechamento",
   });
   res.json({ ok: true, periodo, estado: "recebido" });
+});
+
+
+// ── HISTÓRICO FINANCEIRO DA EMPRESA (fatia 2 da base única, 08/08/2026) ─────
+// DFs canônicas montadas das LEITURAS da porta (F1), dobradas com o dicionário
+// em cascata e os MODELOS VIGENTES desta empresa — as MESMAS funções de fold
+// do IBR (foldBP/foldDRE), aplicadas a outra fonte. LEITURA PURA: nada é
+// persistido, e o IBR segue com a extração própria até o plug (F3).
+// Cada balancete lido vira UMA coluna (o período do documento); as contas que
+// o dicionário não resolve voltam como pendências — a validação mora na aba
+// Dicionário & Modelos do hub.
+router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Promise<void> => {
+  const companyId = String(req.query.companyId ?? "");
+  if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
+  const company = await prisma.company.findFirst({ where: { id: companyId, ...whereEmpresaVisivel(req) } });
+  if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+
+  const docs = await prisma.document.findMany({
+    where: { companyId, analysisId: null, status: { not: "Substituído" } },
+    include: { leituraPorta: { select: { conteudo: true, hashArquivo: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  const avisos: string[] = [];
+  const fontes: Array<{ id: string; nome: string; conteudo: LeituraPortaConteudo }> = [];
+  for (const d of docs) {
+    if (!/balancete/i.test(d.tipo)) continue;
+    const lp = d.leituraPorta;
+    const c = lp?.conteudo as unknown as LeituraPortaConteudo | undefined;
+    if (!lp || (d.hash && lp.hashArquivo !== d.hash) || !c) { avisos.push(`${d.nome}: ainda sem leitura da porta (abra a Data room — a leitura roda sozinha).`); continue; }
+    if (c.erro) { avisos.push(`${d.nome}: ${c.erro}`); continue; }
+    fontes.push({ id: d.id, nome: d.nome, conteudo: c });
+  }
+
+  // Dicionário na CASCATA (global → workspace → empresa), resolvido POR TIPO —
+  // a mesma régua do /refold do IBR.
+  const dictRowsBrutos = await prisma.accountDictionary.findMany({
+    where: whereCascataDicionarioAtiva(req.scopeUserIds!, companyId),
+    select: { nomeOriginal: true, contaDestino: true, grupoConta: true, userId: true, companyId: true, tipo: true },
+  });
+  const dictRows = [...resolverCascataDicionario(dictRowsBrutos, "BP"), ...resolverCascataDicionario(dictRowsBrutos, "DRE")];
+  const bpModel = await loadActiveBPModel(companyId);
+  const dreModel = await loadActiveDREModel(companyId);
+
+  type Item = { conta: string; valores: Record<string, number> };
+  const bp: Item[] = [];
+  const dre: Item[] = [];
+  const mergeItens = (alvo: Item[], novos: Item[]) => {
+    for (const n of novos) {
+      const ex = alvo.find((x) => x.conta === n.conta);
+      if (!ex) { alvo.push({ conta: n.conta, valores: { ...n.valores } }); continue; }
+      for (const [pk, v] of Object.entries(n.valores)) ex.valores[pk] = v;
+    }
+  };
+  const naoMapeados: NaoMapeado[] = [];
+  const periodos: string[] = [];
+  const origemPorPeriodo: Record<string, string> = {};
+  const provasPorPeriodo: Record<string, unknown> = {};
+  for (const f of fontes) {
+    try {
+      const conv = converterBalancete({
+        periodoInicio: f.conteudo.periodoInicio,
+        periodoFim: f.conteudo.periodoFim,
+        ordemColunas: "ant-d-c-atual",
+        linhas: f.conteudo.linhas,
+        avisos: [],
+      });
+      const periodo = conv.periodoBP;
+      if (periodos.includes(periodo)) {
+        avisos.push(`${f.nome}: período ${periodo} já coberto por outro balancete — este ficou de fora (remova a duplicidade na Data room).`);
+        continue;
+      }
+      periodos.push(periodo);
+      origemPorPeriodo[periodo] = f.nome;
+      provasPorPeriodo[periodo] = conv.provas;
+      const rBP = foldBP(conv.arvoreBP, [periodo], dictRows, bpModel);
+      mergeItens(bp, rBP.bp as Item[]);
+      naoMapeados.push(...rBP.naoMapeados);
+      const rDRE = foldDRE(conv.arvoreDRE, [periodo], dictRows, dreModel);
+      mergeItens(dre, rDRE.dre as Item[]);
+      naoMapeados.push(...rDRE.naoMapeados);
+    } catch (e) {
+      avisos.push(`${f.nome}: conversão falhou (${e instanceof Error ? e.message : String(e)}).`);
+    }
+  }
+  periodos.sort((a2, b2) => ordPeriodo(a2) - ordPeriodo(b2));
+
+  // Pendências CONSOLIDADAS por conta (a mesma conta em N períodos é UMA pendência).
+  const pendMap = new Map<string, { nome: string; tipo: "BP" | "DRE"; grupo: string; periodos: string[]; valorUltimo: number }>();
+  for (const nm of naoMapeados) {
+    const k = `${nm.tipo}|${nm.nome.toLowerCase()}`;
+    const atual = pendMap.get(k) ?? { nome: nm.nome, tipo: nm.tipo, grupo: nm.grupo, periodos: [], valorUltimo: 0 };
+    if (!atual.periodos.includes(nm.periodo)) atual.periodos.push(nm.periodo);
+    atual.valorUltimo = nm.valor;
+    pendMap.set(k, atual);
+  }
+
+  const versoes = await getActiveModelVersions(companyId);
+  res.json({
+    periodos,
+    origemPorPeriodo,
+    provasPorPeriodo,
+    bp,
+    dre,
+    pendencias: [...pendMap.values()].sort((x, y) => Math.abs(y.valorUltimo) - Math.abs(x.valorUltimo)),
+    avisos,
+    fontes: fontes.length,
+    modelos: versoes,
+  });
 });
 
 export default router;
