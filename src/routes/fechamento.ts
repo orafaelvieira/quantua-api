@@ -22,6 +22,7 @@ import { extrairTextoLayoutPDF } from "../services/parser";
 import { parseBalanceteTexto } from "../services/balancete-parser";
 import { converterBalancete } from "../services/balancete-conversao";
 import { foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
+import { sugerirConta } from "../services/account-mapper";
 import { ordPeriodo } from "../services/account-mapper";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
 import { resolverCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
@@ -319,6 +320,12 @@ router.post("/reabrir", async (req: AuthRequest, res: Response): Promise<void> =
 // Cada balancete lido vira UMA coluna (o período do documento); as contas que
 // o dicionário não resolve voltam como pendências — a validação mora na aba
 // Dicionário & Modelos do hub.
+/** CACHE do fold por empresa (08/08/2026, "leva alguns segundos"): instância
+ *  única do Cloud Run — a MARCA é a impressão digital dos insumos (leituras,
+ *  dicionário, versões de modelo). Mudou algo, recalcula; senão a aba abre na
+ *  hora. Máx. 50 empresas em memória (o payload é pequeno; o caro é o fold). */
+const cacheHistorico = new Map<string, { marca: string; payload: unknown }>();
+
 router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Promise<void> => {
   const companyId = String(req.query.companyId ?? "");
   if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
@@ -327,9 +334,24 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
 
   const docs = await prisma.document.findMany({
     where: { companyId, analysisId: null, status: { not: "Substituído" } },
-    include: { leituraPorta: { select: { conteudo: true, hashArquivo: true } } },
+    include: { leituraPorta: { select: { conteudo: true, hashArquivo: true, criadoEm: true } } },
     orderBy: { createdAt: "asc" },
   });
+  // Impressão digital dos insumos — barata: ids/hashes já vieram na query
+  // acima; dicionário por agregado; modelos por versão ativa.
+  const dictAgg = await prisma.accountDictionary.aggregate({
+    where: whereCascataDicionarioAtiva(req.scopeUserIds!, companyId),
+    _count: { _all: true },
+    _max: { updatedAt: true },
+  });
+  const versoesAtivas = await getActiveModelVersions(companyId);
+  const marca = JSON.stringify([
+    docs.map((d) => [d.id, d.hash, d.status, d.leituraPorta?.hashArquivo ?? null, d.leituraPorta?.criadoEm ?? null]),
+    dictAgg._count._all, dictAgg._max.updatedAt,
+    versoesAtivas,
+  ]);
+  const emCache = cacheHistorico.get(companyId);
+  if (emCache && emCache.marca === marca) { res.json(emCache.payload); return; }
   const avisos: string[] = [];
   const fontes: Array<{ id: string; nome: string; conteudo: LeituraPortaConteudo }> = [];
   for (const d of docs) {
@@ -415,19 +437,32 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     : null;
   if (periodos.length === 1) avisos.push("Fluxo de Caixa precisa de pelo menos 2 períodos lidos (método indireto compara balanços).");
 
-  const versoes = await getActiveModelVersions(companyId);
-  res.json({
+  // SUGESTÃO DE CADASTRO por pendência (08/08/2026, pedido do dono): a mesma
+  // heurística determinística do IBR (sugerirConta) contra as contas do
+  // MODELO DA EMPRESA — pré-preenche o select da tela; o analista confirma e
+  // a entrada nasce no escopo da EMPRESA ("pendente" → fila global da Quantua).
+  const candidatosDRE = dreModel.lines.filter((l) => !l.subtotal).map((l) => l.conta);
+  const candidatosBP = bpModel.names;
+  const pendencias = [...pendMap.values()]
+    .sort((x, y) => Math.abs(y.valorUltimo) - Math.abs(x.valorUltimo))
+    .map((pd) => ({ ...pd, sugestao: sugerirConta(pd.nome, pd.tipo === "DRE" ? candidatosDRE : candidatosBP) }));
+
+  const payload = {
     periodos,
     fc,
     origemPorPeriodo,
     provasPorPeriodo,
     bp,
     dre,
-    pendencias: [...pendMap.values()].sort((x, y) => Math.abs(y.valorUltimo) - Math.abs(x.valorUltimo)),
+    pendencias,
+    opcoes: { dre: candidatosDRE, bp: candidatosBP },
     avisos,
     fontes: fontes.length,
-    modelos: versoes,
-  });
+    modelos: versoesAtivas,
+  };
+  if (cacheHistorico.size >= 50) cacheHistorico.delete(cacheHistorico.keys().next().value!);
+  cacheHistorico.set(companyId, { marca, payload });
+  res.json(payload);
 });
 
 export default router;

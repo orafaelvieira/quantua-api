@@ -1,5 +1,6 @@
 ﻿import "dotenv/config";
 import express from "express";
+import compression from "compression";
 import cors from "cors";
 import { env } from "./config/env";
 
@@ -56,6 +57,10 @@ app.use(cors({
   ],
   credentials: true,
 }));
+// COMPRESSÃO (08/08/2026, "as abas levam segundos para carregar"): a API
+// nunca comprimiu — o dicionário de uma empresa são ~600KB de JSON cru, e o
+// histórico da porta idem. gzip corta ~10x o fio; CPU é ínfima perto do ganho.
+app.use(compression());
 app.use(express.json({ limit: "5mb" }));
 
 // Request logger (dev) — drop in production once stable.
