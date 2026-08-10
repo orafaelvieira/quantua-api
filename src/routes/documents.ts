@@ -5,7 +5,7 @@ import { z } from "zod";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from "../services/escopo-empresa";
-import { uploadFile, deleteFile } from "../services/storage";
+import { uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
 import { registrarAuditoria } from "../services/audit-trail";
 import { derivarDocumentosLogicos, periodosFaltantes } from "../services/fechamento-periodo";
 import { montarLinhaAdotada, montarLinhaFixada, propagarMetadadosDoPool } from "../services/fixacao-pool";
@@ -696,6 +696,24 @@ router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, r
 
 // Cadeia de VERSÕES do documento (da vigente até a original), seguindo os
 // ponteiros substituidoPorId para trás.
+/** BAIXAR O ARQUIVO (10/08/2026, pedido do dono): o analista precisa conferir
+ *  o documento original ao lado da leitura. URL assinada de 5 min — o arquivo
+ *  não passa pela API (bucket privado segue privado). Escopo de EMPRESA. */
+router.get("/:id/download", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const doc = await prisma.document.findFirst({
+    where: { id, company: whereEmpresaVisivel(req) },
+    select: { id: true, nome: true, hash: true, storagePath: true },
+  });
+  if (!doc || !doc.storagePath) { res.status(404).json({ error: "Documento não encontrado" }); return; }
+  try {
+    const url = await getSignedDownloadUrl(doc.storagePath, 300);
+    res.json({ url, expiresIn: 300, nome: doc.nome, hash: doc.hash });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Falha ao gerar URL" });
+  }
+});
+
 router.get("/:id/versoes", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const doc = await prisma.document.findFirst({
