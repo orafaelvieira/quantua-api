@@ -354,12 +354,31 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   if (emCache && emCache.marca === marca) { res.json(emCache.payload); return; }
   const avisos: string[] = [];
   const fontes: Array<{ id: string; nome: string; conteudo: LeituraPortaConteudo }> = [];
+  // RELATÓRIO DE VALIDAÇÃO por documento (09/08/2026, pedido do dono: o
+  // quadro do IBR não aparecia no workspace): leitura + provas aritméticas,
+  // um check por documento — a tela marca ✓/✗ cruzando com as pendências.
+  const relatorio: Array<{ documentId: string; nome: string; contas: number; periodo: string | null; lido: boolean; fechamentoOk: boolean | null; erro: string | null }> = [];
   for (const d of docs) {
     if (!/balancete/i.test(d.tipo)) continue;
     const lp = d.leituraPorta;
     const c = lp?.conteudo as unknown as LeituraPortaConteudo | undefined;
-    if (!lp || (d.hash && lp.hashArquivo !== d.hash) || !c) { avisos.push(`${d.nome}: ainda sem leitura da porta (abra a Data room — a leitura roda sozinha).`); continue; }
-    if (c.erro) { avisos.push(`${d.nome}: ${c.erro}`); continue; }
+    if (!lp || (d.hash && lp.hashArquivo !== d.hash) || !c) {
+      avisos.push(`${d.nome}: ainda sem leitura da porta (abra a Data room — a leitura roda sozinha).`);
+      relatorio.push({ documentId: d.id, nome: d.nome, contas: 0, periodo: null, lido: false, fechamentoOk: null, erro: "ainda sem leitura da porta" });
+      continue;
+    }
+    if (c.erro) {
+      avisos.push(`${d.nome}: ${c.erro}`);
+      relatorio.push({ documentId: d.id, nome: d.nome, contas: 0, periodo: null, lido: false, fechamentoOk: null, erro: c.erro });
+      continue;
+    }
+    relatorio.push({
+      documentId: d.id, nome: d.nome, contas: c.totalContas,
+      periodo: c.periodoInicio && c.periodoFim ? `${c.periodoInicio} a ${c.periodoFim}` : null,
+      lido: true,
+      fechamentoOk: c.provas ? !!(c.provas.fechamento.ok && c.provas.linhas.ok) : null,
+      erro: null,
+    });
     fontes.push({ id: d.id, nome: d.nome, conteudo: c });
   }
 
@@ -459,6 +478,17 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   // a entrada nasce no escopo da EMPRESA ("pendente" → fila global da Quantua).
   const candidatosDRE = dreModel.lines.filter((l) => !l.subtotal).map((l) => l.conta);
   const candidatosBP = bpModel.names;
+  // 💡 na ÁRVORE (09/08/2026, "não está vindo a sugestão"): o workspace não
+  // paga IA — a sugestão é a DETERMINÍSTICA (similaridade de nome contra o
+  // modelo da empresa), no MESMO shape que o OriginalTreeView já lê
+  // (chave BP = `BP|grupo|nome`; DRE = `DRE|DRE|nome`). Honesta no rótulo.
+  const sugestoesIA: Record<string, { sugestao: string; justificativa: string; confianca: string }> = {};
+  for (const nm of naoMapeados) {
+    const chave = nm.tipo === "BP" ? `BP|${nm.grupo}|${nm.nome}` : `DRE|DRE|${nm.nome}`;
+    if (sugestoesIA[chave]) continue;
+    const sug = sugerirConta(nm.nome, nm.tipo === "DRE" ? candidatosDRE : candidatosBP);
+    if (sug) sugestoesIA[chave] = { sugestao: sug, justificativa: "similaridade de nome com a conta do modelo (determinística, sem IA)", confianca: "média" };
+  }
   const pendencias = [...pendMap.values()]
     .sort((x, y) => Math.abs(y.valorUltimo) - Math.abs(x.valorUltimo))
     .map((pd) => ({ ...pd, sugestao: sugerirConta(pd.nome, pd.tipo === "DRE" ? candidatosDRE : candidatosBP) }));
@@ -474,6 +504,8 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     bp,
     dre,
     pendencias,
+    relatorio,
+    sugestoesIA,
     opcoes: { dre: candidatosDRE, bp: candidatosBP },
     avisos,
     fontes: fontes.length,
