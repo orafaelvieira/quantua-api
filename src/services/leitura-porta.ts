@@ -111,6 +111,8 @@ export async function lerBalanceteDeterministico(
  *  fica gravada por hash do arquivo — reclassificar conta NUNCA repaga IA. */
 export interface LeituraDemonstrativoConteudo {
   versao: 1;
+  /** Versão do leitor que produziu esta leitura (releitura quando muda). */
+  versaoLeitor?: number;
   tipoLeitura: "demonstrativo";
   motor: "deterministico" | "ia";
   /** Períodos canônicos ("31/12/AAAA") — colunas que o documento carrega. */
@@ -136,6 +138,11 @@ const renomearChaves = <T,>(obj: Record<string, T>): Record<string, T> => {
   for (const [k, v] of Object.entries(obj)) out[canonicoAno(k)] = v;
   return out;
 };
+/** Versão do LEITOR de demonstrativo — incrementar força releitura das
+ *  gravadas (10/08/2026: v2 = colunas em ordem decrescente p/ o builder +
+ *  aviso de competência divergente). */
+export const VERSAO_LEITOR_DEMONSTRATIVO = 2;
+const anoDe = (p: string): number => Number((p.match(/(\d{4})\s*$/) ?? [])[1] ?? 0);
 
 export async function lerDemonstrativoHibrido(
   buffer: Buffer,
@@ -145,12 +152,22 @@ export async function lerDemonstrativoHibrido(
   ctx: { companyId: string | null; documentId?: string },
 ): Promise<LeituraDemonstrativoConteudo> {
   const base: LeituraDemonstrativoConteudo = {
-    versao: 1, tipoLeitura: "demonstrativo", motor: "deterministico",
+    versao: 1, versaoLeitor: VERSAO_LEITOR_DEMONSTRATIVO, tipoLeitura: "demonstrativo", motor: "deterministico",
     periodos: [], totalContas: 0,
     periodoInicio: null, periodoFim: null, provas: null, linhas: [],
     avisos: [],
   };
   const ehBP = /balan/i.test(tipo);
+  // COMPETÊNCIA declarada ≠ período lido = aviso na cara (10/08/2026, caso
+  // "BP 2022.pdf → 31/12/2021"): o documento pode ser mesmo do outro ano OU o
+  // comparativo pode ter engolido a coluna do exercício — o analista decide.
+  const anoComp = competencia && /^\d{4}$/.test(competencia.trim()) ? competencia.trim() : null;
+  const fecharLeitura = (r: LeituraDemonstrativoConteudo): LeituraDemonstrativoConteudo => {
+    if (anoComp && r.periodos.length && !r.periodos.some((p) => String(anoDe(p)) === anoComp)) {
+      r.avisos.push(`competência declarada ${anoComp}, mas o documento traz ${r.periodos.join(" · ")} — confira se o arquivo é do exercício certo.`);
+    }
+    return r;
+  };
   let parsed: Awaited<ReturnType<typeof parseDocument>>;
   try {
     parsed = await parseDocument(buffer, nome, tipo);
@@ -163,19 +180,24 @@ export async function lerDemonstrativoHibrido(
 
   // 1) Linha determinística (custo zero) — a mesma do IBR.
   if (ehBP) {
-    const arv = construirArvoreBPporIndentacao(parsed, periodosDoc);
+    // O builder do BP mapeia coluna→período por ÍNDICE sobre o texto cru, e o
+    // detector devolve as datas em ordem CRESCENTE — mas o BP comparativo
+    // brasileiro imprime o exercício ATUAL à esquerda. Ordem DECRESCENTE aqui,
+    // senão a coluna de 2022 ganharia o rótulo de 2021 (e vice-versa).
+    const colunas = [...periodosDoc].sort((a, b) => anoDe(b) - anoDe(a) || b.localeCompare(a));
+    const arv = construirArvoreBPporIndentacao(parsed, colunas);
     if (arv) {
       const canon = renomearChaves(arv as Record<string, unknown>);
-      return { ...base, motor: "deterministico", arvoreBP: canon, periodos: Object.keys(canon), totalContas: parsed.linhas.length };
+      return fecharLeitura({ ...base, motor: "deterministico", arvoreBP: canon, periodos: Object.keys(canon), totalContas: parsed.linhas.length });
     }
   } else {
     const det = construirArvoreDREporIndentacao(parsed.linhas, periodosDoc);
     if (det) {
       const canon = renomearChaves(det.secoes as Record<string, unknown>);
-      return {
+      return fecharLeitura({
         ...base, motor: "deterministico", arvoreDRE: canon, periodos: Object.keys(canon),
         declarados: renomearChaves(det.declarados), totalContas: parsed.linhas.length,
-      };
+      });
     }
   }
 
@@ -189,23 +211,30 @@ export async function lerDemonstrativoHibrido(
   // (p/ a árvore determinística interna) — o MESMO contrato do /process.
   const linhasToText = (linhas: ExtractedRow[]) =>
     linhas.map((l) => `${l.contexto ? l.contexto + " > " : ""}${l.conta} = ${JSON.stringify(l.valores)}`).join("\n");
+  // PIN de período: com UM período conhecido a extração força tudo nele. Se a
+  // competência declara um exercício que o detector NÃO achou (comparativo que
+  // engoliu a coluna do exercício), o pin esmagaria as duas colunas numa só —
+  // acrescenta o exercício declarado para a IA rotular pelas datas do documento.
+  const periodosIA = anoComp && !periodosDoc.some((p) => String(anoDe(p)) === anoComp)
+    ? [...periodosDoc, `31/12/${anoComp}`]
+    : periodosDoc;
   const aiDoc = parsed.linhas.length
-    ? { raw: linhasToText(parsed.linhas), rawIndent: parsed.raw, linhas: parsed.linhas, tipo, periodos: periodosDoc }
-    : { buffer, tipo, periodos: periodosDoc };
+    ? { raw: linhasToText(parsed.linhas), rawIndent: parsed.raw, linhas: parsed.linhas, tipo, periodos: periodosIA }
+    : { buffer, tipo, periodos: periodosIA };
   try {
     const r = await comContextoIA(
       { produto: "data-room", origem: "leitura-porta-demonstrativo", companyId: ctx.companyId },
-      () => extractFinancialsWithAI([aiDoc], periodosDoc),
+      () => extractFinancialsWithAI([aiDoc], periodosIA),
     );
     const arvBP = renomearChaves(r.arvoreOriginalBP as Record<string, unknown>);
     const arvDRE = renomearChaves(r.arvoreOriginalDRE as unknown as Record<string, unknown>);
     const periodos = ehBP ? Object.keys(arvBP) : Object.keys(arvDRE);
     if (!periodos.length) return { ...base, motor: "ia", custoUsd: r.custo.usd, erro: "a extração não reconheceu colunas de período no documento" };
-    return {
+    return fecharLeitura({
       ...base, motor: "ia",
       ...(ehBP ? { arvoreBP: arvBP } : { arvoreDRE: arvDRE, declarados: renomearChaves(r.declarados) }),
       periodos, totalContas: parsed.linhas.length, custoUsd: r.custo.usd,
-    };
+    });
   } catch (e) {
     return { ...base, erro: `extração falhou (${e instanceof Error ? e.message : String(e)})` };
   }
@@ -252,7 +281,9 @@ export async function gravarLeituraPorta(documentId: string): Promise<void> {
     // documento). Balancete (custo zero) mantém o comportamento de sempre.
     if (ehDemonstrativo && doc.hash) {
       const atual = await prisma.documentoLeitura.findUnique({ where: { documentId: doc.id }, select: { hashArquivo: true, conteudo: true } });
-      if (atual && atual.hashArquivo === doc.hash && !(atual.conteudo as { erro?: string } | null)?.erro) return;
+      const c = atual?.conteudo as { erro?: string; versaoLeitor?: number } | null;
+      // Releitura quando: arquivo mudou, leitura com erro, ou LEITOR evoluiu.
+      if (atual && atual.hashArquivo === doc.hash && !c?.erro && c?.versaoLeitor === VERSAO_LEITOR_DEMONSTRATIVO) return;
     }
     const buffer = await downloadFile(doc.storagePath);
     const conteudo = ehBalancete

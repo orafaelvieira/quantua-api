@@ -11,7 +11,7 @@
  */
 import { Router, Response } from "express";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { gravarLeituraPorta, resumoDaLeitura, type LeituraPortaConteudo, type LeituraDemonstrativoConteudo } from "../services/leitura-porta";
+import { gravarLeituraPorta, resumoDaLeitura, VERSAO_LEITOR_DEMONSTRATIVO, type LeituraPortaConteudo, type LeituraDemonstrativoConteudo } from "../services/leitura-porta";
 import { whereEmpresaVisivel, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
@@ -477,9 +477,11 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     const ehBP = /balan/i.test(d.tipo);
     const lp = d.leituraPorta;
     const c = lp?.conteudo as unknown as (LeituraDemonstrativoConteudo | undefined);
-    if (!lp || (d.hash && lp.hashArquivo !== d.hash) || !c || c.tipoLeitura !== "demonstrativo") {
-      // Sem leitura ainda (documento legado ou recém-substituído): dispara em
-      // background e declara — a marca do cache recalcula quando ela chegar.
+    // Avisos da leitura (ex.: competência declarada ≠ período lido) na tela.
+    for (const a of c?.avisos ?? []) avisos.push(`${d.nome}: ${a}`);
+    if (!lp || (d.hash && lp.hashArquivo !== d.hash) || !c || c.tipoLeitura !== "demonstrativo" || c.versaoLeitor !== VERSAO_LEITOR_DEMONSTRATIVO) {
+      // Sem leitura ainda (documento legado, recém-substituído ou de leitor
+      // ANTIGO): dispara em background e declara — a marca recalcula ao chegar.
       void gravarLeituraPorta(d.id);
       avisos.push(`${d.nome}: leitura em andamento (com IA quando a determinística não alcança) — recarregue em instantes.`);
       relatorio.push({ documentId: d.id, nome: d.nome, contas: 0, periodo: null, lido: false, fechamentoOk: null, erro: "leitura em andamento — recarregue em instantes" });
@@ -709,7 +711,9 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     sugestoesIA,
     opcoes: { dre: candidatosDRE, bp: candidatosBP },
     avisos,
-    fontes: fontes.length,
+    // Fontes LIDAS de qualquer tipo (10/08/2026: só balancete zerava o contador
+    // numa empresa com BP/DRE e a tela mostrava "nenhum documento lido").
+    fontes: relatorio.filter((r) => r.lido).length,
     modelos: versoesAtivas,
   };
   if (cacheHistorico.size >= 50) cacheHistorico.delete(cacheHistorico.keys().next().value!);
