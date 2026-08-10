@@ -387,6 +387,11 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     }
   };
   const naoMapeados: NaoMapeado[] = [];
+  // AUDITORIA (09/08/2026, pedido do dono: "verificar o que foi feito"): o
+  // fold carimba `destino` em cada nó da árvore ORIGINAL — devolvemos as
+  // árvores no shape que o OriginalTreeView do IBR já lê (mesma tela).
+  const arvoreOriginalBP: Record<string, unknown> = {};
+  const arvoreOriginalDRE: Record<string, unknown> = {};
   const periodos: string[] = [];
   const origemPorPeriodo: Record<string, string> = {};
   const provasPorPeriodo: Record<string, unknown> = {};
@@ -413,6 +418,9 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
       const rDRE = foldDRE(conv.arvoreDRE, [periodo], dictRows, dreModel);
       mergeItens(dre, rDRE.dre as unknown as Item[]);
       naoMapeados.push(...rDRE.naoMapeados);
+      // O fold MUTA as árvores carimbando destino/absorvido — é a auditoria.
+      Object.assign(arvoreOriginalBP, conv.arvoreBP as unknown as Record<string, unknown>);
+      Object.assign(arvoreOriginalDRE, conv.arvoreDRE as unknown as Record<string, unknown>);
     } catch (e) {
       avisos.push(`${f.nome}: conversão falhou (${e instanceof Error ? e.message : String(e)}).`);
     }
@@ -450,6 +458,9 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   const payload = {
     periodos,
     fc,
+    arvoreOriginalBP,
+    arvoreOriginalDRE,
+    naoMapeadosDetalhe: naoMapeados,
     origemPorPeriodo,
     provasPorPeriodo,
     bp,
