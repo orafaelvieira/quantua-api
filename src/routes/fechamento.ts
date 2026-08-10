@@ -504,6 +504,39 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   // carrega "Ativo Circulante > ADIANTAMENTO..." no naoMapeado e a dica nunca
   // era encontrada (10/08/2026, "continua sem as dicas").
   const raizGrupo = (g: string) => g.split(">")[0]!.trim();
+
+  // LINHA DE FECHAMENTO/APURAÇÃO (10/08/2026, "imagem 1, não sugeriu"): a
+  // família "RESULTADO LÍQUIDO DO EXERCÍCIO" não é conta de input — classificar
+  // a folha em qualquer conta distorce a DRE; a ação certa é IGNORAR. Quando a
+  // raiz ≈ ± soma das outras raízes (espelho PROVADO), a dica sai com confiança
+  // alta; quando o valor NÃO bate (conta de apuração/zeramento com saldo
+  // próprio, caso Belagro 2023: −577,0 mi vs −85,9 mi), a dica ainda sai, mas
+  // com ⚠ de conferência — "verde só com prova".
+  type NoDre = { nome: string; valor?: number; filhos?: NoDre[] };
+  const ehNomeResultado = (s: string) =>
+    /\b(resultado|lucro|prejuizo)\b.*\b(liquido|exercicio|periodo)\b|\bresultado liquido\b|\bapuracao\b.*\bresultado\b/.test(
+      s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase());
+  const espelhoDre = new Map<string, { provado: boolean; valor: number; somaOutras: number }>();
+  for (const arv of Object.values(arvoreOriginalDRE)) {
+    const roots = arv as NoDre[];
+    if (!Array.isArray(roots) || roots.length < 2) continue;
+    for (const r of roots) {
+      const vr = r.valor ?? 0;
+      if (Math.abs(vr) < 0.005 || !ehNomeResultado(r.nome)) continue;
+      const somaOutras = roots.filter((o) => o !== r).reduce((s, o) => s + (o.valor ?? 0), 0);
+      const tol = Math.max(1, Math.abs(vr) * 0.001);
+      const provado = Math.abs(somaOutras - vr) <= tol || Math.abs(somaOutras + vr) <= tol;
+      // Marca só os nós da subárvore com o MESMO valor da raiz (a corrente do
+      // fechamento) — um filho de valor próprio não ganha a dica de ignorar.
+      const marca = (n: NoDre): void => {
+        if (Math.abs((n.valor ?? 0) - vr) <= tol || Math.abs((n.valor ?? 0) + vr) <= tol) {
+          if (!espelhoDre.get(n.nome)?.provado) espelhoDre.set(n.nome, { provado, valor: vr, somaOutras });
+        }
+        (n.filhos ?? []).forEach(marca);
+      };
+      marca(r);
+    }
+  }
   // SUGESTÃO PELO CONTEXTO DO DOCUMENTO (BP): conta de BP raramente se parece
   // com a do modelo em texto ("G Belusso Transportes") — mas as IRMÃS do mesmo
   // grupo do documento já têm destino carimbado pelo fold. Consenso das irmãs
@@ -560,16 +593,36 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     const porNome = sugerirConta(nome, candidatosBP);
     return porNome ? { sugestao: porNome, justificativa: "similaridade de nome com a conta do modelo (determinística, sem IA)", confianca: "média" } : null;
   };
-  const sugestoesIA: Record<string, { sugestao: string; justificativa: string; confianca: string }> = {};
+  const fmtMi = (v: number) => `${(v / 1_000_000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mi`;
+  const sugestaoIgnorar = (esp: { provado: boolean; valor: number; somaOutras: number }) => ({
+    sugestao: "__IGNORAR__",
+    justificativa: esp.provado
+      ? "linha de fechamento do resultado — o valor é o espelho das demais seções do documento (prova aritmética); classificá-la dobraria a DRE"
+      : "linha de apuração/fechamento do resultado — não é conta de movimento; o resultado já está nas demais seções",
+    confianca: esp.provado ? "alta" : "média",
+    ...(esp.provado ? {} : {
+      verificar: `o valor da linha (${fmtMi(esp.valor)}) difere do resultado somado das demais seções (${fmtMi(esp.somaOutras)}) — confirme no documento que é conta de apuração/zeramento antes de ignorar`,
+    }),
+  });
+  const sugestoesIA: Record<string, { sugestao: string; justificativa: string; confianca: string; verificar?: string }> = {};
   for (const nm of naoMapeados) {
     const chave = nm.tipo === "BP" ? `BP|${raizGrupo(nm.grupo)}|${nm.nome}` : `DRE|DRE|${nm.nome}`;
     if (sugestoesIA[chave]) continue;
-    const sug = nm.tipo === "DRE" ? sugerirDre(nm.nome) : sugestaoBP(nm.grupo, nm.nome);
+    const esp = nm.tipo === "DRE" ? espelhoDre.get(nm.nome) : undefined;
+    const sug = nm.tipo === "DRE"
+      ? (esp ? sugestaoIgnorar(esp) : sugerirDre(nm.nome))
+      : sugestaoBP(nm.grupo, nm.nome);
     if (sug) sugestoesIA[chave] = sug;
   }
   const pendencias = [...pendMap.values()]
     .sort((x, y) => Math.abs(y.valorUltimo) - Math.abs(x.valorUltimo))
-    .map((pd) => ({ ...pd, sugestao: pd.tipo === "DRE" ? (sugerirDre(pd.nome)?.sugestao ?? null) : (sugestaoBP(pd.grupo, pd.nome)?.sugestao ?? null) }));
+    .map((pd) => ({
+      ...pd,
+      // Espelho não ganha conta-sugestão no quadro (o sentinela cru confundiria).
+      sugestao: pd.tipo === "DRE"
+        ? (espelhoDre.has(pd.nome) ? null : (sugerirDre(pd.nome)?.sugestao ?? null))
+        : (sugestaoBP(pd.grupo, pd.nome)?.sugestao ?? null),
+    }));
 
   const payload = {
     periodos,
