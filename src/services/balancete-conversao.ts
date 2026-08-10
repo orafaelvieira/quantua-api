@@ -53,6 +53,21 @@ export interface ProvasBalancete {
    */
   linhas: { total: number; coerentes: number; ok: boolean; incoerentes: Array<{ classificacao: string; nome: string; anterior: number; debito: number; credito: number; atual: number }> };
   exercicioEncerrado: boolean;
+  /**
+   * P4 — RECONCILIAÇÃO DA DRE DO EXERCÍCIO ENCERRADO (10/08/2026).
+   *
+   * No balancete de encerramento as contas de resultado estão ZERADAS (o
+   * lançamento de encerramento as transferiu), então a DRE é derivada do
+   * MOVIMENTO — uma heurística: receita = crédito acumulado, gasto = débito
+   * acumulado. Transferência interna entre contas de resultado infla os dois
+   * lados e ninguém percebe. A única âncora do próprio documento é a variação
+   * do resultado no PL: se a DRE derivada não bate com ela, o número não é
+   * fato — e não pode receber selo verde ("verde só com prova").
+   *
+   * Só existe quando `exercicioEncerrado` (no balancete corrente a DRE vem do
+   * SALDO das contas de resultado, que é prova direta).
+   */
+  dreEncerrada?: { derivado: number; declaradoPL: number; gap: number; limite: number; ok: boolean };
 }
 
 export interface ConversaoBalancete {
@@ -86,18 +101,58 @@ export type TipoGrupo = "ativo" | "passivo" | "resultado" | "apuracao" | "espelh
 const normalizar = (s: string): string =>
   s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
 
+/**
+ * NOME DA FAMÍLIA DE APURAÇÃO/ENCERRAMENTO (10/08/2026 — bug crítico Belagro).
+ *
+ * Uma seção chamada "Resultado (líquido) do exercício/período" NÃO é componente
+ * do resultado: ela É o resultado, transferido pelo lançamento de encerramento.
+ * Somá-la à DRE é dupla contagem — no balancete de 2023 da Belagro a conta
+ * [05] tinha débito = crédito = R$ 576.963.484 (puro contra-lançamento) e caía
+ * em "Outras Despesas Operacionais", levando o Lucro Líquido a −687,9 milhões.
+ *
+ * A régua anterior procurava a substring "RESULTADO DO EXERC" e não casava com
+ * "RESULTADO LÍQUIDO DO EXERCÍCIO" (o "LÍQUIDO" no meio) — daí o vazamento.
+ *
+ * CONSERVADORA de propósito: só casa quando "resultado" vem grudado em
+ * "exercício/período" (com "líquido" opcional). NÃO casa — e não pode casar —
+ * com contas legítimas da DRE: "Resultado de Equivalência Patrimonial",
+ * "Resultado Financeiro", "Resultado de Posições de Mercado", "Resultado
+ * Operacional do Exercício" (tem palavra própria no meio).
+ */
+export function ehNomeDeApuracao(nome: string): boolean {
+  const n = normalizar(nome);
+  // PALAVRA "APURAÇÃO", não o radical: "LUCROS APURADOS" é conta de PL, não
+  // encerramento (revisão adversarial, 10/08/2026).
+  if (/\bAPURACAO\b|\bENCERRAMENTO\b|\bZERAMENTO\b/.test(n)) return true;
+  return /\bRESULTADO\s+(LIQUIDO\s+)?(DO\s+|DE\s+)?(EXERCICIO|PERIODO)\b/.test(n);
+}
+
 function tipoDoGrupo(nome: string, folhas: LinhaBalancete[]): TipoGrupo {
   const n = normalizar(nome);
   if (n.startsWith("ATIVO")) return "ativo";
   if (n.startsWith("PASSIVO")) return "passivo";
   // Apuração: grupo de encerramento técnico — nunca vira linha de DRE.
-  // Casos reais: "CONTAS DE APURAÇÃO" (Domínio) e grupo "RESULTADO" cujas
-  // folhas são todas "RESULTADO DO EXERCÍCIO/APURAÇÃO" (Phonetrack).
-  if (n.includes("APURA")) return "apuracao";
-  const folhasSaoApuracao = folhas.length > 0 && folhas.every((f) => {
-    const fn = normalizar(f.nome);
-    return fn.includes("APURA") || fn.includes("RESULTADO DO EXERC") || fn.includes("ENCERRAMENTO");
-  });
+  // Casos reais: "CONTAS DE APURAÇÃO" (Domínio), "RESULTADO LÍQUIDO DO
+  // EXERCÍCIO" (Belagro) e grupo "RESULTADO" cujas folhas são todas de
+  // encerramento (Phonetrack).
+  //
+  // VETO DA ECONOMIA PRÓPRIA (10/08/2026, caso EXTRAMED achado na revisão
+  // adversarial): o nome do grupo NÃO basta. "CONTAS DE DESTINAÇÃO/APURAÇÃO DE
+  // RESULTADO" carrega IRPJ 1.929.304,98 e CSLL 720.481,33 — despesa de
+  // verdade. Se QUALQUER folha com valor próprio tem nome fora da família de
+  // encerramento, o grupo tem conteúdo econômico e continua na DRE; do
+  // contrário o IR/CSLL sumiria da demonstração e o lucro sairia inflado.
+  // DESTINAÇÃO do lucro (distribuição, dividendo, JCP, reserva) NÃO é economia
+  // própria: é uso do resultado depois de apurado e não pode virar despesa da
+  // DRE. Fica de fora do veto — o grupo segue como apuração/destinação.
+  const ehNomeDeDestinacao = (nome: string): boolean =>
+    /\bDISTRIBUIC\w*\s+(DE\s+)?(LUCRO|RESULTADO)|\bDIVIDENDO|\bJCP\b|JUROS\s+SOBRE\s+(O\s+)?CAPITAL|\bRESERVA\s+(LEGAL|DE\s+LUCRO)/.test(normalizar(nome));
+  const temEconomiaPropria = folhas.some(
+    (f) => Math.abs(f.saldoAtual ?? 0) > TOLERANCIA && !ehNomeDeApuracao(f.nome) && !ehNomeDeDestinacao(f.nome),
+  );
+  if (temEconomiaPropria) return "resultado";
+  if (ehNomeDeApuracao(n)) return "apuracao";
+  const folhasSaoApuracao = folhas.length > 0 && folhas.every((f) => ehNomeDeApuracao(f.nome));
   if (folhasSaoApuracao) return "apuracao";
   return "resultado";
 }
@@ -652,6 +707,37 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
       }
     }
     arvoreDRE[periodoBP] = secoes;
+
+    // P4 — a DRE derivada do MOVIMENTO reconcilia com o que o PL declara?
+    // Âncora: variação das contas de resultado do PL (Resultado do Exercício /
+    // Lucros ou Prejuízos Acumulados) entre os dois retratos do documento.
+    // Distribuição de lucro no ano mexe nessas contas sem passar pela DRE — daí
+    // o limite generoso (10% da receita): a prova existe para pegar DIVERGÊNCIA
+    // GROSSA (caso Belagro 2023: derivado −85,9 mi × PL +1,3 mi), não ruído.
+    if (exercicioEncerrado && temSaldosAnteriores(b.linhas)) {
+      const derivado = arred(secoes.reduce((s, x) => s + x.valor, 0));
+      const contasResultadoPL = [...ativos, ...passivos]
+        .flatMap((g) => folhasDe(g.no))
+        .filter((l) => {
+          const n = normalizar(l.nome);
+          return ehNomeDeApuracao(n) || /\bLUCROS?\b.*\bACUMULADOS?\b|\bPREJUIZOS?\b.*\bACUMULADOS?\b|\bRESULTADO\b.*\bACUMULADO\b/.test(n);
+        });
+      // Lucro no PL é CREDOR: usa a régua patrimonial do lado passivo, para o
+      // lucro sair positivo e o prejuízo negativo.
+      const declaradoPL = arred(contasResultadoPL.reduce(
+        (s, l) => s + (assinadoBP(l, false, "saldoAtual") - assinadoBP(l, false, "saldoAnterior")), 0));
+      const receita = arred(secoes.filter((x) => x.valor > 0).reduce((s, x) => s + x.valor, 0));
+      const gap = Math.abs(arred(derivado - declaradoPL));
+      const limite = Math.max(5_000, receita * 0.1);
+      const ok = contasResultadoPL.length === 0 ? true : gap <= limite;
+      provas.dreEncerrada = { derivado, declaradoPL, gap, limite, ok };
+      if (!ok) {
+        avisos.push(
+          `Balancete de ENCERRAMENTO: as contas de resultado estão zeradas e a DRE foi derivada do movimento — ela dá ${fmt(derivado)}, mas o resultado que o próprio PL registra no ano é ${fmt(declaradoPL)} (diferença de ${fmt(gap)}). ` +
+          `Transferência interna entre contas de resultado infla os dois lados: confira a DRE deste exercício contra a demonstração oficial antes de usar os números.`,
+        );
+      }
+    }
   }
 
   return { periodoBP, periodoBPAnterior, arvoreBP, arvoreDRE, resultadoAcumulado, provas, gruposExcluidos, avisos };

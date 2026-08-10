@@ -20,9 +20,9 @@ import { competenciaValida, competenciaDoPeriodoBalancete, rotuloCompetencia } f
 import { downloadFile } from "../services/storage";
 import { extrairTextoLayoutPDF } from "../services/parser";
 import { parseBalanceteTexto } from "../services/balancete-parser";
-import { converterBalancete } from "../services/balancete-conversao";
+import { converterBalancete, ehNomeDeApuracao } from "../services/balancete-conversao";
 import { foldBP, foldDRE, type NaoMapeado, type BPN3Item } from "../services/ai-extraction";
-import { sugerirConta } from "../services/account-mapper";
+import { sugerirConta, GRUPO_CLASSIF_MAP } from "../services/account-mapper";
 import { sugerirContaCanonica } from "../services/sugerir-conta-canonica";
 import { ordPeriodo } from "../services/account-mapper";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
@@ -327,6 +327,14 @@ router.post("/reabrir", async (req: AuthRequest, res: Response): Promise<void> =
  *  hora. Máx. 50 empresas em memória (o payload é pequeno; o caro é o fold). */
 const cacheHistorico = new Map<string, { marca: string; payload: unknown }>();
 
+/** R$ curto para as mensagens de prova ("R$ -85,9 mi"). */
+const fmtBRL = (v: number): string => {
+  const abs = Math.abs(v);
+  if (abs >= 1e6) return `R$ ${(v / 1e6).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mi`;
+  if (abs >= 1e3) return `R$ ${(v / 1e3).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil`;
+  return `R$ ${v.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}`;
+};
+
 router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Promise<void> => {
   const companyId = String(req.query.companyId ?? "");
   if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
@@ -443,6 +451,21 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
       periodos.push(periodo);
       origemPorPeriodo[periodo] = f.nome;
       provasPorPeriodo[periodo] = conv.provas;
+      // P4 (10/08/2026, caso Belagro 2023): DRE de exercício ENCERRADO só é
+      // verde se reconciliar com o resultado que o próprio PL registra. As
+      // provas vêm da conversão FRESCA daqui (a leitura gravada é anterior a
+      // esta prova e não a carrega).
+      const p4 = conv.provas.dreEncerrada;
+      if (p4 && !p4.ok) {
+        avisos.push(
+          `${f.nome}: balancete de ENCERRAMENTO — a DRE derivada do movimento (${fmtBRL(p4.derivado)}) não reconcilia com o resultado que o próprio PL registra no ano (${fmtBRL(p4.declaradoPL)}). Transferência interna entre contas de resultado infla os dois lados: confira contra a demonstração oficial do exercício antes de usar estes números.`,
+        );
+        const linha = relatorio.find((r) => r.documentId === f.id);
+        if (linha) {
+          linha.fechamentoOk = false;
+          linha.erro = `DRE do encerramento não reconcilia com o PL (${fmtBRL(p4.derivado)} × ${fmtBRL(p4.declaradoPL)})`;
+        }
+      }
       // Balancete que cobre o exercício INTEIRO (01/01 a 31/12) é exercício; o
       // resto é mês — a tela rotula "2025" × "05/2026" a partir daqui.
       tipoPorPeriodo[periodo] = /^01\/01\//.test(f.conteudo.periodoInicio ?? "") && /^31\/12\//.test(f.conteudo.periodoFim ?? "")
@@ -570,6 +593,43 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   // a entrada nasce no escopo da EMPRESA ("pendente" → fila global da Quantua).
   const candidatosDRE = dreModel.lines.filter((l) => !l.subtotal).map((l) => l.conta);
   const candidatosBP = bpModel.names;
+  type Sugestao = { sugestao: string; justificativa: string; confianca: string; verificar?: string };
+
+  /**
+   * CANDIDATAS VÁLIDAS PARA ESTA LINHA (10/08/2026 — "isso é fundamental, não
+   * pode ter erro"). A dica era calculada contra o modelo INTEIRO e saía
+   * inválida: "Perdas em operações NDF" (despesa) recebia "Receitas
+   * Financeiras"; "Empréstimos a terceiros" (ativo) recebia "Empréstimos e
+   * Financiamentos - CP" (passivo). A tela então SUPRIMIA a dica inválida — e
+   * o analista via "umas contas trazem dica, outras não".
+   *
+   * O servidor passa a usar a MESMA régua do dropdown:
+   *  - DRE: natureza pelo SINAL do valor (entrada só oferece receita; saída,
+   *    nunca) — igual a `dreGroupsPorNatureza` no OriginalTreeView;
+   *  - BP: só contas do MESMO grupo patrimonial da linha (AC/ANC/PC/PNC/PL) —
+   *    igual a `gruposDo`.
+   * Sem candidata válida, nenhuma dica: melhor silêncio que dica impossível.
+   */
+  const ehContaDeReceita = (conta: string) => /^(receitas?\b|outras receitas)/i.test(conta.trim());
+  const candidatosDREPara = (valor: number): string[] =>
+    valor === 0 ? candidatosDRE : candidatosDRE.filter((c) => ehContaDeReceita(c) === valor > 0);
+  const CODIGO_DO_GRUPO: Record<string, string> = {
+    "ativo circulante": "AC", "ativo nao circulante": "ANC",
+    "passivo circulante": "PC", "passivo nao circulante": "PNC", "patrimonio liquido": "PL",
+  };
+  const semAcento = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+  const candidatosBPPara = (grupo: string): string[] => {
+    const code = CODIGO_DO_GRUPO[semAcento(raizGrupo(grupo))];
+    if (!code) return candidatosBP;
+    // O modelo usa SUBclassificações (AF/AO dentro de AC; PO/PF dentro de PC) —
+    // é o mesmo mapa que o mapeamento de contas usa. Só linhas de INPUT: a
+    // linha-subtotal "Ativo Circulante" não é destino de classificação.
+    const aceitas = GRUPO_CLASSIF_MAP[code] ?? new Set([code]);
+    const doGrupo = bpModel.lines
+      .filter((l) => aceitas.has(l.classificacao) && l.tipo === "input")
+      .map((l) => l.conta);
+    return doGrupo.length ? doGrupo : candidatosBP;
+  };
   // 💡 na ÁRVORE (09/08/2026, "não está vindo a sugestão"): o workspace não
   // paga IA — a sugestão é a DETERMINÍSTICA (similaridade de nome contra o
   // modelo da empresa), no MESMO shape que o OriginalTreeView já lê
@@ -579,8 +639,14 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   // "Aviso prévio" não se PARECEM com "Despesas com Pessoas" em texto, mas o
   // classificador do orçamento já SABE que são pessoal — e a similaridade
   // sozinha ainda errava por token ("Ajuda de Custo" → "Custo Operacional").
-  const sugerirDre = (nome: string): { sugestao: string; justificativa: string; confianca: string } | null => {
-    const porRegra = sugerirContaCanonica(nome, candidatosDRE);
+  const sugerirDre = (nome: string, valor: number): Sugestao | null => {
+    // 1º o CONTEXTO do documento (irmã/consenso) — ver visitaDoc; 2º o
+    // vocabulário contábil; 3º a similaridade com o modelo. Sempre contra as
+    // candidatas VÁLIDAS para a natureza da linha.
+    const validas = candidatosDREPara(valor);
+    const ctx = contextoDRE.get(`DRE|DRE|${nome}`);
+    if (ctx && validas.includes(ctx.sugestao)) return ctx;
+    const porRegra = sugerirContaCanonica(nome, validas);
     if (porRegra) {
       return {
         sugestao: porRegra.conta,
@@ -588,7 +654,7 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
         confianca: porRegra.base === "similaridade" ? "média" : "alta",
       };
     }
-    const porNome = sugerirConta(nome, candidatosDRE);
+    const porNome = sugerirConta(nome, validas);
     return porNome ? { sugestao: porNome, justificativa: "similaridade de nome com a conta do modelo (determinística, sem IA)", confianca: "média" } : null;
   };
   // A chave da tela usa o grupo-RAIZ (OriginalTreeView: raizG) — conta aninhada
@@ -604,9 +670,11 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   // próprio, caso Belagro 2023: −577,0 mi vs −85,9 mi), a dica ainda sai, mas
   // com ⚠ de conferência — "verde só com prova".
   type NoDre = { nome: string; valor?: number; filhos?: NoDre[] };
-  const ehNomeResultado = (s: string) =>
-    /\b(resultado|lucro|prejuizo)\b.*\b(liquido|exercicio|periodo)\b|\bresultado liquido\b|\bapuracao\b.*\bresultado\b/.test(
-      s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase());
+  // MESMA régua conservadora da conversão (10/08/2026): o regex largo daqui
+  // casava "RESULTADO FINANCEIRO LÍQUIDO" — uma linha legítima da DRE — e
+  // oferecia "ignorar esta linha" para ela. Sugerir que o analista jogue fora
+  // o resultado financeiro é pior do que não sugerir nada.
+  const ehNomeResultado = (s: string) => ehNomeDeApuracao(s);
   const espelhoDre = new Map<string, { provado: boolean; valor: number; somaOutras: number }>();
   for (const arv of Object.values(arvoreOriginalDRE)) {
     const roots = arv as NoDre[];
@@ -641,47 +709,97 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     const nome = m ? m[1]! : d;
     return !nome.startsWith("(") && candidatosBPSet.has(nome) ? nome : null;
   };
-  const visitaBP = (itens: BPN3Item[], grupoRaiz: string, pai: string | null): void => {
-    const destinosIrmas = itens
-      .filter((i) => !pendentesBP.has(i.nome))
-      .map((i) => destinoRealDe(i.destino))
-      .filter((d): d is string => d !== null);
-    let consenso: { sugestao: string; justificativa: string; confianca: string } | null = null;
-    if (destinosIrmas.length) {
+  // Tokens do nome, para medir parentesco entre IRMÃS do documento.
+  const tokensDe = (s: string) =>
+    new Set(s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 2));
+  const parentesco = (a: string, b: string): number => {
+    const ta = tokensDe(a), tb = tokensDe(b);
+    if (!ta.size || !tb.size) return 0;
+    let comuns = 0;
+    for (const t of ta) if (tb.has(t)) comuns++;
+    return comuns / new Set([...ta, ...tb]).size;
+  };
+
+  type NoDoc = { nome: string; destino?: string; filhos?: NoDoc[] };
+  /**
+   * CONTEXTO DO DOCUMENTO — vale para BP e DRE (10/08/2026, "contas que não
+   * aparecem sugestão"). Ordem, da mais forte para a mais fraca:
+   *   1. IRMÃ QUASE IGUAL (≥60% de tokens em comum) já classificada — "Perdas
+   *      NDF - Contratos realizados" herda de "Perdas NDF - Contratos em
+   *      aberto". É o sinal mais forte: o plano de contas nomeia famílias.
+   *   2. CONSENSO das irmãs (≥60% no mesmo destino).
+   *   3. NOME DO PAI parecido com uma conta do modelo.
+   * O contexto vence o vocabulário genérico de propósito: "Vale transporte"
+   * dentro de "CUSTOS COM PESSOAL (MOD)" é CUSTO, não despesa — quem sabe
+   * disso é o documento, não a regra.
+   */
+  const visitaDoc = (
+    itens: NoDoc[],
+    ctx: { tipo: "BP" | "DRE"; grupoRaiz: string; pai: string | null; candidatos: Set<string>; lista: string[]; pendentes: Set<string>; destino: Map<string, Sugestao> },
+  ): void => {
+    const destinoReal = (d?: string): string | null => {
+      if (!d) return null;
+      const m = /^\(absorvido em (.+)\)$/.exec(d);
+      const nome = m ? m[1]! : d;
+      return !nome.startsWith("(") && ctx.candidatos.has(nome) ? nome : null;
+    };
+    const classificadas = itens
+      .filter((i) => !ctx.pendentes.has(i.nome))
+      .map((i) => ({ nome: i.nome, destino: destinoReal(i.destino) }))
+      .filter((x): x is { nome: string; destino: string } => x.destino !== null);
+    let consenso: Sugestao | null = null;
+    if (classificadas.length) {
       const cont = new Map<string, number>();
-      for (const d of destinosIrmas) cont.set(d, (cont.get(d) ?? 0) + 1);
+      for (const c2 of classificadas) cont.set(c2.destino, (cont.get(c2.destino) ?? 0) + 1);
       const [top, n] = [...cont.entries()].sort((a, b) => b[1] - a[1])[0]!;
-      if (n / destinosIrmas.length >= 0.6) {
+      if (n / classificadas.length >= 0.6) {
         consenso = {
           sugestao: top,
-          justificativa: `as contas irmãs${pai ? ` de "${pai}"` : ""} no documento foram para esta conta (determinística, sem IA)`,
+          justificativa: `as contas irmãs${ctx.pai ? ` de "${ctx.pai}"` : ""} no documento foram para esta conta (determinística, sem IA)`,
           confianca: "alta",
         };
       }
     }
     for (const it of itens) {
-      if (pendentesBP.has(it.nome)) {
-        const chave = `BP|${grupoRaiz}|${it.nome}`;
-        if (!contextoBP.has(chave)) {
-          const porPai = !consenso && pai ? sugerirConta(pai, candidatosBP) : null;
-          const escolha = consenso ?? (porPai
-            ? { sugestao: porPai, justificativa: `o grupo do documento ("${pai}") se parece com esta conta do modelo (determinística, sem IA)`, confianca: "média" }
-            : null);
-          if (escolha) contextoBP.set(chave, escolha);
+      if (ctx.pendentes.has(it.nome)) {
+        const chave = `${ctx.tipo}|${ctx.grupoRaiz}|${it.nome}`;
+        if (!ctx.destino.has(chave)) {
+          const irma = classificadas
+            .map((c2) => ({ ...c2, score: parentesco(it.nome, c2.nome) }))
+            .sort((a, b) => b.score - a.score)[0];
+          const porPai = ctx.pai ? sugerirConta(ctx.pai, ctx.lista) : null;
+          const escolha: Sugestao | null = irma && irma.score >= 0.6
+            ? { sugestao: irma.destino, justificativa: `a conta irmã "${irma.nome}" do mesmo grupo do documento foi para esta conta (determinística, sem IA)`, confianca: "alta" }
+            : consenso ?? (porPai
+              ? { sugestao: porPai, justificativa: `o grupo do documento ("${ctx.pai}") se parece com esta conta do modelo (determinística, sem IA)`, confianca: "média" }
+              : null);
+          if (escolha) ctx.destino.set(chave, escolha);
         }
       }
-      if (it.filhos?.length) visitaBP(it.filhos, grupoRaiz, it.nome);
+      if (it.filhos?.length) visitaDoc(it.filhos, { ...ctx, pai: it.nome });
     }
   };
   for (const arv of Object.values(arvoreOriginalBP)) {
     const grupos = (arv as { grupos?: Record<string, BPN3Item[]> })?.grupos ?? {};
-    for (const [gn, itens] of Object.entries(grupos)) visitaBP(itens, gn, null);
+    for (const [gn, itens] of Object.entries(grupos)) {
+      visitaDoc(itens as NoDoc[], { tipo: "BP", grupoRaiz: gn, pai: null, candidatos: candidatosBPSet, lista: candidatosBP, pendentes: pendentesBP, destino: contextoBP });
+    }
+  }
+  // DRE: as seções do documento são as raízes; a mesma régua de contexto.
+  const candidatosDRESet = new Set(candidatosDRE);
+  const pendentesDRE = new Set(naoMapeados.filter((n) => n.tipo === "DRE").map((n) => n.nome));
+  const contextoDRE = new Map<string, Sugestao>();
+  for (const arv of Object.values(arvoreOriginalDRE)) {
+    const secoes = (arv as NoDoc[]) ?? [];
+    if (!Array.isArray(secoes)) continue;
+    visitaDoc(secoes, { tipo: "DRE", grupoRaiz: "DRE", pai: null, candidatos: candidatosDRESet, lista: candidatosDRE, pendentes: pendentesDRE, destino: contextoDRE });
   }
 
-  const sugestaoBP = (grupo: string, nome: string): { sugestao: string; justificativa: string; confianca: string } | null => {
+  const sugestaoBP = (grupo: string, nome: string): Sugestao | null => {
+    const validas = candidatosBPPara(grupo);
     const ctx = contextoBP.get(`BP|${raizGrupo(grupo)}|${nome}`);
-    if (ctx) return ctx;
-    const porNome = sugerirConta(nome, candidatosBP);
+    if (ctx && validas.includes(ctx.sugestao)) return ctx;
+    const porNome = sugerirConta(nome, validas);
     return porNome ? { sugestao: porNome, justificativa: "similaridade de nome com a conta do modelo (determinística, sem IA)", confianca: "média" } : null;
   };
   const fmtMi = (v: number) => `${(v / 1_000_000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mi`;
@@ -695,24 +813,53 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
       verificar: `o valor da linha (${fmtMi(esp.valor)}) difere do resultado somado das demais seções (${fmtMi(esp.somaOutras)}) — confirme no documento que é conta de apuração/zeramento antes de ignorar`,
     }),
   });
-  const sugestoesIA: Record<string, { sugestao: string; justificativa: string; confianca: string; verificar?: string }> = {};
+  /**
+   * ÚLTIMO DEGRAU (10/08/2026): sem irmã, sem vocabulário e sem similaridade,
+   * a dica honesta é o BALDE onde o fold JÁ está jogando a linha — a conta
+   * "Outras Despesas/Receitas Operacionais" ou "Outros Ativos/Passivos" que o
+   * destino do não-mapeado carrega. Confiança BAIXA e justificativa explícita:
+   * o analista confirma (vira regra no dicionário) ou escolhe a conta certa,
+   * mas nunca fica sem saber para onde o dinheiro foi.
+   */
+  const sugestaoBalde = (nm: NaoMapeado, candidatos: Set<string>): Sugestao | null => {
+    const destino = (nm.destino ?? "").trim();
+    if (!destino || destino.startsWith("(") || !candidatos.has(destino)) return null;
+    return {
+      sugestao: destino,
+      justificativa: `sem conta equivalente no modelo: é onde esta linha já está sendo somada hoje (seção "${raizGrupo(nm.grupo)}" do documento) — confirme ou escolha a conta certa`,
+      confianca: "baixa",
+    };
+  };
+  const sugestoesIA: Record<string, Sugestao> = {};
   for (const nm of naoMapeados) {
-    const chave = nm.tipo === "BP" ? `BP|${raizGrupo(nm.grupo)}|${nm.nome}` : `DRE|DRE|${nm.nome}`;
+    // A MESMA conta troca de natureza entre períodos (caso real Belagro:
+    // "Perdas NDF - Contratos em aberto" é +124.802 em set/25 e −1.395.434 em
+    // jan/26; "Bonificação e Brindes" idem). Uma chave só por nome fazia a dica
+    // da primeira ocorrência valer para todas — e ficar INVÁLIDA na de sinal
+    // oposto, que a tela então suprimia. A chave da DRE carrega o sinal; a
+    // chave sem sinal continua gravada para quem lê no formato antigo.
+    const sinal = nm.tipo === "DRE" ? (nm.valor > 0 ? "|+" : "|-") : "";
+    const chaveBase = nm.tipo === "BP" ? `BP|${raizGrupo(nm.grupo)}|${nm.nome}` : `DRE|DRE|${nm.nome}`;
+    const chave = `${chaveBase}${sinal}`;
     if (sugestoesIA[chave]) continue;
     const esp = nm.tipo === "DRE" ? espelhoDre.get(nm.nome) : undefined;
     const sug = nm.tipo === "DRE"
-      ? (esp ? sugestaoIgnorar(esp) : sugerirDre(nm.nome))
-      : sugestaoBP(nm.grupo, nm.nome);
-    if (sug) sugestoesIA[chave] = sug;
+      ? (esp ? sugestaoIgnorar(esp) : sugerirDre(nm.nome, nm.valor) ?? sugestaoBalde(nm, new Set(candidatosDREPara(nm.valor))))
+      : sugestaoBP(nm.grupo, nm.nome) ?? sugestaoBalde(nm, new Set(candidatosBPPara(nm.grupo)));
+    if (sug) {
+      sugestoesIA[chave] = sug;
+      sugestoesIA[chaveBase] ??= sug;
+    }
   }
   const pendencias = [...pendMap.values()]
     .sort((x, y) => Math.abs(y.valorUltimo) - Math.abs(x.valorUltimo))
     .map((pd) => ({
       ...pd,
-      // Espelho não ganha conta-sugestão no quadro (o sentinela cru confundiria).
+      // MESMA cascata da árvore (inclusive o balde): o quadro não pode dizer
+      // "sem sugestão" para uma linha que a árvore ao lado sugere.
       sugestao: pd.tipo === "DRE"
-        ? (espelhoDre.has(pd.nome) ? null : (sugerirDre(pd.nome)?.sugestao ?? null))
-        : (sugestaoBP(pd.grupo, pd.nome)?.sugestao ?? null),
+        ? (espelhoDre.has(pd.nome) ? null : (sugestoesIA[`DRE|DRE|${pd.nome}`]?.sugestao ?? null))
+        : (sugestoesIA[`BP|${raizGrupo(pd.grupo)}|${pd.nome}`]?.sugestao ?? null),
     }));
 
   const payload = {

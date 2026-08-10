@@ -58,7 +58,7 @@ function cleanAccountName(name: string): string {
  * classificacao codes that belong to the same section.
  * E.g., grupo "AC" matches classificacao AF, AO (both sub-groups of Ativo Circulante).
  */
-const GRUPO_CLASSIF_MAP: Record<string, Set<string>> = {
+export const GRUPO_CLASSIF_MAP: Record<string, Set<string>> = {
   AC: new Set(["AC", "AF", "AO"]),
   ANC: new Set(["ANC"]),
   PC: new Set(["PC", "PO", "PF"]),
