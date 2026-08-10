@@ -16,6 +16,7 @@ import { extrairTextoLayoutPDF } from "../services/parser";
 import { parseBalanceteTexto } from "../services/balancete-parser";
 import { parseBalanceteTabular, ehArquivoTabular } from "../services/balancete-tabular";
 import { gravarLeituraPorta } from "../services/leitura-porta";
+import { pdfEscaneado } from "../services/balancete-ocr";
 
 const router = Router();
 router.use(requireAuth);
@@ -49,6 +50,34 @@ async function analiseCancelada(analysisId: string | null): Promise<boolean> {
   return a?.status === "Cancelada";
 }
 const ERRO_CANCELADA = "IBR cancelado é somente consulta — documentos ficam congelados como evidência.";
+
+/**
+ * TRAVA DE PDF ESCANEADO (10/08/2026, pedido do dono): a extração por OCR
+ * ainda não é confiável para documento contábil — a indentação reconstruída
+ * achata a hierarquia. PDF imagem NÃO entra na Data room; a mensagem diz o
+ * caminho certo. "Material complementar" fica de fora (é resumido, não
+ * extraído). Retorna a mensagem de recusa, ou null quando o arquivo passa.
+ *
+ * A prova de "tem texto de verdade" são linhas com VALOR MONETÁRIO pt-BR no
+ * texto extraído — qualquer demonstrativo de texto tem dezenas; num escaneado
+ * só sobra carimbo/rodapé. Isso evita o falso positivo da capa com logotipo
+ * (página 1 imagem + pouco texto num PDF perfeitamente legível).
+ */
+async function motivoRecusaPdfEscaneado(buffer: Buffer, nome: string, tipo: string, textoJaExtraido?: string | null): Promise<string | null> {
+  if (!/\.pdf$/i.test(nome) || tipo === "Material complementar") return null;
+  try {
+    const texto = textoJaExtraido ?? (await extrairTextoLayoutPDF(buffer).catch(() => ""));
+    const linhasComValor = (texto ?? "").split("\n").filter((l) => /\d{1,3}(?:\.\d{3})*,\d{2}/.test(l)).length;
+    const scan = await pdfEscaneado(buffer, linhasComValor);
+    if (!scan.escaneado) return null;
+    return "PDF escaneado (imagem digitalizada) não é aceito: a leitura por OCR ainda não é confiável para documentos contábeis. "
+      + "Exporte o PDF direto do sistema contábil (com texto selecionável) ou envie o arquivo em Excel/CSV. "
+      + "Se for material de apoio (não contábil), envie como \"Material complementar\".";
+  } catch {
+    // Inspeção falhou ≠ escaneado — não se recusa documento sem prova.
+    return null;
+  }
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -269,17 +298,23 @@ router.post("/upload", upload.single("file"), async (req: AuthRequest, res: Resp
     return;
   }
 
+  // Auto-detecção de BALANCETE pelo nome do arquivo (o wizard manda "Outro"
+  // por padrão; a linha de extração de balancete depende do tipo correto).
+  let tipoFinal = tipo === "Outro" && /balancete/i.test(nome) ? "Balancete" : tipo;
+  let competenciaFinal: string | null = competencia ?? null;
+
+  // Trava de PDF escaneado — ANTES do storage (recusado não deixa órfão) e
+  // FORA da curadoria de propósito: se a curadoria falhar ("Invalid PDF
+  // structure"), o catch dela não pode engolir a trava.
+  const recusaScan = await motivoRecusaPdfEscaneado(req.file.buffer, nome, tipoFinal);
+  if (recusaScan) { res.status(422).json({ error: recusaScan }); return; }
+
   const key = `uploads/${req.userId}/${analysisId ?? `pool-${companyId}`}/${Date.now()}-${nome}`;
   const storagePath = await uploadFile(req.file.buffer, key, req.file.mimetype);
 
   const tamanho = req.file.size > 1024 * 1024
     ? `${(req.file.size / 1024 / 1024).toFixed(1)} MB`
     : `${Math.round(req.file.size / 1024)} KB`;
-
-  // Auto-detecção de BALANCETE pelo nome do arquivo (o wizard manda "Outro"
-  // por padrão; a linha de extração de balancete depende do tipo correto).
-  let tipoFinal = tipo === "Outro" && /balancete/i.test(nome) ? "Balancete" : tipo;
-  let competenciaFinal: string | null = competencia ?? null;
 
   // CURADORIA ASSISTIDA (pedido do usuário, 20/07/2026; ESTENDIDA 27/07/2026): na
   // porta da Data room — fonte única — tipo e competência não ficam só a cargo do
@@ -547,6 +582,10 @@ router.post("/:id/substituir", upload.single("file"), async (req: AuthRequest, r
     res.status(409).json({ error: mensagemDuplicado(dupSubst), duplicadoDe: dupSubst });
     return;
   }
+
+  // Trava de PDF escaneado — a versão nova herda o tipo do documento vigente.
+  const recusaScan = await motivoRecusaPdfEscaneado(req.file.buffer, nome, doc.tipo);
+  if (recusaScan) { res.status(422).json({ error: recusaScan }); return; }
 
   // PRODUTOS VINCULADOS (27/07/2026): quem fundamenta números em cima da versão
   // substituída precisa saber — o analista é INFORMADO para gerar nova versão dos
