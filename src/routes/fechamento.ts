@@ -396,6 +396,9 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   const origemPorPeriodo: Record<string, string> = {};
   const provasPorPeriodo: Record<string, unknown> = {};
   for (const f of fontes) {
+    // A instância do Cloud Run é ÚNICA: 20s+ de fold síncrono travariam todas
+    // as requisições — devolve o event loop entre documentos.
+    await new Promise((r) => setImmediate(r));
     try {
       const conv = converterBalancete({
         periodoInicio: f.conteudo.periodoInicio,
@@ -419,8 +422,13 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
       mergeItens(dre, rDRE.dre as unknown as Item[]);
       naoMapeados.push(...rDRE.naoMapeados);
       // O fold MUTA as árvores carimbando destino/absorvido — é a auditoria.
-      Object.assign(arvoreOriginalBP, conv.arvoreBP as unknown as Record<string, unknown>);
-      Object.assign(arvoreOriginalDRE, conv.arvoreDRE as unknown as Record<string, unknown>);
+      // SÓ a chave do PERÍODO DOBRADO viaja (09/08/2026, coluna em branco na
+      // Belagro): a conversão devolve também o período de ABERTURA (saldo
+      // anterior — o acumulado de 2024 carrega 31/12/2023 cru), e o assign
+      // completo SOBRESCREVIA a árvore dobrada de um documento pela abertura
+      // não-dobrada do documento seguinte — destino sumia da auditoria.
+      if ((conv.arvoreBP as Record<string, unknown>)[periodo]) arvoreOriginalBP[periodo] = (conv.arvoreBP as Record<string, unknown>)[periodo];
+      if ((conv.arvoreDRE as Record<string, unknown>)[periodo]) arvoreOriginalDRE[periodo] = (conv.arvoreDRE as Record<string, unknown>)[periodo];
     } catch (e) {
       avisos.push(`${f.nome}: conversão falhou (${e instanceof Error ? e.message : String(e)}).`);
     }
