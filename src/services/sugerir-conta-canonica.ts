@@ -38,7 +38,7 @@ const tokens = (s: string) => norm(s).split(" ").filter((t) => t.length > 2 && !
 const VOCABULARIO: Array<{ gatilhos: RegExp; pista: RegExp; porque: string }> = [
   // FOLHA (30/07/2026 — plano MOVE FARMA): horas extras, gratificações, PPR e
   // companhia ficavam SEM regra e caíam na IA (ou em nada).
-  { gatilhos: /\b(salari|ordenad|folha|encargo|inss|fgts|13|ferias|rescis|pro labore|prolabore|gratificac|abono)\w*|\bhoras? extras?\b|\badicional noturno\b|\bppr\b|\bplr\b|participacao nos resultados/, pista: /pessoa|folha|salari/, porque: "remuneração e encargos" },
+  { gatilhos: /\b(salari|ordenad|folha|encargo|inss|fgts|13|ferias|rescis|pro labore|prolabore|gratificac|abono)\w*|\baviso previo\b|indenizac\w* trabalhist\w*|\bhoras? extras?\b|\badicional noturno\b|\bppr\b|\bplr\b|participacao nos resultados/, pista: /pessoa|folha|salari/, porque: "remuneração e encargos" },
   // VR/VA/VT são SIGLAS — palavra inteira (30/07/2026): "va\w*" engolia
   // "Variação Cambial Ativa" e a mandava para Despesas com Pessoas (defeito
   // real do plano MOVE FARMA).

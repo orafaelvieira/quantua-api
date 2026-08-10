@@ -23,6 +23,7 @@ import { parseBalanceteTexto } from "../services/balancete-parser";
 import { converterBalancete } from "../services/balancete-conversao";
 import { foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { sugerirConta } from "../services/account-mapper";
+import { sugerirContaCanonica } from "../services/sugerir-conta-canonica";
 import { ordPeriodo } from "../services/account-mapper";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
 import { resolverCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
@@ -482,16 +483,38 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   // paga IA — a sugestão é a DETERMINÍSTICA (similaridade de nome contra o
   // modelo da empresa), no MESMO shape que o OriginalTreeView já lê
   // (chave BP = `BP|grupo|nome`; DRE = `DRE|DRE|nome`). Honesta no rótulo.
+  // Para DRE, o VOCABULÁRIO CONTÁBIL vem antes da similaridade de nome
+  // (10/08/2026, "porque uns trazem dicas outros não?"): "Uniformes"/"EPI"/
+  // "Aviso prévio" não se PARECEM com "Despesas com Pessoas" em texto, mas o
+  // classificador do orçamento já SABE que são pessoal — e a similaridade
+  // sozinha ainda errava por token ("Ajuda de Custo" → "Custo Operacional").
+  const sugerirDre = (nome: string): { sugestao: string; justificativa: string; confianca: string } | null => {
+    const porRegra = sugerirContaCanonica(nome, candidatosDRE);
+    if (porRegra) {
+      return {
+        sugestao: porRegra.conta,
+        justificativa: `${porRegra.porque} (determinística, sem IA)`,
+        confianca: porRegra.base === "similaridade" ? "média" : "alta",
+      };
+    }
+    const porNome = sugerirConta(nome, candidatosDRE);
+    return porNome ? { sugestao: porNome, justificativa: "similaridade de nome com a conta do modelo (determinística, sem IA)", confianca: "média" } : null;
+  };
   const sugestoesIA: Record<string, { sugestao: string; justificativa: string; confianca: string }> = {};
   for (const nm of naoMapeados) {
     const chave = nm.tipo === "BP" ? `BP|${nm.grupo}|${nm.nome}` : `DRE|DRE|${nm.nome}`;
     if (sugestoesIA[chave]) continue;
-    const sug = sugerirConta(nm.nome, nm.tipo === "DRE" ? candidatosDRE : candidatosBP);
-    if (sug) sugestoesIA[chave] = { sugestao: sug, justificativa: "similaridade de nome com a conta do modelo (determinística, sem IA)", confianca: "média" };
+    if (nm.tipo === "DRE") {
+      const sug = sugerirDre(nm.nome);
+      if (sug) sugestoesIA[chave] = sug;
+    } else {
+      const sug = sugerirConta(nm.nome, candidatosBP);
+      if (sug) sugestoesIA[chave] = { sugestao: sug, justificativa: "similaridade de nome com a conta do modelo (determinística, sem IA)", confianca: "média" };
+    }
   }
   const pendencias = [...pendMap.values()]
     .sort((x, y) => Math.abs(y.valorUltimo) - Math.abs(x.valorUltimo))
-    .map((pd) => ({ ...pd, sugestao: sugerirConta(pd.nome, pd.tipo === "DRE" ? candidatosDRE : candidatosBP) }));
+    .map((pd) => ({ ...pd, sugestao: pd.tipo === "DRE" ? (sugerirDre(pd.nome)?.sugestao ?? null) : sugerirConta(pd.nome, candidatosBP) }));
 
   const payload = {
     periodos,
