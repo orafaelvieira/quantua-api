@@ -21,7 +21,7 @@ import { downloadFile } from "../services/storage";
 import { extrairTextoLayoutPDF } from "../services/parser";
 import { parseBalanceteTexto } from "../services/balancete-parser";
 import { converterBalancete } from "../services/balancete-conversao";
-import { foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
+import { foldBP, foldDRE, type NaoMapeado, type BPN3Item } from "../services/ai-extraction";
 import { sugerirConta } from "../services/account-mapper";
 import { sugerirContaCanonica } from "../services/sugerir-conta-canonica";
 import { ordPeriodo } from "../services/account-mapper";
@@ -500,21 +500,76 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     const porNome = sugerirConta(nome, candidatosDRE);
     return porNome ? { sugestao: porNome, justificativa: "similaridade de nome com a conta do modelo (determinística, sem IA)", confianca: "média" } : null;
   };
+  // A chave da tela usa o grupo-RAIZ (OriginalTreeView: raizG) — conta aninhada
+  // carrega "Ativo Circulante > ADIANTAMENTO..." no naoMapeado e a dica nunca
+  // era encontrada (10/08/2026, "continua sem as dicas").
+  const raizGrupo = (g: string) => g.split(">")[0]!.trim();
+  // SUGESTÃO PELO CONTEXTO DO DOCUMENTO (BP): conta de BP raramente se parece
+  // com a do modelo em texto ("G Belusso Transportes") — mas as IRMÃS do mesmo
+  // grupo do documento já têm destino carimbado pelo fold. Consenso das irmãs
+  // (≥60%) vem antes da similaridade; sem irmãs, o NOME DO PAI desempata.
+  const candidatosBPSet = new Set(candidatosBP);
+  const pendentesBP = new Set(naoMapeados.filter((n) => n.tipo === "BP").map((n) => n.nome));
+  const contextoBP = new Map<string, { sugestao: string; justificativa: string; confianca: string }>();
+  const destinoRealDe = (d?: string): string | null => {
+    if (!d) return null;
+    const m = /^\(absorvido em (.+)\)$/.exec(d);
+    const nome = m ? m[1]! : d;
+    return !nome.startsWith("(") && candidatosBPSet.has(nome) ? nome : null;
+  };
+  const visitaBP = (itens: BPN3Item[], grupoRaiz: string, pai: string | null): void => {
+    const destinosIrmas = itens
+      .filter((i) => !pendentesBP.has(i.nome))
+      .map((i) => destinoRealDe(i.destino))
+      .filter((d): d is string => d !== null);
+    let consenso: { sugestao: string; justificativa: string; confianca: string } | null = null;
+    if (destinosIrmas.length) {
+      const cont = new Map<string, number>();
+      for (const d of destinosIrmas) cont.set(d, (cont.get(d) ?? 0) + 1);
+      const [top, n] = [...cont.entries()].sort((a, b) => b[1] - a[1])[0]!;
+      if (n / destinosIrmas.length >= 0.6) {
+        consenso = {
+          sugestao: top,
+          justificativa: `as contas irmãs${pai ? ` de "${pai}"` : ""} no documento foram para esta conta (determinística, sem IA)`,
+          confianca: "alta",
+        };
+      }
+    }
+    for (const it of itens) {
+      if (pendentesBP.has(it.nome)) {
+        const chave = `BP|${grupoRaiz}|${it.nome}`;
+        if (!contextoBP.has(chave)) {
+          const porPai = !consenso && pai ? sugerirConta(pai, candidatosBP) : null;
+          const escolha = consenso ?? (porPai
+            ? { sugestao: porPai, justificativa: `o grupo do documento ("${pai}") se parece com esta conta do modelo (determinística, sem IA)`, confianca: "média" }
+            : null);
+          if (escolha) contextoBP.set(chave, escolha);
+        }
+      }
+      if (it.filhos?.length) visitaBP(it.filhos, grupoRaiz, it.nome);
+    }
+  };
+  for (const arv of Object.values(arvoreOriginalBP)) {
+    const grupos = (arv as { grupos?: Record<string, BPN3Item[]> })?.grupos ?? {};
+    for (const [gn, itens] of Object.entries(grupos)) visitaBP(itens, gn, null);
+  }
+
+  const sugestaoBP = (grupo: string, nome: string): { sugestao: string; justificativa: string; confianca: string } | null => {
+    const ctx = contextoBP.get(`BP|${raizGrupo(grupo)}|${nome}`);
+    if (ctx) return ctx;
+    const porNome = sugerirConta(nome, candidatosBP);
+    return porNome ? { sugestao: porNome, justificativa: "similaridade de nome com a conta do modelo (determinística, sem IA)", confianca: "média" } : null;
+  };
   const sugestoesIA: Record<string, { sugestao: string; justificativa: string; confianca: string }> = {};
   for (const nm of naoMapeados) {
-    const chave = nm.tipo === "BP" ? `BP|${nm.grupo}|${nm.nome}` : `DRE|DRE|${nm.nome}`;
+    const chave = nm.tipo === "BP" ? `BP|${raizGrupo(nm.grupo)}|${nm.nome}` : `DRE|DRE|${nm.nome}`;
     if (sugestoesIA[chave]) continue;
-    if (nm.tipo === "DRE") {
-      const sug = sugerirDre(nm.nome);
-      if (sug) sugestoesIA[chave] = sug;
-    } else {
-      const sug = sugerirConta(nm.nome, candidatosBP);
-      if (sug) sugestoesIA[chave] = { sugestao: sug, justificativa: "similaridade de nome com a conta do modelo (determinística, sem IA)", confianca: "média" };
-    }
+    const sug = nm.tipo === "DRE" ? sugerirDre(nm.nome) : sugestaoBP(nm.grupo, nm.nome);
+    if (sug) sugestoesIA[chave] = sug;
   }
   const pendencias = [...pendMap.values()]
     .sort((x, y) => Math.abs(y.valorUltimo) - Math.abs(x.valorUltimo))
-    .map((pd) => ({ ...pd, sugestao: pd.tipo === "DRE" ? (sugerirDre(pd.nome)?.sugestao ?? null) : sugerirConta(pd.nome, candidatosBP) }));
+    .map((pd) => ({ ...pd, sugestao: pd.tipo === "DRE" ? (sugerirDre(pd.nome)?.sugestao ?? null) : (sugestaoBP(pd.grupo, pd.nome)?.sugestao ?? null) }));
 
   const payload = {
     periodos,
