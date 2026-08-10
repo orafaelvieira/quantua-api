@@ -11,7 +11,7 @@
  */
 import { Router, Response } from "express";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { gravarLeituraPorta, resumoDaLeitura, type LeituraPortaConteudo } from "../services/leitura-porta";
+import { gravarLeituraPorta, resumoDaLeitura, type LeituraPortaConteudo, type LeituraDemonstrativoConteudo } from "../services/leitura-porta";
 import { whereEmpresaVisivel, guardaEscritaSuspensao } from "../services/escopo-empresa";
 import { prisma } from "../db/client";
 import { registrarAuditoria } from "../services/audit-trail";
@@ -359,6 +359,12 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   // quadro do IBR não aparecia no workspace): leitura + provas aritméticas,
   // um check por documento — a tela marca ✓/✗ cruzando com as pendências.
   const relatorio: Array<{ documentId: string; nome: string; contas: number; periodo: string | null; lido: boolean; fechamentoOk: boolean | null; erro: string | null }> = [];
+  // DEMONSTRATIVOS ANUAIS (10/08/2026, pedido do dono: "não é apenas balancete
+  // — também balanço patrimonial e DRE"): entram pela MESMA linha determinística
+  // do IBR (árvore do BP por indentação; árvore da DRE com prova de partição —
+  // funções puras, o fluxo do IBR não muda). SEM IA: documento que a linha
+  // determinística não lê fica declarado no relatório.
+  const docsDemonstrativos = docs.filter((d) => /^(dre|balan[çc]o patrimonial)$/i.test(d.tipo.trim()));
   for (const d of docs) {
     if (!/balancete/i.test(d.tipo)) continue;
     const lp = d.leituraPorta;
@@ -451,6 +457,70 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
       if ((conv.arvoreDRE as Record<string, unknown>)[periodo]) arvoreOriginalDRE[periodo] = (conv.arvoreDRE as Record<string, unknown>)[periodo];
     } catch (e) {
       avisos.push(`${f.nome}: conversão falhou (${e instanceof Error ? e.message : String(e)}).`);
+    }
+  }
+
+  // ── DEMONSTRATIVOS (DRE / Balanço Patrimonial) ──
+  // Balancete manda: período já coberto por balancete (ou por outro
+  // demonstrativo do mesmo lado) fica de fora com aviso — nunca se soma duas
+  // fontes na mesma coluna. Cobertura é POR LADO: um BP anual e uma DRE anual
+  // do mesmo ano se completam.
+  const cobertoBP = new Set(periodos);
+  const cobertoDRE = new Set(periodos);
+  const canonico = (p: string) => (/^\d{4}$/.test(p.trim()) ? `31/12/${p.trim()}` : p.trim());
+  const registraPeriodo = (p: string, nomeDoc: string) => {
+    if (!periodos.includes(p)) periodos.push(p);
+    origemPorPeriodo[p] = origemPorPeriodo[p] ? `${origemPorPeriodo[p]} · ${nomeDoc}` : nomeDoc;
+  };
+  for (const d of docsDemonstrativos) {
+    await new Promise((r) => setImmediate(r));
+    const ehBP = /balan/i.test(d.tipo);
+    const lp = d.leituraPorta;
+    const c = lp?.conteudo as unknown as (LeituraDemonstrativoConteudo | undefined);
+    if (!lp || (d.hash && lp.hashArquivo !== d.hash) || !c || c.tipoLeitura !== "demonstrativo") {
+      // Sem leitura ainda (documento legado ou recém-substituído): dispara em
+      // background e declara — a marca do cache recalcula quando ela chegar.
+      void gravarLeituraPorta(d.id);
+      avisos.push(`${d.nome}: leitura em andamento (com IA quando a determinística não alcança) — recarregue em instantes.`);
+      relatorio.push({ documentId: d.id, nome: d.nome, contas: 0, periodo: null, lido: false, fechamentoOk: null, erro: "leitura em andamento — recarregue em instantes" });
+      continue;
+    }
+    if (c.erro) {
+      avisos.push(`${d.nome}: ${c.erro}`);
+      relatorio.push({ documentId: d.id, nome: d.nome, contas: c.totalContas, periodo: null, lido: false, fechamentoOk: null, erro: c.erro });
+      continue;
+    }
+    try {
+      const arvore = (ehBP ? c.arvoreBP : c.arvoreDRE) as Record<string, unknown> | undefined;
+      const coberto = ehBP ? cobertoBP : cobertoDRE;
+      const arvCanon: Record<string, unknown> = {};
+      for (const [pRaw, dadosP] of Object.entries(arvore ?? {})) {
+        const p = canonico(pRaw);
+        if (coberto.has(p)) { avisos.push(`${d.nome}: ${p} já coberto por outra fonte de ${ehBP ? "BP" : "DRE"} — esta coluna ficou de fora.`); continue; }
+        arvCanon[p] = dadosP;
+      }
+      const aceitos = Object.keys(arvCanon);
+      if (aceitos.length) {
+        if (ehBP) {
+          const r2 = foldBP(arvCanon as Parameters<typeof foldBP>[0], aceitos, dictRows, bpModel);
+          mergeItens(bp, r2.bp as unknown as Item[]);
+          naoMapeados.push(...r2.naoMapeados);
+          for (const p of aceitos) { cobertoBP.add(p); registraPeriodo(p, d.nome); arvoreOriginalBP[p] = arvCanon[p]; }
+        } else {
+          const r2 = foldDRE(arvCanon as Parameters<typeof foldDRE>[0], aceitos, dictRows, dreModel);
+          mergeItens(dre, r2.dre as unknown as Item[]);
+          naoMapeados.push(...r2.naoMapeados);
+          for (const p of aceitos) { cobertoDRE.add(p); registraPeriodo(p, d.nome); arvoreOriginalDRE[p] = arvCanon[p]; }
+        }
+      }
+      relatorio.push({
+        documentId: d.id, nome: d.nome, contas: c.totalContas,
+        periodo: aceitos.join(" · ") || null, lido: true, fechamentoOk: null, erro: null,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      avisos.push(`${d.nome}: fold falhou (${msg}).`);
+      relatorio.push({ documentId: d.id, nome: d.nome, contas: c.totalContas, periodo: null, lido: false, fechamentoOk: null, erro: `fold falhou (${msg})` });
     }
   }
   periodos.sort((a2, b2) => ordPeriodo(a2) - ordPeriodo(b2));

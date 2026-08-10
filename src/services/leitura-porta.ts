@@ -20,10 +20,14 @@
  */
 import { prisma } from "../db/client";
 import { downloadFile } from "./storage";
-import { extrairTextoLayoutPDF } from "./parser";
+import { extrairTextoLayoutPDF, parseDocument, type ExtractedRow } from "./parser";
 import { parseBalanceteTabular, ehArquivoTabular } from "./balancete-tabular";
 import { parseBalanceteTexto, pareceBalancete, type BalanceteParseado, type LinhaBalancete } from "./balancete-parser";
 import { converterBalancete, type ProvasBalancete } from "./balancete-conversao";
+import { construirArvoreBPporIndentacao } from "./bp-tree-indent";
+import { construirArvoreDREporIndentacao } from "./dre-tree-indent";
+import { extractFinancialsWithAI } from "./ai-extraction";
+import { comContextoIA } from "./ai-usage";
 
 export interface LeituraPortaConteudo {
   versao: 1;
@@ -98,6 +102,115 @@ export async function lerBalanceteDeterministico(
   };
 }
 
+/** Leitura de DEMONSTRATIVO (DRE / Balanço Patrimonial) — 10/08/2026, pedido
+ *  do dono: "não é apenas balancete — também balanço patrimonial e DRE".
+ *  HÍBRIDA como no IBR: a linha DETERMINÍSTICA primeiro (árvore do BP por
+ *  indentação; árvore da DRE com prova de partição — custo zero); quando ela
+ *  não alcança, a MESMA extração de IA do IBR, com custo carimbado no escopo
+ *  da EMPRESA (regra da casa: nenhum consumidor de IA sem trilha). A leitura
+ *  fica gravada por hash do arquivo — reclassificar conta NUNCA repaga IA. */
+export interface LeituraDemonstrativoConteudo {
+  versao: 1;
+  tipoLeitura: "demonstrativo";
+  motor: "deterministico" | "ia";
+  /** Períodos canônicos ("31/12/AAAA") — colunas que o documento carrega. */
+  periodos: string[];
+  /** Árvore ORIGINAL (mesmo shape do IBR) — só o lado do documento. */
+  arvoreBP?: unknown;
+  arvoreDRE?: unknown;
+  declarados?: Record<string, Record<string, number>>;
+  custoUsd?: number;
+  totalContas: number;
+  /** Compat com resumoDaLeitura/pool (o demonstrativo não tem intervalo). */
+  periodoInicio: null;
+  periodoFim: null;
+  provas: null;
+  linhas: [];
+  avisos: string[];
+  erro?: string;
+}
+
+const canonicoAno = (p: string) => (/^\d{4}$/.test(p.trim()) ? `31/12/${p.trim()}` : p.trim());
+const renomearChaves = <T,>(obj: Record<string, T>): Record<string, T> => {
+  const out: Record<string, T> = {};
+  for (const [k, v] of Object.entries(obj)) out[canonicoAno(k)] = v;
+  return out;
+};
+
+export async function lerDemonstrativoHibrido(
+  buffer: Buffer,
+  nome: string,
+  tipo: string,
+  competencia: string | null | undefined,
+  ctx: { companyId: string | null; documentId?: string },
+): Promise<LeituraDemonstrativoConteudo> {
+  const base: LeituraDemonstrativoConteudo = {
+    versao: 1, tipoLeitura: "demonstrativo", motor: "deterministico",
+    periodos: [], totalContas: 0,
+    periodoInicio: null, periodoFim: null, provas: null, linhas: [],
+    avisos: [],
+  };
+  const ehBP = /balan/i.test(tipo);
+  let parsed: Awaited<ReturnType<typeof parseDocument>>;
+  try {
+    parsed = await parseDocument(buffer, nome, tipo);
+  } catch (e) {
+    return { ...base, erro: `não foi possível ler o arquivo (${e instanceof Error ? e.message : String(e)})` };
+  }
+  const periodosDoc = parsed.periodos.length
+    ? parsed.periodos
+    : (competencia && /^\d{4}$/.test(competencia) ? [competencia] : []);
+
+  // 1) Linha determinística (custo zero) — a mesma do IBR.
+  if (ehBP) {
+    const arv = construirArvoreBPporIndentacao(parsed, periodosDoc);
+    if (arv) {
+      const canon = renomearChaves(arv as Record<string, unknown>);
+      return { ...base, motor: "deterministico", arvoreBP: canon, periodos: Object.keys(canon), totalContas: parsed.linhas.length };
+    }
+  } else {
+    const det = construirArvoreDREporIndentacao(parsed.linhas, periodosDoc);
+    if (det) {
+      const canon = renomearChaves(det.secoes as Record<string, unknown>);
+      return {
+        ...base, motor: "deterministico", arvoreDRE: canon, periodos: Object.keys(canon),
+        declarados: renomearChaves(det.declarados), totalContas: parsed.linhas.length,
+      };
+    }
+  }
+
+  // 2) IA — a MESMA extração do IBR (que ainda tenta o determinístico por
+  //    dentro), com o gasto atribuído à empresa via contexto.
+  const semTexto = parsed.linhas.length === 0 && (!parsed.raw || parsed.raw.length < 200);
+  if (semTexto && !/\.pdf$/i.test(nome)) {
+    return { ...base, erro: "nenhum conteúdo legível reconhecido no arquivo" };
+  }
+  // raw = contexto>conta (p/ o LLM) · rawIndent = texto INDENTADO do parser
+  // (p/ a árvore determinística interna) — o MESMO contrato do /process.
+  const linhasToText = (linhas: ExtractedRow[]) =>
+    linhas.map((l) => `${l.contexto ? l.contexto + " > " : ""}${l.conta} = ${JSON.stringify(l.valores)}`).join("\n");
+  const aiDoc = parsed.linhas.length
+    ? { raw: linhasToText(parsed.linhas), rawIndent: parsed.raw, linhas: parsed.linhas, tipo, periodos: periodosDoc }
+    : { buffer, tipo, periodos: periodosDoc };
+  try {
+    const r = await comContextoIA(
+      { produto: "data-room", origem: "leitura-porta-demonstrativo", companyId: ctx.companyId },
+      () => extractFinancialsWithAI([aiDoc], periodosDoc),
+    );
+    const arvBP = renomearChaves(r.arvoreOriginalBP as Record<string, unknown>);
+    const arvDRE = renomearChaves(r.arvoreOriginalDRE as unknown as Record<string, unknown>);
+    const periodos = ehBP ? Object.keys(arvBP) : Object.keys(arvDRE);
+    if (!periodos.length) return { ...base, motor: "ia", custoUsd: r.custo.usd, erro: "a extração não reconheceu colunas de período no documento" };
+    return {
+      ...base, motor: "ia",
+      ...(ehBP ? { arvoreBP: arvBP } : { arvoreDRE: arvDRE, declarados: renomearChaves(r.declarados) }),
+      periodos, totalContas: parsed.linhas.length, custoUsd: r.custo.usd,
+    };
+  } catch (e) {
+    return { ...base, erro: `extração falhou (${e instanceof Error ? e.message : String(e)})` };
+  }
+}
+
 /** Resumo curto para listagens (o conteúdo integral fica no registro). */
 export function resumoDaLeitura(c: LeituraPortaConteudo): {
   ok: boolean; contas: number; periodo: string | null; fechamentoOk: boolean | null; erro: string | null;
@@ -114,18 +227,37 @@ export function resumoDaLeitura(c: LeituraPortaConteudo): {
 /** Baixa, lê e grava a leitura de um documento do pool — para rodar em
  *  BACKGROUND no upload/substituição (`void gravarLeituraPorta(id)`).
  *  Engole toda falha com log: a porta nunca derruba o upload. */
+const DEMONSTRATIVO_RE = /^(dre|balan[çc]o patrimonial)$/i;
+/** Documentos em leitura NESTE processo (instância única): a leitura de
+ *  demonstrativo pode pagar IA — duas chamadas simultâneas pagariam duas. */
+const emLeitura = new Set<string>();
+
 export async function gravarLeituraPorta(documentId: string): Promise<void> {
+  if (emLeitura.has(documentId)) return;
+  emLeitura.add(documentId);
   try {
     const doc = await prisma.document.findUnique({
       where: { id: documentId },
-      select: { id: true, nome: true, tipo: true, competencia: true, storagePath: true, hash: true, analysisId: true },
+      select: { id: true, nome: true, tipo: true, competencia: true, storagePath: true, hash: true, analysisId: true, companyId: true },
     });
     // Só documento do POOL (analysisId null): a linha fixada do IBR tem o
     // próprio pipeline e não é assunto da porta.
     if (!doc || doc.analysisId || !doc.storagePath) return;
-    if (!/balancete/i.test(doc.tipo)) return;
+    const ehBalancete = /balancete/i.test(doc.tipo);
+    const ehDemonstrativo = DEMONSTRATIVO_RE.test(doc.tipo.trim());
+    if (!ehBalancete && !ehDemonstrativo) return;
+    // DEMONSTRATIVO com leitura BOA do MESMO arquivo (hash) não se refaz —
+    // pode ter custado IA e o custo é um só por versão do arquivo. Leitura com
+    // ERRO pode tentar de novo (falha transitória de IA não pode congelar o
+    // documento). Balancete (custo zero) mantém o comportamento de sempre.
+    if (ehDemonstrativo && doc.hash) {
+      const atual = await prisma.documentoLeitura.findUnique({ where: { documentId: doc.id }, select: { hashArquivo: true, conteudo: true } });
+      if (atual && atual.hashArquivo === doc.hash && !(atual.conteudo as { erro?: string } | null)?.erro) return;
+    }
     const buffer = await downloadFile(doc.storagePath);
-    const conteudo = await lerBalanceteDeterministico(buffer, doc.nome, doc.competencia);
+    const conteudo = ehBalancete
+      ? await lerBalanceteDeterministico(buffer, doc.nome, doc.competencia)
+      : await lerDemonstrativoHibrido(buffer, doc.nome, doc.tipo, doc.competencia, { companyId: doc.companyId, documentId: doc.id });
     await prisma.documentoLeitura.upsert({
       where: { documentId: doc.id },
       create: { documentId: doc.id, hashArquivo: doc.hash, conteudo: conteudo as unknown as object },
@@ -133,5 +265,7 @@ export async function gravarLeituraPorta(documentId: string): Promise<void> {
     });
   } catch (e) {
     console.warn(`[leitura-porta] falhou para ${documentId} (upload segue normal):`, e instanceof Error ? e.message : e);
+  } finally {
+    emLeitura.delete(documentId);
   }
 }

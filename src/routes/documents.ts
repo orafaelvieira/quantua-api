@@ -141,7 +141,10 @@ router.get("/pool", async (req: AuthRequest, res: Response): Promise<void> => {
   // re-upload. Best-effort: a resposta atual sai sem esperar.
   for (const d of docs) {
     const lp = (d as { leituraPorta?: { hashArquivo: string | null } | null }).leituraPorta;
-    if (/balancete/i.test(d.tipo) && d.status !== "Substituído" && (!lp || lp.hashArquivo !== d.hash)) {
+    // 10/08/2026: demonstrativos (DRE/Balanço) também têm leitura na porta —
+    // a mesma régua de backfill (o serviço decide o motor por tipo).
+    const temLeituraNaPorta = /balancete/i.test(d.tipo) || /^(dre|balan[çc]o patrimonial)$/i.test(d.tipo.trim());
+    if (temLeituraNaPorta && d.status !== "Substituído" && (!lp || lp.hashArquivo !== d.hash)) {
       void gravarLeituraPorta(d.id);
     }
   }
