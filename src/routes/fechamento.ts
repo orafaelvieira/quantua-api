@@ -420,6 +420,8 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   const arvoreOriginalDRE: Record<string, unknown> = {};
   const periodos: string[] = [];
   const origemPorPeriodo: Record<string, string> = {};
+  /** Como rotular cada coluna: "mes" → 05/2026 · "exercicio" → 2026. */
+  const tipoPorPeriodo: Record<string, "mes" | "exercicio"> = {};
   const provasPorPeriodo: Record<string, unknown> = {};
   for (const f of fontes) {
     // A instância do Cloud Run é ÚNICA: 20s+ de fold síncrono travariam todas
@@ -441,6 +443,10 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
       periodos.push(periodo);
       origemPorPeriodo[periodo] = f.nome;
       provasPorPeriodo[periodo] = conv.provas;
+      // Balancete que cobre o exercício INTEIRO (01/01 a 31/12) é exercício; o
+      // resto é mês — a tela rotula "2025" × "05/2026" a partir daqui.
+      tipoPorPeriodo[periodo] = /^01\/01\//.test(f.conteudo.periodoInicio ?? "") && /^31\/12\//.test(f.conteudo.periodoFim ?? "")
+        ? "exercicio" : "mes";
       const rBP = foldBP(conv.arvoreBP, [periodo], dictRows, bpModel);
       mergeItens(bp, rBP.bp as unknown as Item[]);
       naoMapeados.push(...rBP.naoMapeados);
@@ -471,6 +477,9 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   const registraPeriodo = (p: string, nomeDoc: string) => {
     if (!periodos.includes(p)) periodos.push(p);
     origemPorPeriodo[p] = origemPorPeriodo[p] ? `${origemPorPeriodo[p]} · ${nomeDoc}` : nomeDoc;
+    // Demonstrativo anual é EXERCÍCIO; se o mesmo período já veio de balancete
+    // mensal, o mensal continua mandando (não vira "2026" o que é maio/26).
+    tipoPorPeriodo[p] ??= "exercicio";
   };
   for (const d of docsDemonstrativos) {
     await new Promise((r) => setImmediate(r));
@@ -515,9 +524,19 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
           for (const p of aceitos) { cobertoDRE.add(p); registraPeriodo(p, d.nome); arvoreOriginalDRE[p] = arvCanon[p]; }
         }
       }
+      // "Verde só com prova": competência declarada FORA dos períodos lidos é
+      // ✗ na validação (10/08/2026, caso "BP 2022.pdf → 31/12/2021") — a coluna
+      // entra, mas ninguém chama de conferida o que diverge do declarado.
+      const anoDeclarado = d.competencia && /^\d{4}$/.test(d.competencia.trim()) ? d.competencia.trim() : null;
+      const divergeDoDeclarado = !!anoDeclarado && c.periodos.length > 0
+        && !c.periodos.some((p) => p.trim().slice(-4) === anoDeclarado);
       relatorio.push({
         documentId: d.id, nome: d.nome, contas: c.totalContas,
-        periodo: aceitos.join(" · ") || null, lido: true, fechamentoOk: null, erro: null,
+        periodo: aceitos.join(" · ") || null, lido: true,
+        fechamentoOk: divergeDoDeclarado ? false : null,
+        erro: divergeDoDeclarado
+          ? `competência declarada ${anoDeclarado}, mas a leitura trouxe ${c.periodos.join(" · ")} — confira o arquivo (num balanço comparativo, a coluna do exercício pode ter sido trocada pela do ano anterior)`
+          : null,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -703,6 +722,7 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     arvoreOriginalDRE,
     naoMapeadosDetalhe: naoMapeados,
     origemPorPeriodo,
+    tipoPorPeriodo,
     provasPorPeriodo,
     bp,
     dre,
