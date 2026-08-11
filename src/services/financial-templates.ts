@@ -69,6 +69,12 @@ export const BP_TEMPLATE: Array<{ classificacao: string; conta: string; nivel: n
   { classificacao: "PL", conta: "Resultado do Exercício", nivel: 2 },
   { classificacao: "PL", conta: "Ajustes de Avaliação Patrimonial", nivel: 2 },
   { classificacao: "PL", conta: "Adiantamento para Futuro Aumento Capital - PL", nivel: 2 },
+  // CONTA-BALDE DO PL (10/08/2026). Todo grupo do BP tem a sua ("Outros Ativos
+  // Circulantes"...) menos o PL — e sem ela a conta que não casa com nenhuma
+  // linha do modelo entrava no TOTAL do passivo e não aparecia em NENHUMA
+  // linha. Caso real: "Distribuição de Lucros" da Belagro, R$ 4,7 mi em 2023 e
+  // R$ 8,8 mi em 2024, sumia da tela e quebrava o Fluxo de Caixa em silêncio.
+  { classificacao: "PL", conta: "Outras Contas do Patrimônio Líquido", nivel: 2 },
 ];
 
 // DRE padrão (modelo gerencial Quantua — espelha Modelo_DRE.xlsx).

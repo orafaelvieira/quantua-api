@@ -443,6 +443,9 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   const origemPorPeriodo: Record<string, string> = {};
   /** Como rotular cada coluna: "mes" → 05/2026 · "exercicio" → 2026. */
   const tipoPorPeriodo: Record<string, "mes" | "exercicio"> = {};
+  /** CONSERVAÇÃO DE VALOR por coluna: o que entrou do documento × o que saiu
+   *  para as linhas. Quando não bate, a conta onde o dinheiro ficou vem junto. */
+  const conservacaoPorPeriodo: Record<string, { entrou: number; saiu: number; diferenca: number; ok: boolean; vazamentos: Array<{ conta: string; grupo: string; valor: number; motivo: string }> }> = {};
   const provasPorPeriodo: Record<string, unknown> = {};
   for (const f of fontes) {
     // A instância do Cloud Run é ÚNICA: 20s+ de fold síncrono travariam todas
@@ -484,6 +487,7 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
       tipoPorPeriodo[periodo] = /^01\/01\//.test(f.conteudo.periodoInicio ?? "") && /^31\/12\//.test(f.conteudo.periodoFim ?? "")
         ? "exercicio" : "mes";
       const rBP = foldBP(conv.arvoreBP, [periodo], dictRows, bpModel);
+      for (const k of rBP.conservacao) conservacaoPorPeriodo[k.periodo] = k;
       mergeItens(bp, rBP.bp as unknown as Item[]);
       naoMapeados.push(...rBP.naoMapeados);
       const rDRE = foldDRE(conv.arvoreDRE, [periodo], dictRows, dreModel);
@@ -550,6 +554,7 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
       if (aceitos.length) {
         if (ehBP) {
           const r2 = foldBP(arvCanon as Parameters<typeof foldBP>[0], aceitos, dictRows, bpModel);
+          for (const k of r2.conservacao) conservacaoPorPeriodo[k.periodo] = k;
           mergeItens(bp, r2.bp as unknown as Item[]);
           naoMapeados.push(...r2.naoMapeados);
           for (const p of aceitos) { cobertoBP.add(p); registraPeriodo(p, d.nome); arvoreOriginalBP[p] = arvCanon[p]; }
@@ -651,6 +656,18 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
         `Origem: ${origemPorPeriodo[p] ?? "documento"}. Enquanto isso o Fluxo de Caixa desta coluna não pode fechar — ele é derivado do balanço.`,
       );
     }
+  }
+
+  // O dinheiro que entrou do documento saiu todo para as linhas? Quando não,
+  // a coluna nomeia a conta — é o diagnóstico do "FC não bate com o BP".
+  for (const [p, k] of Object.entries(conservacaoPorPeriodo)) {
+    if (k.ok) continue;
+    const v = k.vazamentos[0];
+    avisos.push(
+      `${rotuloDaColuna(p)}: conservação de valor não fecha — entrou ${fmtBRL(k.entrou)} do documento e saiu ${fmtBRL(k.saiu)} nas linhas (diferença ${fmtBRL(k.diferenca)})` +
+      (v ? `. O dinheiro ficou em "${v.conta}" (${fmtBRL(v.valor)}): ${v.motivo}.` : ".") +
+      ` Enquanto isso o Fluxo de Caixa desta coluna não pode fechar.`,
+    );
   }
 
   // FLUXO DE CAIXA INDIRETO (pedido do dono, 08/08: "faltou o Fluxo de
@@ -946,6 +963,7 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     tipoPorPeriodo,
     provasPorPeriodo,
     provaPatrimonial,
+    conservacaoPorPeriodo,
     bp,
     dre,
     pendencias,

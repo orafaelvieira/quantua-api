@@ -476,7 +476,9 @@ const isCompensacao = (nome: string): boolean => /compensa[çc][aã]o/i.test(nom
 const OUTROS_GRUPO: Record<string, string | null> = {
   AC: "Outros Ativos Circulantes", PC: "Outros Passivos Circulantes",
   ANC: "Outros Ativos Não Circulantes", PNC: "Outros Passivos não Circulantes",
-  PL: null, // PL sem balde limpo → vira gap sinalizado (integridade)
+  // O PL passou a ter balde (10/08/2026): sem ele o valor entrava no subtotal
+  // e não aparecia em linha nenhuma — dinheiro invisível no balanço.
+  PL: "Outras Contas do Patrimônio Líquido",
 };
 
 /** Busca um SUBCONJUNTO de `vals` que some ≈ `alvo` (DFS com poda e teto de nós).
@@ -541,7 +543,31 @@ export interface AlertaComposicaoBP {
   severidade: "info" | "erro";
 }
 
-export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryEntry[], model: BPModel = DEFAULT_BP_MODEL): { bp: BPLineItem[]; naoMapeados: NaoMapeado[]; alertasComposicao: AlertaComposicaoBP[] } {
+/**
+ * CONSERVAÇÃO DE VALOR (10/08/2026) — "o dinheiro que entra tem de sair".
+ *
+ * Cada folha do documento credita DOIS acumuladores: o subtotal do grupo (que
+ * vira "Ativo Total"/"Passivo Total") e a linha de detalhe (que vira a conta
+ * exibida e alimenta o Fluxo de Caixa). Quando o grupo não tem conta-balde no
+ * modelo — o caso do Patrimônio Líquido — o valor entrava SÓ no subtotal: o
+ * balanço continuava fechando, a linha sumia da tela e o FC deixava de bater
+ * sem ninguém saber por quê ("por que o fluxo de caixa não bate com o BP?").
+ *
+ * A prova soma os dois lados e, quando divergem, NOMEIA a conta onde o
+ * dinheiro ficou. Determinística, sem custo.
+ */
+export interface ConservacaoValorBP {
+  periodo: string;
+  /** Σ dos subtotais dos grupos (o que entrou do documento). */
+  entrou: number;
+  /** Σ das linhas de detalhe (o que saiu para a tela e para o FC). */
+  saiu: number;
+  diferenca: number;
+  ok: boolean;
+  vazamentos: Array<{ conta: string; grupo: string; valor: number; motivo: string }>;
+}
+
+export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: DictionaryEntry[], model: BPModel = DEFAULT_BP_MODEL): { bp: BPLineItem[]; naoMapeados: NaoMapeado[]; alertasComposicao: AlertaComposicaoBP[]; conservacao: ConservacaoValorBP[] } {
   // Linhas do modelo que NÃO são input (subtotais/totais: "Passivo Circulante", "Ativo
   // Total"...). Um mapeamento para elas (dicionário/alias) identifica o nó como o PRÓPRIO
   // grupo/agregado reafirmado — NUNCA pode ser destino de absorção: o valor cairia numa
@@ -550,6 +576,7 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
   // "Passivo Circulante" engolia Fornecedores/Obrigações e a composição do PC ficava R$ 0).
   const naoInputModelo = new Set(model.lines.filter((l) => l.tipo !== "input").map((l) => l.conta));
   const alertasComposicao: AlertaComposicaoBP[] = [];
+  const vazamentos: ConservacaoValorBP["vazamentos"] & { periodo: string }[] = [] as never;
   const detalhe: Record<string, Record<string, number>> = {}; // conta → periodo → valor
   const subtotal: Record<string, Record<string, number>> = {}; // grupoCode → periodo → valor
   const naoMapeados: NaoMapeado[] = [];
@@ -670,6 +697,10 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
               const delta = (it.valor - s) * fator;
               const balde = OUTROS_GRUPO[g];
               if (balde) { add(detalhe, balde, p, delta); add(subtotal, g, p, delta); }
+              else (vazamentos as unknown as Array<Record<string, unknown>>).push({
+                periodo: p, conta: `${it.nome} (diferença de composição)`, grupo: grupoNome, valor: delta,
+                motivo: `o grupo ${grupoNome} não tem conta-balde no modelo: a diferença entre o valor declarado e a soma dos filhos não tem onde aparecer`,
+              });
               // ERRO: delta foi para o balde — a composição precisa de revisão.
               alertasComposicao.push({ periodo: p, grupo: grupoNome, caminho: [...caminho, it.nome].join(" > "), declarado: it.valor, somaFilhos: s, delta: it.valor - s, severidade: "erro" });
             }
@@ -688,6 +719,10 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
         if (comContexto && !naoInputModelo.has(comContexto)) { add(detalhe, comContexto, p, v); it.destino = comContexto; return; }
         const balde = OUTROS_GRUPO[g];
         if (balde) add(detalhe, balde, p, v);
+        else (vazamentos as unknown as Array<Record<string, unknown>>).push({
+          periodo: p, conta: it.nome, grupo: grupoNome, valor: v,
+          motivo: `o grupo ${grupoNome} não tem conta-balde no modelo: o valor entra no total mas não aparece em nenhuma linha (some da tela e do Fluxo de Caixa)`,
+        });
         it.destino = balde ?? "(não classificado)";
         // Nome GENÉRICO ("Outras Obrigações", "Outros Créditos"...) que caiu no balde
         // "Outros ..." do próprio grupo: o balde É a classificação correta por definição —
@@ -753,8 +788,22 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
     }
     return { classificacao: t.classificacao, conta: t.conta, valores, nivel: t.nivel, editado: false };
   });
-  return { bp, naoMapeados, alertasComposicao };
+  // ── Conservação de valor: Σ subtotais × Σ detalhe, por período ──
+  const conservacao: ConservacaoValorBP[] = periodos.map((p) => {
+    const entrou = arred2(Object.values(subtotal).reduce((s2, porPeriodo) => s2 + (porPeriodo[p] ?? 0), 0));
+    const saiu = arred2(Object.values(detalhe).reduce((s2, porPeriodo) => s2 + (porPeriodo[p] ?? 0), 0));
+    const diferenca = arred2(entrou - saiu);
+    const doPeriodo = (vazamentos as unknown as Array<{ periodo: string; conta: string; grupo: string; valor: number; motivo: string }>)
+      .filter((v) => v.periodo === p)
+      .map(({ conta, grupo, valor, motivo }) => ({ conta, grupo, valor, motivo }));
+    return { periodo: p, entrou, saiu, diferenca, ok: Math.abs(diferenca) <= Math.max(0.05, Math.abs(entrou) * 1e-9), vazamentos: doPeriodo };
+  });
+
+  return { bp, naoMapeados, alertasComposicao, conservacao };
 }
+
+/** Arredonda a 2 casas — a conservação é conferida ao centavo. */
+const arred2 = (n: number): number => Math.round(n * 100) / 100;
 
 export async function extractFinancialsWithAI(
   docs: Array<{ buffer?: Buffer; raw?: string; rawIndent?: string; linhas?: ExtractedRow[]; tipo: string; periodos?: string[] }>,
