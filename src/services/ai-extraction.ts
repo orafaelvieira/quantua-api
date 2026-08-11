@@ -575,6 +575,19 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
   // e as folhas seriam descartadas (caso Fibracabos Grau 4: "EXIGÍVEL A CURTO PRAZO" →
   // "Passivo Circulante" engolia Fornecedores/Obrigações e a composição do PC ficava R$ 0).
   const naoInputModelo = new Set(model.lines.filter((l) => l.tipo !== "input").map((l) => l.conta));
+  /**
+   * BALDE RESOLVIDO CONTRA O MODELO EM USO (10/08/2026). O nome canônico só
+   * serve se a EMPRESA tiver essa linha: modelo copy-on-write (empresa que
+   * editou o BP) pode não ter, e creditar um nome que nenhuma linha lê deixaria
+   * o dinheiro invisível na tela COM a prova de conservação passando — o pior
+   * dos mundos. Sem balde no modelo, devolve null: vira vazamento declarado.
+   */
+  const baldeDoGrupo = (g: string): string | null => {
+    const canonico = OUTROS_GRUPO[g];
+    if (canonico && model.names.includes(canonico)) return canonico;
+    const doGrupo = model.lines.filter((l) => l.tipo === "input" && l.classificacao === g);
+    return doGrupo.find((l) => /^outr[oa]s?/i.test(l.conta))?.conta ?? null;
+  };
   const alertasComposicao: AlertaComposicaoBP[] = [];
   const vazamentos: ConservacaoValorBP["vazamentos"] & { periodo: string }[] = [] as never;
   const detalhe: Record<string, Record<string, number>> = {}; // conta → periodo → valor
@@ -695,7 +708,7 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
             if (Math.abs(s - it.valor) > tolDe(it.valor)) {
               // Delta preservado no balde (o total NUNCA se perde) + alerta apontando o nó.
               const delta = (it.valor - s) * fator;
-              const balde = OUTROS_GRUPO[g];
+              const balde = baldeDoGrupo(g);
               if (balde) { add(detalhe, balde, p, delta); add(subtotal, g, p, delta); }
               else (vazamentos as unknown as Array<Record<string, unknown>>).push({
                 periodo: p, conta: `${it.nome} (diferença de composição)`, grupo: grupoNome, valor: delta,
@@ -717,11 +730,11 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
           : null;
         // (contexto também nunca pode apontar para subtotal/total do modelo)
         if (comContexto && !naoInputModelo.has(comContexto)) { add(detalhe, comContexto, p, v); it.destino = comContexto; return; }
-        const balde = OUTROS_GRUPO[g];
+        const balde = baldeDoGrupo(g);
         if (balde) add(detalhe, balde, p, v);
         else (vazamentos as unknown as Array<Record<string, unknown>>).push({
           periodo: p, conta: it.nome, grupo: grupoNome, valor: v,
-          motivo: `o grupo ${grupoNome} não tem conta-balde no modelo: o valor entra no total mas não aparece em nenhuma linha (some da tela e do Fluxo de Caixa)`,
+          motivo: `o modelo de BP desta empresa não tem conta-balde no grupo ${grupoNome} ("Outros…"): o valor entra no total mas não aparece em nenhuma linha (some da tela e do Fluxo de Caixa)`,
         });
         it.destino = balde ?? "(não classificado)";
         // Nome GENÉRICO ("Outras Obrigações", "Outros Créditos"...) que caiu no balde
