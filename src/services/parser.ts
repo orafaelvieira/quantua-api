@@ -1334,5 +1334,26 @@ export async function parseDocument(
 ): Promise<ParsedDocument> {
   const ext = filename.split(".").pop()?.toLowerCase();
   if (ext === "pdf") return parsePDF(buffer, tipo, filename);
+  // DEMONSTRATIVO EM PLANILHA (11/08/2026): balanço e DRE em xlsx/csv tinham
+  // leitura sofrível aqui — medido no acervo, 6 de 10 arquivos rendiam ZERO
+  // linha e "Nota" virava período. O leitor dedicado (determinístico, reusa a
+  // máquina do balancete) devolve 9 de 10 com hierarquia e período corretos.
+  // Só assume quando LÊ MAIS que o caminho antigo: nunca piora o que já ia bem.
+  if (/balan|dre|resultado|dmpl/i.test(tipo) && !/balancete/i.test(tipo)) {
+    try {
+      const { parseDemonstrativoTabular } = await import("./demonstrativo-tabular");
+      const alt = parseDemonstrativoTabular(buffer, filename);
+      if (alt) {
+        const antigo = parseExcel(buffer, tipo);
+        const contas = (ls: ExtractedRow[]) => ls.filter((l) => Object.values(l.valores).some((v) => v !== 0)).length;
+        if (contas(alt.linhas) > contas(antigo.linhas)) {
+          return { tipo, linhas: alt.linhas, periodos: alt.periodos, raw: alt.raw };
+        }
+        return antigo;
+      }
+    } catch (e) {
+      console.warn(`[parser] leitor de demonstrativo em planilha falhou (segue no caminho antigo):`, e instanceof Error ? e.message : e);
+    }
+  }
   return parseExcel(buffer, tipo);
 }
