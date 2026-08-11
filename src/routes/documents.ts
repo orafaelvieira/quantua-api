@@ -135,6 +135,30 @@ router.get("/pool", async (req: AuthRequest, res: Response): Promise<void> => {
     include: { leituraPorta: { select: { conteudo: true, hashArquivo: true } } },
   });
   const porId = new Map(docs.map((d) => [d.id, d]));
+  // JÁ USADO EM OUTRO IBR (garantia 7 do dono, 10/08/2026): a linha fixada do
+  // IBR aponta para a do POOL por `fixadoDeId`. O wizard precisa saber ANTES
+  // de selecionar — dois IBRs sobre a mesma base ou se contradizem, ou é
+  // retrabalho cobrado duas vezes. IBR CANCELADO não conta (a evidência dele
+  // está congelada, mas o documento voltou a ficar livre).
+  const fixadas = await prisma.document.findMany({
+    where: { fixadoDeId: { in: docs.map((d) => d.id) }, analysisId: { not: null } },
+    select: { fixadoDeId: true, analysisId: true },
+  });
+  const analises = fixadas.length
+    ? await prisma.analysis.findMany({
+        where: { id: { in: [...new Set(fixadas.map((f) => f.analysisId!).filter(Boolean))] } },
+        select: { id: true, nome: true, status: true },
+      })
+    : [];
+  const analisePorId = new Map(analises.map((a) => [a.id, a]));
+  const usadoPorDoc = new Map<string, Array<{ analysisId: string; nome: string; status: string }>>();
+  for (const f of fixadas) {
+    const a = f.analysisId ? analisePorId.get(f.analysisId) : null;
+    if (!f.fixadoDeId || !a || a.status === "Cancelada") continue;
+    const lista = usadoPorDoc.get(f.fixadoDeId) ?? [];
+    if (!lista.some((x) => x.analysisId === a.id)) lista.push({ analysisId: a.id, nome: a.nome, status: a.status });
+    usadoPorDoc.set(f.fixadoDeId, lista);
+  }
   // BACKFILL PREGUIÇOSO da leitura (F1): balancete do pool sem leitura (ou com
   // leitura de arquivo substituído) é lido em background na primeira listagem —
   // os documentos que subiram ANTES da porta existir ganham leitura sem
@@ -156,6 +180,9 @@ router.get("/pool", async (req: AuthRequest, res: Response): Promise<void> => {
       id: v.id, nome: v.nome, tipo: v.tipo, competencia: v.competencia, moeda: v.moeda,
       versao: v.versao, status: v.status, tamanho: v.tamanho, criadoEm: v.createdAt,
       totalVersoes: l.versoes.length, temResumo: !!cache?.resumo,
+      // IBRs que JÁ usam este documento (qualquer versão da cadeia).
+      usadoEm: l.versoes.flatMap((vv) => usadoPorDoc.get(vv.id) ?? [])
+        .filter((x, i, arr) => arr.findIndex((y) => y.analysisId === x.analysisId) === i),
       // LEITURA NA PORTA (F1): resumo curto para a tela — o miolo fica no registro.
       leitura: (() => {
         const lp = (v as { leituraPorta?: { conteudo: unknown; hashArquivo: string | null } | null }).leituraPorta;

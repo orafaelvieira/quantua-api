@@ -634,6 +634,25 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
   // SEM O LADO DO PASSIVO (Passivo Circulante e Não Circulante com zero
   // contas), Ativo 8,3 mi × Passivo 3,6 mi — e o FC "não fechava" sem dizer
   // por quê. O balancete, que tem a própria prova, fecha ao centavo.
+  // Contas que o fold marcou como IGNORADAS, por período — a árvore carimba o
+  // destino "(ignorada pelo analista)" em cada nó. É a primeira suspeita quando
+  // o balanço não fecha: ignorar tira da montagem sem tirar do documento.
+  const ignoradasPorPeriodo = new Map<string, Array<{ nome: string; valor: number }>>();
+  for (const [per, capa] of Object.entries(arvoreOriginalBP)) {
+    const achadas: Array<{ nome: string; valor: number }> = [];
+    const anda = (itens: unknown): void => {
+      if (!Array.isArray(itens)) return;
+      for (const it of itens as Array<{ nome?: string; valor?: number; destino?: string; filhos?: unknown }>) {
+        if (typeof it?.destino === "string" && it.destino.includes("ignorada") && typeof it.valor === "number" && it.valor !== 0) {
+          achadas.push({ nome: String(it.nome ?? "?"), valor: it.valor });
+        }
+        if (it?.filhos) anda(it.filhos);
+      }
+    };
+    for (const itens of Object.values((capa as { grupos?: Record<string, unknown> })?.grupos ?? {})) anda(itens);
+    if (achadas.length) ignoradasPorPeriodo.set(per, achadas);
+  }
+
   const valorEm = (conta: string, p: string): number =>
     (bp.find((x) => x.conta === conta)?.valores as Record<string, number> | undefined)?.[p] ?? 0;
   /** Mesmo rótulo curto da tela: "2024" (exercício) · "05/2026" (mês). */
@@ -651,6 +670,20 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     const ok = Math.abs(gap) <= Math.max(1, Math.abs(ativo) * 0.0001);
     provaPatrimonial[p] = { ativo, passivo, gap, ok };
     if (!ok) {
+      // A CAUSA ANTES DA CULPA (10/08/2026, caso Dunamys): quando há conta
+      // MARCADA COMO IGNORADA na coluna, ela é a primeira suspeita — ignorar
+      // tira o valor da montagem sem tirar do documento. Dizer "a extração não
+      // fechou" aí é mentira: a leitura estava certa ao centavo.
+      const ignoradas = ignoradasPorPeriodo.get(p) ?? [];
+      const somaIgnorada = ignoradas.reduce((s2, x) => s2 + Math.abs(x.valor), 0);
+      if (ignoradas.length > 0 && Math.abs(Math.abs(gap) - somaIgnorada) <= Math.max(1, Math.abs(gap) * 0.01)) {
+        avisos.push(
+          `${rotuloDaColuna(p)}: o balanço não fecha por causa de conta MARCADA COMO IGNORADA — ${ignoradas.map((x) => `"${x.nome}" (${fmtBRL(x.valor)})`).join(", ")}. ` +
+          `A diferença (${fmtBRL(gap)}) é exatamente esse valor: a leitura do documento está correta; o que tirou a conta da montagem foi a marcação de ignorar. ` +
+          `Desfaça o ignorar na auditoria abaixo (ou classifique a conta) e o balanço volta a fechar.`,
+        );
+        continue;
+      }
       avisos.push(
         `${rotuloDaColuna(p)}: o balanço lido não fecha — Ativo ${fmtBRL(ativo)} × Passivo + PL ${fmtBRL(passivo)} (diferença de ${fmtBRL(gap)}). ` +
         `Origem: ${origemPorPeriodo[p] ?? "documento"}. Enquanto isso o Fluxo de Caixa desta coluna não pode fechar — ele é derivado do balanço.`,
@@ -953,8 +986,39 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
         : (sugestoesIA[`BP|${raizGrupo(pd.grupo)}|${pd.nome}`]?.sugestao ?? null),
     }));
 
+  // ── CONCILIAÇÃO POR DOCUMENTO (10/08/2026, garantia 6 do dono: "documento
+  // que ainda não foi conciliado 100% não pode ser usado em IBR") ──
+  // UM lugar decide, e a mesma resposta serve à tela de Conciliação e ao
+  // wizard do IBR. Conciliado = leitura sem erro + TODAS as provas que rodaram
+  // passaram + nenhuma conta do documento pendente de classificação.
+  const pendPorPeriodo = new Map<string, number>();
+  for (const nm of naoMapeados) pendPorPeriodo.set(nm.periodo, (pendPorPeriodo.get(nm.periodo) ?? 0) + 1);
+  const fimDoIntervalo = (per: string | null): string[] => {
+    if (!per) return [];
+    return per.split(" · ").flatMap((t) => {
+      const partes = t.split(" a ");
+      return [(partes[partes.length - 1] ?? "").trim()].filter(Boolean);
+    });
+  };
+  const conciliacaoPorDocumento: Record<string, { ok: boolean; motivos: string[] }> = {};
+  for (const r of relatorio) {
+    const motivos: string[] = [];
+    if (!r.lido) motivos.push(r.erro ?? "documento ainda não lido");
+    else {
+      if (r.fechamentoOk === false) motivos.push(r.erro ?? "as provas do documento não fecham");
+      const pend = fimDoIntervalo(r.periodo).reduce((s2, p) => s2 + (pendPorPeriodo.get(p) ?? 0), 0);
+      if (pend > 0) motivos.push(`${pend} conta(s) sem classificação`);
+      const prova = fimDoIntervalo(r.periodo).map((p) => provaPatrimonial[p]).find((x) => x && !x.ok);
+      if (prova) motivos.push(`o balanço da coluna não fecha (diferença de ${fmtBRL(prova.gap)})`);
+      const cons = fimDoIntervalo(r.periodo).map((p) => conservacaoPorPeriodo[p]).find((x) => x && !x.ok);
+      if (cons) motivos.push(`conservação de valor não fecha (diferença de ${fmtBRL(cons.diferenca)})`);
+    }
+    conciliacaoPorDocumento[r.documentId] = { ok: motivos.length === 0, motivos };
+  }
+
   const payload = {
     periodos,
+    conciliacaoPorDocumento,
     fc,
     arvoreOriginalBP,
     arvoreOriginalDRE,

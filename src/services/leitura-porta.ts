@@ -30,6 +30,7 @@ import { extrairComCascata, detectDocType, type DocParaCascata, type EscopoRegua
 import { resolverCascataDicionario, whereCascataDicionarioAtiva } from "./dicionario-escopo";
 import { resolverEscopoAcesso } from "./escopo-acesso";
 import { loadActiveBPModel, loadActiveDREModel } from "./model-version";
+import { IGNORAR_DESTINO } from "./account-mapper";
 import { env } from "../config/env";
 import { comContextoIA } from "./ai-usage";
 
@@ -158,7 +159,10 @@ const renomearChaves = <T,>(obj: Record<string, T>): Record<string, T> => {
  *  aviso de competência divergente). */
 /** v3 (10/08/2026): a porta passou a usar a CASCATA COMPLETA do IBR
  *  (heurístico → Haiku → visão). Leituras da v2 são refeitas. */
-export const VERSAO_LEITOR_DEMONSTRATIVO = 3;
+/** v4 (10/08/2026): a prova da LEITURA deixou de ser afetada pela marcação de
+ *  "ignorar" do analista — leituras da v3 guardaram integridade errada (caso
+ *  Dunamys: 3/5 num balanço que fecha ao centavo) e são refeitas. */
+export const VERSAO_LEITOR_DEMONSTRATIVO = 4;
 const anoDe = (p: string): number => Number((p.match(/(\d{4})\s*$/) ?? [])[1] ?? 0);
 
 /**
@@ -279,6 +283,16 @@ export async function lerDemonstrativoHibrido(
     // sai do DONO da empresa. Sem isto a porta julgaria o documento com um
     // dicionário vazio e daria score diferente do IBR para o mesmo arquivo.
     const insumos = await carregarInsumosDaEmpresa(ctx.companyId);
+    // IGNORAR É DECISÃO DE MONTAGEM, NÃO DE LEITURA (10/08/2026 — caso Dunamys).
+    // A conta "Lucros/Prejuízos Acumulados" estava marcada como ignorada no
+    // dicionário da empresa. Na hora de MEDIR A EXTRAÇÃO isso derrubava
+    // R$ 150.637,50 do PL, o balanço "não fechava" e o sistema acusava a
+    // extração — que estava perfeita (Ativo = Passivo + PL = 801.403,25, igual
+    // ao total impresso). Pior: a cascata escalava até a VISÃO tentando
+    // consertar uma leitura correta. A prova da leitura mede o DOCUMENTO como
+    // ele é; a conciliação, adiante, é que aplica as decisões do analista.
+    const semIgnorar = (es: typeof insumos.dictForBP) => es.filter((e) => e.contaDestino !== IGNORAR_DESTINO);
+    const insumosDaLeitura = { ...insumos, dictForBP: semIgnorar(insumos.dictForBP), dictForDRE: semIgnorar(insumos.dictForDRE) };
     // ESCOPO DA RÉGUA: um documento por vez não tem como provar as 5 provas.
     // O conteúdo decide (o `tipo` declarado é reserva) — e documento que traz
     // BP e DRE juntos (planilha "BP e DRE 2024.xlsx") volta ao escopo cheio.
@@ -287,7 +301,7 @@ export async function lerDemonstrativoHibrido(
     const escopo: EscopoRegua = conteudo === "BOTH" ? "auto" : conteudo === "DRE" ? "DRE" : conteudo === "BP" ? "BP" : (ehBP ? "BP" : "DRE");
     const { escolhido, custoTotalUsd } = await comContextoIA(
       { produto: "data-room", origem: "leitura-porta-demonstrativo", companyId: ctx.companyId },
-      () => extrairComCascata([doc], { ...insumos, hibridoAtivo: env.ibr.hibridoAtivo, origem: "porta", escopo, exigeArvore: true }),
+      () => extrairComCascata([doc], { ...insumosDaLeitura, hibridoAtivo: env.ibr.hibridoAtivo, origem: "porta", escopo, exigeArvore: true }),
     );
     const arvBP = renomearChaves((escolhido.arvoreBP ?? {}) as Record<string, unknown>);
     const arvDRE = renomearChaves((escolhido.arvoreDRE ?? {}) as Record<string, unknown>);
