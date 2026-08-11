@@ -5,7 +5,7 @@ import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from
 import { bumpDictionaryVersion, getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { DEFAULT_BP_MODEL, IGNORAR_DESTINO } from "../services/account-mapper";
 import { avaliaBloqueioEstrutural } from "../services/conta-estrutural";
-import { prioridadeEscopo, whereCascataDicionario } from "../services/dicionario-escopo";
+import { prioridadeEscopo, whereCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
 import { avaliarContaParticular, grupoImediatoDoCaminho } from "../services/conta-particular";
 
 const router = Router();
@@ -952,13 +952,18 @@ router.post("/desfazer-ignorar", async (req: AuthRequest, res: Response): Promis
   const empresa = await prisma.company.findFirst({ where: { id: companyId, ...whereEmpresaVisivel(req) } });
   if (!empresa) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
+  // A BUSCA USA A MESMA CASCATA DO FOLD (10/08/2026 — bug do primeiro corte):
+  // o filtro anterior cobria empresa e workspace e ESQUECIA o dicionário GLOBAL
+  // (userId null + companyId null), que é de onde vinha a marca no caso real —
+  // a tela dizia "ignorada" e a rota respondia "não está marcada".
   const alvo = nomeOriginal.trim().toLowerCase();
   const candidatas = await prisma.accountDictionary.findMany({
     where: {
-      contaDestino: IGNORAR_DESTINO,
-      revisao: { not: "cancelada" },
-      OR: [{ companyId }, { companyId: null, userId: { in: req.scopeUserIds! } }],
-      ...(tipo ? { tipo } : {}),
+      AND: [
+        whereCascataDicionarioAtiva(req.scopeUserIds!, companyId),
+        { contaDestino: IGNORAR_DESTINO },
+        ...(tipo ? [{ tipo }] : []),
+      ],
     },
   });
   const norm = (s: string) => s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
@@ -967,9 +972,20 @@ router.post("/desfazer-ignorar", async (req: AuthRequest, res: Response): Promis
     res.status(404).json({ error: `"${nomeOriginal}" não está marcada como ignorada nesta empresa.` });
     return;
   }
+  // Marca que vem do GLOBAL não se cancela por aqui: cancelar tiraria a regra
+  // de TODAS as empresas. O caminho é classificar a conta NESTA empresa — a
+  // entrada da empresa vence a global na cascata (é o que a tela oferece).
+  const daEmpresa = remover.filter((r) => r.companyId === companyId);
+  if (daEmpresa.length === 0) {
+    res.status(409).json({
+      error: `"${nomeOriginal}" está marcada como ignorada no dicionário GLOBAL da Quantua. Classifique a conta aqui na empresa — a classificação da empresa substitui a regra global, sem mexer nas outras empresas.`,
+      escopo: "global",
+    });
+    return;
+  }
   const autor = await nomeUsuario(req.userId);
   await prisma.accountDictionary.updateMany({
-    where: { id: { in: remover.map((r) => r.id) } },
+    where: { id: { in: daEmpresa.map((r) => r.id) } },
     data: {
       revisao: "cancelada", revisadoPor: autor, revisadoEm: new Date(),
       revisaoMotivo: "Ignorar desfeito na auditoria — a conta volta a entrar nas demonstrações.",
@@ -977,9 +993,9 @@ router.post("/desfazer-ignorar", async (req: AuthRequest, res: Response): Promis
   });
   await bumpDictionaryVersion({
     acao: "cancelar", fonte: "dicionario-empresa",
-    nomeOriginal, contaDestino: IGNORAR_DESTINO, grupoConta: remover[0]!.grupoConta, tipo: remover[0]!.tipo,
+    nomeOriginal, contaDestino: IGNORAR_DESTINO, grupoConta: daEmpresa[0]!.grupoConta, tipo: daEmpresa[0]!.tipo,
     criadoPor: autor, companyId,
     nota: `"Ignorar" desfeito em ${nomeOriginal} — a conta volta a somar nas demonstrações desta empresa.`,
   });
-  res.json({ ok: true, desfeitas: remover.length });
+  res.json({ ok: true, desfeitas: daEmpresa.length });
 });
