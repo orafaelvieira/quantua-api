@@ -5,7 +5,7 @@ import { z } from "zod";
 import { prisma } from "../db/client";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from "../services/escopo-empresa";
-import { uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
+import { uploadFile, deleteFile, getSignedDownloadUrl, mimeDoNome } from "../services/storage";
 import { registrarAuditoria } from "../services/audit-trail";
 import { derivarDocumentosLogicos, periodosFaltantes } from "../services/fechamento-periodo";
 import { montarLinhaAdotada, montarLinhaFixada, propagarMetadadosDoPool } from "../services/fixacao-pool";
@@ -707,8 +707,15 @@ router.get("/:id/download", async (req: AuthRequest, res: Response): Promise<voi
   });
   if (!doc || !doc.storagePath) { res.status(404).json({ error: "Documento não encontrado" }); return; }
   try {
-    const url = await getSignedDownloadUrl(doc.storagePath, 300);
-    res.json({ url, expiresIn: 300, nome: doc.nome, hash: doc.hash });
+    // Nome COM EXTENSÃO garantida: documento antigo pode ter sido salvo sem
+    // ela (o arquivo "download" sem tipo que o analista reclamou) — a extensão
+    // vem da chave do storage quando o nome não a tem.
+    const extDaChave = (doc.storagePath.split(".").pop() ?? "").toLowerCase();
+    const nome = /\.[a-z0-9]{2,5}$/i.test(doc.nome) || !/^[a-z0-9]{2,5}$/.test(extDaChave)
+      ? doc.nome
+      : `${doc.nome}.${extDaChave}`;
+    const url = await getSignedDownloadUrl(doc.storagePath, 300, mimeDoNome(nome), nome);
+    res.json({ url, expiresIn: 300, nome, hash: doc.hash });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Falha ao gerar URL" });
   }

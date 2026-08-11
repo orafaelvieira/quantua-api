@@ -31,6 +31,7 @@ import { classificarSetor } from "../services/setor-classificador";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
+import { extrairComCascata, paraTelaManual, mergeItensPorConta } from "../services/extracao-cascata";
 import { getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
@@ -1226,22 +1227,6 @@ export function aplicarProvasBalancete(
 
 // Merge por conta: copia valores de períodos ainda vazios (usado para juntar
 // documentos anuais entre si e para APPENDAR os meses dos balancetes).
-function mergeItensPorConta<T extends { conta: string; valores: Record<string, number> }>(existing: T[], newItems: T[]): void {
-  const map = new Map<string, T>();
-  for (const item of existing) map.set(item.conta, item);
-  for (const novo of newItems) {
-    const alvo = map.get(novo.conta);
-    if (alvo) {
-      for (const [periodo, valor] of Object.entries(novo.valores)) {
-        if (alvo.valores[periodo] === undefined || alvo.valores[periodo] === 0) alvo.valores[periodo] = valor;
-      }
-    } else {
-      existing.push(novo);
-      map.set(novo.conta, novo);
-    }
-  }
-}
-
 // Mensagem única da IMUTABILIDADE do concluído (decisão do usuário, 21/07/2026):
 // produto emitido não se altera — atualização é NOVA VERSÃO, com motivo.
 const ERRO_CONCLUIDA_IMUTAVEL =
@@ -1560,184 +1545,24 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const bpModel = await loadActiveBPModel(analysis.companyId); // bridge: BP padrão vem do banco (cascata empresa→global)
     const dreModel = await loadActiveDREModel(analysis.companyId); // bridge: DRE padrão idem (contas do editor entram no dropdown e na cascata)
 
-    // Auto-detect document type — content-first, tipo as fallback
-    function detectDocType(doc: ParsedDocument): "BP" | "DRE" | "BOTH" | "UNKNOWN" {
-      // 1. ALWAYS check content first (more reliable than user-provided tipo)
-      const raw = doc.raw.toLowerCase();
-      const hasBP = raw.includes("ativo circulante") || raw.includes("passivo circulante") || raw.includes("a t i v o");
-      // DRE keywords — must be specific enough to NOT match BP account names
-      // Avoid: "prejuizo" (matches BP "LUCROS OU PREJUIZOS ACUMULADOS")
-      // Avoid: "resultado do exerc" (matches BP PL section "RESULTADO DO EXERCÍCIO")
-      // Avoid: "despesas operacionais", "lucro bruto" (too generic, appear in some BPs)
-      const hasDRE = raw.includes("receita bruta") || raw.includes("resultado liquido") ||
-                     raw.includes("custo operacional") || raw.includes("custo produtos vendidos") ||
-                     raw.includes("demonstrativo de resultado") || raw.includes("demonstração do resultado") ||
-                     raw.includes("receita de vendas") || raw.includes("deducoes da receita") ||
-                     raw.includes("deduções da receita") || raw.includes("despesas com vendas") ||
-                     raw.includes("receita operacional líquida") || raw.includes("custo das mercadorias");
-
-      if (hasBP && hasDRE) return "BOTH";
-      if (hasBP) return "BP";
-      if (hasDRE) return "DRE";
-
-      // 2. Fallback: user-provided tipo field
-      const tipoNorm = doc.tipo.toLowerCase();
-      if (tipoNorm.includes("balan") || tipoNorm.includes("balancete")) return "BP";
-      if (tipoNorm.includes("dre") || tipoNorm.includes("resultado") || tipoNorm.includes("demonstra")) return "DRE";
-
-      return "UNKNOWN";
-    }
-
-    // (merge por conta: mergeItensPorConta, escopo de módulo — reusado no refold)
-
-    // ── CASCATA cheapest-first: parser (grátis) → híbrido (IA Haiku) → [visão: passo 2] ──
-    // Pega o 1º nível que FECHA no gate de integridade (Ativo=Passivo + composição AC+ANC /
-    // PC+PNC+PL + detalhe completo + DRE reconciliando vs declarado). Se nenhum fecha, usa o
-    // de maior score (a trava mostra vermelho). Mede o custo de IA de cada nível.
+    // ── CASCATA cheapest-first: parser (grátis) → híbrido (Haiku) → visão (Sonnet) ──
+    // MOTOR ÚNICO (10/08/2026): a cascata mudou de endereço para
+    // `services/extracao-cascata.ts` — mesmas funções, mesma ordem, mesmo
+    // critério (score 5/5 de integridade). A porta da Data room do workspace
+    // chama EXATAMENTE esta função, então os dois caminhos não podem divergir.
     const dictAll = [...dictForBP, ...dictForDRE];
-    const HIBRIDO_ATIVO = env.ibr.hibridoAtivo;
-    const linhasToText = (linhas: ExtractedRow[]) =>
-      linhas.map((l) => `${l.contexto ? l.contexto + " > " : ""}${l.conta} = ${JSON.stringify(l.valores)}`).join("\n");
-
-    interface Candidato {
-      fonte: "heuristico" | "hibrido" | "visao";
-      bp: BPLineItem[]; dre: DRELineItem[]; periodos: string[];
-      declarados: Record<string, Record<string, number>>;
-      unmatched: UnmatchedAccount[];              // N3 p/ tela manual (só do híbrido; heurístico = [])
-      arvoreBP: unknown; arvoreDRE: unknown; naoMapeados: unknown[]; alertasComposicao: unknown[];
-      custoUsd: number;
-      validacao: ReturnType<typeof validateFinancialData>;
-      score: number; fecha: boolean;
-    }
-    const scoreDe = (v: ReturnType<typeof validateFinancialData>) => {
-      const dreOk = !v.reconciliacaoDRE.verificada || v.reconciliacaoDRE.ok;
-      return (v.equacaoPatrimonial ? 1 : 0) + (v.composicaoAtivo ? 1 : 0) + (v.composicaoPassivo ? 1 : 0) + (v.detalheCompleto ? 1 : 0) + (dreOk ? 1 : 0);
-    };
-    const totalBP = (bp: BPLineItem[], conta: string, p: string) => bp.find((b) => b.conta === conta)?.valores[p] ?? 0;
-    // Normaliza/recalcula a DRE do candidato e roda a trava — base da decisão da cascata.
-    // IMPORTANTE: exige DADOS REAIS (Ativo e Passivo não-zero em algum período). Sem isso,
-    // validateFinancialData marca equação=true VACUAMENTE (pula a checagem com totais 0) —
-    // um resultado VAZIO não pode "fechar" nem vencer um parcial. Vazio → score 0.
-    const avalia = (c: Omit<Candidato, "validacao" | "score" | "fecha">): Candidato => {
-      normalizeDRESigns(c.dre, c.periodos);
-      recomputeDRESubtotals(c.dre, c.periodos, dreModel.extrasPorBloco);
-      const v = validateFinancialData(c.bp, c.dre, c.periodos, c.declarados);
-      const temDados = c.periodos.some((p) => totalBP(c.bp, "Ativo Total", p) !== 0 && totalBP(c.bp, "Passivo Total", p) !== 0);
-      const score = temDados ? scoreDe(v) : 0;
-      return { ...c, validacao: v, score, fecha: temDados && score === 5 };
-    };
-    const declaradosDe = (dre: DRELineItem[], periodos: string[]) => {
-      const decl: Record<string, Record<string, number>> = {};
-      for (const p of periodos) for (const conta of ["Receita Líquida", "Lucro Bruto", "Lucro Líquido"]) {
-        const v = dre.find((d) => d.conta === conta)?.valores[p] ?? 0;
-        if (Math.abs(v) > 0.5) (decl[p] ??= {})[conta] = v;
-      }
-      return decl;
-    };
-
-    // Nível 1 — PARSER determinístico (heurístico, grátis).
-    const rodaHeuristico = (): Candidato => {
-      let bp: BPLineItem[] = [], dre: DRELineItem[] = [];
-      const unm: UnmatchedAccount[] = [];
-      for (const doc of parsedDocs) {
-        const docType = detectDocType(doc);
-        const tipoNorm = doc.tipo.toLowerCase();
-        const querBP = docType === "BP" || docType === "BOTH" || (docType === "UNKNOWN" && doc.linhas.length > 0 && (tipoNorm.includes("balan") || tipoNorm.includes("balancete")));
-        const querDRE = docType === "DRE" || docType === "BOTH" || (docType === "UNKNOWN" && doc.linhas.length > 0 && (tipoNorm.includes("dre") || tipoNorm.includes("resultado")));
-        if (querBP) { const r = mapExtractedToBP(doc.linhas, dictForBP, bpModel); if (!bp.length) bp = r.items; else mergeItensPorConta(bp, r.items); unm.push(...r.unmatched); }
-        if (querDRE) { const r = mapExtractedToDRE(doc.linhas, dictForDRE); if (!dre.length) dre = r.items; else mergeItensPorConta(dre, r.items); unm.push(...r.unmatched); }
-      }
-      const periodos = detectPeriodos(parsedDocs);
-      // declarados capturados ANTES do recompute (avalia() recompõe a cascata depois)
-      const declarados = declaradosDe(dre, periodos);
-      // unmatched do heurístico é folha profunda (N4+) → NUNCA vai p/ a tela (dupla contagem).
-      // Guardamos só p/ telemetria; a tela manual é N3-only (alimentada pelo híbrido).
-      return avalia({ fonte: "heuristico", bp, dre, periodos, declarados, unmatched: [], arvoreBP: null, arvoreDRE: null, naoMapeados: [], alertasComposicao: [], custoUsd: 0 });
-    };
-
-    // N3 de BP não mapeados → tela manual (NUNCA N4+; a soma das folhas já está no N3).
-    // Candidatos de sugestão. DRE: inputs do template. BP: filtrado POR LADO do grupo
-    // (Ativo/Passivo/PL) — a sugestão NUNCA cruza Ativo↔Passivo (mesma regra do de-para).
-    const candidatosDRE = DRE_TEMPLATE.filter((t) => !t.subtotal).map((t) => t.conta);
-    const candidatosBPdoGrupo = (grupo: string): string[] => {
-      const lado = grupo.startsWith("Ativo") ? "A" : grupo.startsWith("Passivo") ? "P" : grupo.startsWith("Patrim") ? "PL" : null;
-      if (!lado) return bpModel.names;
-      return bpModel.lines
-        .filter((l) => l.tipo === "input" && (lado === "PL" ? l.classificacao === "PL" : lado === "P" ? (l.classificacao[0] === "P" && l.classificacao !== "PL") : l.classificacao[0] === "A"))
-        .map((l) => l.conta);
-    };
-    const naoMapeadosParaTela = (naoMapeados: NaoMapeado[]): UnmatchedAccount[] => {
-      // BP: nível N3 (primeira quebra). DRE: nível de seção-input. NUNCA folhas profundas
-      // (sem dupla contagem). Reclassificar MOVE o valor (de "Outros" p/ a conta certa).
-      const byKey = new Map<string, UnmatchedAccount>();
-      for (const nm of naoMapeados) {
-        if (nm?.tipo !== "BP" && nm?.tipo !== "DRE") continue;
-        const key = `${nm.tipo}|${nm.nome}`;
-        const contexto = nm.tipo === "BP" ? nm.grupo : `Hoje em: ${nm.destino}`;
-        const sugestao = sugerirConta(nm.nome, nm.tipo === "BP" ? candidatosBPdoGrupo(nm.grupo) : candidatosDRE) ?? undefined;
-        const cur = byKey.get(key) ?? { conta: nm.nome, valores: {}, contexto, tipo: nm.tipo, sugestao };
-        cur.valores[nm.periodo] = (cur.valores[nm.periodo] ?? 0) + nm.valor;
-        byKey.set(key, cur);
-      }
-      return [...byKey.values()];
-    };
-    const temDadosIA = (r: { bp: BPLineItem[]; dre: DRELineItem[] }) =>
-      r.bp.some((b) => Object.values(b.valores).some((v) => v)) || r.dre.some((d) => Object.values(d.valores).some((v) => v));
-
-    // Nível 2 — HÍBRIDO (parser → IA Haiku texto → fold N3). Período por-doc (pin). Custo medido.
-    const rodaHibrido = async (): Promise<Candidato | null> => {
-      // raw = linhasToText (limpo, p/ o LLM) · rawIndent = doc.raw do parser (INDENTADO, p/ a
-      // árvore determinística por indentação — recupera as folhas Grau-4 que `linhas` colapsa).
-      // linhas = fonte das árvores determinísticas de DRE (e do BP quando o rawIndent chega
-      // achatado do cache herdado) — quando elas provam, o doc nem passa pelo LLM.
-      const aiDocs = parsedDocs.filter((d) => d.linhas.length > 0).map((d) => ({ raw: linhasToText(d.linhas), rawIndent: d.raw, linhas: d.linhas, tipo: d.tipo, periodos: d.periodos }));
-      if (!aiDocs.length) return null;
-      const r = await extractFinancialsWithAI(aiDocs, [], dictAll, bpModel, { dreModel });
-      if (!temDadosIA(r)) return null;
-      return avalia({ fonte: "hibrido", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: naoMapeadosParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, alertasComposicao: r.alertasComposicao, custoUsd: r.custo.usd });
-    };
-
-    // Nível 3 — VISÃO (Sonnet lê o PDF original). Caro: só como ÚLTIMO recurso. Re-baixa os
-    // buffers sob demanda (não retém na memória). Pula docs editados manualmente. Usa o
-    // período conhecido pelo parser (pin) p/ alinhar com o que o parser/híbrido já viram.
-    const rodaVisao = async (): Promise<Candidato | null> => {
-      const visDocs: Array<{ buffer: Buffer; tipo: string; periodos: string[] }> = [];
-      for (let i = 0; i < financialDocs.length; i++) {
-        const doc = financialDocs[i];
-        if (reusaCache(doc) || !doc.storagePath) continue;
-        const buffer = await downloadFile(doc.storagePath);
-        visDocs.push({ buffer, tipo: doc.tipo, periodos: parsedDocs[i]?.periodos ?? [] });
-      }
-      if (!visDocs.length) return null;
-      const r = await extractFinancialsWithAI(visDocs, [], dictAll, bpModel, { dreModel }); // buffer → Sonnet visão
-      if (!temDadosIA(r)) return null;
-      return avalia({ fonte: "visao", bp: r.bp, dre: r.dre, periodos: r.periodos, declarados: r.declarados, unmatched: naoMapeadosParaTela(r.naoMapeados as NaoMapeado[]), arvoreBP: r.arvoreOriginalBP, arvoreDRE: r.arvoreOriginalDRE, naoMapeados: r.naoMapeados, alertasComposicao: r.alertasComposicao, custoUsd: r.custo.usd });
-    };
-
-    const custos: Array<{ fonte: string; usd: number }> = [];
-    let escolhido = rodaHeuristico();
-    custos.push({ fonte: "parser", usd: 0 });
-    // Nível 2 — HÍBRIDO (Haiku, barato): escala se NÃO fechou 5/5 (tenta melhorar inclusive a
-    // reconciliação da DRE, que é barata de tentar no texto).
-    if (!escolhido.fecha && HIBRIDO_ATIVO) {
-      try {
-        const hib = await rodaHibrido();
-        if (hib) { custos.push({ fonte: "hibrido", usd: hib.custoUsd }); if (hib.fecha || hib.score > escolhido.score) escolhido = hib; }
-      } catch (e: any) { console.error("[process] híbrido falhou:", e?.message ?? e); }
-    }
-    // Nível 3 — VISÃO (Sonnet), só se ainda NÃO fechou 5/5 (último recurso). Integridade
-    // COMPLETA é o critério: equação + composição (Ativo e Passivo) + detalhe + DRE
-    // reconciliando. Eficiência vem de FECHAR nos níveis baratos (corrigir a extração), não
-    // de relaxar o gate.
-    if (!escolhido.fecha && HIBRIDO_ATIVO) {
-      try {
-        const vis = await rodaVisao();
-        if (vis) { custos.push({ fonte: "visao", usd: vis.custoUsd }); if (vis.fecha || vis.score > escolhido.score) escolhido = vis; }
-      } catch (e: any) { console.error("[process] visão falhou:", e?.message ?? e); }
-    }
+    const { escolhido, custos } = await extrairComCascata(
+      financialDocs.map((doc, i) => ({
+        nome: doc.nome,
+        tipo: doc.tipo,
+        parsed: parsedDocs[i]!,
+        buffer: doc.storagePath ? () => downloadFile(doc.storagePath!) : undefined,
+        pularVisao: reusaCache(doc),
+      })),
+      { dictForBP, dictForDRE, bpModel, dreModel, hibridoAtivo: env.ibr.hibridoAtivo, origem: "process" },
+    );
+    const naoMapeadosParaTela = paraTelaManual(bpModel);
     const custoTotalUsd = custos.reduce((s, c) => s + c.usd, 0);
-    const vv = escolhido.validacao;
-    console.log(`[process] cascata: venceu=${escolhido.fonte} fecha=${escolhido.fecha} score=${escolhido.score}/5 [eq=${vv.equacaoPatrimonial} cA=${vv.composicaoAtivo} cP=${vv.composicaoPassivo} det=${vv.detalheCompleto} dre=${JSON.stringify(vv.reconciliacaoDRE)}] | ${custos.map((c) => `${c.fonte}:$${c.usd.toFixed(4)}`).join(" ")} | total=$${custoTotalUsd.toFixed(4)}`);
 
     // Materializa o vencedor. Árvore/N3 vêm direto do candidato (heurístico = null/[]; IA
     // texto OU visão = a captura N3) — NÃO gatear por "híbrido" senão a visão perde a árvore.

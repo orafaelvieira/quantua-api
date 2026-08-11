@@ -567,6 +567,19 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
           desbalanceado = "a leitura não reconheceu NENHUMA conta de passivo (balanço em duas colunas costuma perder o lado direito) — o Ativo não fecha com o Passivo e o Fluxo de Caixa desta coluna não pode fechar";
         }
       }
+      // A CASCATA JÁ SE JULGOU (10/08/2026): a leitura carrega o score de
+      // integridade do nível vencedor (equação + composição + detalhe + DRE).
+      // Não fechou 5/5 mesmo após heurístico → Haiku → visão? Então é ✗ aqui,
+      // com o motivo — o analista não descobre isso adiante, na conta errada.
+      const integ = c.integridade;
+      if (!desbalanceado && integ && !integ.fecha) {
+        const faltas = [
+          !integ.equacaoPatrimonial ? "Ativo ≠ Passivo + PL" : null,
+          !integ.composicaoAtivo ? "composição do ativo não soma" : null,
+          !integ.composicaoPassivo ? "composição do passivo não soma" : null,
+        ].filter(Boolean).join(" · ");
+        desbalanceado = `a extração não fechou a integridade (${integ.score}/5${faltas ? ` — ${faltas}` : ""}) mesmo depois da cascata completa (parser → IA texto → IA visão)`;
+      }
       relatorio.push({
         documentId: d.id, nome: d.nome, contas: c.totalContas,
         periodo: aceitos.join(" · ") || null, lido: true,
