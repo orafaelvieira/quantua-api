@@ -15,6 +15,11 @@ export interface ValidationResult {
   equacaoPatrimonial: boolean;
   composicaoAtivo: boolean;
   composicaoPassivo: boolean;
+  /** A composição foi CONFERIDA contra o total impresso no documento? Sem o
+   *  total declarado a prova não roda — e não pode valer ponto no portão
+   *  (comparar AC+ANC com o Ativo Total que o próprio fold somou é tautologia). */
+  composicaoAtivoVerificada: boolean;
+  composicaoPassivoVerificada: boolean;
   /** false quando algum grupo do BP fecha no subtotal mas o detalhe está incompleto */
   detalheCompleto: boolean;
   /** grupos do BP com detalhe incompleto (subtotal ≠ soma das contas) */
@@ -152,6 +157,10 @@ export function validateFinancialData(
   let equacaoPatrimonial = true;
   let composicaoAtivo = true;
   let composicaoPassivo = true;
+  // "verificada" = existia total IMPRESSO no documento para comparar. Sem ele
+  // a prova não passa nem falha: não roda (e não vale ponto no portão).
+  let composicaoAtivoVerificada = false;
+  let composicaoPassivoVerificada = false;
 
   // ===== 0. Cronologia: lacunas na série de períodos (sempre "aviso") =====
   alertas.push(...alertasCronologia(periodos));
@@ -174,19 +183,25 @@ export function validateFinancialData(
       }
     }
 
-    // ===== 2. Composição do Ativo: AC + ANC = Ativo Total =====
+    // ===== 2. Composição do Ativo: AC + ANC = Ativo Total DECLARADO =====
+    // ATENÇÃO (10/08/2026): comparar AC+ANC com o "Ativo Total" MONTADO é
+    // tautologia — o fold define Ativo Total COMO AC+ANC (ai-extraction.ts,
+    // montagem dos totais). A prova só existe contra o total que o DOCUMENTO
+    // imprime; sem ele, a prova é NÃO VERIFICADA e não pode dar ponto.
     const ativoCirculante = bpVal(bp, "Ativo Circulante", periodo);
     const ativoNaoCirculante = bpVal(bp, "Ativo Não Circulante", periodo);
+    const ativoDeclarado = declarados?.[periodo]?.["Ativo Total"];
+    if (typeof ativoDeclarado === "number" && ativoDeclarado !== 0) composicaoAtivoVerificada = true;
 
-    if (ativoTotal !== 0 && (ativoCirculante !== 0 || ativoNaoCirculante !== 0)) {
+    if (typeof ativoDeclarado === "number" && ativoDeclarado !== 0 && (ativoCirculante !== 0 || ativoNaoCirculante !== 0)) {
       const somaAtivo = ativoCirculante + ativoNaoCirculante;
-      if (!approxEqual(somaAtivo, ativoTotal, 2)) {
+      if (!approxEqual(somaAtivo, ativoDeclarado, 2)) {
         composicaoAtivo = false;
         alertas.push({
           tipo: "aviso",
           area: "Composição do Ativo",
-          mensagem: `AC (${fmtBRL(ativoCirculante)}) + ANC (${fmtBRL(ativoNaoCirculante)}) ≠ Ativo Total (${fmtBRL(ativoTotal)}) em ${periodo}`,
-          detalhes: `Soma: ${fmtBRL(somaAtivo)}, diferença: ${fmtBRL(Math.abs(somaAtivo - ativoTotal))}`,
+          mensagem: `AC (${fmtBRL(ativoCirculante)}) + ANC (${fmtBRL(ativoNaoCirculante)}) ≠ TOTAL DO ATIVO impresso no documento (${fmtBRL(ativoDeclarado)}) em ${periodo}`,
+          detalhes: `Montado: ${fmtBRL(somaAtivo)}, diferença: ${fmtBRL(Math.abs(somaAtivo - ativoDeclarado))} — a leitura não reproduz o total do próprio documento.`,
         });
       }
     }
@@ -200,15 +215,17 @@ export function validateFinancialData(
     const passivoNaoCirculante = bpVal(bp, "Passivo Não Circulante", periodo);
     const patrimonioLiquido = bpVal(bp, "Patrimônio Líquido", periodo);
 
-    if (passivoTotal !== 0 && (passivoCirculante !== 0 || passivoNaoCirculante !== 0 || patrimonioLiquido !== 0)) {
+    const passivoDeclarado = declarados?.[periodo]?.["Passivo Total"];
+    if (typeof passivoDeclarado === "number" && passivoDeclarado !== 0) composicaoPassivoVerificada = true;
+    if (typeof passivoDeclarado === "number" && passivoDeclarado !== 0 && (passivoCirculante !== 0 || passivoNaoCirculante !== 0 || patrimonioLiquido !== 0)) {
       const somaPassivo = passivoCirculante + passivoNaoCirculante + patrimonioLiquido;
-      if (!approxEqual(Math.abs(somaPassivo), passivoTotal, 2)) {
+      if (!approxEqual(Math.abs(somaPassivo), Math.abs(passivoDeclarado), 2)) {
         composicaoPassivo = false;
         alertas.push({
           tipo: "aviso",
           area: "Composição do Passivo",
-          mensagem: `PC (${fmtBRL(passivoCirculante)}) + PNC (${fmtBRL(passivoNaoCirculante)}) + PL (${fmtBRL(patrimonioLiquido)}) ≠ Passivo Total (${fmtBRL(passivoTotal)}) em ${periodo}`,
-          detalhes: `Soma: ${fmtBRL(somaPassivo)}, diferença: ${fmtBRL(Math.abs(Math.abs(somaPassivo) - passivoTotal))}`,
+          mensagem: `PC (${fmtBRL(passivoCirculante)}) + PNC (${fmtBRL(passivoNaoCirculante)}) + PL (${fmtBRL(patrimonioLiquido)}) ≠ TOTAL DO PASSIVO impresso no documento (${fmtBRL(passivoDeclarado)}) em ${periodo}`,
+          detalhes: `Montado: ${fmtBRL(somaPassivo)}, diferença: ${fmtBRL(Math.abs(Math.abs(somaPassivo) - Math.abs(passivoDeclarado)))} — a leitura não reproduz o total do próprio documento.`,
         });
       }
     }
@@ -440,6 +457,8 @@ export function validateFinancialData(
     equacaoPatrimonial,
     composicaoAtivo,
     composicaoPassivo,
+    composicaoAtivoVerificada,
+    composicaoPassivoVerificada,
     detalheCompleto,
     gruposIncompletos,
     reconciliacaoDRE,

@@ -50,18 +50,20 @@ const opts = (escopo?: "auto" | "BP" | "DRE") => ({
 });
 
 describe("régua por escopo", () => {
-  it('escopo "BP": teto 4 e a DRE não é cobrada do balanço', async () => {
+  it('escopo "BP" SEM total impresso: as provas de composição não rodam (teto 2)', async () => {
+    // Sem o total que o documento imprime, comparar AC+ANC com o Ativo Total
+    // MONTADO seria tautologia — a prova não roda e não vale ponto.
     const r = await extrairComCascata([{ nome: "bp.pdf", tipo: "Balanço Patrimonial", parsed: BP_COMPLETO }], opts("BP"));
-    expect(r.escolhido.scoreMax).toBe(4);
+    expect(r.escolhido.scoreMax).toBe(2);
+    expect(r.escolhido.validacao.composicaoAtivoVerificada).toBe(false);
     expect(r.escolhido.fonte).toBe("heuristico");
   });
 
-  it('escopo "DRE": teto 1 e "não verificada" NÃO ganha ponto de graça', async () => {
+  it('escopo "DRE" sem subtotal declarado: nada é provado e NÃO fecha', async () => {
     const r = await extrairComCascata([{ nome: "dre.pdf", tipo: "DRE", parsed: DRE_AVULSA }], opts("DRE"));
-    expect(r.escolhido.scoreMax).toBe(1);
-    // Sem declarados no documento, a reconciliação não é verificada → 0 ponto.
     expect(r.escolhido.validacao.reconciliacaoDRE.verificada).toBe(false);
-    expect(r.escolhido.score).toBe(0);
+    expect(r.escolhido.scoreMax).toBe(0);
+    // teto 0 é "não provei nada" — nunca "fechou".
     expect(r.escolhido.fecha).toBe(false);
   });
 
@@ -71,9 +73,34 @@ describe("régua por escopo", () => {
     expect(receita?.valores["31/12/2024"]).toBe(1000);
   });
 
-  it('escopo "auto" (o do /process) mantém o teto 5 — zero retrocesso no IBR', async () => {
+  it('escopo "auto" (o do /process) cobra as provas patrimoniais e a da DRE', async () => {
     const r = await extrairComCascata([{ nome: "bp.pdf", tipo: "Balanço Patrimonial", parsed: BP_COMPLETO }], opts());
-    expect(r.escolhido.scoreMax).toBe(5);
+    // Sem totais impressos e sem subtotais de DRE declarados sobram as duas
+    // provas que independem do documento: equação patrimonial e detalhe.
+    expect(r.escolhido.scoreMax).toBe(2);
+  });
+
+  it("TOTAL IMPRESSO no documento vira prova cruzada — e reprova quando não bate", async () => {
+    const comTotalErrado: ParsedDocument = { ...BP_COMPLETO };
+    const doc = { nome: "bp.pdf", tipo: "Balanço Patrimonial", parsed: comTotalErrado };
+    const ia = await import("./ai-extraction");
+    vi.mocked(ia.extractFinancialsWithAI).mockResolvedValueOnce({
+      bp: [
+        { conta: "Ativo Circulante", valores: { "31/12/2024": 1000 } },
+        { conta: "Ativo Total", valores: { "31/12/2024": 1000 } },
+        { conta: "Passivo Total", valores: { "31/12/2024": 1000 } },
+      ] as never,
+      dre: [] as never, periodos: ["31/12/2024"], declarados: {},
+      // O documento IMPRIME 9.999 de Ativo Total — a leitura montou 1.000.
+      arvoreOriginalBP: { "31/12/2024": { grupos: { "Ativo Circulante": [{ nome: "Caixa", valor: 1000 }] }, totais: { "Ativo Total": 9999 } } },
+      arvoreOriginalDRE: {}, naoMapeados: [], alertasComposicao: [], custo: { usd: 0.01 },
+    } as never);
+    const r = await extrairComCascata([doc], { ...opts("BP"), hibridoAtivo: true });
+    const venceu = r.escolhido.fonte === "hibrido" ? r.escolhido : null;
+    if (venceu) {
+      expect(venceu.validacao.composicaoAtivoVerificada).toBe(true);
+      expect(venceu.validacao.composicaoAtivo).toBe(false); // 1.000 ≠ 9.999 impresso
+    }
   });
 
   it("sem IA ativa a cascata para no heurístico e não custa nada", async () => {

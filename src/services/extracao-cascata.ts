@@ -199,33 +199,65 @@ export async function extrairComCascata(
   //   "DRE"    → 1 prova: a reconciliação contra os declarados do próprio doc,
   //              e aqui "não verificada" NÃO ganha ponto de graça.
   const escopo = opts.escopo ?? "auto";
+  /**
+   * PROVA NÃO VERIFICADA NÃO VALE PONTO (10/08/2026). Antes, `composicaoAtivo`
+   * e `composicaoPassivo` comparavam AC+ANC com um "Ativo Total" que o próprio
+   * fold definiu como AC+ANC — dois dos cinco pontos do portão eram de graça,
+   * e a DRE sem declarados ganhava um terceiro (`!verificada || ok`).
+   * Agora o TETO acompanha o que dá para provar: um documento que não imprime
+   * total nenhum fecha "3/3" com honestidade, e a tela mostra quais provas
+   * rodaram — em vez de fingir 5/5.
+   */
   const provasDoEscopo = (v: ReturnType<typeof validateFinancialData>): { score: number; max: number } => {
-    if (escopo === "BP") {
-      return { score: (v.equacaoPatrimonial ? 1 : 0) + (v.composicaoAtivo ? 1 : 0) + (v.composicaoPassivo ? 1 : 0) + (v.detalheCompleto ? 1 : 0), max: 4 };
-    }
-    if (escopo === "DRE") {
-      return { score: v.reconciliacaoDRE.verificada && v.reconciliacaoDRE.ok ? 1 : 0, max: 1 };
-    }
-    const dreOk = !v.reconciliacaoDRE.verificada || v.reconciliacaoDRE.ok;
-    return {
-      score: (v.equacaoPatrimonial ? 1 : 0) + (v.composicaoAtivo ? 1 : 0) + (v.composicaoPassivo ? 1 : 0) + (v.detalheCompleto ? 1 : 0) + (dreOk ? 1 : 0),
-      max: 5,
-    };
+    const conta = (roda: boolean, passou: boolean): [number, number] => (roda ? [passou ? 1 : 0, 1] : [0, 0]);
+    const somar = (...pares: Array<[number, number]>) => pares.reduce(
+      (acc, [s, m]) => ({ score: acc.score + s, max: acc.max + m }), { score: 0, max: 0 },
+    );
+    const compA = conta(v.composicaoAtivoVerificada, v.composicaoAtivo);
+    const compP = conta(v.composicaoPassivoVerificada, v.composicaoPassivo);
+    const dre = conta(v.reconciliacaoDRE.verificada, v.reconciliacaoDRE.ok);
+    if (escopo === "BP") return somar([v.equacaoPatrimonial ? 1 : 0, 1], compA, compP, [v.detalheCompleto ? 1 : 0, 1]);
+    if (escopo === "DRE") return somar(dre);
+    return somar([v.equacaoPatrimonial ? 1 : 0, 1], compA, compP, [v.detalheCompleto ? 1 : 0, 1], dre);
   };
 
   // Normaliza/recalcula a DRE do candidato e roda a trava — base da decisão.
   // EXIGE DADOS REAIS: sem isso a validação marca equação=true VACUAMENTE e um
   // resultado VAZIO "fecharia". No escopo DRE o que prova vida é a própria DRE.
+  /**
+   * TOTAIS IMPRESSOS NO DOCUMENTO (10/08/2026). A captura já traz, em cada
+   * período da árvore, o "Ativo Total"/"Passivo Total" que o contador imprimiu
+   * — dado que estava morto no payload. Ele entra em `declarados` para virar a
+   * PROVA CRUZADA de composição: montado × impresso, não montado × montado.
+   */
+  const comTotaisImpressos = (
+    declarados: Record<string, Record<string, number>>,
+    arvoreBP: unknown,
+  ): Record<string, Record<string, number>> => {
+    const out: Record<string, Record<string, number>> = { ...declarados };
+    for (const [periodo, capa] of Object.entries((arvoreBP ?? {}) as Record<string, { totais?: Record<string, number> }>)) {
+      const totais = capa?.totais;
+      if (!totais) continue;
+      for (const chave of ["Ativo Total", "Passivo Total"]) {
+        const v = totais[chave];
+        if (typeof v === "number" && v !== 0) (out[periodo] ??= { ...(declarados[periodo] ?? {}) })[chave] = v;
+      }
+    }
+    return out;
+  };
+
   const avalia = (c: Omit<CandidatoCascata, "validacao" | "score" | "fecha" | "scoreMax">): CandidatoCascata => {
     normalizeDRESigns(c.dre, c.periodos);
     recomputeDRESubtotals(c.dre, c.periodos, dreModel.extrasPorBloco);
-    const v = validateFinancialData(c.bp, c.dre, c.periodos, c.declarados);
+    const v = validateFinancialData(c.bp, c.dre, c.periodos, comTotaisImpressos(c.declarados, c.arvoreBP));
     const temBP = c.periodos.some((p) => totalBP(c.bp, "Ativo Total", p) !== 0 && totalBP(c.bp, "Passivo Total", p) !== 0);
     const temDRE = c.dre.some((d) => Object.values(d.valores).some((x) => Math.abs(x) > 0.5));
     const temDados = escopo === "DRE" ? temDRE : temBP;
     const { score: s, max } = provasDoEscopo(v);
     const score = temDados ? s : 0;
-    return { ...c, validacao: v, score, scoreMax: max, fecha: temDados && score === max };
+    // `max === 0` significa que NENHUMA prova pôde rodar. Isso não é "fechou":
+    // é "não provei nada" — e não pode encerrar a cascata nem pintar de verde.
+    return { ...c, validacao: v, score, scoreMax: max, fecha: temDados && max > 0 && score === max };
   };
 
   const declaradosDe = (dre: DRELineItem[], periodos: string[]) => {
