@@ -9,12 +9,16 @@
  *    comparação é do CONJUNTO, e os fluxos legítimos não podem quebrar.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { conciliacaoDoDocumento } from "./conciliacao-documento";
+import { conjuntoJaUsadoEmOutroIBR } from "./fixacao-pool";
 
-const prismaMock = {
+// `vi.hoisted` porque `vi.mock` é içado para o topo do arquivo: uma const
+// comum ainda não existe quando a fábrica do mock roda.
+const prismaMock = vi.hoisted(() => ({
   document: { findUnique: vi.fn(), findMany: vi.fn() },
   company: { findUnique: vi.fn() },
   accountDictionary: { findMany: vi.fn() },
-};
+}));
 vi.mock("../db/client", () => ({ prisma: prismaMock }));
 vi.mock("./escopo-acesso", () => ({ resolverEscopoAcesso: vi.fn(async () => ({ scopeUserIds: ["u1"] })) }));
 vi.mock("./model-version", () => ({
@@ -22,8 +26,8 @@ vi.mock("./model-version", () => ({
   loadActiveDREModel: vi.fn(async () => ({ lines: [], extrasPorBloco: {} })),
 }));
 
-const { conciliacaoDoDocumento } = await import("./conciliacao-documento");
-const { conjuntoJaUsadoEmOutroIBR } = await import("./fixacao-pool");
+// Import estático: `vi.mock` é içado pelo vitest, então o mock já está de pé.
+// (await no topo do módulo quebra o `tsc` do build — pegadinha do deploy.)
 
 const provasBoas = {
   partidaDobrada: { debitos: 100, creditos: 100, delta: 0, folhas: 4, verificavel: true, ok: true },
