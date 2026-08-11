@@ -46,7 +46,27 @@ export function resolverCascataDicionario<T extends EntradaDicionarioEscopo>(
     const atual = vencedores.get(chave);
     if (!atual || prioridadeEscopo(e) >= prioridadeEscopo(atual)) vencedores.set(chave, e);
   }
-  const lista = [...vencedores.values()];
+  let lista = [...vencedores.values()];
+
+  // "IGNORAR" É VETO — e veto de escopo MENOR não sobrevive a uma classificação
+  // mais específica (11/08/2026, caso Dunamys: "classifiquei a conta mas o ✗ não
+  // sumiu"). No BP a chave inclui o `grupoConta` de propósito (a mesma conta em
+  // PC e PNC são contas distintas), então a entrada GLOBAL de ignorar e a
+  // classificação da EMPRESA ficavam em chaves diferentes e as duas sobreviviam;
+  // `isContaIgnorada` casa só pelo NOME, então o veto continuava valendo e a
+  // conta seguia fora do balanço, sem caminho de volta pela tela.
+  // Regra: classificação explícita vence o veto de escopo igual ou menor.
+  const IGNORAR = "__IGNORAR__";
+  const escopoClassificado = new Map<string, number>();
+  for (const e of lista) {
+    if (e.contaDestino === IGNORAR) continue;
+    const n = e.nomeOriginal.toLowerCase();
+    const p = prioridadeEscopo(e);
+    if (p > (escopoClassificado.get(n) ?? -1)) escopoClassificado.set(n, p);
+  }
+  lista = lista.filter((e) =>
+    e.contaDestino !== IGNORAR ||
+    prioridadeEscopo(e) > (escopoClassificado.get(e.nomeOriginal.toLowerCase()) ?? -1));
 
   // DRE: o `grupoConta` ESPELHA o destino (convenção da tela de classificação),
   // então NÃO é discriminador de contexto — a mesma conta na empresa e no global

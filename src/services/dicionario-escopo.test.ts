@@ -102,3 +102,49 @@ describe("whereCascataDicionario", () => {
     expect(w.OR[2]).toEqual({ companyId: "c1" });
   });
 });
+
+/**
+ * O VETO NÃO PODE VENCER A CLASSIFICAÇÃO (11/08/2026 — caso Dunamys).
+ *
+ * "Classifiquei a conta mas o ✗ não sumiu": a conta estava marcada como
+ * IGNORAR no dicionário GLOBAL; o analista classificou na EMPRESA; como no BP
+ * a chave inclui o grupoConta, as duas entradas sobreviviam — e
+ * `isContaIgnorada` casa só pelo nome, então o veto global continuava tirando
+ * R$ 150,6 mil do balanço, sem caminho de volta pela tela.
+ */
+describe("ignorar é veto — e perde para classificação mais específica", () => {
+  const global = (nome: string, destino: string, grupo = "Patrimônio Líquido") =>
+    ({ nomeOriginal: nome, contaDestino: destino, grupoConta: grupo, userId: null, companyId: null, tipo: "BP" });
+  const daEmpresa = (nome: string, destino: string, grupo = "Patrimônio Líquido") =>
+    ({ nomeOriginal: nome, contaDestino: destino, grupoConta: grupo, userId: "u1", companyId: "c1", tipo: "BP" });
+
+  it("classificação da EMPRESA derruba o ignorar GLOBAL do mesmo nome", () => {
+    const r = resolverCascataDicionario(
+      [global("Lucros/Prejuízos Acumulados", "__IGNORAR__"), daEmpresa("Lucros/Prejuízos Acumulados", "Lucros/Prejuízos Acumulados")],
+      "BP",
+    );
+    expect(r.some((e) => e.contaDestino === "__IGNORAR__")).toBe(false);
+    expect(r.some((e) => e.contaDestino === "Lucros/Prejuízos Acumulados")).toBe(true);
+  });
+
+  it("mesmo com grupoConta DIFERENTE (era o que criava duas chaves)", () => {
+    const r = resolverCascataDicionario(
+      [global("Lucros/Prejuízos Acumulados", "__IGNORAR__", "Outros"), daEmpresa("Lucros/Prejuízos Acumulados", "Lucros/Prejuízos Acumulados")],
+      "BP",
+    );
+    expect(r.some((e) => e.contaDestino === "__IGNORAR__")).toBe(false);
+  });
+
+  it("ignorar SOZINHO continua valendo (subtotal duplicado segue fora)", () => {
+    const r = resolverCascataDicionario([global("TOTAL DO ATIVO", "__IGNORAR__")], "BP");
+    expect(r.some((e) => e.contaDestino === "__IGNORAR__")).toBe(true);
+  });
+
+  it("classificação em OUTRA conta não derruba o ignorar desta", () => {
+    const r = resolverCascataDicionario(
+      [global("TOTAL DO ATIVO", "__IGNORAR__"), daEmpresa("Caixa Geral", "Caixa e Equivalentes de Caixa", "Ativo Circulante")],
+      "BP",
+    );
+    expect(r.some((e) => e.contaDestino === "__IGNORAR__")).toBe(true);
+  });
+});
