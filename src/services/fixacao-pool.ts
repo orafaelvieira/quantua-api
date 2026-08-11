@@ -19,6 +19,7 @@
  */
 import { prisma } from "../db/client";
 import { MATERIAL_TIPO } from "./material-context";
+import { conciliacaoDoDocumento } from "./conciliacao-documento";
 
 export interface DocumentoFixado {
   id: string;
@@ -119,6 +120,21 @@ export async function fixarDocumentosDoPool(
       continue;
     }
 
+    // GARANTIA 6 (10/08/2026, palavras do dono): "documentos que ainda não
+    // foram conciliados 100% não podem ser usados em IBR". A tela avisa antes,
+    // mas a trava mora AQUI — chamada direta à API não pode furar a regra.
+    // Material complementar fica fora: não vira número, não tem o que conciliar.
+    if (!/material complementar/i.test(pool.tipo)) {
+      const conc = await conciliacaoDoDocumento(pool.id);
+      if (conc && !conc.ok) {
+        erros.push({
+          documentId,
+          erro: `"${pool.nome}" ainda não está conciliado: ${conc.motivos.join(" · ")}. Trate na aba Conciliação contábil da empresa e tente de novo.`,
+        });
+        continue;
+      }
+    }
+
     // Gate W2: "existe v3 e você está fixando v2" — recusa e aponta a vigente.
     if (pool.status === "Substituído") {
       let vigente = pool;
@@ -204,4 +220,49 @@ export async function propagarMetadadosDoPool(
     where: { fixadoDeId: poolDocId, status: "Pendente" },
     data,
   });
+}
+
+/**
+ * GARANTIA 7 — o CONJUNTO de documentos contábeis deste IBR já fundamentou
+ * outro? Compara o conjunto de documentos do POOL (fixadoDeId) — a identidade
+ * do insumo, não a da linha fixada.
+ *
+ * Casos LEGÍTIMOS que a regra NÃO pode quebrar (revisão do fluxo do analista):
+ *  - IBR CANCELADO: não é entrega, não conta;
+ *  - NOVA VERSÃO do mesmo IBR: é outro `analysisId`, mas o conjunto é o mesmo
+ *    de propósito — por isso a resposta é 409 CONFIRMÁVEL, não bloqueio duro;
+ *  - dois IBRs de períodos diferentes que compartilham UM balancete: conjuntos
+ *    diferentes, não dispara.
+ */
+export async function conjuntoJaUsadoEmOutroIBR(
+  analysisId: string,
+  companyId: string,
+): Promise<{ analysisId: string; nome: string; status: string; documentos: number } | null> {
+  const contabil = (tipo: string) => !/material complementar/i.test(tipo);
+  const meus = await prisma.document.findMany({
+    where: { analysisId, fixadoDeId: { not: null } },
+    select: { fixadoDeId: true, tipo: true },
+  });
+  const meuConjunto = new Set(meus.filter((d) => contabil(d.tipo)).map((d) => d.fixadoDeId!));
+  if (meuConjunto.size === 0) return null;
+
+  const outros = await prisma.document.findMany({
+    where: { companyId, analysisId: { not: null, notIn: [analysisId] }, fixadoDeId: { in: [...meuConjunto] } },
+    select: { analysisId: true, fixadoDeId: true, tipo: true, analysis: { select: { nome: true, status: true } } },
+  });
+  const porAnalise = new Map<string, { nome: string; status: string; docs: Set<string> }>();
+  for (const d of outros) {
+    if (!d.analysisId || !d.fixadoDeId || !contabil(d.tipo)) continue;
+    if (d.analysis?.status === "Cancelada") continue;
+    const atual = porAnalise.get(d.analysisId) ?? { nome: d.analysis?.nome ?? "IBR", status: d.analysis?.status ?? "?", docs: new Set<string>() };
+    atual.docs.add(d.fixadoDeId);
+    porAnalise.set(d.analysisId, atual);
+  }
+  for (const [id, a] of porAnalise) {
+    // MESMO conjunto: todo documento meu está lá (o outro pode ter mais — se
+    // tem mais, é um trabalho de escopo maior, não repetição).
+    const cobreTudo = [...meuConjunto].every((d) => a.docs.has(d));
+    if (cobreTudo) return { analysisId: id, nome: a.nome, status: a.status, documentos: meuConjunto.size };
+  }
+  return null;
 }

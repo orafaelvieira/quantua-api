@@ -18,7 +18,7 @@ import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
 import { comparePeersCvm, CVM_COMPARAVEIS } from "../services/peer-benchmark-cvm";
 import { researchCompanyWeb, researchSectorBenchmarksWeb } from "../services/web-research";
 import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-context";
-import { fixarDocumentosDoPool, montarLinhaFixada } from "../services/fixacao-pool";
+import { conjuntoJaUsadoEmOutroIBR, fixarDocumentosDoPool, montarLinhaFixada } from "../services/fixacao-pool";
 import { curarUpload, curarConteudo, competenciaDosPeriodos, competenciaDoPeriodoBalancete, rotuloCompetencia } from "../services/curadoria-pool";
 import { acharDuplicadoPorHash, mensagemDuplicado } from "../services/duplicidade-docs";
 import { cicloVidaAnalysis, etapaAnalysis } from "../services/ciclo-vida";
@@ -2060,6 +2060,25 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
   // Guard por DADO (não por status) — vale para gerar E regerar, mesmo após edições.
   // ANTES do check de indicadores: com pendências os indicadores ficam vazios de
   // propósito, e o analista precisa ver as PENDÊNCIAS (409), não um 400 genérico.
+  // GARANTIA 7 (10/08/2026, palavras do dono): "o sistema não pode permitir a
+  // geração de um novo IBR com os MESMOS documentos contábeis já utilizados,
+  // deverá informar ao usuário". A checagem é do CONJUNTO — dois IBRs podem
+  // compartilhar um balancete (períodos que se sobrepõem); o que não pode é
+  // outro IBR já ter usado EXATAMENTE os mesmos insumos, porque aí ou os dois
+  // se contradizem ou é o mesmo trabalho cobrado duas vezes.
+  // Fora da trava: IBR cancelado (não vale como entrega) e o próprio IBR.
+  const reuso = await conjuntoJaUsadoEmOutroIBR(analysis.id, analysis.companyId);
+  if (reuso && req.body?.confirmarReuso !== true) {
+    res.status(409).json({
+      error: `Os mesmos ${reuso.documentos} documento(s) contábeis já fundamentaram o IBR "${reuso.nome}" (${reuso.status}). ` +
+        `Gerar de novo sobre a mesma base produz duas entregas que podem se contradizer. ` +
+        `Se a intenção é revisar aquele trabalho, use "Nova versão" no IBR existente; para seguir mesmo assim, confirme.`,
+      reuso,
+      podeConfirmar: true,
+    });
+    return;
+  }
+
   const prontidao = avaliarProntidaoGeracao(dados);
   const pendencias = [...prontidao.pendencias, ...(setorPendente(analysis) ? [PEND_SETOR] : [])];
   if (!prontidao.pronta || pendencias.length > prontidao.pendencias.length) {
