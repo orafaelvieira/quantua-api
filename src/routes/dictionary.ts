@@ -930,3 +930,56 @@ router.post("/:id/reativar", async (req: AuthRequest, res: Response): Promise<vo
 });
 
 export default router;
+
+/**
+ * POST /dictionary/desfazer-ignorar — tira a marca de IGNORAR de uma conta.
+ *
+ * O "ignorar" existe para linha de SUBTOTAL DUPLICADO. Quando ele cai numa
+ * conta REAL, o valor sai da soma e o balanço deixa de fechar — foi o caso da
+ * Dunamys ("Lucros/Prejuízos Acumulados" ignorada, R$ 150,6 mil, exatamente a
+ * diferença do balanço). Até aqui a marca era uma via de mão única: a tela
+ * mostrava "(ignorada pelo analista)" e não havia como voltar atrás.
+ *
+ * Cancela (nunca deleta — política da casa) as entradas-sentinela da conta no
+ * escopo da EMPRESA. A cascata volta a enxergar a conta na próxima dobra.
+ */
+router.post("/desfazer-ignorar", async (req: AuthRequest, res: Response): Promise<void> => {
+  const { companyId, nomeOriginal, tipo } = (req.body ?? {}) as Record<string, string | undefined>;
+  if (!companyId || !nomeOriginal) {
+    res.status(400).json({ error: "companyId e nomeOriginal são obrigatórios" });
+    return;
+  }
+  const empresa = await prisma.company.findFirst({ where: { id: companyId, ...whereEmpresaVisivel(req) } });
+  if (!empresa) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+
+  const alvo = nomeOriginal.trim().toLowerCase();
+  const candidatas = await prisma.accountDictionary.findMany({
+    where: {
+      contaDestino: IGNORAR_DESTINO,
+      revisao: { not: "cancelada" },
+      OR: [{ companyId }, { companyId: null, userId: { in: req.scopeUserIds! } }],
+      ...(tipo ? { tipo } : {}),
+    },
+  });
+  const norm = (s: string) => s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  const remover = candidatas.filter((c) => norm(c.nomeOriginal) === norm(alvo));
+  if (remover.length === 0) {
+    res.status(404).json({ error: `"${nomeOriginal}" não está marcada como ignorada nesta empresa.` });
+    return;
+  }
+  const autor = await nomeUsuario(req.userId);
+  await prisma.accountDictionary.updateMany({
+    where: { id: { in: remover.map((r) => r.id) } },
+    data: {
+      revisao: "cancelada", revisadoPor: autor, revisadoEm: new Date(),
+      revisaoMotivo: "Ignorar desfeito na auditoria — a conta volta a entrar nas demonstrações.",
+    },
+  });
+  await bumpDictionaryVersion({
+    acao: "cancelar", fonte: "dicionario-empresa",
+    nomeOriginal, contaDestino: IGNORAR_DESTINO, grupoConta: remover[0]!.grupoConta, tipo: remover[0]!.tipo,
+    criadoPor: autor, companyId,
+    nota: `"Ignorar" desfeito em ${nomeOriginal} — a conta volta a somar nas demonstrações desta empresa.`,
+  });
+  res.json({ ok: true, desfeitas: remover.length });
+});
