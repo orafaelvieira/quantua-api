@@ -387,12 +387,25 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
       relatorio.push({ documentId: d.id, nome: d.nome, contas: 0, periodo: null, lido: false, fechamentoOk: null, erro: c.erro });
       continue;
     }
+    // P0 — PARTIDA DOBRADA (10/08/2026): Σ débitos = Σ créditos nas linhas que
+    // o sistema LEU. É a prova cruzada que não depende de total impresso e que
+    // pega linha perdida no parse. Ela vale para o selo do documento e o motivo
+    // vai junto — no corpus, 9 documentos que passavam verdes reprovaram aqui.
+    const pd = c.provas?.partidaDobrada;
+    const partidaOk = pd?.verificavel ? pd.ok : true;
+    if (pd?.verificavel && !pd.ok) {
+      avisos.push(
+        `${d.nome}: a leitura não fecha em partida dobrada — débitos ${fmtBRL(pd.debitos)} × créditos ${fmtBRL(pd.creditos)} (diferença ${fmtBRL(pd.delta)}) em ${pd.folhas} conta(s). Alguma linha ficou de fora ou foi lida torta.`,
+      );
+    }
     relatorio.push({
       documentId: d.id, nome: d.nome, contas: c.totalContas,
       periodo: c.periodoInicio && c.periodoFim ? `${c.periodoInicio} a ${c.periodoFim}` : null,
       lido: true,
-      fechamentoOk: c.provas ? !!(c.provas.fechamento.ok && c.provas.linhas.ok) : null,
-      erro: null,
+      fechamentoOk: c.provas ? !!(c.provas.fechamento.ok && c.provas.linhas.ok && partidaOk) : null,
+      erro: pd?.verificavel && !pd.ok
+        ? `partida dobrada não fecha: diferença de ${fmtBRL(pd.delta)} entre débitos e créditos lidos`
+        : null,
     });
     fontes.push({ id: d.id, nome: d.nome, conteudo: c });
   }

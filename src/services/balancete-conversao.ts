@@ -42,6 +42,21 @@ const TOLERANCIA = 0.05; // centavos de arredondamento entre sistemas
 export interface ProvasBalancete {
   /** P1 — só quando o doc declara totais. */
   debitosCreditos?: { debito: number; credito: number; ok: boolean };
+  /**
+   * P0 — PARTIDA DOBRADA DAS LINHAS LIDAS (10/08/2026).
+   *
+   * A prova cruzada que faltava e que não depende de o documento imprimir
+   * total nenhum: num balancete, todo lançamento tem débito e crédito DENTRO
+   * do próprio documento, então Σ débitos das folhas = Σ créditos das folhas.
+   * Ela mede o que o sistema LEU (P1 comparava dois números impressos entre
+   * si e passava mesmo se o parser perdesse trinta linhas).
+   *
+   * Pega, sem IA e sem custo: linha perdida no parse, dígito trocado numa
+   * coluna, linha duplicada, coluna deslocada. Documento que só publica saldo
+   * (sem colunas de movimento) fica `verificavel: false` — e aí o selo é ⚠,
+   * nunca ✓.
+   */
+  partidaDobrada: { debitos: number; creditos: number; delta: number; folhas: number; verificavel: boolean; ok: boolean };
   /** P2 — fechamento patrimonial. */
   fechamento: { ativo: number; passivo: number; resultadoAcumulado: number; delta: number; ok: boolean };
   /**
@@ -606,7 +621,23 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
     }
   }
 
+  // P0 — partida dobrada sobre as FOLHAS (nó sem filho): somar sintética e
+  // folha contaria o mesmo lançamento duas vezes.
+  const folhasDoDoc = grupos.flatMap((g) => folhasDe(g.no));
+  const somaD = arred(folhasDoDoc.reduce((s, l) => s + Math.abs(l.debito || 0), 0));
+  const somaC = arred(folhasDoDoc.reduce((s, l) => s + Math.abs(l.credito || 0), 0));
+  const deltaDC = arred(somaD - somaC);
+  const temMovimento = somaD > TOLERANCIA || somaC > TOLERANCIA;
+  const partidaDobrada = {
+    debitos: somaD, creditos: somaC, delta: deltaDC, folhas: folhasDoDoc.length,
+    verificavel: temMovimento,
+    // Tolerância relativa mínima: documento de bilhões arredondado ao centavo
+    // não pode reprovar por 1 centavo de dízima.
+    ok: temMovimento ? Math.abs(deltaDC) <= Math.max(TOLERANCIA, somaD * 1e-9) : false,
+  };
+
   const provas: ProvasBalancete = {
+    partidaDobrada,
     fechamento: { ativo: ativoAtual, passivo: passivoAtual, resultadoAcumulado, delta, ok: Math.abs(delta) <= TOLERANCIA },
     linhas: { total: b.linhas.length, coerentes: b.linhas.length - totalIncoerentes, ok: totalIncoerentes === 0, incoerentes },
     exercicioEncerrado,
@@ -614,6 +645,13 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
       ? { debitosCreditos: { ...b.totais, ok: Math.abs(b.totais.debito - b.totais.credito) <= TOLERANCIA } }
       : {}),
   };
+  if (provas.partidaDobrada.verificavel && !provas.partidaDobrada.ok) {
+    avisos.push(
+      `Partida dobrada não fecha nas linhas lidas: débitos ${fmt(provas.partidaDobrada.debitos)} × créditos ${fmt(provas.partidaDobrada.creditos)} ` +
+      `(diferença ${fmt(provas.partidaDobrada.delta)}) em ${provas.partidaDobrada.folhas} conta(s). ` +
+      `Num balancete todo lançamento tem os dois lados no próprio documento — a diferença indica linha perdida, dígito trocado ou coluna deslocada na leitura.`,
+    );
+  }
   if (!provas.fechamento.ok) {
     avisos.push(`Fechamento não bate: Ativo ${fmt(ativoAtual)} − Passivo ${fmt(passivoAtual)} − Resultado ${fmt(resultadoAcumulado)} = ${fmt(delta)}.`);
   }

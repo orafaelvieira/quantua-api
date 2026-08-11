@@ -173,3 +173,61 @@ describe("P4 — DRE do exercício encerrado só é verde se reconciliar com o P
     expect(c.provas.dreEncerrada).toBeUndefined();
   });
 });
+
+/**
+ * P0 — PARTIDA DOBRADA DAS LINHAS LIDAS (10/08/2026).
+ *
+ * A prova cruzada que não depende de total impresso: num balancete todo
+ * lançamento tem os dois lados dentro do próprio documento. Ela mede o que o
+ * sistema LEU — no corpus real reprovou 9 documentos que passavam verdes (a
+ * WOLK tinha R$ 1.823,64 de diferença em 333 contas).
+ */
+describe("P0 — partida dobrada das linhas lidas", () => {
+  // Documento minúsculo mas CONTABILMENTE real: cada lançamento tem os dois
+  // lados dentro do próprio balancete (Σ débitos = Σ créditos = 2.800) e cada
+  // linha fecha a própria equação (saldo atual = anterior ± movimento).
+  const INTEGRO: L[] = [
+    ["01", "ATIVO", "800.00", "1000.00", "800.00", "1000.00"],
+    ["01.1", "Caixa", "800.00", "1000.00", "800.00", "1000.00"],
+    ["02", "PASSIVO", "800.00", "800.00", "1000.00", "1000.00"],
+    ["02.1", "Fornecedores", "800.00", "800.00", "1000.00", "1000.00"],
+    ["03", "RECEITAS", "0.00", "0.00", "1000.00", "1000.00"],
+    ["03.1", "Vendas", "0.00", "0.00", "1000.00", "1000.00"],
+    ["04", "CUSTOS", "0.00", "1000.00", "0.00", "1000.00"],
+    ["04.1", "Custo A", "0.00", "600.00", "0.00", "600.00"],
+    ["04.2", "Custo B", "0.00", "400.00", "0.00", "400.00"],
+  ];
+  const prova = (linhas: L[]) => ler(linhas, "01/05/2026 a 31/05/2026").provas.partidaDobrada;
+
+  it("documento íntegro: Σ débitos = Σ créditos nas folhas", () => {
+    const p = prova(INTEGRO);
+    expect(p.verificavel).toBe(true);
+    expect(p.ok).toBe(true);
+    expect(p.debitos).toBeCloseTo(p.creditos, 2);
+    expect(p.debitos).toBeCloseTo(2800, 2);
+  });
+
+  it("LINHA PERDIDA no parse: reprova e mede a diferença exata", () => {
+    const p = prova(INTEGRO.filter((l) => l[0] !== "04.2"));
+    expect(p.ok).toBe(false);
+    expect(Math.abs(p.delta)).toBeCloseTo(400, 2);
+  });
+
+  it("DÍGITO TROCADO numa coluna: reprova", () => {
+    const p = prova(INTEGRO.map((l) => (l[0] === "03.1" ? (["03.1", "Vendas", "0.00", "0.00", "1900.00", "1900.00"] as L) : l)));
+    expect(p.ok).toBe(false);
+  });
+
+  it("documento SÓ COM SALDO (sem movimento) fica NÃO VERIFICÁVEL, nunca verde", () => {
+    const p = prova([
+      ["01", "ATIVO", "1000.00", "0.00", "0.00", "1000.00"],
+      ["02", "PASSIVO", "1000.00", "0.00", "0.00", "1000.00"],
+    ]);
+    expect(p.verificavel).toBe(false);
+    expect(p.ok).toBe(false);
+  });
+
+  it("conta a soma sobre FOLHAS — sintética não entra duas vezes", () => {
+    expect(prova(INTEGRO).folhas).toBe(5); // Caixa, Fornecedores, Vendas, Custo A, Custo B
+  });
+});
