@@ -553,14 +553,29 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
       const anoDeclarado = d.competencia && /^\d{4}$/.test(d.competencia.trim()) ? d.competencia.trim() : null;
       const divergeDoDeclarado = !!anoDeclarado && c.periodos.length > 0
         && !c.periodos.some((p) => p.trim().slice(-4) === anoDeclarado);
+      // BALANÇO INCOMPLETO (10/08/2026, caso Move Farma/Dunamys): a leitura do
+      // BP anual trouxe o ativo e o PL e NENHUMA conta de passivo — Ativo ≠
+      // Passivo. A conferência mora aqui, no documento que originou a coluna.
+      let desbalanceado: string | null = null;
+      if (ehBP) {
+        const grupos = Object.entries(c.arvoreBP ?? {})
+          .flatMap(([, capa]) => Object.entries((capa as { grupos?: Record<string, unknown[]> })?.grupos ?? {}));
+        const contasDe = (re: RegExp) => grupos.filter(([g]) => re.test(g)).reduce((s, [, itens]) => s + (itens?.length ?? 0), 0);
+        const nPassivo = contasDe(/passivo/i);
+        const nAtivo = contasDe(/ativo/i);
+        if (nAtivo > 0 && nPassivo === 0) {
+          desbalanceado = "a leitura não reconheceu NENHUMA conta de passivo (balanço em duas colunas costuma perder o lado direito) — o Ativo não fecha com o Passivo e o Fluxo de Caixa desta coluna não pode fechar";
+        }
+      }
       relatorio.push({
         documentId: d.id, nome: d.nome, contas: c.totalContas,
         periodo: aceitos.join(" · ") || null, lido: true,
-        fechamentoOk: divergeDoDeclarado ? false : null,
+        fechamentoOk: divergeDoDeclarado || desbalanceado ? false : null,
         erro: divergeDoDeclarado
           ? `competência declarada ${anoDeclarado}, mas a leitura trouxe ${c.periodos.join(" · ")} — confira o arquivo (num balanço comparativo, a coluna do exercício pode ter sido trocada pela do ano anterior)`
-          : null,
+          : desbalanceado,
       });
+      if (desbalanceado) avisos.push(`${d.nome}: ${desbalanceado}.`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       avisos.push(`${d.nome}: fold falhou (${msg}).`);
@@ -577,6 +592,39 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     if (!atual.periodos.includes(nm.periodo)) atual.periodos.push(nm.periodo);
     atual.valorUltimo = nm.valor;
     pendMap.set(k, atual);
+  }
+
+  // ── PROVA PATRIMONIAL DE CADA COLUNA (10/08/2026, "por que o fluxo de caixa
+  // não bate com o valor do BP?") ──
+  // O FC indireto é DERIVADO do balanço: a identidade FCO+FCI+FCF = ΔCaixa
+  // fecha algebricamente sempre que Ativo = Passivo nos dois períodos. Quando
+  // não fecha, a causa está no balanço — e ela precisa aparecer NA COLUNA, não
+  // só no fim da cadeia. Caso real (Move Farma): o BP anual lido do PDF veio
+  // SEM O LADO DO PASSIVO (Passivo Circulante e Não Circulante com zero
+  // contas), Ativo 8,3 mi × Passivo 3,6 mi — e o FC "não fechava" sem dizer
+  // por quê. O balancete, que tem a própria prova, fecha ao centavo.
+  const valorEm = (conta: string, p: string): number =>
+    (bp.find((x) => x.conta === conta)?.valores as Record<string, number> | undefined)?.[p] ?? 0;
+  /** Mesmo rótulo curto da tela: "2024" (exercício) · "05/2026" (mês). */
+  const rotuloDaColuna = (p: string): string => {
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(p.trim());
+    if (!m) return p;
+    return tipoPorPeriodo[p] === "mes" ? `${m[2]}/${m[3]}` : m[3]!;
+  };
+  const provaPatrimonial: Record<string, { ativo: number; passivo: number; gap: number; ok: boolean }> = {};
+  for (const p of periodos) {
+    const ativo = valorEm("Ativo Total", p);
+    const passivo = valorEm("Passivo Total", p);
+    if (Math.abs(ativo) < 0.5 && Math.abs(passivo) < 0.5) continue; // coluna só de DRE
+    const gap = Math.round((ativo - passivo) * 100) / 100;
+    const ok = Math.abs(gap) <= Math.max(1, Math.abs(ativo) * 0.0001);
+    provaPatrimonial[p] = { ativo, passivo, gap, ok };
+    if (!ok) {
+      avisos.push(
+        `${rotuloDaColuna(p)}: o balanço lido não fecha — Ativo ${fmtBRL(ativo)} × Passivo + PL ${fmtBRL(passivo)} (diferença de ${fmtBRL(gap)}). ` +
+        `Origem: ${origemPorPeriodo[p] ?? "documento"}. Enquanto isso o Fluxo de Caixa desta coluna não pode fechar — ele é derivado do balanço.`,
+      );
+    }
   }
 
   // FLUXO DE CAIXA INDIRETO (pedido do dono, 08/08: "faltou o Fluxo de
@@ -871,6 +919,7 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     origemPorPeriodo,
     tipoPorPeriodo,
     provasPorPeriodo,
+    provaPatrimonial,
     bp,
     dre,
     pendencias,
