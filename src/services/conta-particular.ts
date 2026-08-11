@@ -21,6 +21,9 @@ const normalizar = (s: string): string =>
 
 const RE_CNPJ = /\d{2}\.?\d{3}\.?\d{3}\/\d{4}-?\d{2}/;
 const RE_CPF = /\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/;
+/** CNPJ/CPF SEM pontuação — o contador digita dos dois jeitos (10/08/2026).
+ *  Testado sobre o nome com pontuação removida. */
+const RE_DOC_SEM_PONTO = /(?<!\d)(\d{14}|\d{11})(?!\d)/;
 /** Sufixos societários — fortes indícios de razão social de terceiro. */
 const RE_RAZAO_SOCIAL = /\b(ltda|eireli|epp|s\/a|s\.a\.?|cia\.?|companhia)\b|\bme\b(?![a-z])/i;
 
@@ -64,7 +67,37 @@ const VOCABULARIO_CONTABIL = [
   "cofre", "fundo fixo", "disponibilidade", "circulante", "realizavel", "exigivel", "compensac",
   "apurac", "encerrament", "abertura", "saldo", "deposito", "caucao", "garantia", "judicial",
   "restituic", "recuperac", "ressarcim", "reembols", "antecipac", "parcelament", "refis",
+  // Palavras estruturais que sobravam no resíduo e faziam conta comum passar
+  // por nome próprio (10/08/2026: "Duplicatas a RECEBER" era flagrada).
+  "receber", "recebiment", "pagar", "pagament", "vencid", "vencer", "prazo", "curto", "longo",
+  "vista", "haver", "credit", "debit", "matriz", "filial", "grupo", "subgrupo", "interno", "externo",
+  "terceir", "coligad", "controlad", "ligad", "relacionad", "parte", "partes", "pessoa", "pessoas",
 ];
+
+/** Conectivos e ruído que não contam como "nome próprio" no resíduo. */
+const CONECTIVOS = new Set([
+  "de", "da", "do", "das", "dos", "a", "ao", "aos", "as", "e", "em", "com", "para", "por", "no", "na",
+  "nos", "nas", "sobre", "s", "c", "cc", "ref", "conta", "contas", "cta", "sr", "sra", "dr", "dra",
+]);
+
+/**
+ * O que SOBRA do nome depois de tirar o termo do grupo, o vocabulário contábil,
+ * conectivos, números e siglas de uma letra. Se sobra alguma coisa, essa coisa é
+ * quase sempre um NOME PRÓPRIO — a razão social ou a pessoa.
+ *
+ * É o que separa "Mútuos" (nada sobra → conhecimento reutilizável, pode ir ao
+ * global) de "Mútuos - João da Silva" (sobra "joao silva" → dado do cliente).
+ */
+export function residuoDeNomeProprio(nome: string): string[] {
+  const n = normalizar(nome).replace(/[()\[\]{}.,;:/\-]/g, " ");
+  return n.split(/\s+/).filter((t) => {
+    if (!t || t.length < 2) return false;              // sigla de 1 letra ("G", "W")
+    if (/^\d+$/.test(t)) return false;                 // número de conta/parcela
+    if (CONECTIVOS.has(t)) return false;
+    if (RE_GRUPO_NOMINAL.test(t) || RE_GRUPO_CONTRAPARTE.test(t)) return false;
+    return !VOCABULARIO_CONTABIL.some((v) => t.startsWith(v) || v.startsWith(t));
+  });
+}
 
 export interface AvaliacaoParticular {
   particular: boolean;
@@ -81,7 +114,7 @@ export function avaliarContaParticular(nome: string, contexto?: string | null): 
   const n = normalizar(nome);
   if (!n) return { particular: false, bloqueioDuro: false, motivo: null };
 
-  if (RE_CNPJ.test(nome) || RE_CPF.test(nome)) {
+  if (RE_CNPJ.test(nome) || RE_CPF.test(nome) || RE_DOC_SEM_PONTO.test(nome.replace(/[.\-\/]/g, ""))) {
     return { particular: true, bloqueioDuro: true, motivo: "contém CNPJ/CPF — dado identificável de terceiro (LGPD)" };
   }
   if (RE_RAZAO_SOCIAL.test(n)) {
@@ -93,7 +126,13 @@ export function avaliarContaParticular(nome: string, contexto?: string | null): 
   // entidade nomeada — particular, salvo quando o próprio nome DESCREVE o grupo
   // ("Adiantamento a coligadas") ou é um balde genérico ("Outros", "Diversos").
   if (RE_GRUPO_NOMINAL.test(ctx)) {
-    const nomeDescreveGrupo = RE_GRUPO_NOMINAL.test(n) || /^(outr[oa]s|diversos|geral|total|conta transit)/.test(n);
+    // ATENÇÃO (10/08/2026 — a garantia do dono): "descreve o grupo" é o nome
+    // que SÓ tem o termo do grupo ("Mútuos", "Empréstimos a sócios"). A régua
+    // antiga aceitava QUALQUER nome que CONTIVESSE o termo — e "Mútuos - João
+    // da Silva" ia direto para o dicionário global, que é exatamente o caso
+    // que o dono citou. O que decide é o RESÍDUO.
+    const generico = /^(outr[oa]s|diversos|geral|total|conta transit)/.test(n);
+    const nomeDescreveGrupo = generico || (RE_GRUPO_NOMINAL.test(n) && residuoDeNomeProprio(n).length === 0);
     if (!nomeDescreveGrupo) {
       return {
         particular: true,
@@ -106,14 +145,27 @@ export function avaliarContaParticular(nome: string, contexto?: string | null): 
   // Grupo de CONTRAPARTE (clientes/fornecedores): particular só se o nome não
   // tiver termo contábil genérico (aí é nome próprio, não sub-conta).
   if (RE_GRUPO_CONTRAPARTE.test(ctx)) {
-    const temVocabulario = VOCABULARIO_CONTABIL.some((t) => n.includes(t));
-    if (!temVocabulario) {
+    // O escape de vocabulário era um OR sobre o nome inteiro: UMA palavra
+    // contábil livrava o nome próprio ("Adiantamento de estoque - WG
+    // Armazéns" passava). Agora vale o RESÍDUO: sobrou nome, é particular.
+    if (residuoDeNomeProprio(n).length > 0) {
       return {
         particular: true,
         bloqueioDuro: false,
         motivo: "nome próprio em grupo de clientes/fornecedores — específico desta empresa",
       };
     }
+  }
+  // SEM CONTEXTO o detector era cego (fail-open). Mas há um sinal que basta
+  // pelo próprio nome: termo de parte ligada/mútuo/sócio GRUDADO num nome
+  // próprio — "Mútuos - João da Silva", "Empréstimo sócio Pedro". O grupo do
+  // documento nem sempre chega até aqui; a garantia não pode depender disso.
+  if (RE_GRUPO_NOMINAL.test(n) && residuoDeNomeProprio(n).length > 0) {
+    return {
+      particular: true,
+      bloqueioDuro: false,
+      motivo: "nome de terceiro junto ao termo de mútuo/sócio/parte ligada — específico desta empresa",
+    };
   }
   return { particular: false, bloqueioDuro: false, motivo: null };
 }

@@ -59,3 +59,51 @@ describe("grupoImediatoDoCaminho", () => {
     expect(grupoImediatoDoCaminho(null)).toBe(null);
   });
 });
+
+/**
+ * A GARANTIA DO DONO (10/08/2026): "contas adicionadas no workspace da empresa
+ * devem subir para aprovação da Quantua no dicionário global, COM EXCEÇÃO de
+ * contas com nomes, por exemplo mas não se limitando, MÚTUOS que aparece o
+ * nome do credor/devedor".
+ *
+ * A régua antiga fazia o OPOSTO no caso citado: qualquer nome que CONTIVESSE
+ * "mútuo"/"sócio"/"acionista" era tratado como "descreve o grupo" e ia direto
+ * ao dicionário global — "Mútuos - João da Silva" incluído.
+ */
+describe("nome próprio não sobe ao dicionário global (garantia do dono)", () => {
+  const particular = (nome: string, ctx?: string) => avaliarContaParticular(nome, ctx ?? null).particular;
+
+  it.each([
+    ["Mútuos - João da Silva", undefined],
+    ["Empréstimo sócio Pedro Henrique", undefined],
+    ["Mútuo Belagro Transportes", "Ativo > MÚTUOS"],
+    ["G Belusso Transportes", "Ativo Circulante > EMPRÉSTIMOS A PESSOAS LIGADAS"],
+    ["União Agro", "Ativo Circulante > EMPRÉSTIMOS A PESSOAS LIGADAS"],
+    ["Adiantamento de estoque - WG Armazéns", "Ativo Circulante > ADIANTAMENTO A FORNECEDORES"],
+    ["Transportadora Beta Ltda", undefined],
+  ])("FICA na empresa: %s", (nome, ctx) => expect(particular(nome, ctx)).toBe(true));
+
+  it.each([
+    ["Mútuos", undefined],
+    ["Empréstimos a sócios", undefined],
+    ["Outros mútuos", "Ativo > MÚTUOS"],
+    ["Duplicatas a receber", "Ativo Circulante > CLIENTES"],
+    ["Duplicatas a receber - vencidas", "Ativo Circulante > CLIENTES"],
+    ["Contas a pagar - curto prazo", "Passivo Circulante > FORNECEDORES"],
+    ["Clientes mercado interno", "Ativo Circulante > CLIENTES"],
+    ["Adiantamento de Férias", "Ativo Circulante > ADIANTAMENTOS A FUNCIONÁRIOS"],
+    ["Caixa Geral", undefined],
+  ])("SOBE para o global: %s", (nome, ctx) => expect(particular(nome, ctx)).toBe(false));
+
+  it("CNPJ sem pontuação também é bloqueio duro (o contador digita dos dois jeitos)", () => {
+    const r = avaliarContaParticular("12345678000199 - Fornecedor X", null);
+    expect(r.particular).toBe(true);
+    expect(r.bloqueioDuro).toBe(true);
+  });
+
+  it("sem contexto do documento a garantia continua valendo pelo próprio nome", () => {
+    // O caminho do documento nem sempre chega ao detector — a regra não pode
+    // depender disso (era fail-open).
+    expect(particular("Mútuos - Maria Aparecida")).toBe(true);
+  });
+});
