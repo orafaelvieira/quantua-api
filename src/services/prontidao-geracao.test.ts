@@ -93,12 +93,26 @@ describe("avaliarProntidaoGeracao — a régua única do gate", () => {
     expect(r.avisos.join(" ")).toMatch(/não traz subtotais/i);
   });
 
-  it("alerta de composição severidade ERRO → bloqueia; info não bloqueia", () => {
+  /**
+   * MUDOU EM 12/08/2026, e a mudança é de princípio: "todo problema ligado aos
+   * documentos contábeis se resolve na conciliação do workspace; a geração do
+   * IBR não pode ter atrito" (dono).
+   *
+   * O delta da composição foi PRESERVADO em "Outros" — nenhum valor se perdeu e
+   * os totais continuam certos. É problema de ATRIBUIÇÃO de detalhe, e é um fato
+   * do DOCUMENTO: aparece na aba Conciliação contábil, com o nó e a diferença,
+   * onde o analista consegue agir. Bloquear a geração fazia o analista descobrir
+   * isso DUAS TELAS depois de a seleção ter dito "tudo conciliado", e sem ação
+   * disponível naquele ponto.
+   */
+  it("alerta de composição severidade ERRO → AVISA, não bloqueia (o delta está preservado)", () => {
     const d = base();
     d.alertasComposicao = [{ severidade: "info" }, { severidade: "erro" }];
     const r = avaliarProntidaoGeracao(d);
-    expect(r.pronta).toBe(false);
-    expect(r.pendencias.join(" ")).toMatch(/1 nó\(s\) com composição divergente/);
+    expect(r.pronta).toBe(true);
+    expect(r.pendencias.join(" ")).not.toMatch(/composição divergente/);
+    expect(r.avisos.join(" ")).toMatch(/1 nó\(s\) com composição divergente/);
+    expect(r.avisos.join(" ")).toMatch(/Conciliação contábil/);
   });
 
   it("análise LEGADA (sem validação persistida) → libera com aviso (não brica IBRs antigos)", () => {

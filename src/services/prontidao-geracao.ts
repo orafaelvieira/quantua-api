@@ -65,7 +65,17 @@ export function avaliarProntidaoGeracao(dados: unknown): ProntidaoGeracao {
     ? (d.alertasComposicao as Array<{ severidade?: string }>).filter((a) => a?.severidade === "erro").length
     : 0;
   if (alertasErro > 0) {
-    pendencias.push(`${alertasErro} nó(s) com composição divergente (delta preservado em "Outros") — o alerta aponta o nó exato na auditoria.`);
+    // AVISO, NÃO PENDÊNCIA (12/08/2026, princípio do dono: "todo problema
+    // ligado aos documentos contábeis se resolve na conciliação do workspace;
+    // a geração do IBR não pode ter atrito").
+    //
+    // O delta foi PRESERVADO em "Outros": nenhum valor se perdeu, os totais
+    // continuam certos. É um problema de ATRIBUIÇÃO de detalhe, não de valor —
+    // e é um fato do DOCUMENTO, que agora aparece na aba Conciliação contábil,
+    // com o nó e a diferença, onde o analista trabalha. Bloquear a geração aqui
+    // significava descobrir o problema duas telas depois de a tela anterior ter
+    // dito "tudo conciliado", e sem ação disponível naquele ponto.
+    avisos.push(`${alertasErro} nó(s) com composição divergente (delta preservado em "Outros") — veja o nó exato na aba Conciliação contábil da empresa.`);
   }
 
   // 4) CONTAS NÃO CLASSIFICADAS com valor (âmbar) — classifique ou ignore (grátis).

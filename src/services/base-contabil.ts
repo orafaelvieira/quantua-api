@@ -904,7 +904,37 @@ async function montarBaseContabilSemCache(
       return [(partes[partes.length - 1] ?? "").trim()].filter(Boolean);
     });
   };
-  const conciliacaoPorDocumento: Record<string, { ok: boolean; motivos: string[] }> = {};
+  /**
+   * AVISOS DO DOCUMENTO (12/08/2026, princípio do dono: "todo problema ligado
+   * aos documentos contábeis se resolve na conciliação do workspace").
+   *
+   * Diferente dos MOTIVOS: motivo derruba o selo (o documento não entra em
+   * IBR); aviso é fato conhecido que NÃO invalida o número — composição de um
+   * nó cujo delta foi preservado em "Outros" é atribuição de detalhe, não erro
+   * de valor. Antes esse fato só aparecia lá na frente, bloqueando a geração
+   * do IBR, depois de a tela ter dito "tudo conciliado". Agora nasce aqui, com
+   * o nó e a diferença, onde dá para agir.
+   */
+  const avisosPorDocumento = new Map<string, string[]>();
+  for (const a of alertasComposicao as Array<{ periodo: string; caminho: string; declarado: number; somaFilhos: number; delta: number; severidade: string }>) {
+    if (a.severidade !== "erro") continue;
+    for (const r of relatorio) {
+      if (!fimDoIntervalo(r.periodo).includes(a.periodo)) continue;
+      const lista = avisosPorDocumento.get(r.documentId) ?? [];
+      // A diferença vem com CENTAVO, não abreviada: numa seção de R$ 3,3 mi os
+      // dois totais arredondados saem idênticos na tela ("R$ -3,3 mi × R$ -3,3
+      // mi") e a frase parece errada. O que o analista precisa é do delta exato.
+      const exato = a.delta.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      lista.push(
+        `"${a.caminho}" (${rotuloDaColuna(a.periodo)}): a soma das contas desta seção difere do subtotal impresso em R$ ${exato}. ` +
+        `A diferença foi preservada em "Outros" — nenhum valor se perdeu e os totais continuam certos, mas esse pedaço do detalhe ficou num balde. ` +
+        `Classifique as contas da seção na auditoria abaixo para o dinheiro voltar para a linha certa.`,
+      );
+      avisosPorDocumento.set(r.documentId, lista);
+    }
+  }
+
+  const conciliacaoPorDocumento: Record<string, { ok: boolean; motivos: string[]; avisos: string[] }> = {};
   for (const r of relatorio) {
     const motivos: string[] = [];
     if (!r.lido) motivos.push(r.erro ?? "documento ainda não lido");
@@ -917,7 +947,9 @@ async function montarBaseContabilSemCache(
       const cons = fimDoIntervalo(r.periodo).map((p) => conservacaoPorPeriodo[p]).find((x) => x && !x.ok);
       if (cons) motivos.push(`conservação de valor não fecha (diferença de ${fmtBRL(cons.diferenca)})`);
     }
-    conciliacaoPorDocumento[r.documentId] = { ok: motivos.length === 0, motivos };
+    conciliacaoPorDocumento[r.documentId] = {
+      ok: motivos.length === 0, motivos, avisos: avisosPorDocumento.get(r.documentId) ?? [],
+    };
   }
 
   const payload = {
