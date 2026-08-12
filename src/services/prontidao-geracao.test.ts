@@ -21,7 +21,9 @@ const base = () => ({
   version: 2,
   bp: bpOk.map((l) => ({ ...l })),
   dre: dreOk.map((l) => ({ ...l })),
-  validacao: { ...validacaoLimpa, reconciliacaoDRE: { ...validacaoLimpa.reconciliacaoDRE } },
+  // `alertas` entra no shape porque a regua passou a citar a prova com numero
+  // (12/08/2026): sem declarar aqui, o `npx tsc` do Dockerfile reprova o teste.
+  validacao: { ...validacaoLimpa, reconciliacaoDRE: { ...validacaoLimpa.reconciliacaoDRE } } as Record<string, unknown>,
   naoMapeados: [] as unknown[],
   alertasComposicao: [] as unknown[],
 });
