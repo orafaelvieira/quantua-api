@@ -199,6 +199,13 @@ export async function montarBaseContabil(
    *  para as linhas. Quando não bate, a conta onde o dinheiro ficou vem junto. */
   const conservacaoPorPeriodo: Record<string, { entrou: number; saiu: number; diferenca: number; ok: boolean; vazamentos: Array<{ conta: string; grupo: string; valor: number; motivo: string }> }> = {};
   const provasPorPeriodo: Record<string, unknown> = {};
+  /**
+   * INTERVALO COBERTO POR DOCUMENTO (11/08/2026). A regra da SÉRIE CONTÍNUA
+   * (services/serie-periodos.ts) se mede por intervalo, não por rótulo de
+   * coluna: um balancete de junho é ACUMULADO e cobre desde 1º de janeiro.
+   * Quem sabe o intervalo é a leitura do documento — então ele viaja daqui.
+   */
+  const intervaloPorDocumento: Record<string, { inicio: string; fim: string; tipo: "mes" | "exercicio" }> = {};
   // ── CONTRATO PARA O PRODUTO (11/08/2026) ──
   // O IBR precisa de mais do que a tela: as árvores MENSAIS por documento (o
   // /refold as re-dobra quando o dicionário muda, e os prazos médios YTD saem
@@ -250,6 +257,12 @@ export async function montarBaseContabil(
       tipoPorPeriodo[periodo] = /^01\/01\//.test(f.conteudo.periodoInicio ?? "") && /^31\/12\//.test(f.conteudo.periodoFim ?? "")
         ? "exercicio" : "mes";
       arvoresBalancete.push({ docId: f.id, nome: f.nome, periodo, arvoreBP: conv.arvoreBP, arvoreDRE: conv.arvoreDRE });
+      if (f.conteudo.periodoInicio && f.conteudo.periodoFim) {
+        intervaloPorDocumento[f.id] = {
+          inicio: f.conteudo.periodoInicio, fim: f.conteudo.periodoFim,
+          tipo: tipoPorPeriodo[periodo] ?? "mes",
+        };
+      }
       balancetes.push({ docId: f.id, nome: f.nome, periodo, provas: conv.provas, gruposExcluidos: conv.gruposExcluidos, avisos: conv.avisos });
       const rBP = foldBP(conv.arvoreBP, [periodo], dictRows, bpModel);
       alertasComposicao.push(...rBP.alertasComposicao);
@@ -318,6 +331,15 @@ export async function montarBaseContabil(
         arvCanon[p] = dadosP;
       }
       const aceitos = Object.keys(arvCanon);
+      if (aceitos.length) {
+        // Demonstrativo ANUAL cobre o exercício: do 1º de janeiro do primeiro
+        // período aceito ao último dia do último.
+        const ordenados = [...aceitos].sort((x, y) => ordPeriodo(x) - ordPeriodo(y));
+        const primeiro = ordenados[0]!, ultimo = ordenados[ordenados.length - 1]!;
+        intervaloPorDocumento[d.id] = {
+          inicio: `01/01/${primeiro.slice(-4)}`, fim: ultimo, tipo: "exercicio",
+        };
+      }
       // Subtotais IMPRESSOS no documento (Receita Líquida, Lucro Bruto, Ativo
       // Total…) — a chave do período segue a MESMA canonicalização das colunas.
       for (const [pRaw, decl] of Object.entries(c.declarados ?? {})) {
@@ -823,6 +845,7 @@ export async function montarBaseContabil(
     modelos: versoesAtivas,
     versaoBase: VERSAO_BASE,
     documentosUsados: relatorio.map((r) => r.documentId),
+    intervaloPorDocumento,
     // ── contrato do produto (só quando pedido; ver `paraProduto`) ──
     ...(opcoes.paraProduto ? { arvoresBalancete, balancetes, declarados, alertasComposicao } : {}),
   };

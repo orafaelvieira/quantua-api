@@ -33,6 +33,8 @@ import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
 import { extrairComCascata, paraTelaManual, mergeItensPorConta } from "../services/extracao-cascata";
+import { baseDoWorkspaceParaIBR, ehRecusa } from "../services/base-para-ibr";
+import { registrarRotasDocumentosBase } from "./documentos-base";
 import { getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
@@ -1467,9 +1469,23 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       }
     }
 
+    // ── O IBR LÊ A BASE DO WORKSPACE (11/08/2026) ──
+    // Quando todos os documentos vieram do pool da empresa e estão conciliados,
+    // não se extrai nada aqui: consome-se a base que a aba Conciliação contábil
+    // já montou (services/base-para-ibr.ts explica a régua e o porquê). A base
+    // cobre BP, DRE e BALANCETE de uma vez, então a linha separada de balancete
+    // não roda — senão os meses entrariam duas vezes.
+    const daBase = await baseDoWorkspaceParaIBR(analysis.companyId, req.scopeUserIds!, docsAtivos as never);
+    const usaBase = !ehRecusa(daBase);
+    if (!usaBase) {
+      console.log(`[process] ${analysis.id}: base do workspace NÃO usada — ${(daBase as { motivos: string[] }).motivos.join(" | ")}`);
+    } else {
+      console.log(`[process] ${analysis.id}: lendo a BASE DO WORKSPACE (${daBase.poolIds.length} documento(s) do pool, ${daBase.escolhido.periodos.length} coluna(s), IA já paga na porta)`);
+    }
+
     // Balancetes SAEM do fluxo BP/DRE (linha de extração separada, adiante).
-    const balanceteDocs = docsAtivos.filter((d) => ehBalancete(d.tipo));
-    const financialDocs = docsAtivos.filter((d) => !ehBalancete(d.tipo));
+    const balanceteDocs = usaBase ? [] : docsAtivos.filter((d) => ehBalancete(d.tipo));
+    const financialDocs = usaBase ? [] : docsAtivos.filter((d) => !ehBalancete(d.tipo));
 
     // 2. Baixa e parseia cada documento (ou usa dados editados manualmente)
     const parsedDocs: ParsedDocument[] = await Promise.all(
@@ -1569,16 +1585,28 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // critério (score 5/5 de integridade). A porta da Data room do workspace
     // chama EXATAMENTE esta função, então os dois caminhos não podem divergir.
     const dictAll = [...dictForBP, ...dictForDRE];
-    const { escolhido, custos } = await extrairComCascata(
-      financialDocs.map((doc, i) => ({
-        nome: doc.nome,
-        tipo: doc.tipo,
-        parsed: parsedDocs[i]!,
-        buffer: doc.storagePath ? () => downloadFile(doc.storagePath!) : undefined,
-        pularVisao: reusaCache(doc),
-      })),
-      { dictForBP, dictForDRE, bpModel, dreModel, hibridoAtivo: env.ibr.hibridoAtivo, origem: "process" },
-    );
+    if (usaBase) {
+      // O laço de download/parse não roda no caminho da base — mas o estado do
+      // documento NA TELA do IBR é o mesmo de sempre: "Processado". Sem isto,
+      // a Data room do IBR mostraria "Pendente" para documento já lido e
+      // conciliado, e o analista pensaria que faltou alguma coisa.
+      await prisma.document.updateMany({
+        where: { id: { in: docsAtivos.map((d) => d.id) } },
+        data: { status: "Processado", confianca: 95 },
+      });
+    }
+    const { escolhido, custos } = usaBase
+      ? { escolhido: daBase.escolhido, custos: [{ fonte: "base-workspace", usd: 0 }] }
+      : await extrairComCascata(
+        financialDocs.map((doc, i) => ({
+          nome: doc.nome,
+          tipo: doc.tipo,
+          parsed: parsedDocs[i]!,
+          buffer: doc.storagePath ? () => downloadFile(doc.storagePath!) : undefined,
+          pularVisao: reusaCache(doc),
+        })),
+        { dictForBP, dictForDRE, bpModel, dreModel, hibridoAtivo: env.ibr.hibridoAtivo, origem: "process" },
+      );
     const naoMapeadosParaTela = paraTelaManual(bpModel);
     const custoTotalUsd = custos.reduce((s, c) => s + c.usd, 0);
 
@@ -1602,10 +1630,15 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // centavo: Ativo − Passivo = resultado acumulado; PL ajustado com "Resultado
     // do Período") → MESMO fold/dicionário/modelos da cascata. O mês entra como
     // período novo MESCLADO aos anuais (BP no fim do mês; DRE acumulada YTD).
-    const balancetes: Array<Record<string, unknown>> = [];
+    // Vindo da base do workspace, as árvores mensais e as provas por balancete
+    // JÁ chegam prontas (a base leu balancete, BP e DRE na mesma passada) — o
+    // laço abaixo não roda, mas o resto do fluxo continua enxergando os mesmos
+    // dados: prazos médios YTD, aplicarProvasBalancete e o /refold dependem deles.
+    const balancetes: Array<Record<string, unknown>> = usaBase ? [...daBase.balancetes] : [];
     // Custo de IA da via de OCR ([[registrar-custo-ia]]): entra no custo da extração.
     let custoOcrUsd = 0;
-    const arvoresBalancete: Array<{ docId: string; nome: string; periodo: string; arvoreBP: unknown; arvoreDRE: unknown }> = [];
+    const arvoresBalancete: Array<{ docId: string; nome: string; periodo: string; arvoreBP: unknown; arvoreDRE: unknown }> =
+      usaBase ? [...daBase.arvoresBalancete] : [];
     const nmBalancete: NaoMapeado[] = [];
     for (const doc of balanceteDocs) {
       try {
@@ -1822,7 +1855,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
         await prisma.document.update({ where: { id: doc.id }, data: { status: "Erro" } }).catch(() => {});
       }
     }
-    if (balanceteDocs.length > 0) {
+    if (balanceteDocs.length > 0 || balancetes.length > 0) {
       allPeriodos = [...allPeriodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
       // RE-VALIDA o modelo MESCLADO: a validação da cascata cobriu só os
       // documentos anuais — os meses do balancete entram na régua aqui (a
@@ -1873,9 +1906,15 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // SUGESTÃO POR IA para as contas não-mapeadas (âmbar): UMA chamada Haiku no lote,
     // temperature 0, opções fechadas por grupo/natureza. Gerada AQUI (1x por extração)
     // e CACHEADA em dadosEstruturados — a tela nunca re-consulta IA. Best-effort.
-    let sugestoesIA: Record<string, import("../services/classification-suggest").SugestaoIA> = {};
+    // Vindo da base, as sugestões DETERMINÍSTICAS já vêm prontas (e de graça):
+    // entram antes, e a IA só é chamada para o que sobrar.
+    let sugestoesIA: Record<string, import("../services/classification-suggest").SugestaoIA> =
+      usaBase ? { ...(daBase.sugestoes as Record<string, import("../services/classification-suggest").SugestaoIA>) } : {};
     let custoSugestoes: import("../services/ai-extraction").CustoIA | null = null;
-    const nmParaSugerir = [...((usouIA ? hibridoNaoMapeados : []) as import("../services/ai-extraction").NaoMapeado[]), ...nmBalancete];
+    const nmParaSugerir = [...((usouIA ? hibridoNaoMapeados : []) as import("../services/ai-extraction").NaoMapeado[]), ...nmBalancete]
+      // Quem já tem dica determinística da base não vai à IA — o lote pago
+      // encolhe para o que realmente falta (regra: IA só onde a régua não alcança).
+      .filter((nm) => !sugestoesIA[chaveNM(nm as never)]);
     // DIAGNÓSTICO persistido (prod não tem log acessível): a tela mostra quantas
     // pendentes têm dica e POR QUE a geração falhou, quando falha.
     const sugestoesDiag: { pedidas: number; geradas: number; erros: string[]; em: string } = {
@@ -1892,7 +1931,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
           { setor: analysis.sectorCustom ?? analysis.company.setor ?? null, receitaUltimoAno: receitaLinha && ultimoP ? receitaLinha.valores[ultimoP] ?? null : null },
           dreInputs,
         );
-        sugestoesIA = r.sugestoes;
+        // MERGE, nunca substituição: as dicas determinísticas da base já estão
+        // aqui e são mais confiáveis (nasceram do próprio documento).
+        sugestoesIA = { ...sugestoesIA, ...r.sugestoes };
         custoSugestoes = r.custo;
         sugestoesDiag.geradas = Object.keys(r.sugestoes).length;
         sugestoesDiag.erros = r.erros;
@@ -1912,7 +1953,12 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       dre: structuredDRE,
       indicadores,
       periodos: allPeriodos,
-      unmatchedAccounts: [...escolhido.unmatched, ...naoMapeadosParaTela(nmBalancete)],
+      // Vindo da base, as pendências chegam como naoMapeados crus — a MESMA
+      // função da cascata as converte para a tela de classificação manual.
+      unmatchedAccounts: [
+        ...(usaBase ? naoMapeadosParaTela(escolhido.naoMapeados as NaoMapeado[]) : escolhido.unmatched),
+        ...naoMapeadosParaTela(nmBalancete),
+      ],
       declarados: declaradosDRE,
       arvoreOriginalBP: arvoreOriginalBP,
       arvoreOriginalDRE: arvoreOriginalDRE,
@@ -1935,7 +1981,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     } as DadosEstruturados;
     // Linha de balancete: provas por documento + árvores mensais (o /refold as
     // re-dobra quando o dicionário/modelo muda — mesma mecânica das anuais).
-    if (balanceteDocs.length > 0) {
+    if (balancetes.length > 0 || arvoresBalancete.length > 0) {
       (dadosEstruturados as any).balancetes = balancetes;
       (dadosEstruturados as any).arvoresBalancete = arvoresBalancete;
     }
@@ -1950,7 +1996,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const extraidoEm = new Date().toISOString();
     const insumos = {
       // Proveniência inclui os BALANCETES (política de versionamento: todo insumo carimba o hash)
-      documentos: [...financialDocs, ...balanceteDocs].map((d) => ({ id: d.id, nome: d.nome, tipo: d.tipo, hash: d.hash, versao: d.versao, editadoManualmente: d.editadoManualmente })),
+      documentos: (usaBase ? docsAtivos : [...financialDocs, ...balanceteDocs]).map((d) => ({ id: d.id, nome: d.nome, tipo: d.tipo, hash: d.hash, versao: d.versao, editadoManualmente: d.editadoManualmente })),
       dicionarioVersao,
       // Cascata por empresa: quantas entradas PRÓPRIAS da empresa participaram
       // do fold (proveniência — o global sozinho não reproduz este resultado).
@@ -3276,6 +3322,9 @@ router.post(
 // ("usa Balancete jun/26 v3") e herança do resumo de IA nos materiais.
 // Idempotente: refixar o mesmo documento reusa a fixação viva.
 // body: { documentIds: string[] }
+// Seleção dos documentos contábeis (wizard + aba Escopo) — ver routes/documentos-base.ts.
+registrarRotasDocumentosBase(router, { whereRecursoEmpresa });
+
 router.post("/:id/documents/fixar", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id;
   if (!id || typeof id !== "string") { res.status(404).json({ error: "ID inválido" }); return; }
