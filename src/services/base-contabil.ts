@@ -42,6 +42,14 @@ const fmtBRL = (v: number): string => {
   return `R$ ${v.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}`;
 };
 
+/**
+ * VERSÃO DO CONTRATO DA BASE. Sobe quando a MONTAGEM muda de resultado (não
+ * quando só se acrescenta campo): entra na marca do cache, então subir aqui
+ * invalida tudo que estava guardado — é como um conserto chega a quem já
+ * tinha o número velho na tela.
+ */
+export const VERSAO_BASE = 1;
+
 /** Insumos + impressão digital deles. Separado da montagem de propósito: a
  *  marca é BARATA (ids/hashes/agregados) e serve para o cache decidir se
  *  precisa pagar o fold, que é caro. */
@@ -51,14 +59,24 @@ export type InsumosBase = {
   marca: string;
 };
 
-const buscarDocs = (companyId: string) => prisma.document.findMany({
-  where: { companyId, analysisId: null, status: { not: "Substituído" } },
+const buscarDocs = (companyId: string, documentIds?: string[] | null) => prisma.document.findMany({
+  where: {
+    companyId, analysisId: null, status: { not: "Substituído" },
+    ...(documentIds && documentIds.length ? { id: { in: documentIds } } : {}),
+  },
   include: { leituraPorta: { select: { conteudo: true, hashArquivo: true, criadoEm: true } } },
   orderBy: { createdAt: "asc" },
 });
 
-export async function insumosDaBase(companyId: string, scopeUserIds: string[]): Promise<InsumosBase> {
-  const docs = await buscarDocs(companyId);
+/**
+ * @param documentIds SELEÇÃO do produto (IBR): monta a base só com estes
+ *   documentos. `null`/vazio = pool inteiro da empresa (a aba Conciliação
+ *   contábil, que mostra tudo). O filtro mora aqui, e não na montagem, para a
+ *   MARCA do cache já carregar a seleção — duas seleções diferentes da mesma
+ *   empresa são duas bases diferentes e não podem compartilhar cache.
+ */
+export async function insumosDaBase(companyId: string, scopeUserIds: string[], documentIds?: string[] | null): Promise<InsumosBase> {
+  const docs = await buscarDocs(companyId, documentIds);
   // Impressão digital dos insumos — barata: ids/hashes já vieram na query
   // acima; dicionário por agregado; modelos por versão ativa.
   const dictAgg = await prisma.accountDictionary.aggregate({
@@ -68,6 +86,8 @@ export async function insumosDaBase(companyId: string, scopeUserIds: string[]): 
   });
   const versoesAtivas = await getActiveModelVersions(companyId);
   const marca = JSON.stringify([
+    VERSAO_BASE,
+    documentIds && documentIds.length ? [...documentIds].sort() : null,
     docs.map((d) => [d.id, d.hash, d.status, d.leituraPorta?.hashArquivo ?? null, d.leituraPorta?.criadoEm ?? null]),
     dictAgg._count._all, dictAgg._max.updatedAt,
     versoesAtivas,
@@ -78,10 +98,19 @@ export async function insumosDaBase(companyId: string, scopeUserIds: string[]): 
 export type BaseContabil = Awaited<ReturnType<typeof montarBaseContabil>>;
 
 /** Monta a base. Recebe os insumos já buscados (o cache os usa para decidir). */
+/**
+ * @param paraProduto quando true, o retorno carrega também o CONTRATO DO
+ *   PRODUTO (árvores mensais por documento, provas por balancete, subtotais
+ *   declarados, alertas de composição). São dados pesados — as árvores já
+ *   viajam em `arvoreOriginal*` para a tela — e só o IBR precisa deles; a aba
+ *   Conciliação contábil não pagaria por isso à toa (o payload da Belagro já
+ *   tem 287 KB).
+ */
 export async function montarBaseContabil(
   companyId: string,
   scopeUserIds: string[],
   insumos: InsumosBase,
+  opcoes: { paraProduto?: boolean } = {},
 ) {
   const { docs, versoesAtivas } = insumos;
   const avisos: string[] = [];
@@ -170,6 +199,17 @@ export async function montarBaseContabil(
    *  para as linhas. Quando não bate, a conta onde o dinheiro ficou vem junto. */
   const conservacaoPorPeriodo: Record<string, { entrou: number; saiu: number; diferenca: number; ok: boolean; vazamentos: Array<{ conta: string; grupo: string; valor: number; motivo: string }> }> = {};
   const provasPorPeriodo: Record<string, unknown> = {};
+  // ── CONTRATO PARA O PRODUTO (11/08/2026) ──
+  // O IBR precisa de mais do que a tela: as árvores MENSAIS por documento (o
+  // /refold as re-dobra quando o dicionário muda, e os prazos médios YTD saem
+  // dos períodos delas), os subtotais DECLARADOS no documento (a validação
+  // reconcilia a DRE montada contra eles) e os alertas de composição do fold.
+  // Sem estes campos o plug do IBR na base seria retrocesso: o produto perderia
+  // provas que hoje ele tem.
+  const arvoresBalancete: Array<{ docId: string; nome: string; periodo: string; arvoreBP: unknown; arvoreDRE: unknown }> = [];
+  const balancetes: Array<{ docId: string; nome: string; periodo: string; provas: unknown; gruposExcluidos: unknown; avisos: string[] }> = [];
+  const declarados: Record<string, Record<string, number>> = {};
+  const alertasComposicao: unknown[] = [];
   for (const f of fontes) {
     // A instância do Cloud Run é ÚNICA: 20s+ de fold síncrono travariam todas
     // as requisições — devolve o event loop entre documentos.
@@ -209,11 +249,15 @@ export async function montarBaseContabil(
       // resto é mês — a tela rotula "2025" × "05/2026" a partir daqui.
       tipoPorPeriodo[periodo] = /^01\/01\//.test(f.conteudo.periodoInicio ?? "") && /^31\/12\//.test(f.conteudo.periodoFim ?? "")
         ? "exercicio" : "mes";
+      arvoresBalancete.push({ docId: f.id, nome: f.nome, periodo, arvoreBP: conv.arvoreBP, arvoreDRE: conv.arvoreDRE });
+      balancetes.push({ docId: f.id, nome: f.nome, periodo, provas: conv.provas, gruposExcluidos: conv.gruposExcluidos, avisos: conv.avisos });
       const rBP = foldBP(conv.arvoreBP, [periodo], dictRows, bpModel);
+      alertasComposicao.push(...rBP.alertasComposicao);
       for (const k of rBP.conservacao) conservacaoPorPeriodo[k.periodo] = k;
       mergeItens(bp, rBP.bp as unknown as Item[]);
       naoMapeados.push(...rBP.naoMapeados);
       const rDRE = foldDRE(conv.arvoreDRE, [periodo], dictRows, dreModel);
+      alertasComposicao.push(...rDRE.alertasComposicao);
       mergeItens(dre, rDRE.dre as unknown as Item[]);
       naoMapeados.push(...rDRE.naoMapeados);
       // O fold MUTA as árvores carimbando destino/absorvido — é a auditoria.
@@ -274,15 +318,23 @@ export async function montarBaseContabil(
         arvCanon[p] = dadosP;
       }
       const aceitos = Object.keys(arvCanon);
+      // Subtotais IMPRESSOS no documento (Receita Líquida, Lucro Bruto, Ativo
+      // Total…) — a chave do período segue a MESMA canonicalização das colunas.
+      for (const [pRaw, decl] of Object.entries(c.declarados ?? {})) {
+        const p = canonico(pRaw);
+        if (aceitos.includes(p)) declarados[p] = { ...(declarados[p] ?? {}), ...decl };
+      }
       if (aceitos.length) {
         if (ehBP) {
           const r2 = foldBP(arvCanon as Parameters<typeof foldBP>[0], aceitos, dictRows, bpModel);
+          alertasComposicao.push(...r2.alertasComposicao);
           for (const k of r2.conservacao) conservacaoPorPeriodo[k.periodo] = k;
           mergeItens(bp, r2.bp as unknown as Item[]);
           naoMapeados.push(...r2.naoMapeados);
           for (const p of aceitos) { cobertoBP.add(p); registraPeriodo(p, d.nome); arvoreOriginalBP[p] = arvCanon[p]; }
         } else {
           const r2 = foldDRE(arvCanon as Parameters<typeof foldDRE>[0], aceitos, dictRows, dreModel);
+          alertasComposicao.push(...r2.alertasComposicao);
           mergeItens(dre, r2.dre as unknown as Item[]);
           naoMapeados.push(...r2.naoMapeados);
           for (const p of aceitos) { cobertoDRE.add(p); registraPeriodo(p, d.nome); arvoreOriginalDRE[p] = arvCanon[p]; }
@@ -762,6 +814,10 @@ export async function montarBaseContabil(
     // numa empresa com BP/DRE e a tela mostrava "nenhum documento lido").
     fontes: relatorio.filter((r) => r.lido).length,
     modelos: versoesAtivas,
+    versaoBase: VERSAO_BASE,
+    documentosUsados: relatorio.map((r) => r.documentId),
+    // ── contrato do produto (só quando pedido; ver `paraProduto`) ──
+    ...(opcoes.paraProduto ? { arvoresBalancete, balancetes, declarados, alertasComposicao } : {}),
   };
   return payload;
 }
