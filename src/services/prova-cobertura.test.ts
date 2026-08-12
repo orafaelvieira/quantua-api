@@ -4,7 +4,7 @@
  * pega isso; a de contagem pega.
  */
 import { describe, it, expect } from "vitest";
-import { provarCobertura, nomesDaArvore, nomeComparavel, motivoDaCobertura, marcarPais, type LinhaDoDocumento } from "./prova-cobertura";
+import { provarCobertura, nomesDaArvore, nomeComparavel, motivoDaCobertura, ehLinhaEstrutural, type LinhaDoDocumento } from "./prova-cobertura";
 
 const linha = (conta: string, valor: number) => ({ conta, valores: { "31/12/2025": valor } });
 
@@ -144,4 +144,27 @@ describe("nome quebrado em duas linhas", () => {
     expect(c.ok).toBe(false);
     expect(c.faltantes.map((f) => f.nome)).toEqual(["CUSTO"]);
   });
+});
+
+/**
+ * FECHAMENTO DO BALANÇO em todas as grafias do acervo. O caso Dunamys
+ * (12/08/2026): "PASSIVO + PATRIMÔNIO LÍQUIDO" era cobrado como conta e
+ * derrubava três balanços corretos.
+ */
+describe("linha de fechamento do balanço não é conta", () => {
+  it.each([
+    "PASSIVO + PATRIMÔNIO LÍQUIDO",
+    "PASSIVO E PATRIMONIO LIQUIDO",
+    "ATIVO + PATRIMÔNIO LÍQUIDO",
+    "TOTAL DO PASSIVO E PATRIMÔNIO LÍQUIDO",
+    "PASSIVO TOTAL",
+    "ATIVO",
+    "PATRIMÔNIO LÍQUIDO",
+  ])("%s", (nome) => expect(ehLinhaEstrutural(nome)).toBe(true));
+
+  it.each([
+    "Passivos Contingentes",
+    "Bradesco Invest Fácil 23456-7",
+    "Ativos Biológicos",
+  ])("mas %s continua sendo conta", (nome) => expect(ehLinhaEstrutural(nome)).toBe(false));
 });

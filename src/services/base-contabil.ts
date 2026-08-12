@@ -449,7 +449,37 @@ async function montarBaseContabilSemCache(
       // Não fechou 5/5 mesmo após heurístico → Haiku → visão? Então é ✗ aqui,
       // com o motivo — o analista não descobre isso adiante, na conta errada.
       const integ = c.integridade;
-      if (!desbalanceado && integ && !integ.fecha) {
+      const cobFalhou = !!(integ?.cobertura?.verificavel && !integ.cobertura.ok);
+      // COBERTURA AVISA, NÃO REPROVA (12/08/2026, caso Dunamys — três balanços
+      // corretos ficaram ✗ da noite para o dia).
+      //
+      // A cobertura compara NOMES entre dois leitores, e nome é frágil de um
+      // jeito que soma não é: o parser lê "Bradesco Invest Fácil 18000-9" e a
+      // visão lê "…16000-9" — um dígito de diferença vira "conta perdida" sem
+      // que nada tenha se perdido. Enquanto a aritmética do documento fecha
+      // (equação patrimonial e composição dos dois lados), reprovar é mentir
+      // sobre o documento E travar o analista, que não tem ação nenhuma
+      // disponível: quem perdeu a linha foi o leitor, não ele.
+      //
+      // Ela CONTINUA valendo onde tem consequência boa e nenhum custo: dentro
+      // da cascata, derrubando o portão para o motor escalar (Haiku → visão) e
+      // tentar de novo. E continua aparecendo, com o nome das contas, para
+      // quem quiser conferir no papel.
+      if (cobFalhou) {
+        const cb = integ!.cobertura!;
+        avisos.push(
+          `${d.nome}: a leitura trouxe ${cb.encontradas} das ${cb.total} contas que o documento imprime — ` +
+          `${cb.faltantes.slice(0, 3).map((f) => `"${f}"`).join(", ")}${cb.faltantes.length > 3 ? ` e mais ${cb.faltantes.length - 3}` : ""} ` +
+          `não foram reconhecidas com o mesmo nome. A aritmética do documento fecha, então os totais estão certos; ` +
+          `confira no original se alguma dessas linhas precisa aparecer no detalhe.`,
+        );
+      }
+      // "Só a cobertura falhou" se mede pelo PLACAR, não pela lista de provas:
+      // a cobertura vale exatamente 1 ponto, então score === scoreMax − 1 diz
+      // que todo o resto passou. Assim vale para qualquer escopo — num DRE
+      // avulso não existe equação patrimonial para conferir.
+      const soFaltouCobertura = cobFalhou && integ!.score === integ!.scoreMax - 1;
+      if (!desbalanceado && integ && !integ.fecha && !soFaltouCobertura) {
         const cob = integ.cobertura;
         const faltas = [
           !integ.equacaoPatrimonial ? "Ativo ≠ Passivo + PL" : null,

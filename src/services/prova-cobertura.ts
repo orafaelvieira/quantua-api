@@ -51,7 +51,13 @@ export function ehLinhaEstrutural(nome: string): boolean {
   const n = nomeComparavel(nome);
   if (!n) return true;
   if (/^(total|subtotal|soma)\b/.test(n)) return true;
-  if (/^(ativo|passivo)( total| circulante| nao circulante| e patrimonio liquido)?$/.test(n)) return true;
+  if (/^(ativo|passivo)( total| circulante| nao circulante)?$/.test(n)) return true;
+  // LINHA DE FECHAMENTO DO BALANÇO, em todas as grafias que o acervo usa:
+  // "PASSIVO + PATRIMÔNIO LÍQUIDO" (o "+" some na canônica), "PASSIVO E
+  // PATRIMONIO LIQUIDO", "TOTAL DO PASSIVO E PL". Caso Dunamys (12/08/2026):
+  // sem isto, o total geral do balanço era cobrado como se fosse conta e os
+  // três BPs viravam ✗ — a tela ficou vermelha num documento correto.
+  if (/^(ativo|passivo)( e)? (patrimonio liquido|pl)$/.test(n)) return true;
   if (/^(circulante|nao circulante|realizavel a longo prazo|permanente|resultado de exercicios futuros)$/.test(n)) return true;
   if (/^patrimonio liquido$/.test(n)) return true;
   if (/^receitas? (operacional |bruta$|liquida$)/.test(n)) return true;

@@ -27,7 +27,6 @@ import { converterBalancete, type ProvasBalancete } from "./balancete-conversao"
 import { construirArvoreBPporIndentacao } from "./bp-tree-indent";
 import { construirArvoreDREporIndentacao } from "./dre-tree-indent";
 import { extrairComCascata, detectDocType, type DocParaCascata, type EscopoRegua } from "./extracao-cascata";
-import { motivoDaCobertura } from "./prova-cobertura";
 import { resolverCascataDicionario, whereCascataDicionarioAtiva } from "./dicionario-escopo";
 import { resolverEscopoAcesso } from "./escopo-acesso";
 import { loadActiveBPModel, loadActiveDREModel } from "./model-version";
@@ -360,8 +359,11 @@ export async function lerDemonstrativoHibrido(
         encontradas: cob.encontradas, faltantes: cob.faltantes.slice(0, 12).map((f) => f.nome),
       },
     };
-    const motivoCob = motivoDaCobertura(cob);
-    if (motivoCob) r.avisos.push(motivoCob);
+    // O AVISO da cobertura NÃO nasce aqui: quem fala com o analista é a base
+    // (services/base-contabil), que sabe se a aritmética do documento fechou e
+    // pode dizer "os totais estão certos" em vez de "a leitura perdeu conta".
+    // Duas mensagens sobre o mesmo fato, uma delas alarmista, é pior que uma.
+    // O dado estruturado fica em `integridade.cobertura`, para quem quiser.
     if (ehBP && !v.equacaoPatrimonial) {
       r.avisos.push("o balanço lido não fecha (Ativo ≠ Passivo + PL) mesmo depois da cascata completa de extração — confira o documento.");
     }
