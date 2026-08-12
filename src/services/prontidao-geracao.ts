@@ -32,6 +32,14 @@ function temValores(linhas: unknown): boolean {
   );
 }
 
+/** R$ curto para caber na frase da pendencia (o valor exato esta na auditoria). */
+const fmtBRLCurto = (v: number): string => {
+  const abs = Math.abs(v);
+  if (abs >= 1e6) return `R$ ${(v / 1e6).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mi`;
+  if (abs >= 1e3) return `R$ ${(v / 1e3).toLocaleString("pt-BR", { maximumFractionDigits: 0 })} mil`;
+  return `R$ ${v.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`;
+};
+
 export function avaliarProntidaoGeracao(dados: unknown): ProntidaoGeracao {
   const d = dados as any;
   const pendencias: string[] = [];
@@ -47,19 +55,52 @@ export function avaliarProntidaoGeracao(dados: unknown): ProntidaoGeracao {
   //    precisa SABER o porquê (flagrado: só BP importado e status "Pronta para gerar").
   const temBP = temValores(d.bp);
   const temDRE = temValores(d.dre);
-  if (!temBP) pendencias.push("Nenhum Balanço Patrimonial foi importado — sem ele não há equação patrimonial, capital de giro nem fluxo de caixa. Suba o BP e reprocesse.");
-  if (!temDRE) pendencias.push("Nenhuma DRE foi importada — a análise precisa do resultado (receita, margens, EBITDA, lucro). Suba a DRE e reprocesse.");
+  // A ACAO PRECISA EXISTIR NA TELA (12/08/2026 - varredura). "Suba o BP e
+  // reprocesse" apontava para um botao que nao existe aqui: documento novo so
+  // entra pela Data room da empresa, e a escolha de quais entram no IBR e a aba
+  // Escopo. A frase agora diz o caminho real.
+  if (!temBP) pendencias.push("Nenhum Balanço Patrimonial entrou na montagem — sem ele não há equação patrimonial, capital de giro nem fluxo de caixa. selecione na aba Escopo o documento que traz esse demonstrativo (ou envie-o pela Data room da empresa, se ele ainda não estiver lá).");
+  if (!temDRE) pendencias.push("Nenhuma DRE entrou na montagem — a análise precisa do resultado (receita, margens, EBITDA, lucro). selecione na aba Escopo o documento que traz esse demonstrativo (ou envie-o pela Data room da empresa, se ele ainda não estiver lá).");
 
-  const v = d.validacao as { equacaoPatrimonial?: boolean; composicaoAtivo?: boolean; composicaoPassivo?: boolean; reconciliacaoDRE?: { verificada?: boolean; ok?: boolean } };
+  const v = d.validacao as {
+    equacaoPatrimonial?: boolean; composicaoAtivo?: boolean; composicaoPassivo?: boolean;
+    reconciliacaoDRE?: { verificada?: boolean; ok?: boolean };
+    // A PROVA COM NUMERO JA ESTAVA AQUI e era ignorada por construcao: o tipo
+    // declarado nem listava `alertas`. Cada pendencia abaixo passa a citar o
+    // periodo e a diferenca que a validacao ja calculou (regra da casa:
+    // vermelho so com endereco).
+    alertas?: Array<{ tipo: string; area: string; mensagem: string; detalhes?: string }>;
+  };
+  const alertaDe = (area: string) => (v.alertas ?? []).filter((a) => a.area === area && a.tipo === "erro");
+  const citar = (as: Array<{ mensagem: string; detalhes?: string }>, max = 3) =>
+    as.slice(0, max).map((a) => `${a.mensagem}${a.detalhes ? ` — ${a.detalhes}` : ""}`).join(" · ")
+    + (as.length > max ? ` (e mais ${as.length - max})` : "");
 
   // 2) EQUAÇÃO PATRIMONIAL (Ativo = Passivo em todos os períodos)
   if (temBP && v.equacaoPatrimonial === false) {
-    pendencias.push("O balanço não fecha (Ativo ≠ Passivo em pelo menos um período) — revise a extração na aba Histórico financeiro.");
+    const quais = alertaDe("Equação Patrimonial");
+    pendencias.push(
+      quais.length
+        ? `O balanço não fecha: ${citar(quais)}. Confira a coluna na aba Histórico financeiro (a prova por documento está na Conciliação contábil da empresa).`
+        : "O balanço não fecha (Ativo ≠ Passivo em pelo menos um período) — revise a extração na aba Histórico financeiro.",
+    );
   }
 
   // 3) COMPOSIÇÃO (subtotais declarados vs soma dos filhos)
   if (temBP && (v.composicaoAtivo === false || v.composicaoPassivo === false)) {
-    pendencias.push("A composição do balanço não confere (subtotal declarado ≠ soma das contas) — veja os alertas de composição na auditoria.");
+    // NOME PROPRIO (12/08/2026 - varredura). Esta prova e do TOPO do balanco:
+    // AC+ANC contra o "Ativo Total" IMPRESSO no documento. Ela tinha a mesma
+    // redacao da prova de NO (que hoje so avisa) e mandava "ver os alertas de
+    // composicao na auditoria" - outra prova, outra tela. Duas coisas
+    // diferentes com o mesmo nome e o jeito mais rapido de perder o analista.
+    const quais = alertaDe("Composição");
+    const lado = v.composicaoAtivo === false && v.composicaoPassivo === false ? "do ativo e do passivo"
+      : v.composicaoAtivo === false ? "do ativo" : "do passivo";
+    pendencias.push(
+      `A soma dos grupos ${lado} não reproduz o TOTAL impresso no documento` +
+      (quais.length ? `: ${citar(quais)}` : "") +
+      ". Confira a coluna na aba Histórico financeiro.",
+    );
   }
   const alertasErro = Array.isArray(d.alertasComposicao)
     ? (d.alertasComposicao as Array<{ severidade?: string }>).filter((a) => a?.severidade === "erro").length
@@ -82,17 +123,34 @@ export function avaliarProntidaoGeracao(dados: unknown): ProntidaoGeracao {
   //    Motor árvore usa `naoMapeados` (lista VIVA, atualizada pelo refold);
   //    fluxo legado usa `unmatchedAccounts` (valores por período).
   const nomes = new Set<string>();
+  /** nome -> maior valor absoluto visto (para nomear as MAIORES na mensagem). */
+  const maiores = new Map<string, number>();
+  const anota = (nome: string, valor: number) => {
+    nomes.add(nome);
+    if (Math.abs(valor) > Math.abs(maiores.get(nome) ?? 0)) maiores.set(nome, valor);
+  };
   if (Array.isArray(d.naoMapeados)) {
     for (const n of d.naoMapeados as Array<{ nome?: string; valor?: number }>) {
-      if (n?.nome && typeof n.valor === "number" && n.valor !== 0) nomes.add(n.nome);
+      if (n?.nome && typeof n.valor === "number" && n.valor !== 0) anota(n.nome, n.valor);
     }
   } else if (Array.isArray(d.unmatchedAccounts)) {
     for (const u of d.unmatchedAccounts as Array<{ conta?: string; valores?: Record<string, number> }>) {
-      if (u?.conta && Object.values(u.valores ?? {}).some((x) => typeof x === "number" && x !== 0)) nomes.add(u.conta);
+      const vals = Object.values(u?.valores ?? {}).filter((x): x is number => typeof x === "number" && x !== 0);
+      if (u?.conta && vals.length) anota(u.conta, vals.sort((a, b) => Math.abs(b) - Math.abs(a))[0]!);
     }
   }
   if (nomes.size > 0) {
-    pendencias.push(`${nomes.size} conta(s) não classificada(s) com valor — classifique ou marque "ignorar" na tela de auditoria (grátis, sem IA).`);
+    // NOMEAR AS MAIORES (12/08/2026 - varredura). A lista de nomes existia na
+    // propria funcao e era jogada fora: publicava-se so o TAMANHO. O analista
+    // nao conseguia conferir a contagem nem achar as contas - e e a pendencia
+    // que bloqueia a chamada mais cara do fluxo.
+    const porValor = [...maiores.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4);
+    const amostra = porValor.map(([n, val]) => `"${n}"${val ? ` (${fmtBRLCurto(val)})` : ""}`).join(", ");
+    pendencias.push(
+      `${nomes.size} conta(s) não classificada(s) com valor` +
+      (amostra ? `, entre elas ${amostra}` : "") +
+      `. Classifique (ou marque "ignorar") na aba Histórico financeiro, no quadro "Original do documento → modelo padrão" — é grátis, sem IA.`,
+    );
   }
 
   // 5) DRE: se o documento DECLARA subtotais, a reconciliação tem que BATER.

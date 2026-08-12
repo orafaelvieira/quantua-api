@@ -49,6 +49,28 @@ import { montarConteudoAnalise, aplicarFotoAnalise, hashConteudo, STATUS_TRANSIT
 import type { DadosEstruturados, BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
 
 const router = Router();
+
+/**
+ * SETOR "OUTROS" EXIGE A DESCRICAO DA ATIVIDADE - uma regua so (12/08/2026,
+ * varredura adversarial, achado #8).
+ *
+ * O campo tinha TRES escritores com criterios diferentes: o card de confirmacao
+ * (POST /:id/setor) exigia o texto e devolvia 400; o PUT /:id/escopo (usado pelo
+ * wizard) e o POST /analyses (nascimento) marcavam `setorConfirmado` para
+ * qualquer setor, inclusive "outros" com o texto vazio. Quem escolhia "Outros"
+ * no wizard e nao digitava a atividade passava o portao com setor CONFIRMADO e
+ * `sectorCustom` nulo - e o IBR saia sem pares e sem o texto que orienta as
+ * premissas setoriais e a pesquisa de mercado. O defeito so aparecia no
+ * conteudo da analise, tarde demais.
+ */
+export const ehSetorOutros = (sectorId?: string | null): boolean =>
+  !!sectorId && (sectorId === "outros" || sectorId.startsWith("outros__"));
+
+export const faltaSectorCustom = (sectorId?: string | null, custom?: string | null): boolean =>
+  ehSetorOutros(sectorId) && !(custom ?? "").trim();
+
+const ERRO_SECTOR_CUSTOM =
+  'Com "Outros" \u00e9 preciso descrever a atividade da empresa (ex.: "Assessoria em concursos p\u00fablicos") \u2014 \u00e9 o que orienta as premissas e a pesquisa de mercado.';
 router.use(requireAuth);
 // SOMENTE CONSULTA: org suspensa (inadimplência) lê mas não escreve.
 router.use(guardaEscritaSuspensao("analysis"));
@@ -391,7 +413,9 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       ibrType: analysisData.ibrType,
       sectorId: analysisData.sectorId,
       // Confirma SÓ com escolha ativa (flag do wizard); sugestão de CNAE por inércia não.
-      setorConfirmado: analysisData.setorEscolhido === true && !!analysisData.sectorId,
+      // "Outros" sem descrição nunca nasce confirmado (mesma régua do card).
+    setorConfirmado: analysisData.setorEscolhido === true && !!analysisData.sectorId
+      && !faltaSectorCustom(analysisData.sectorId, analysisData.sectorCustom),
       sectorCustom: analysisData.sectorCustom,
       documentChecklist: documentChecklist as object | undefined,
       userId: req.userId!,
@@ -2389,6 +2413,13 @@ router.put("/:id/escopo", async (req: AuthRequest, res: Response): Promise<void>
     // Só a escolha ATIVA do analista confirma (flag do frontend). Sugestão do CNAE
     // aceita por inércia fica registrada mas NÃO confirmada — o classificador valida
     // depois com os números (sugestão fraca nunca confirma sozinha).
+    // E "Outros" sem a descrição da atividade NÃO confirma: mesma régua do card de
+    // confirmação (faltaSectorCustom) — antes, este caminho deixava passar.
+    const customPretendido = typeof req.body?.sectorCustom === "string" ? req.body.sectorCustom : analysis.sectorCustom;
+    if (faltaSectorCustom(req.body.sectorId, customPretendido)) {
+      res.status(400).json({ error: ERRO_SECTOR_CUSTOM, precisaSectorCustom: true });
+      return;
+    }
     if (req.body?.setorEscolhido === true) (data as any).setorConfirmado = true;
   }
   // sectorCustom pode ser LIMPO (string vazia → null) quando o usuário troca "Outros" por setor real
@@ -3001,7 +3032,8 @@ router.post("/:id/setor/confirmar", async (req: AuthRequest, res: Response): Pro
   // premissa setorial nem contexto para a pesquisa de mercado, e "Outros" puro
   // não diz nada a quem lê. O texto vem do card ou, na NOVA VERSÃO, do que foi
   // digitado na versão anterior (herdado no /nova-versao). Exigido nesse caso.
-  const ehOutros = sectorId === "outros" || sectorId.startsWith("outros__") || sector.parent?.code === "outros";
+  // Mesma função dos outros dois escritores — uma régua só para o campo.
+  const ehOutros = ehSetorOutros(sectorId) || sector.parent?.code === "outros";
   const sectorCustom = ehOutros ? (customBody || analysis.sectorCustom || "") : null;
   if (ehOutros && !sectorCustom) {
     res.status(400).json({

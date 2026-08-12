@@ -175,3 +175,55 @@ describe("mensagem do gate quando a reconciliação falha", () => {
     expect(texto).toMatch(/balancete não fecha/i);
   });
 });
+
+/**
+ * MENSAGEM COM ENDERECO (12/08/2026 — varredura adversarial). Todas estas
+ * pendencias BLOQUEIAM a chamada mais cara do fluxo; se elas nao dizem O QUE
+ * conferir, o analista trava sem ter o que fazer. A prova ja estava no mesmo
+ * objeto e era descartada.
+ */
+describe("as pendências dizem o que conferir", () => {
+  it("balanço que não fecha cita o período e a diferença que a validação calculou", () => {
+    const d = base();
+    d.validacao.equacaoPatrimonial = false;
+    d.validacao.alertas = [{
+      tipo: "erro", area: "Equação Patrimonial",
+      mensagem: "Ativo Total (R$ 8,3 mi) ≠ Passivo Total (R$ 3,6 mi) em 31/12/2024",
+      detalhes: "Diferença: R$ 4,7 mi (56,63%)",
+    }];
+    const r = avaliarProntidaoGeracao(d);
+    const txt = r.pendencias.join(" ");
+    expect(txt).toContain("31/12/2024");
+    expect(txt).toContain("Diferença");
+  });
+
+  it("contas não classificadas são NOMEADAS, as maiores primeiro", () => {
+    const d = base();
+    d.naoMapeados = [
+      { nome: "ADIANTAMENTOS DIVERSOS", valor: 1904756 },
+      { nome: "Cafezinho", valor: 120 },
+      { nome: "MUTUO SOCIOS", valor: 890000 },
+    ];
+    const r = avaliarProntidaoGeracao(d);
+    const txt = r.pendencias.join(" ");
+    expect(txt).toContain("3 conta(s)");
+    expect(txt).toContain("ADIANTAMENTOS DIVERSOS");
+    expect(txt.indexOf("ADIANTAMENTOS DIVERSOS")).toBeLessThan(txt.indexOf("Cafezinho"));
+  });
+
+  it("documento faltando aponta a ação que EXISTE (aba Escopo), não 'suba e reprocesse'", () => {
+    const d = base();
+    d.dre = [];
+    const txt = avaliarProntidaoGeracao(d).pendencias.join(" ");
+    expect(txt).toContain("aba Escopo");
+    expect(txt).not.toContain("reprocesse");
+  });
+
+  it("composição do TOPO tem nome próprio — não se confunde com a prova de nó", () => {
+    const d = base();
+    d.validacao.composicaoAtivo = false;
+    const txt = avaliarProntidaoGeracao(d).pendencias.join(" ");
+    expect(txt).toContain("não reproduz o TOTAL impresso");
+    expect(txt).not.toContain("alertas de composição na auditoria");
+  });
+});

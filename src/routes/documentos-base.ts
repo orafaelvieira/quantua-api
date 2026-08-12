@@ -29,6 +29,11 @@ import { fixarDocumentosDoPool, conjuntoJaUsadoEmOutroIBR } from "../services/fi
 import { baseDoWorkspaceParaIBR, ehRecusa } from "../services/base-para-ibr";
 import { registrarAuditoria } from "../services/audit-trail";
 
+/** Tipos que a base contabil le. Fora disto, a leitura nunca roda - e a tela
+ *  precisa dizer isso em vez de pedir para esperar. */
+const ehTipoContabil = (tipo: string): boolean =>
+  /balancete|^dre$|demonstra|balan[çc]o/i.test((tipo ?? "").trim());
+
 export const ERRO_CONCLUIDA = "IBR concluído é imutável — crie uma nova versão para mudar o escopo.";
 
 type Escopo = { whereRecursoEmpresa: (req: AuthRequest) => Record<string, unknown> };
@@ -77,7 +82,16 @@ export function registrarRotasDocumentosBase(router: Router, { whereRecursoEmpre
     const documentos = pool.map((p) => ({
       id: p.id, nome: p.nome, tipo: p.tipo, competencia: p.competencia, tamanho: p.tamanho, versao: p.versao,
       intervalo: intervalos[p.id] ?? null,
-      conciliado: conc[p.id] ?? { ok: false, motivos: ["ainda sem leitura na Data room — abra a aba Conciliação contábil"] },
+      // "AGUARDANDO" x "NUNCA VAI" (12/08/2026 - varredura, achado #7). Documento
+      // de tipo nao-contabil (contrato, ata, extrato: tipo "Outro") nunca entra na
+      // base - a leitura nao roda para ele. A mensagem generica mandava esperar
+      // numa tela onde nada ia acontecer, e a linha ficava vermelha para sempre.
+      conciliado: conc[p.id] ?? {
+        ok: false,
+        motivos: [ehTipoContabil(p.tipo)
+          ? "ainda sem leitura na Data room — abra a aba Conciliação contábil (a leitura roda sozinha)"
+          : `documento do tipo "${p.tipo}" não entra na base contábil — se ele for balancete, DRE ou balanço, corrija o tipo na Data room da empresa; senão ele não pertence a esta lista`],
+      },
       usadoEm: (usoPorPool.get(p.id) ?? []).filter((u) => u.analysisId !== analysis.id),
       selecionado: selecionados.has(p.id),
     }));
@@ -114,10 +128,19 @@ export function registrarRotasDocumentosBase(router: Router, { whereRecursoEmpre
       const veredito = await baseDoWorkspaceParaIBR(analysis.companyId, req.scopeUserIds!, docsSelecionados);
       if (ehRecusa(veredito)) motivos.push(...veredito.motivos);
     }
+    // REUSO E CONFIRMAVEL, NAO TERMINAL (12/08/2026 - varredura, achado #4).
+    // A geracao devolve 409 com `podeConfirmar: true` e a tela deixa seguir com
+    // um clique. Aqui o mesmo fato entrava em `podeRodar` como impedimento, e o
+    // analista lia "nao pode rodar" quando bastava confirmar - dois vereditos
+    // incompativeis sobre o MESMO fato, com remedios contraditorios (refazer o
+    // trabalho x um clique). Sai da lista de bloqueios e vira aviso, com o
+    // remedio certo escrito.
     const reuso = await conjuntoJaUsadoEmOutroIBR(analysis.id, analysis.companyId);
+    const avisosConfirmaveis: string[] = [];
     if (reuso) {
-      motivos.push(
-        `estes mesmos documentos já foram usados no IBR "${reuso.nome}" (${reuso.status}) — inclua um documento novo, ou crie uma nova versão daquele IBR em vez de um IBR novo`,
+      avisosConfirmaveis.push(
+        `Estes mesmos documentos já fundamentaram o IBR "${reuso.nome}" (${reuso.status}). ` +
+        `Se a intenção é revisar aquele trabalho, use "Nova versão" nele; para seguir assim mesmo, o sistema pede uma confirmação na hora de gerar.`,
       );
     }
 
@@ -142,6 +165,7 @@ export function registrarRotasDocumentosBase(router: Router, { whereRecursoEmpre
       // clique de resgate: "usar só o trecho contínuo mais recente".
       sugestaoTrechoContinuo: serie.ok ? null : trechoContinuoMaisRecente(colunas),
       podeRodar: { ok: motivos.length === 0, motivos },
+      avisosConfirmaveis,
       reuso,
     });
   });
