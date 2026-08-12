@@ -69,6 +69,43 @@ async function versoesDoProduto(produtoId: string) {
 
 // GET /produtos?companyId= — envelopes da empresa (com versões e vigente
 // resolvido) + registros SOLTOS (sem envelope), para a ação "organizar versões".
+/**
+ * QUANTOS RÓTULOS FOGEM DO PADRÃO (12/08/2026, relato do dono: "não entendi por
+ * que o padronizar nomes está aparecendo").
+ *
+ * O botão "Padronizar nomes…" é FERRAMENTA DE ACERVO ANTIGO — existe para
+ * arrumar nomes que nasceram antes do padrão. Ele aparecia SEMPRE, no cabeçalho
+ * de todo grupo de produto, inclusive numa empresa com um único IBR já chamado
+ * "IBR DUNAMYS · dez/24 · v1", que É o padrão. Botão que não tem o que fazer
+ * vira pergunta na cabeça do analista.
+ *
+ * A contagem usa a MESMA montagem de rótulo do POST /padronizar-nomes — sem
+ * duplicar a regra: se o padrão mudar, os dois mudam juntos.
+ */
+function rotulosForaDoPadrao(produtos: Array<{ id: string; tipo: string; rotulo: string }>): number {
+  const porTipo = new Map<string, number>();
+  for (const p of produtos) porTipo.set(p.tipo, (porTipo.get(p.tipo) ?? 0) + 1);
+  let fora = 0;
+  for (const p of produtos) {
+    const tipo = p.tipo as TipoProduto;
+    const [cabeca, ...resto] = p.rotulo.split("—");
+    const complementoAtual = resto.join("—").trim();
+    const anoAtual = /(\d{4})/.exec(cabeca)?.[1] ?? "";
+    const unicoDoTipo = (porTipo.get(p.tipo) ?? 0) <= 1;
+    const complementoNovo = tipo === "business-plan"
+      ? complementoAtual
+      : tipo === "orcamento" || !unicoDoTipo
+        ? complementoAtual
+        : "";
+    const { rotulo: rotuloNovo, erro } = montarRotulo(tipo, { periodo: anoAtual, complemento: complementoNovo });
+    // Rótulo que o motor não consegue montar NÃO conta como fora do padrão: a
+    // padronização o manteria como está (vai para `mantidos`), então oferecer o
+    // botão por causa dele seria oferecer uma ação sem efeito.
+    if (!erro && rotuloNovo && rotuloNovo !== p.rotulo) fora++;
+  }
+  return fora;
+}
+
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   const companyId = String(req.query.companyId ?? "");
   if (!companyId) { res.status(400).json({ error: "companyId é obrigatório" }); return; }
@@ -96,6 +133,8 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     })
   );
 
+  const foraDoPadrao = rotulosForaDoPadrao(produtos);
+
   const [analisesSoltas, modelosSoltos] = await Promise.all([
     prisma.analysis.findMany({
       // ehTeste fora de TODA listagem (higienização 21/07) — o workspace incluso.
@@ -112,6 +151,9 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
 
   res.json({
     produtos: compostos,
+    /** Quantos rótulos fogem do padrão — a tela só oferece "Padronizar nomes…"
+     *  quando há o que padronizar (ver rotulosForaDoPadrao). */
+    foraDoPadrao,
     soltos: {
       analyses: analisesSoltas.map((a) => ({ ...a, cicloVida: cicloVidaAnalysis(a.status), etapa: etapaAnalysis(a.status) })),
       models: modelosSoltos.map((m) => ({ ...m, cicloVida: cicloVidaModel(m.status), etapa: null as string | null })),
