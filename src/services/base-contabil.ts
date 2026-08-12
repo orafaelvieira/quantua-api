@@ -474,19 +474,18 @@ async function montarBaseContabilSemCache(
       // da cascata, derrubando o portão para o motor escalar (Haiku → visão) e
       // tentar de novo. E continua aparecendo, com o nome das contas, para
       // quem quiser conferir no papel.
-      if (cobFalhou) {
-        const cb = integ!.cobertura!;
-        avisos.push(
-          `${d.nome}: a leitura trouxe ${cb.encontradas} das ${cb.total} contas que o documento imprime — ` +
-          `${cb.faltantes.slice(0, 3).map((f) => `"${f}"`).join(", ")}${cb.faltantes.length > 3 ? ` e mais ${cb.faltantes.length - 3}` : ""} ` +
-          `não foram reconhecidas com o mesmo nome. A aritmética do documento fecha, então os totais estão certos; ` +
-          `confira no original se alguma dessas linhas precisa aparecer no detalhe.`,
-        );
-      }
-      // "Só a cobertura falhou" se mede pelo PLACAR, não pela lista de provas:
-      // a cobertura vale exatamente 1 ponto, então score === scoreMax − 1 diz
-      // que todo o resto passou. Assim vale para qualquer escopo — num DRE
-      // avulso não existe equação patrimonial para conferir.
+      // A COBERTURA NÃO FALA COM O ANALISTA (12/08/2026, pergunta do dono:
+      // "qual o objetivo da msg? alguma coisa vai mudar na conciliação?").
+      // Não muda nada, e essa é a resposta: a aritmética do documento fecha, as
+      // contas não entram na fila de classificação (nada se perdeu na montagem)
+      // e o analista não tem ação nenhuma disponível — quem nomeou a linha
+      // diferente foi o leitor. Um aviso sem ação é ruído, e ruído numa tela de
+      // conferência custa atenção que devia ir para o que importa.
+      //
+      // Ela continua trabalhando onde tem consequência: DENTRO da cascata,
+      // derrubando o portão para o motor escalar (foi assim que apareceu o
+      // parser que comia "Horas Extras e DSR"). O detalhe fica no payload, em
+      // `integridade.cobertura`, para diagnóstico.
       const soFaltouCobertura = cobFalhou && integ!.score === integ!.scoreMax - 1;
       if (!desbalanceado && integ && !integ.fecha && !soFaltouCobertura) {
         const cob = integ.cobertura;

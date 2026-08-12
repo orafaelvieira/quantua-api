@@ -3341,7 +3341,7 @@ router.post("/:id/documents/fixar", async (req: AuthRequest, res: Response): Pro
   // Concluído é IMUTÁVEL (21/07/2026): fixar documento novo = nova versão.
   if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
 
-  const resultado = await fixarDocumentosDoPool(analysis, parsed.data.documentIds);
+  const resultado = await fixarDocumentosDoPool(analysis, parsed.data.documentIds, req.scopeUserIds!);
   for (const f of resultado.fixados) {
     if (f.jaExistia) continue;
     void registrarAuditoria({

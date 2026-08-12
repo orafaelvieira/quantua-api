@@ -19,7 +19,8 @@
  */
 import { prisma } from "../db/client";
 import { MATERIAL_TIPO } from "./material-context";
-import { conciliacaoDoDocumento } from "./conciliacao-documento";
+import { insumosDaBase, montarBaseContabil } from "./base-contabil";
+import { resolverEscopoAcesso } from "./escopo-acesso";
 
 export interface DocumentoFixado {
   id: string;
@@ -107,9 +108,30 @@ function shape(d: DocRow, jaExistia: boolean): DocumentoFixado {
 export async function fixarDocumentosDoPool(
   analysis: { id: string; companyId: string },
   documentIds: string[],
+  scopeUserIds?: string[],
 ): Promise<ResultadoFixacao> {
   const fixados: DocumentoFixado[] = [];
   const erros: ErroFixacao[] = [];
+
+  // A RÉGUA DA CONCILIAÇÃO É UMA SÓ, E É A DA BASE (12/08/2026).
+  //
+  // Existiam duas: a tela lia `conciliacaoPorDocumento` da base e esta função
+  // recalculava por conta própria em conciliacao-documento.ts. Elas discordavam
+  // num caso real e visível — leitura DETERMINÍSTICA de demonstrativo não grava
+  // `integridade` (não passa pela cascata), a base considerava o documento
+  // conciliado e a fixação respondia "a leitura não registrou as provas de
+  // integridade". O analista via ✓ em todos os documentos da lista e um X
+  // vermelho ao tentar usá-los. Regra da casa: dois caminhos para o mesmo
+  // julgamento divergem sempre — agora é um.
+  const escopo = scopeUserIds ?? (await (async () => {
+    // Chamada sem escopo (rota legada): resolve pelo DONO da empresa, como a
+    // leitura da porta já faz quando roda em background.
+    const empresa = await prisma.company.findUnique({ where: { id: analysis.companyId }, select: { userId: true } });
+    return empresa ? (await resolverEscopoAcesso(empresa.userId)).scopeUserIds : [];
+  })());
+  const insumos = await insumosDaBase(analysis.companyId, escopo);
+  const base = await montarBaseContabil(analysis.companyId, escopo, insumos);
+  const conciliacao = base.conciliacaoPorDocumento as Record<string, { ok: boolean; motivos: string[] }>;
 
   for (const documentId of documentIds) {
     const pool = await prisma.document.findFirst({
@@ -125,7 +147,7 @@ export async function fixarDocumentosDoPool(
     // mas a trava mora AQUI — chamada direta à API não pode furar a regra.
     // Material complementar fica fora: não vira número, não tem o que conciliar.
     if (!/material complementar/i.test(pool.tipo)) {
-      const conc = await conciliacaoDoDocumento(pool.id);
+      const conc = conciliacao[pool.id];
       if (conc && !conc.ok) {
         erros.push({
           documentId,

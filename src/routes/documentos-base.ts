@@ -145,7 +145,7 @@ export function registrarRotasDocumentosBase(router: Router, { whereRecursoEmpre
       });
     }
     const fixacao = adicionar.length
-      ? await fixarDocumentosDoPool({ id: analysis.id, companyId: analysis.companyId }, adicionar)
+      ? await fixarDocumentosDoPool({ id: analysis.id, companyId: analysis.companyId }, adicionar, req.scopeUserIds!)
       : { fixados: [], erros: [] };
     for (const f of fixacao.fixados) {
       if (f.jaExistia) continue;
