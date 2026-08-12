@@ -95,9 +95,34 @@ export async function insumosDaBase(companyId: string, scopeUserIds: string[], d
   return { docs, versoesAtivas, marca };
 }
 
-export type BaseContabil = Awaited<ReturnType<typeof montarBaseContabil>>;
+export type BaseContabil = Awaited<ReturnType<typeof montarBaseContabilSemCache>>;
 
 /** Monta a base. Recebe os insumos já buscados (o cache os usa para decidir). */
+/**
+ * CACHE DA MONTAGEM — mora aqui, e não em quem chama.
+ *
+ * O fold custa 20s+ de CPU numa instância ÚNICA e a mesma base é pedida por
+ * três lugares diferentes: a aba Conciliação contábil, o seletor de documentos
+ * do IBR (a cada clique de checkbox!) e o próprio /process. Cache em um só
+ * chamador deixaria os outros dois pagando o preço inteiro.
+ *
+ * A chave separa o que produz resultado diferente: empresa, ESCOPO DE ACESSO
+ * (o dicionário resolvido muda com ele — cache sem isso vaza entre escritórios),
+ * seleção de documentos e o modo `paraProduto`. A `marca` dos insumos decide se
+ * o que está guardado ainda vale.
+ */
+const memo = new Map<string, { marca: string; payload: unknown }>();
+const emVoo = new Map<string, Promise<unknown>>();
+const TETO_MEMO = 40;
+
+/** Espera a montagem em curso, com TETO: bug que impeça a liberação não pode
+ *  virar espera eterna — passado o teto, cada um monta a sua. */
+const esperarComTeto = async (p: Promise<unknown>, ms = 60_000): Promise<void> => {
+  let t: NodeJS.Timeout | undefined;
+  await Promise.race([p.catch(() => {}), new Promise<void>((r) => { t = setTimeout(r, ms); })]);
+  if (t) clearTimeout(t);
+};
+
 /**
  * @param paraProduto quando true, o retorno carrega também o CONTRATO DO
  *   PRODUTO (árvores mensais por documento, provas por balancete, subtotais
@@ -107,6 +132,43 @@ export type BaseContabil = Awaited<ReturnType<typeof montarBaseContabil>>;
  *   tem 287 KB).
  */
 export async function montarBaseContabil(
+  companyId: string,
+  scopeUserIds: string[],
+  insumos: InsumosBase,
+  opcoes: { paraProduto?: boolean } = {},
+): Promise<BaseContabil> {
+  const chave = [
+    companyId,
+    [...scopeUserIds].sort().join(","),
+    opcoes.paraProduto ? "produto" : "tela",
+    insumos.docs.map((d) => d.id).sort().join(","),
+  ].join("|");
+
+  const guardado = memo.get(chave);
+  if (guardado && guardado.marca === insumos.marca) return guardado.payload as BaseContabil;
+
+  // SINGLE-FLIGHT: quem chega no meio de uma montagem espera a dela em vez de
+  // começar outra (a tela abre, o analista recarrega, o wizard consulta).
+  const emAndamento = emVoo.get(chave);
+  if (emAndamento) {
+    await esperarComTeto(emAndamento);
+    const pronto = memo.get(chave);
+    if (pronto && pronto.marca === insumos.marca) return pronto.payload as BaseContabil;
+  }
+
+  const promessa = montarBaseContabilSemCache(companyId, scopeUserIds, insumos, opcoes);
+  emVoo.set(chave, promessa);
+  try {
+    const payload = await promessa;
+    if (memo.size >= TETO_MEMO) memo.delete(memo.keys().next().value!);
+    memo.set(chave, { marca: insumos.marca, payload });
+    return payload;
+  } finally {
+    if (emVoo.get(chave) === promessa) emVoo.delete(chave);
+  }
+}
+
+async function montarBaseContabilSemCache(
   companyId: string,
   scopeUserIds: string[],
   insumos: InsumosBase,
