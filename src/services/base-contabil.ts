@@ -366,12 +366,19 @@ export async function montarBaseContabil(
       // com o motivo — o analista não descobre isso adiante, na conta errada.
       const integ = c.integridade;
       if (!desbalanceado && integ && !integ.fecha) {
+        const cob = integ.cobertura;
         const faltas = [
           !integ.equacaoPatrimonial ? "Ativo ≠ Passivo + PL" : null,
           !integ.composicaoAtivo ? "composição do ativo não soma" : null,
           !integ.composicaoPassivo ? "composição do passivo não soma" : null,
+          // COBERTURA: aqui o motivo precisa NOMEAR as contas — "5/5" não diz ao
+          // analista o que conferir no papel (regra da casa: verde só com prova,
+          // e vermelho só com endereço).
+          cob && cob.verificavel && !cob.ok
+            ? `a leitura perdeu ${cob.total - cob.encontradas} conta(s) que o documento imprime (${cob.faltantes.slice(0, 3).map((f) => `"${f}"`).join(", ")}${cob.faltantes.length > 3 ? "…" : ""})`
+            : null,
         ].filter(Boolean).join(" · ");
-        desbalanceado = `a extração não fechou a integridade (${integ.score}/5${faltas ? ` — ${faltas}` : ""}) mesmo depois da cascata completa (parser → IA texto → IA visão)`;
+        desbalanceado = `a extração não fechou a integridade (${integ.score}/${integ.scoreMax}${faltas ? ` — ${faltas}` : ""}) mesmo depois da cascata completa (parser → IA texto → IA visão)`;
       }
       relatorio.push({
         documentId: d.id, nome: d.nome, contas: c.totalContas,

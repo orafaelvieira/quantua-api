@@ -27,6 +27,7 @@ import { converterBalancete, type ProvasBalancete } from "./balancete-conversao"
 import { construirArvoreBPporIndentacao } from "./bp-tree-indent";
 import { construirArvoreDREporIndentacao } from "./dre-tree-indent";
 import { extrairComCascata, detectDocType, type DocParaCascata, type EscopoRegua } from "./extracao-cascata";
+import { motivoDaCobertura } from "./prova-cobertura";
 import { resolverCascataDicionario, whereCascataDicionarioAtiva } from "./dicionario-escopo";
 import { resolverEscopoAcesso } from "./escopo-acesso";
 import { loadActiveBPModel, loadActiveDREModel } from "./model-version";
@@ -128,6 +129,9 @@ export interface LeituraDemonstrativoConteudo {
     equacaoPatrimonial: boolean;
     composicaoAtivo: boolean;
     composicaoPassivo: boolean;
+    /** Prova de COBERTURA: toda conta impressa chegou na árvore? Quando falha,
+     *  vêm os nomes — sem eles o analista não tem o que conferir no papel. */
+    cobertura?: { verificavel: boolean; ok: boolean; total: number; encontradas: number; faltantes: string[] };
   };
   tipoLeitura: "demonstrativo";
   motor: "deterministico" | "ia";
@@ -162,7 +166,7 @@ const renomearChaves = <T,>(obj: Record<string, T>): Record<string, T> => {
 /** v4 (10/08/2026): a prova da LEITURA deixou de ser afetada pela marcação de
  *  "ignorar" do analista — leituras da v3 guardaram integridade errada (caso
  *  Dunamys: 3/5 num balanço que fecha ao centavo) e são refeitas. */
-export const VERSAO_LEITOR_DEMONSTRATIVO = 4;
+export const VERSAO_LEITOR_DEMONSTRATIVO = 5;
 const anoDe = (p: string): number => Number((p.match(/(\d{4})\s*$/) ?? [])[1] ?? 0);
 
 /**
@@ -347,10 +351,17 @@ export async function lerDemonstrativoHibrido(
     // A PROVA VIAJA COM A LEITURA: quem consome sabe se o balanço fecha, sem
     // recalcular — e a tela pode dizer POR QUE não fecha.
     const v = escolhido.validacao;
+    const cob = escolhido.cobertura;
     r.integridade = {
       fonte: escolhido.fonte, score: escolhido.score, scoreMax: escolhido.scoreMax, fecha: escolhido.fecha,
       equacaoPatrimonial: v.equacaoPatrimonial, composicaoAtivo: v.composicaoAtivo, composicaoPassivo: v.composicaoPassivo,
+      cobertura: {
+        verificavel: cob.verificavel, ok: cob.ok, total: cob.totalDocumento,
+        encontradas: cob.encontradas, faltantes: cob.faltantes.slice(0, 12).map((f) => f.nome),
+      },
     };
+    const motivoCob = motivoDaCobertura(cob);
+    if (motivoCob) r.avisos.push(motivoCob);
     if (ehBP && !v.equacaoPatrimonial) {
       r.avisos.push("o balanço lido não fecha (Ativo ≠ Passivo + PL) mesmo depois da cascata completa de extração — confira o documento.");
     }

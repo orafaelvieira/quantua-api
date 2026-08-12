@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseBRNumber, yearFromFilename, detectPeriodsFromPDF, collapseOpeningClosing, juntarNomeValorQuebrados } from "./parser";
+import { parseBRNumber, yearFromFilename, detectPeriodsFromPDF, collapseOpeningClosing, juntarNomeValorQuebrados, ehLinhaDeCabecalho } from "./parser";
 
 describe("parseBRNumber — sinal contábil (parênteses = negativo)", () => {
   it("positivo simples", () => {
@@ -147,5 +147,57 @@ describe("juntarNomeValorQuebrados — pares nome/valor do visualizador SPED", (
       "    ATIVO                                      R$ 6.593.019,93                  R$ 8.147.304,62",
     ].join("\n");
     expect(juntarNomeValorQuebrados(raw)).toBe(raw);
+  });
+});
+
+/**
+ * CONTA COMIDA POR PREFIXO DE CABEÇALHO (11/08/2026, caso Move Farma).
+ *
+ * A lista de cabeçalhos a ignorar rodava sobre o começo da linha, sem fronteira
+ * de palavra e ANTES de saber se a linha tinha valor. "Horas Extras e DSR" caía
+ * no prefixo `Hora` (do cabeçalho "Hora 14:47") e "Entidades e Associações" em
+ * `Entidade`. As duas sumiam da DRE em silêncio: o subtotal do grupo continuava
+ * batendo, então nenhuma prova reprovava.
+ */
+describe("ehLinhaDeCabecalho — cabeçalho não pode comer conta", () => {
+  it.each([
+    "Horas Extras e DSR",
+    "Entidades e Associações",
+    "Diretoria — Pró-labore",
+    "Contadores e Auditores",
+    "Marcos e Placas de Sinalização",
+  ])("conta COM valor nunca é cabeçalho: %s", (nome) => {
+    expect(ehLinhaDeCabecalho(nome, true)).toBe(false);
+  });
+
+  it.each([
+    "Hora 14:47",
+    "Data: 13/01/2023",
+    "Página 2 de 7",
+    "CNPJ: 06.229.282/0001-00",
+    "Período: 31/12/2022",
+    "Entidade: MOVE FARMA LTDA",
+    "Contador CRC-PR 012345",
+  ])("cabeçalho SEM valor continua ignorado: %s", (linha) => {
+    expect(ehLinhaDeCabecalho(linha, false)).toBe(true);
+  });
+
+  it("fronteira de palavra: 'Hora' pega o cabeçalho, não 'Horas'", () => {
+    expect(ehLinhaDeCabecalho("Hora", false)).toBe(true);
+    expect(ehLinhaDeCabecalho("Horas Extras e DSR", false)).toBe(false);
+  });
+
+  /**
+   * Medido no acervo: com a trava do valor sozinha, cabeçalho COM número virava
+   * conta — "CPF: 823.969.870-72" entrou como R$ 823 milhões em 5 documentos.
+   */
+  it.each([
+    "CPF: 823.969.870-72",
+    "CNPJ 06.229.282/0001-00",
+    "Página 106 de 240",
+    "Versão 10.0.7 do Visualizador",
+    "FOLHA 12",
+  ])("identificação do relatório não vira conta nem com número: %s", (linha) => {
+    expect(ehLinhaDeCabecalho(linha, true)).toBe(true);
   });
 });

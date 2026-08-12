@@ -32,6 +32,7 @@ import {
 import { DRE_TEMPLATE } from "./financial-templates";
 import { validateFinancialData } from "./validation";
 import { extractFinancialsWithAI, type NaoMapeado } from "./ai-extraction";
+import { provarCobertura, type Cobertura } from "./prova-cobertura";
 import type { DREModel } from "./model-version";
 
 /** Documento pronto para a cascata. `buffer` é preguiçoso: só a visão baixa. */
@@ -87,6 +88,8 @@ export interface CandidatoCascata {
   alertasComposicao: unknown[];
   custoUsd: number;
   validacao: ReturnType<typeof validateFinancialData>;
+  /** Toda conta do documento chegou na árvore? Ver services/prova-cobertura. */
+  cobertura: Cobertura;
   score: number;
   /** Teto do score no escopo usado (5 = auto · 4 = BP · 1 = DRE). */
   scoreMax: number;
@@ -208,7 +211,7 @@ export async function extrairComCascata(
    * total nenhum fecha "3/3" com honestidade, e a tela mostra quais provas
    * rodaram — em vez de fingir 5/5.
    */
-  const provasDoEscopo = (v: ReturnType<typeof validateFinancialData>): { score: number; max: number } => {
+  const provasDoEscopo = (v: ReturnType<typeof validateFinancialData>, cobertura: Cobertura): { score: number; max: number } => {
     const conta = (roda: boolean, passou: boolean): [number, number] => (roda ? [passou ? 1 : 0, 1] : [0, 0]);
     const somar = (...pares: Array<[number, number]>) => pares.reduce(
       (acc, [s, m]) => ({ score: acc.score + s, max: acc.max + m }), { score: 0, max: 0 },
@@ -216,9 +219,15 @@ export async function extrairComCascata(
     const compA = conta(v.composicaoAtivoVerificada, v.composicaoAtivo);
     const compP = conta(v.composicaoPassivoVerificada, v.composicaoPassivo);
     const dre = conta(v.reconciliacaoDRE.verificada, v.reconciliacaoDRE.ok);
-    if (escopo === "BP") return somar([v.equacaoPatrimonial ? 1 : 0, 1], compA, compP, [v.detalheCompleto ? 1 : 0, 1]);
-    if (escopo === "DRE") return somar(dre);
-    return somar([v.equacaoPatrimonial ? 1 : 0, 1], compA, compP, [v.detalheCompleto ? 1 : 0, 1], dre);
+    // COBERTURA (11/08/2026) — a única prova de CONTAGEM. Todas as outras medem
+    // SOMA e passam quando uma conta some dentro de um grupo, porque o total do
+    // grupo não muda. Caso Move Farma: a leitura híbrida perdeu duas contas da
+    // DRE e fechou 1/1 no escopo DRE. Vale nos três escopos: perder conta é
+    // perder conta, seja no balanço, seja no resultado.
+    const cob = conta(cobertura.verificavel, cobertura.ok);
+    if (escopo === "BP") return somar([v.equacaoPatrimonial ? 1 : 0, 1], compA, compP, [v.detalheCompleto ? 1 : 0, 1], cob);
+    if (escopo === "DRE") return somar(dre, cob);
+    return somar([v.equacaoPatrimonial ? 1 : 0, 1], compA, compP, [v.detalheCompleto ? 1 : 0, 1], dre, cob);
   };
 
   // Normaliza/recalcula a DRE do candidato e roda a trava — base da decisão.
@@ -246,18 +255,25 @@ export async function extrairComCascata(
     return out;
   };
 
-  const avalia = (c: Omit<CandidatoCascata, "validacao" | "score" | "fecha" | "scoreMax">): CandidatoCascata => {
+  /** Linhas que o parser determinístico leu no lote — testemunha da cobertura. */
+  const linhasDoLote = parsedDocs.flatMap((d) => d.linhas);
+
+  const avalia = (c: Omit<CandidatoCascata, "validacao" | "score" | "fecha" | "scoreMax" | "cobertura">): CandidatoCascata => {
     normalizeDRESigns(c.dre, c.periodos);
     recomputeDRESubtotals(c.dre, c.periodos, dreModel.extrasPorBloco);
     const v = validateFinancialData(c.bp, c.dre, c.periodos, comTotaisImpressos(c.declarados, c.arvoreBP));
+    // A árvore do lote é BP + DRE: os dois lados juntos respondem por todas as
+    // linhas que o parser viu (um documento só tem um dos dois, e aí o outro
+    // está vazio e não atrapalha).
+    const cobertura = provarCobertura(linhasDoLote, [c.arvoreBP, c.arvoreDRE]);
     const temBP = c.periodos.some((p) => totalBP(c.bp, "Ativo Total", p) !== 0 && totalBP(c.bp, "Passivo Total", p) !== 0);
     const temDRE = c.dre.some((d) => Object.values(d.valores).some((x) => Math.abs(x) > 0.5));
     const temDados = escopo === "DRE" ? temDRE : temBP;
-    const { score: s, max } = provasDoEscopo(v);
+    const { score: s, max } = provasDoEscopo(v, cobertura);
     const score = temDados ? s : 0;
     // `max === 0` significa que NENHUMA prova pôde rodar. Isso não é "fechou":
     // é "não provei nada" — e não pode encerrar a cascata nem pintar de verde.
-    return { ...c, validacao: v, score, scoreMax: max, fecha: temDados && max > 0 && score === max };
+    return { ...c, validacao: v, cobertura, score, scoreMax: max, fecha: temDados && max > 0 && score === max };
   };
 
   const declaradosDe = (dre: DRELineItem[], periodos: string[]) => {
@@ -362,7 +378,7 @@ export async function extrairComCascata(
   }
   const custoTotalUsd = custos.reduce((s, c) => s + c.usd, 0);
   const vv = escolhido.validacao;
-  console.log(`[${opts.origem ?? "cascata"}] cascata: venceu=${escolhido.fonte} fecha=${escolhido.fecha} score=${escolhido.score}/${escolhido.scoreMax} [eq=${vv.equacaoPatrimonial} cA=${vv.composicaoAtivo} cP=${vv.composicaoPassivo} det=${vv.detalheCompleto} dre=${JSON.stringify(vv.reconciliacaoDRE)}] | ${custos.map((c) => `${c.fonte}:$${c.usd.toFixed(4)}`).join(" ")} | total=$${custoTotalUsd.toFixed(4)}`);
+  console.log(`[${opts.origem ?? "cascata"}] cascata: venceu=${escolhido.fonte} fecha=${escolhido.fecha} score=${escolhido.score}/${escolhido.scoreMax} [eq=${vv.equacaoPatrimonial} cA=${vv.composicaoAtivo} cP=${vv.composicaoPassivo} det=${vv.detalheCompleto} dre=${JSON.stringify(vv.reconciliacaoDRE)} cob=${escolhido.cobertura.verificavel ? `${escolhido.cobertura.encontradas}/${escolhido.cobertura.totalDocumento}` : "n/v"}] | ${custos.map((c) => `${c.fonte}:$${c.usd.toFixed(4)}`).join(" ")} | total=$${custoTotalUsd.toFixed(4)}`);
 
   return { escolhido, custos, custoTotalUsd };
 }

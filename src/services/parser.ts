@@ -1097,12 +1097,58 @@ export function juntarNomeValorQuebrados(text: string): string {
  * but concatenated without spaces.
  * Example: "RECEITA BRUTA DE VENDAS E SERVIÇOS105.491.499,80109.689.157,06"
  */
+/**
+ * CABEÇALHO/RODAPÉ DO RELATÓRIO — linha que não é conta.
+ *
+ * DOIS DEFEITOS CORRIGIDOS AQUI (11/08/2026, caso Move Farma). A lista vivia
+ * copiada em três extratores, sem fronteira de palavra e testada ANTES de
+ * saber se a linha tinha valor. Resultado: contas REAIS eram comidas em
+ * silêncio pelo prefixo de um cabeçalho.
+ *
+ *   "Horas Extras e DSR ......... (2.941,70)"  → comida por `Hora` (o
+ *      cabeçalho "Hora 14:47" do sistema contábil).
+ *   "Entidades e Associações ....... (678,86)" → comida por `Entidade`.
+ *
+ * As duas somem da DRE sem que NENHUMA prova reprove: o subtotal do grupo
+ * ("DESPESA COM PESSOAL", "ADMINISTRATIVAS") continua batendo, porque o que
+ * some é o detalhe, não o total. Foi só comparando a leitura por visão (que lê
+ * o PDF direto, sem passar por aqui) com a híbrida (que lê o texto DESTE
+ * parser) que a perda apareceu.
+ *
+ * Agora: fronteira de palavra (`Hora\b` não casa "Horas") e a regra decisiva —
+ * **linha com valor monetário não é cabeçalho**. Cabeçalho traz data, hora,
+ * CNPJ, número de página; conta traz "1.234,56".
+ */
+/**
+ * NUNCA É CONTA, tenha número ou não. Identificação do relatório e do
+ * signatário. Precisou virar lista própria depois da medição no acervo (531
+ * documentos): com a trava do valor sozinha, "CPF: 823.969.870-72" virava conta
+ * de R$ 823 milhões, "Página 106 de" virava R$ 29 mil e "Versão 10.0.7 do
+ * Visualizador" virava R$ 126. Cabeçalho com número existe — só não é dinheiro.
+ */
+const RE_NUNCA_CONTA = /^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CNPJ|CRC|INSCR|Página|Versão|Entidade|Período|Número de Ordem|Descri[çc][ãa]o|ContaSaldo|Assinado|Toledo|Este (documento|relatório))\b/i;
+
+/**
+ * PODE SER CONTA. Nomes próprios e palavras que entraram na lista para matar o
+ * cabeçalho de um documento específico, mas que também começam contas reais —
+ * "MARCO COMERCIO DE TINTAS LTDA - ME" (fornecedor), "Diretoria — Pró-labore".
+ * Aqui vale a trava do valor: com dinheiro na linha, é conta.
+ */
+const RE_TALVEZ_CONTA = /^(ADMINISTRADOR|TÉCNICO|ANTONIO|JOSE CARLOS|ROBERTO|MARCO|Diretor|Contador|LACTOBOM|DEMONSTRATIVO|DEMONSTRAÇÃO|BALANCO|BALANÇO|STENZEL|BOMBARDELLI)\b|^Dados:/i;
+
+/**
+ * @param temValor a linha carrega um valor monetário? Se sim, os prefixos
+ *   ambíguos deixam de valer — é a trava que impede a lista de comer conta.
+ */
+export function ehLinhaDeCabecalho(trimmed: string, temValor: boolean): boolean {
+  if (RE_NUNCA_CONTA.test(trimmed) || /^Conta\d/i.test(trimmed) || /^72\.\d/.test(trimmed)) return true;
+  if (temValor) return false;
+  return RE_TALVEZ_CONTA.test(trimmed);
+}
+
 function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
   const lines = juntarNomeValorQuebrados(text).split("\n");
   const rawRows: Array<{ conta: string; valores: Record<string, number>; indent: number }> = [];
-
-  // Skip patterns
-  const skipPatterns = /^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CRC|ADMINISTRADOR|TÉCNICO|ANTONIO|JOSE CARLOS|ROBERTO|MARCO|Diretor|Contador|INSCR|LACTOBOM|DEMONSTRATIVO|BALANCO|Conta\d|ContaSaldo|Este (documento|relatório)|Versão|Página|Entidade|Período|Número de Ordem|Descri[çc][ãa]o\b)/i;
 
   // Limpa um nome de conta: prefixos (=)/(-)/(+) — inclusive DUPLICADOS, o SPED
   // imprime "(-) (-) ENCARGOS..." — e o "R$" da 1ª coluna que fica grudado no fim.
@@ -1112,7 +1158,6 @@ function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.length < 3) continue;
-    if (skipPatterns.test(trimmed)) continue;
 
     // Capture indentation (leading spaces) for hierarchy detection
     const indent = line.length - line.trimStart().length;
@@ -1120,6 +1165,9 @@ function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
     // Find all BR numbers in the line
     const numMatches = [...trimmed.matchAll(BR_NUM_G)];
     if (numMatches.length === 0) continue;
+    // A trava de cabeçalho vem DEPOIS de saber que a linha tem valor — ver
+    // ehLinhaDeCabecalho. Antes ela rodava sobre o nome cru e comia conta.
+    if (ehLinhaDeCabecalho(trimmed, true)) continue;
 
     // Extract account name: everything before the first number
     const firstNumIdx = numMatches[0].index!;
@@ -1186,16 +1234,13 @@ function extractStructuredLines(text: string): ExtractedRow[] {
   // Regex para valor brasileiro no final da linha: -?123.456,78
   const valorRegex = /(-?[\d.]+,\d{2})\s*$/;
 
-  // Linhas a ignorar (cabeçalhos, rodapés, totais de conferência)
-  const skipPatterns = /^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CRC|ADMINISTRADOR|TÉCNICO|ANTONIO|JOSE CARLOS)/i;
-
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.length < 3) continue;
-    if (skipPatterns.test(trimmed)) continue;
 
     const match = trimmed.match(valorRegex);
     if (!match) continue;
+    if (ehLinhaDeCabecalho(trimmed, true)) continue; // ver ehLinhaDeCabecalho
 
     const indent = line.length - line.trimStart().length;
 
@@ -1246,8 +1291,6 @@ function extractBlockCorrelation(text: string, periodos: string[]): ExtractedRow
   if (periodos.length < 1) return [];
 
   const brNumPattern = /\(?-?[\d.]+,\d{2}\)?/g;
-  const skipPatterns = /^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CRC|ADMINISTRADOR|TÉCNICO|ANTONIO|JOSE CARLOS|ROBERTO|MARCO|Diretor|Contador|INSCR|LACTOBOM|DEMONSTRATIVO|DEMONSTRAÇÃO|BALANCO|BALANÇO|Conta\b|ContaSaldo|CNPJ|Toledo|Assinado|72\.\d|Dados:|STENZEL|BOMBARDELLI)/i;
-
   // Also skip lines that look like CNPJ, CPF, CRC, or dates
   const skipExtra = /^\d{2}\.\d{3}[\.\-\/]|^CRC\b|^\d{2}\/\d{2}\/\d{4}/i;
 
@@ -1257,12 +1300,14 @@ function extractBlockCorrelation(text: string, periodos: string[]): ExtractedRow
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.length < 3) continue;
-    if (skipPatterns.test(trimmed)) continue;
     if (skipExtra.test(trimmed)) continue;
 
     // Check if line has BR numbers
     const numMatches = [...trimmed.matchAll(brNumPattern)];
     const hasLetters = /[a-zA-ZÀ-ú]/.test(trimmed);
+    // Aqui nome e valor vêm em linhas SEPARADAS (correlação por bloco), então
+    // o `temValor` é o próprio numMatches. Ver ehLinhaDeCabecalho.
+    if (ehLinhaDeCabecalho(trimmed, numMatches.length > 0)) continue;
 
     if (numMatches.length >= 1 && !hasLetters) {
       // Pure value line — no letters, just numbers
