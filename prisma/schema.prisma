@@ -561,6 +561,11 @@ model Analysis {
   /// gera confrontoDores e pontosCegos (número ruim SEM dor declarada).
   dores             Json?
   createdAt         DateTime @default(now()) @map("created_at")
+  /// TOQUE NO REGISTRO (11/08/2026). Existe para a TRAVA DE EXTRAÇÃO: sem um
+  /// carimbo de última escrita, um IBR preso em "Extraindo" (instância morta
+  /// no meio da extração) ficaria travado para sempre, sem botão que resolva.
+  /// @default(now()) para as linhas que já existem quando a coluna nasce.
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at")
 
   /// Próxima revisão agendada (apenas mode=recurring). Cron diário varre
   /// análises com `nextReviewAt <= now+14d` e dispara email ao RT/operator.

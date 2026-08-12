@@ -18,6 +18,7 @@ import { PEER_INDICATOR_MAP } from "../services/peer-indicator-map";
 import { comparePeersCvm, CVM_COMPARAVEIS } from "../services/peer-benchmark-cvm";
 import { researchCompanyWeb, researchSectorBenchmarksWeb } from "../services/web-research";
 import { buildMateriaisContext, MATERIAL_TIPO } from "../services/material-context";
+import { tomarTravaExtracao, motivoTravaNegada } from "../services/trava-extracao";
 import { conjuntoJaUsadoEmOutroIBR, fixarDocumentosDoPool, montarLinhaFixada } from "../services/fixacao-pool";
 import { curarUpload, curarConteudo, competenciaDosPeriodos, competenciaDoPeriodoBalancete, rotuloCompetencia } from "../services/curadoria-pool";
 import { acharDuplicadoPorHash, mensagemDuplicado } from "../services/duplicidade-docs";
@@ -1251,6 +1252,24 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     return;
   }
 
+  // TRAVA DE CONCORRÊNCIA NO BANCO (11/08/2026 — revisão adversarial).
+  // O único guarda aqui era o 409 de "Concluída": duplo clique, duplo POST ou
+  // dois analistas no mesmo IBR disparavam DUAS extrações completas em
+  // paralelo — download, cascata e IA pagos duas vezes, gravando por cima um
+  // do outro numa instância ÚNICA de Cloud Run, onde o fold é 20s+ de CPU.
+  // Marca "Extraindo" de forma ATÔMICA (updateMany condicional): quem perder a
+  // corrida recebe 409 em vez de duplicar o trabalho. Memória não serve —
+  // precisa sobreviver a reinício e valer para qualquer caminho de entrada.
+  // (regra e escape da trava órfã em services/trava-extracao.ts, com testes)
+  if (!(await tomarTravaExtracao(prisma, analysis.id))) {
+    res.status(409).json({ error: motivoTravaNegada(analysis.status) });
+    return;
+  }
+  // Daqui para baixo o status é NOSSO. Todas as saídas do try/catch abaixo já
+  // devolvem o registro ("Revisão necessária" / "Pronta para gerar" / "Erro"),
+  // sempre com updateMany condicionado a "Extraindo" — quem cancelou no meio
+  // não é sobrescrito.
+
   // CASO MISTO DA HERANÇA (2026-07-21): documento com extração HERDADA (arquivo
   // idêntico à versão anterior, provado por hash) reusa o cache como o
   // editadoManualmente sempre reusou — re-baixar e re-parsear os mesmos bytes
@@ -1264,7 +1283,6 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
   // extração + análise por IA) roda em background e pode levar minutos em IBR multi-ano — o
   // frontend acompanha por polling do status. Evita o timeout do proxy/LB (que aparecia como
   // "Erro de conexão" mesmo com o backend ainda processando).
-  await prisma.analysis.update({ where: { id: analysis.id }, data: { status: "Extraindo" } });
   res.status(202).json({ id: analysis.id, status: "Extraindo" });
 
   try {

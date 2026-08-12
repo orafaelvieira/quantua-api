@@ -327,6 +327,38 @@ router.post("/reabrir", async (req: AuthRequest, res: Response): Promise<void> =
  *  hora. Máx. 50 empresas em memória (o payload é pequeno; o caro é o fold). */
 const cacheHistorico = new Map<string, { marca: string; payload: unknown }>();
 
+/**
+ * CHAVE DO CACHE COM ESCOPO (11/08/2026 — revisão adversarial).
+ *
+ * A chave era só o companyId. O payload, porém, é montado com o dicionário
+ * resolvido para o ESCOPO DE ACESSO de quem chamou (`req.scopeUserIds`), e
+ * escopos diferentes veem cascatas diferentes: o primeiro a abrir a tela
+ * gravava a sua versão e o próximo recebia a do outro. Numa plataforma com
+ * escritórios distintos isso é vazamento entre tenants, não só cache errado.
+ */
+const chaveCache = (companyId: string, scopeUserIds: string[]): string =>
+  `${companyId}|${[...scopeUserIds].sort().join(",")}`;
+
+/**
+ * MONTAGENS EM VOO (single-flight). O fold custa 20s+ de CPU numa instância
+ * ÚNICA. Sem isto, N requisições simultâneas da mesma empresa (a tela abre,
+ * o analista recarrega, o wizard consulta) viram N folds concorrentes e o
+ * cache só é escrito no fim — estampido garantido. Quem chega no meio espera
+ * a mesma promessa em vez de começar outra.
+ */
+const emVoo = new Map<string, Promise<unknown>>();
+
+/** Espera a montagem em curso, com TETO: um bug que impedisse a liberação não
+ *  pode virar espera eterna — passado o teto, cada um monta a sua. */
+const esperarComTeto = async (p: Promise<unknown>, ms = 60_000): Promise<void> => {
+  let t: NodeJS.Timeout | undefined;
+  await Promise.race([
+    p.catch(() => {}),
+    new Promise<void>((r) => { t = setTimeout(r, ms); }),
+  ]);
+  if (t) clearTimeout(t);
+};
+
 /** R$ curto para as mensagens de prova ("R$ -85,9 mi"). */
 const fmtBRL = (v: number): string => {
   const abs = Math.abs(v);
@@ -359,8 +391,33 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     dictAgg._count._all, dictAgg._max.updatedAt,
     versoesAtivas,
   ]);
-  const emCache = cacheHistorico.get(companyId);
+  const chave = chaveCache(companyId, req.scopeUserIds!);
+  const emCache = cacheHistorico.get(chave);
   if (emCache && emCache.marca === marca) { res.json(emCache.payload); return; }
+
+  // SINGLE-FLIGHT. Cache miss simultâneo (a tela abre, o analista recarrega, o
+  // wizard consulta) fazia N montagens completas em paralelo na instância
+  // ÚNICA — o cache só é escrito no FIM, então ninguém aproveitava o trabalho
+  // do outro. Quem chega no meio espera a montagem em curso e reaproveita o
+  // resultado dela se os insumos forem os mesmos (mesma marca).
+  const emAndamento = emVoo.get(chave);
+  if (emAndamento) {
+    await esperarComTeto(emAndamento);
+    const pronto = cacheHistorico.get(chave);
+    if (pronto && pronto.marca === marca) { res.json(pronto.payload); return; }
+  }
+  // Registra a NOSSA montagem e garante a liberação em QUALQUER desfecho —
+  // sucesso, erro do handler ou cliente que fechou a aba. Sem isso, uma
+  // exceção deixaria a chave presa e a tela travaria para sempre.
+  let liberar: () => void = () => {};
+  const emVooAgora = new Promise<void>((r) => { liberar = r; });
+  emVoo.set(chave, emVooAgora);
+  const soltar = () => {
+    if (emVoo.get(chave) === emVooAgora) emVoo.delete(chave);
+    liberar();
+  };
+  res.once("finish", soltar);
+  res.once("close", soltar);
   const avisos: string[] = [];
   const fontes: Array<{ id: string; nome: string; conteudo: LeituraPortaConteudo }> = [];
   // RELATÓRIO DE VALIDAÇÃO por documento (09/08/2026, pedido do dono: o
@@ -1041,7 +1098,7 @@ router.get("/historico-financeiro", async (req: AuthRequest, res: Response): Pro
     modelos: versoesAtivas,
   };
   if (cacheHistorico.size >= 50) cacheHistorico.delete(cacheHistorico.keys().next().value!);
-  cacheHistorico.set(companyId, { marca, payload });
+  cacheHistorico.set(chave, { marca, payload });
   res.json(payload);
 });
 
