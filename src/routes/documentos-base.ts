@@ -100,9 +100,23 @@ export function registrarRotasDocumentosBase(router: Router, { whereRecursoEmpre
       );
     }
 
+    // AVISO DO MODELO MONTADO (12/08/2026). Documento conciliado é documento
+    // que fecha SOZINHO; a prontidão da geração julga o modelo com todos eles
+    // juntos, e reprova por coisas que a conciliação nem olha (composição de
+    // um nó divergindo do subtotal declarado). O analista descobria isso só
+    // duas telas adiante, como "algo não fechou" — contradição, do ponto de
+    // vista dele. Agora sai aqui, com nome e valor, ANTES de montar.
+    const periodosSelecionados = new Set(colunas.map((c) => c.fim!));
+    const alertas = (base.alertasComposicao as Array<{ periodo: string; caminho: string; delta: number; severidade: string }>)
+      .filter((a) => a.severidade === "erro" && periodosSelecionados.has(a.periodo));
+    const avisosModelo = alertas.slice(0, 5).map(
+      (a) => `${a.caminho} (${a.periodo}): o subtotal impresso não bate com a soma das contas — diferença de ${a.delta.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}, preservada em "Outros". Os documentos fecham sozinhos; é a montagem conjunta que precisa de olhada.`,
+    );
+
     res.json({
       documentos,
       serie,
+      avisosModelo,
       // Quando a série está furada e o documento que falta não existe, este é o
       // clique de resgate: "usar só o trecho contínuo mais recente".
       sugestaoTrechoContinuo: serie.ok ? null : trechoContinuoMaisRecente(colunas),

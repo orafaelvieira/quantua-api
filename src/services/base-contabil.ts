@@ -946,8 +946,13 @@ async function montarBaseContabilSemCache(
     versaoBase: VERSAO_BASE,
     documentosUsados: relatorio.map((r) => r.documentId),
     intervaloPorDocumento,
+    // Alertas de composição viajam SEMPRE (array curto): o seletor de documentos
+    // precisa deles para avisar ANTES da montagem. A conciliação julga documento
+    // a documento; estes alertas são do MODELO montado, e é justamente essa
+    // diferença que produzia a incoerência "tudo conciliado → revisão necessária".
+    alertasComposicao,
     // ── contrato do produto (só quando pedido; ver `paraProduto`) ──
-    ...(opcoes.paraProduto ? { arvoresBalancete, balancetes, declarados, alertasComposicao } : {}),
+    ...(opcoes.paraProduto ? { arvoresBalancete, balancetes, declarados } : {}),
   };
   return payload;
 }
