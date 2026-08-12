@@ -34,6 +34,7 @@ import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../se
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
 import { extrairComCascata, paraTelaManual, mergeItensPorConta } from "../services/extracao-cascata";
 import { baseDoWorkspaceParaIBR, ehRecusa } from "../services/base-para-ibr";
+import { insumosDaBase, diferencasDaMarca } from "../services/base-contabil";
 import { registrarRotasDocumentosBase } from "./documentos-base";
 import { avaliarSerie, colunasDoIBR } from "../services/serie-periodos";
 import { getCurrentDictionaryVersion } from "../services/dictionary-version";
@@ -475,11 +476,45 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   // Documento HERDADO (fixação Processada, fase B/nova-versão) carrega a própria
   // extração — não conta como "adicionado depois": sem isto, toda v2 herdada
   // acendia "extração desatualizada" à toa (falso positivo real, 21/07/2026).
-  const extracaoDesatualizada = !!extraidoEm && analysis.documents.some((d) =>
-    d.tipo !== MATERIAL_TIPO && d.status !== "Substituído" &&
-    !(d.status === "Processado" && d.fixadoDeId) &&
-    d.createdAt > new Date(extraidoEm)
-  );
+  const marcaGravada = (analysis.dadosEstruturados as any)?.marcaBase as string | undefined;
+  const motivoDesatualizacao: string[] = [];
+  let extracaoDesatualizada = false;
+  if (marcaGravada) {
+    // CAMINHO DA BASE: compara a IMPRESSÃO DIGITAL dos insumos. Mudou o hash de
+    // um arquivo, entrou/saiu documento da seleção, a leitura foi refeita ou o
+    // dicionário/modelo mudou → os números na tela são de antes. Não mudou nada
+    // disso → não há o que reprocessar, mesmo que a linha do documento seja nova.
+    const poolIds = analysis.documents
+      .filter((d) => d.fixadoDeId && d.tipo !== MATERIAL_TIPO && d.status !== "Substituído")
+      .map((d) => d.fixadoDeId!);
+    try {
+      const agora = await insumosDaBase(analysis.companyId, req.scopeUserIds!, poolIds);
+      if (agora.marca !== marcaGravada) {
+        extracaoDesatualizada = true;
+        // Nome do documento na mão, para o aviso poder ser CONFERIDO.
+        const nomePorId: Record<string, string> = {};
+        for (const d of agora.docs) nomePorId[d.id] = d.nome;
+        for (const d of analysis.documents) if (d.fixadoDeId) nomePorId[d.fixadoDeId] ??= d.nome;
+        motivoDesatualizacao.push(...diferencasDaMarca(marcaGravada, agora.marca, nomePorId).slice(0, 6));
+      }
+    } catch { /* falha ao medir não acende alarme falso */ }
+  } else if (extraidoEm) {
+    // CAMINHO ANTIGO (extração própria do IBR): documento vigente que entrou
+    // DEPOIS da última extração. Documento HERDADO (fixação Processada) carrega
+    // a própria extração e não conta — sem isto toda v2 herdada acendia à toa.
+    const novos = analysis.documents.filter((d) =>
+      d.tipo !== MATERIAL_TIPO && d.status !== "Substituído" &&
+      !(d.status === "Processado" && d.fixadoDeId) &&
+      d.createdAt > new Date(extraidoEm),
+    );
+    extracaoDesatualizada = novos.length > 0;
+    // O AVISO PRECISA SER FALSIFICÁVEL (12/08/2026, dono: "não localizei esta
+    // mudança"). Sem o nome do documento e a data, o analista não tem como
+    // conferir se é verdade — e um aviso que não se pode conferir vira ruído.
+    for (const d of novos.slice(0, 5)) {
+      motivoDesatualizacao.push(`"${d.nome}" entrou em ${d.createdAt.toLocaleString("pt-BR")}, depois da extração de ${new Date(extraidoEm).toLocaleString("pt-BR")}`);
+    }
+  }
   // VALUATIONS/MODELOS vinculados a este IBR (pode ser mais de um): o cabeçalho
   // do IBR mostra os links — a relação IBR↔produto fica visível dos dois lados.
   const modelosVinculados = await prisma.financialModel.findMany({
@@ -488,7 +523,7 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
     select: { id: true, nome: true, objetivo: true, status: true },
   });
   res.json({
-    ...analysis, extracaoDesatualizada, modelosVinculados,
+    ...analysis, extracaoDesatualizada, motivoDesatualizacao, modelosVinculados,
     cicloVida: cicloVidaAnalysis(analysis.status), etapa: etapaAnalysis(analysis.status),
   });
 });
@@ -1990,7 +2025,16 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // geração, a tela e o PDF precisam da MESMA leitura de continuidade. Com a
     // base do workspace vem o intervalo REAL de cada coluna; no caminho antigo
     // vale a convenção do motor (mês de balancete é acumulado no ano).
-    if (usaBase) (dadosEstruturados as any).intervaloPorPeriodo = daBase.intervaloPorPeriodo;
+    if (usaBase) {
+      (dadosEstruturados as any).intervaloPorPeriodo = daBase.intervaloPorPeriodo;
+      // MARCA DA BASE (12/08/2026): a impressão digital dos insumos que
+      // produziram estes números — documentos (id+hash+leitura), dicionário e
+      // modelos vigentes. É com ela que se sabe se a extração ficou para trás,
+      // e não com o `createdAt` da linha do documento: recriar a linha do mesmo
+      // arquivo (o analista re-selecionou no Escopo) não muda número nenhum, e
+      // acendia o aviso à toa — sem dizer o que teria mudado.
+      (dadosEstruturados as any).marcaBase = daBase.marcaBase;
+    }
     (dadosEstruturados as any).serie = avaliarSerie(colunasDoIBR(dadosEstruturados as never));
     // Correções de tipo pelo conteúdo: persistidas para o GET /validacao e o /refold
     // (que recalculam a validação do zero) continuarem mostrando o aviso ao analista.

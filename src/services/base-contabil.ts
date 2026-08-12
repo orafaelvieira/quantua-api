@@ -95,6 +95,59 @@ export async function insumosDaBase(companyId: string, scopeUserIds: string[], d
   return { docs, versoesAtivas, marca };
 }
 
+/**
+ * O QUE MUDOU ENTRE DUAS MARCAS.
+ *
+ * A marca é uma impressão digital, e impressão digital só responde "sim/não".
+ * Isso não basta para o analista: "a base mudou" sem dizer O QUE mudou é um
+ * aviso que ele não consegue conferir — foi exatamente a reclamação de
+ * 12/08/2026 ("não localizei esta mudança"). Aqui a marca é DESMONTADA e a
+ * diferença sai com nome de documento e natureza da mudança.
+ *
+ * O formato da marca é definido em `insumosDaBase` — as duas funções andam
+ * juntas de propósito: mudou o formato lá, o leitor aqui acompanha.
+ */
+export function diferencasDaMarca(
+  gravada: string,
+  atual: string,
+  nomePorId: Record<string, string>,
+): string[] {
+  const parse = (m: string) => {
+    try {
+      const [versao, selecao, docs, dictCount, dictMax, modelos] = JSON.parse(m) as [
+        number, string[] | null, Array<[string, string | null, string, string | null, string | null]>, number, string | null, unknown,
+      ];
+      return { versao, selecao, docs, dictCount, dictMax, modelos };
+    } catch { return null; }
+  };
+  const a = parse(gravada), b = parse(atual);
+  if (!a || !b) return ["a impressão digital dos insumos mudou de formato (o motor foi atualizado) — reprocesse para alinhar"];
+
+  const fora: string[] = [];
+  const nome = (id: string) => nomePorId[id] ?? `documento ${id.slice(0, 8)}`;
+  const porId = (docs: typeof a.docs) => new Map(docs.map((d) => [d[0], d]));
+  const antes = porId(a.docs), agora = porId(b.docs);
+
+  for (const [id] of agora) if (!antes.has(id)) fora.push(`"${nome(id)}" entrou na base depois desta extração`);
+  for (const [id] of antes) if (!agora.has(id)) fora.push(`"${nome(id)}" saiu da base (substituído ou removido) depois desta extração`);
+  for (const [id, d] of agora) {
+    const v = antes.get(id);
+    if (!v) continue;
+    if (v[1] !== d[1]) fora.push(`"${nome(id)}" teve o ARQUIVO trocado (hash diferente)`);
+    else if (v[3] !== d[3] || v[4] !== d[4]) fora.push(`"${nome(id)}" foi LIDO de novo na Data room (leitura refeita)`);
+    else if (v[2] !== d[2]) fora.push(`"${nome(id)}" mudou de status (${v[2]} → ${d[2]})`);
+  }
+  if (a.dictCount !== b.dictCount || a.dictMax !== b.dictMax) {
+    const delta = b.dictCount - a.dictCount;
+    fora.push(delta > 0
+      ? `o dicionário da empresa ganhou ${delta} classificação(ões) — contas que estavam em "Outros" podem ter destino agora`
+      : "o dicionário da empresa mudou depois desta extração");
+  }
+  if (JSON.stringify(a.modelos) !== JSON.stringify(b.modelos)) fora.push("o modelo padrão de BP/DRE mudou de versão depois desta extração");
+  if (JSON.stringify(a.selecao) !== JSON.stringify(b.selecao)) fora.push("a seleção de documentos deste IBR mudou depois da extração");
+  return fora.length ? fora : ["algum insumo da base mudou depois desta extração"];
+}
+
 export type BaseContabil = Awaited<ReturnType<typeof montarBaseContabilSemCache>>;
 
 /** Monta a base. Recebe os insumos já buscados (o cache os usa para decidir). */
