@@ -369,7 +369,16 @@ async function montarBaseContabilSemCache(
     const lp = d.leituraPorta;
     const c = lp?.conteudo as unknown as (LeituraDemonstrativoConteudo | undefined);
     // Avisos da leitura (ex.: competência declarada ≠ período lido) na tela.
-    for (const a of c?.avisos ?? []) avisos.push(`${d.nome}: ${a}`);
+    // O aviso ALARMISTA da cobertura ficou GRAVADO nas leituras da v5 antes de
+    // 12/08/2026 ("a leitura perdeu N de M contas… alguma linha foi absorvida").
+    // Parar de gerá-lo não apaga o que já está no banco, e re-ler todo o acervo
+    // só por causa de uma frase seria pagar IA à toa: filtra-se na saída. A
+    // frase honesta sobre o mesmo fato é emitida adiante, com a aritmética na mão.
+    const RE_COBERTURA_ANTIGA = /^a leitura perdeu \d+ de \d+ conta/i;
+    for (const a of c?.avisos ?? []) {
+      if (RE_COBERTURA_ANTIGA.test(a.trim())) continue;
+      avisos.push(`${d.nome}: ${a}`);
+    }
     if (!lp || (d.hash && lp.hashArquivo !== d.hash) || !c || c.tipoLeitura !== "demonstrativo" || c.versaoLeitor !== VERSAO_LEITOR_DEMONSTRATIVO) {
       // Sem leitura ainda (documento legado, recém-substituído ou de leitor
       // ANTIGO): dispara em background e declara — a marca recalcula ao chegar.
