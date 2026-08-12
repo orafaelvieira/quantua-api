@@ -300,7 +300,18 @@ async function montarBaseContabilSemCache(
       for (const [pk, v] of Object.entries(n.valores)) ex.valores[pk] = v;
     }
   };
-  const naoMapeados: NaoMapeado[] = [];
+  /**
+   * PENDÊNCIA TEM DONO (12/08/2026 — varredura adversarial).
+   *
+   * `naoMapeados` era consolidado só por PERÍODO, e o veredito do documento
+   * somava tudo que caísse na mesma coluna. Um BP anual com todas as contas
+   * classificadas ficava "✗ 5 contas sem classificação" porque a DRE do MESMO
+   * ANO tinha cinco — e o analista via vermelho num documento sem defeito, com
+   * o checkbox travado. Agora cada pendência sai carimbada com o documento que
+   * a produziu, e o selo de cada um julga só o que é dele.
+   */
+  const naoMapeados: Array<NaoMapeado & { docId?: string }> = [];
+  const comDono = (ns: NaoMapeado[], docId: string) => ns.map((n) => ({ ...n, docId }));
   // AUDITORIA (09/08/2026, pedido do dono: "verificar o que foi feito"): o
   // fold carimba `destino` em cada nó da árvore ORIGINAL — devolvemos as
   // árvores no shape que o OriginalTreeView do IBR já lê (mesma tela).
@@ -321,6 +332,8 @@ async function montarBaseContabilSemCache(
    * Quem sabe o intervalo é a leitura do documento — então ele viaja daqui.
    */
   const intervaloPorDocumento: Record<string, { inicio: string; fim: string; tipo: "mes" | "exercicio" }> = {};
+  /** Documento cujas colunas já vinham de outra fonte — não entrou na montagem. */
+  const coberturaDuplicada = new Map<string, string[]>();
   // ── CONTRATO PARA O PRODUTO (11/08/2026) ──
   // O IBR precisa de mais do que a tela: as árvores MENSAIS por documento (o
   // /refold as re-dobra quando o dicionário muda, e os prazos médios YTD saem
@@ -383,11 +396,11 @@ async function montarBaseContabilSemCache(
       alertasComposicao.push(...rBP.alertasComposicao);
       for (const k of rBP.conservacao) conservacaoPorPeriodo[k.periodo] = k;
       mergeItens(bp, rBP.bp as unknown as Item[]);
-      naoMapeados.push(...rBP.naoMapeados);
+      naoMapeados.push(...comDono(rBP.naoMapeados, f.id));
       const rDRE = foldDRE(conv.arvoreDRE, [periodo], dictRows, dreModel);
       alertasComposicao.push(...rDRE.alertasComposicao);
       mergeItens(dre, rDRE.dre as unknown as Item[]);
-      naoMapeados.push(...rDRE.naoMapeados);
+      naoMapeados.push(...comDono(rDRE.naoMapeados, f.id));
       // O fold MUTA as árvores carimbando destino/absorvido — é a auditoria.
       // SÓ a chave do PERÍODO DOBRADO viaja (09/08/2026, coluna em branco na
       // Belagro): a conversão devolve também o período de ABERTURA (saldo
@@ -455,6 +468,12 @@ async function montarBaseContabilSemCache(
         arvCanon[p] = dadosP;
       }
       const aceitos = Object.keys(arvCanon);
+      // COLUNA JÁ COBERTA POR OUTRA FONTE (12/08/2026 — varredura adversarial).
+      // Quando todas as colunas do documento já vieram de outro (balancete do
+      // mesmo ano, por exemplo), ele não entra na montagem — e saía com selo
+      // VERDE em silêncio, porque sem coluna não há prova para reprovar. Verde
+      // por ausência de prova é o oposto da regra da casa.
+      if (aceitos.length === 0) coberturaDuplicada.set(d.id, Object.keys(arvore ?? {}).map(canonico));
       if (aceitos.length) {
         // Demonstrativo ANUAL cobre o exercício: do 1º de janeiro do primeiro
         // período aceito ao último dia do último.
@@ -476,13 +495,13 @@ async function montarBaseContabilSemCache(
           alertasComposicao.push(...r2.alertasComposicao);
           for (const k of r2.conservacao) conservacaoPorPeriodo[k.periodo] = k;
           mergeItens(bp, r2.bp as unknown as Item[]);
-          naoMapeados.push(...r2.naoMapeados);
+          naoMapeados.push(...comDono(r2.naoMapeados, d.id));
           for (const p of aceitos) { cobertoBP.add(p); registraPeriodo(p, d.nome); arvoreOriginalBP[p] = arvCanon[p]; }
         } else {
           const r2 = foldDRE(arvCanon as Parameters<typeof foldDRE>[0], aceitos, dictRows, dreModel);
           alertasComposicao.push(...r2.alertasComposicao);
           mergeItens(dre, r2.dre as unknown as Item[]);
-          naoMapeados.push(...r2.naoMapeados);
+          naoMapeados.push(...comDono(r2.naoMapeados, d.id));
           for (const p of aceitos) { cobertoDRE.add(p); registraPeriodo(p, d.nome); arvoreOriginalDRE[p] = arvCanon[p]; }
         }
       }
@@ -948,8 +967,18 @@ async function montarBaseContabilSemCache(
   // UM lugar decide, e a mesma resposta serve à tela de Conciliação e ao
   // wizard do IBR. Conciliado = leitura sem erro + TODAS as provas que rodaram
   // passaram + nenhuma conta do documento pendente de classificação.
+  // Contagem POR DOCUMENTO (o dono da pendência). A contagem por período fica
+  // como reserva para leituras antigas, sem docId carimbado.
+  const pendPorDocumento = new Map<string, Set<string>>();
   const pendPorPeriodo = new Map<string, number>();
-  for (const nm of naoMapeados) pendPorPeriodo.set(nm.periodo, (pendPorPeriodo.get(nm.periodo) ?? 0) + 1);
+  for (const nm of naoMapeados) {
+    pendPorPeriodo.set(nm.periodo, (pendPorPeriodo.get(nm.periodo) ?? 0) + 1);
+    if (!nm.docId) continue;
+    const set = pendPorDocumento.get(nm.docId) ?? new Set<string>();
+    set.add(`${nm.tipo}|${nm.nome.toLowerCase()}`);
+    pendPorDocumento.set(nm.docId, set);
+  }
+  const temDono = naoMapeados.some((nm) => nm.docId);
   const fimDoIntervalo = (per: string | null): string[] => {
     if (!per) return [];
     return per.split(" · ").flatMap((t) => {
@@ -990,19 +1019,27 @@ async function montarBaseContabilSemCache(
   const conciliacaoPorDocumento: Record<string, { ok: boolean; motivos: string[]; avisos: string[] }> = {};
   for (const r of relatorio) {
     const motivos: string[] = [];
+    const avisosDoDoc: string[] = [...(avisosPorDocumento.get(r.documentId) ?? [])];
     if (!r.lido) motivos.push(r.erro ?? "documento ainda não lido");
     else {
       if (r.fechamentoOk === false) motivos.push(r.erro ?? "as provas do documento não fecham");
-      const pend = fimDoIntervalo(r.periodo).reduce((s2, p) => s2 + (pendPorPeriodo.get(p) ?? 0), 0);
+      const pend = temDono
+        ? (pendPorDocumento.get(r.documentId)?.size ?? 0)
+        : fimDoIntervalo(r.periodo).reduce((s2, p) => s2 + (pendPorPeriodo.get(p) ?? 0), 0);
       if (pend > 0) motivos.push(`${pend} conta(s) sem classificação`);
       const prova = fimDoIntervalo(r.periodo).map((p) => provaPatrimonial[p]).find((x) => x && !x.ok);
       if (prova) motivos.push(`o balanço da coluna não fecha (diferença de ${fmtBRL(prova.gap)})`);
       const cons = fimDoIntervalo(r.periodo).map((p) => conservacaoPorPeriodo[p]).find((x) => x && !x.ok);
       if (cons) motivos.push(`conservação de valor não fecha (diferença de ${fmtBRL(cons.diferenca)})`);
+      const dup = coberturaDuplicada.get(r.documentId);
+      if (dup?.length) {
+        avisosDoDoc.push(
+          `não entrou na montagem: ${dup.map(rotuloDaColuna).join(" · ")} já vinha de outra fonte (${dup.map((p) => origemPorPeriodo[p]).filter(Boolean).join(" · ") || "outro documento"}). ` +
+          `Ele não está errado — está redundante; se quiser que ele mande na coluna, remova a outra fonte da Data room.`,
+        );
+      }
     }
-    conciliacaoPorDocumento[r.documentId] = {
-      ok: motivos.length === 0, motivos, avisos: avisosPorDocumento.get(r.documentId) ?? [],
-    };
+    conciliacaoPorDocumento[r.documentId] = { ok: motivos.length === 0, motivos, avisos: avisosDoDoc };
   }
 
   const payload = {

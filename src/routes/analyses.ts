@@ -1514,6 +1514,12 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     const daBase = await baseDoWorkspaceParaIBR(analysis.companyId, req.scopeUserIds!, docsAtivos as never);
     const usaBase = !ehRecusa(daBase);
     if (!usaBase) {
+      // O FALLBACK NÃO PODE SER MUDO (12/08/2026 — varredura adversarial).
+      // Cair para a extração antiga significa ler os documentos DE NOVO, pagar
+      // IA outra vez e produzir números que podem divergir da aba Conciliação
+      // contábil. Isso é o oposto do que o modelo promete, e acontecia com o
+      // analista vendo "✓ seleção pronta" na tela anterior. Fica registrado no
+      // IBR e aparece na tela — com o motivo.
       console.log(`[process] ${analysis.id}: base do workspace NÃO usada — ${(daBase as { motivos: string[] }).motivos.join(" | ")}`);
     } else {
       console.log(`[process] ${analysis.id}: lendo a BASE DO WORKSPACE (${daBase.poolIds.length} documento(s) do pool, ${daBase.escolhido.periodos.length} coluna(s), IA já paga na porta)`);
@@ -2025,6 +2031,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // geração, a tela e o PDF precisam da MESMA leitura de continuidade. Com a
     // base do workspace vem o intervalo REAL de cada coluna; no caminho antigo
     // vale a convenção do motor (mês de balancete é acumulado no ano).
+    if (!usaBase) {
+      (dadosEstruturados as any).baseRecusada = (daBase as { motivos: string[] }).motivos.slice(0, 5);
+    }
     if (usaBase) {
       (dadosEstruturados as any).intervaloPorPeriodo = daBase.intervaloPorPeriodo;
       // MARCA DA BASE (12/08/2026): a impressão digital dos insumos que

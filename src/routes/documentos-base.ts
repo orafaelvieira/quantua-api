@@ -26,6 +26,7 @@ import { MATERIAL_TIPO } from "../services/material-context";
 import { insumosDaBase, montarBaseContabil } from "../services/base-contabil";
 import { avaliarSerie, trechoContinuoMaisRecente, type ColunaSerie } from "../services/serie-periodos";
 import { fixarDocumentosDoPool, conjuntoJaUsadoEmOutroIBR } from "../services/fixacao-pool";
+import { baseDoWorkspaceParaIBR, ehRecusa } from "../services/base-para-ibr";
 import { registrarAuditoria } from "../services/audit-trail";
 
 export const ERRO_CONCLUIDA = "IBR concluído é imutável — crie uma nova versão para mudar o escopo.";
@@ -67,6 +68,7 @@ export function registrarRotasDocumentosBase(router: Router, { whereRecursoEmpre
       usoPorPool.set(u.fixadoDeId, lista);
     }
 
+    const nomePorPool = new Map(pool.map((p) => [p.id, p.nome]));
     const selecionados = new Set(
       analysis.documents
         .filter((d) => d.fixadoDeId && d.tipo !== MATERIAL_TIPO && d.status !== "Substituído")
@@ -93,6 +95,25 @@ export function registrarRotasDocumentosBase(router: Router, { whereRecursoEmpre
       motivos.push(`"${d.nome}" não está conciliado: ${d.conciliado.motivos.join(" · ")}`);
     }
     motivos.push(...serie.motivos);
+
+    // O VEREDITO DA SELEÇÃO VEM DE QUEM VAI EXECUTAR (12/08/2026 — varredura
+    // adversarial, achado #1, defeito que EU introduzi ontem).
+    //
+    // A lista acima é montada sobre a base do POOL INTEIRO; o /process monta a
+    // base só com os documentos SELECIONADOS. São conjuntos diferentes e o
+    // veredito muda com o conjunto: a tela dizia "✓ seleção pronta", o
+    // /process recusava a base e caía NO SILÊNCIO para a extração antiga —
+    // pagando IA de novo e produzindo números que podem divergir da aba
+    // Conciliação contábil, que é exatamente o que este desenho existe para
+    // impedir. Agora quem responde "pode rodar?" é a MESMA função que o
+    // /process usa para decidir.
+    const docsSelecionados = analysis.documents
+      .filter((d) => d.fixadoDeId && d.tipo !== MATERIAL_TIPO && d.status !== "Substituído")
+      .map((d) => ({ id: d.id, nome: nomePorPool.get(d.fixadoDeId!) ?? "documento", tipo: d.tipo, status: d.status, fixadoDeId: d.fixadoDeId }));
+    if (docsSelecionados.length > 0) {
+      const veredito = await baseDoWorkspaceParaIBR(analysis.companyId, req.scopeUserIds!, docsSelecionados);
+      if (ehRecusa(veredito)) motivos.push(...veredito.motivos);
+    }
     const reuso = await conjuntoJaUsadoEmOutroIBR(analysis.id, analysis.companyId);
     if (reuso) {
       motivos.push(
