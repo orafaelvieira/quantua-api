@@ -6,7 +6,7 @@
  * o analista perde histórico que ele TEM.
  */
 import { describe, it, expect } from "vitest";
-import { avaliarSerie, trechoContinuoMaisRecente, intervaloDaColuna, type ColunaSerie } from "./serie-periodos";
+import { avaliarSerie, trechoContinuoMaisRecente, intervaloDaColuna, colunasDoIBR, type ColunaSerie } from "./serie-periodos";
 
 const anual = (ano: number): ColunaSerie => ({ periodo: `31/12/${ano}`, tipo: "exercicio", inicio: `01/01/${ano}`, fim: `31/12/${ano}` });
 const ytd = (mes: number, ano: number): ColunaSerie => ({
@@ -101,5 +101,40 @@ describe("trecho contínuo mais recente (o clique de resgate)", () => {
 
   it("série inteira quando já é contínua", () => {
     expect(trechoContinuoMaisRecente([anual(2024), anual(2025)])).toEqual(["31/12/2024", "31/12/2025"]);
+  });
+});
+
+/**
+ * A trava da geração lê a série do que o IBR guardou. Se `colunasDoIBR` errar,
+ * um IBR com buraco passa calado — que é exatamente o que não pode acontecer.
+ */
+describe("colunas a partir do que o IBR guardou", () => {
+  it("usa o intervalo REAL quando o IBR leu a base do workspace", () => {
+    const cols = colunasDoIBR({
+      periodos: ["31/12/2024", "31/05/2026"],
+      intervaloPorPeriodo: {
+        "31/12/2024": { inicio: "01/01/2024", fim: "31/12/2024", tipo: "exercicio" },
+        "31/05/2026": { inicio: "01/05/2026", fim: "31/05/2026", tipo: "mes" },
+      },
+    });
+    // Mês de MOVIMENTO (01/05 a 31/05) deixa 2025 e jan–abr/26 descobertos.
+    const r = avaliarSerie(cols);
+    expect(r.ok).toBe(false);
+    expect(r.lacunas[0]!.rotulo).toBe("janeiro de 2025 a abril de 2026");
+  });
+
+  it("sem intervalo, mês de balancete é acumulado (a convenção do motor)", () => {
+    const cols = colunasDoIBR({
+      periodos: ["31/12/2024", "31/12/2025", "30/06/2026"],
+      arvoresBalancete: [{ periodo: "30/06/2026" }],
+    });
+    expect(avaliarSerie(cols).ok).toBe(true);
+  });
+
+  it("pega o buraco do caso do dono mesmo sem intervalo declarado", () => {
+    const cols = colunasDoIBR({ periodos: ["31/12/2022", "31/12/2025", "30/06/2026"], arvoresBalancete: [{ periodo: "30/06/2026" }] });
+    const r = avaliarSerie(cols);
+    expect(r.ok).toBe(false);
+    expect(r.lacunas[0]!.rotulo).toBe("2023 a 2024");
   });
 });

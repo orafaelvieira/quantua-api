@@ -35,6 +35,7 @@ import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from ".
 import { extrairComCascata, paraTelaManual, mergeItensPorConta } from "../services/extracao-cascata";
 import { baseDoWorkspaceParaIBR, ehRecusa } from "../services/base-para-ibr";
 import { registrarRotasDocumentosBase } from "./documentos-base";
+import { avaliarSerie, colunasDoIBR } from "../services/serie-periodos";
 import { getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { validateFinancialData, benfordAnalysis } from "../services/validation";
 import { avaliarProntidaoGeracao } from "../services/prontidao-geracao";
@@ -1985,6 +1986,12 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       (dadosEstruturados as any).balancetes = balancetes;
       (dadosEstruturados as any).arvoresBalancete = arvoresBalancete;
     }
+    // SÉRIE DA EXTRAÇÃO — calculada aqui, uma vez, e guardada: a trava da
+    // geração, a tela e o PDF precisam da MESMA leitura de continuidade. Com a
+    // base do workspace vem o intervalo REAL de cada coluna; no caminho antigo
+    // vale a convenção do motor (mês de balancete é acumulado no ano).
+    if (usaBase) (dadosEstruturados as any).intervaloPorPeriodo = daBase.intervaloPorPeriodo;
+    (dadosEstruturados as any).serie = avaliarSerie(colunasDoIBR(dadosEstruturados as never));
     // Correções de tipo pelo conteúdo: persistidas para o GET /validacao e o /refold
     // (que recalculam a validação do zero) continuarem mostrando o aviso ao analista.
     if (alertasTipoDoc.length > 0) (dadosEstruturados as any).alertasTipoDocumento = alertasTipoDoc;
@@ -2141,6 +2148,49 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
       podeConfirmar: true,
     });
     return;
+  }
+
+  // SÉRIE COM BURACO (12/08/2026, pergunta do dono: "quando o analista escolhe
+  // período que não é sequencial, como fica o IBR?").
+  //
+  // Não gera calado. Um IBR que pula 2023 apresenta "receita cresceu 180% de
+  // 2022 a 2024" como se fosse análise — a frase é aritmeticamente verdadeira e
+  // economicamente sem sentido, e o buraco viaja para indicadores, prazos
+  // médios, fluxo de caixa (que compara balanços CONSECUTIVOS) e projeções.
+  //
+  // Também não vira beco sem saída: existe empresa que simplesmente NÃO TEM o
+  // ano que falta (nasceu depois, ou o contador perdeu o arquivo). Então a
+  // mesma forma da garantia 7 — 409 com o motivo e confirmação explícita — e,
+  // ao confirmar, a lacuna passa a ser DECLARADA: fica gravada no IBR, com
+  // quem confirmou e quando, e acompanha o produto. IBR com buraco declarado
+  // reflete a realidade ("não há dados de 2023"); IBR com buraco escondido, não.
+  const serieIBR = (dados as { serie?: { ok: boolean; lacunas: Array<{ rotulo: string; de: string; ate: string }> } }).serie;
+  if (serieIBR && !serieIBR.ok && req.body?.confirmarLacuna !== true) {
+    const quais = serieIBR.lacunas.map((l) => l.rotulo).join(", ");
+    res.status(409).json({
+      error: `A série de períodos deste IBR tem buraco em ${quais}. Toda variação que atravessa o buraco fica sem significado — ` +
+        `"cresceu X%" entre dois pontos com um ano faltando no meio não é análise. Inclua o documento que cobre esse intervalo (aba Escopo), ` +
+        `recorte a seleção para um trecho contínuo, ou confirme para gerar com a LACUNA DECLARADA (ela aparecerá no IBR e no PDF).`,
+      lacunas: serieIBR.lacunas,
+      podeConfirmar: true,
+      tipo: "lacuna",
+    });
+    return;
+  }
+  if (serieIBR && !serieIBR.ok) {
+    // Confirmou: a declaração vira parte do produto, com autoria e data.
+    const declaracao = {
+      lacunas: serieIBR.lacunas,
+      confirmadoPor: req.userId!,
+      confirmadoEm: new Date().toISOString(),
+    };
+    (dados as Record<string, unknown>).lacunaDeclarada = declaracao;
+    await prisma.analysis.update({ where: { id: analysis.id }, data: { dadosEstruturados: dados as object } });
+    void registrarAuditoria({
+      userId: req.userId!, analysisId: analysis.id, entity: "analysis", entityId: analysis.id,
+      field: "geração com lacuna de série DECLARADA",
+      after: declaracao, source: "generate",
+    });
   }
 
   const prontidao = avaliarProntidaoGeracao(dados);

@@ -138,3 +138,25 @@ export function trechoContinuoMaisRecente(colunas: ColunaSerie[]): string[] {
     .sort((a, b) => a.iv!.fim.getTime() - b.iv!.fim.getTime())
     .map((x) => x.c.periodo);
 }
+
+/**
+ * Colunas da série a partir do que o IBR guardou em `dadosEstruturados`.
+ *
+ * Serve os dois caminhos de extração: quando o IBR leu a base do workspace, o
+ * intervalo real de cada documento veio junto (`intervaloPorPeriodo`); no
+ * caminho antigo não existe esse dado e vale a convenção do motor — mês de
+ * balancete é ACUMULADO (cobre desde 1º de janeiro) e exercício cobre o ano
+ * cheio. É a mesma suposição que `intervaloDaColuna` já faz.
+ */
+export function colunasDoIBR(dados: {
+  periodos?: string[];
+  arvoresBalancete?: Array<{ periodo?: string }>;
+  intervaloPorPeriodo?: Record<string, { inicio: string; fim: string; tipo: "mes" | "exercicio" }>;
+}): ColunaSerie[] {
+  const meses = new Set((dados.arvoresBalancete ?? []).map((a) => a?.periodo).filter(Boolean) as string[]);
+  return (dados.periodos ?? []).map((p) => {
+    const iv = dados.intervaloPorPeriodo?.[p];
+    if (iv) return { periodo: p, tipo: iv.tipo, inicio: iv.inicio, fim: iv.fim };
+    return { periodo: p, tipo: meses.has(p) ? ("mes" as const) : ("exercicio" as const) };
+  });
+}

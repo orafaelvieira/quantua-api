@@ -70,6 +70,9 @@ export type ResultadoBaseIBR = {
    * para as mesmas contas, pagando duas vezes por uma resposta que já existe.
    */
   sugestoes: Record<string, { sugestao: string; justificativa: string; confianca: string }>;
+  /** Intervalo REAL coberto por cada coluna — a regra da série contínua se
+   *  mede por intervalo, e sem isto o IBR teria de adivinhar. */
+  intervaloPorPeriodo: Record<string, { inicio: string; fim: string; tipo: "mes" | "exercicio" }>;
   /** Ids do POOL que formaram esta base — proveniência no envelope do IBR. */
   poolIds: string[];
   avisos: string[];
@@ -170,6 +173,9 @@ export async function baseDoWorkspaceParaIBR(
     arvoresBalancete: (base as { arvoresBalancete?: ResultadoBaseIBR["arvoresBalancete"] }).arvoresBalancete ?? [],
     balancetes: ((base as { balancetes?: Array<Record<string, unknown>> }).balancetes ?? []),
     sugestoes,
+    intervaloPorPeriodo: Object.fromEntries(
+      Object.values(base.intervaloPorDocumento).map((iv) => [iv.fim, iv]),
+    ),
     poolIds,
     avisos: base.avisos,
   };
