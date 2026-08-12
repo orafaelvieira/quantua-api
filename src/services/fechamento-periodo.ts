@@ -135,9 +135,24 @@ export function estadoDoPeriodo(
   return documentosDoPeriodo.length > 0 ? "recebido" : "aberto";
 }
 
-/** Fechar: só o que não está fechado. */
-export function podeFechar(reg: FechamentoRegistro | null | undefined): { ok: boolean; erro?: string } {
-  return estaFechado(reg) ? { ok: false, erro: "O período já está fechado." } : { ok: true };
+/**
+ * Fechar: só o que não está fechado E TEM DOCUMENTO (12/08/2026, relato do
+ * dono: "por que tem informação se não tem documentos?").
+ *
+ * "Fechado" afirma que os documentos daquele período estão completos e
+ * conferidos. Fechar período VAZIO afirma isso sobre o nada — e era o que
+ * produzia a tela do relato: uma Data room com ZERO documentos exibindo
+ * "2023 · sem documento · FECHADO", com botão de REABRIR. Estado sem lastro.
+ */
+export function podeFechar(
+  reg: FechamentoRegistro | null | undefined,
+  documentosDoPeriodo: DocumentoLogico[] = [],
+): { ok: boolean; erro?: string } {
+  if (estaFechado(reg)) return { ok: false, erro: "O período já está fechado." };
+  if (documentosDoPeriodo.length === 0) {
+    return { ok: false, erro: 'Não há documento contábil neste período — fechar significa "os documentos estão completos e conferidos", e não há o que conferir. Envie o balancete/DRE/balanço pela Data room e feche depois.' };
+  }
+  return { ok: true };
 }
 
 /** Reabrir: só o que está fechado, e SEMPRE com motivo (fica na trilha). */

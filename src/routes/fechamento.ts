@@ -102,8 +102,17 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
   }
   const regPorPeriodo = new Map(registros.map((r) => [r.periodo, r]));
 
-  // União: períodos com documento + períodos com registro de fechamento.
-  const chaves = [...new Set([...porPeriodo.keys(), ...registros.map((r) => r.periodo)])].sort().reverse();
+  // PERÍODO SEM DOCUMENTO NÃO APARECE (12/08/2026, relato do dono: "por que tem
+  // informação se não tem documentos? deveria excluir tudo").
+  //
+  // A lista era a UNIÃO de "períodos com documento" com "períodos que têm
+  // registro de fechamento". Numa empresa cujos documentos foram removidos (ou
+  // que fechou período vazio, o que o motor permitia), sobravam linhas
+  // "sem documento · FECHADO" numa Data room vazia — estado sem lastro nenhum.
+  // A lista volta a ser o que a tela promete: uma DERIVAÇÃO dos documentos.
+  // O registro de fechamento NÃO é apagado (é fato auditável): se um documento
+  // daquela competência voltar, a linha reaparece com o estado que tinha.
+  const chaves = [...porPeriodo.keys()].sort().reverse();
 
   const periodos = chaves.map((periodo) => {
     const documentos = porPeriodo.get(periodo) ?? [];
@@ -268,7 +277,11 @@ router.post("/fechar", async (req: AuthRequest, res: Response): Promise<void> =>
   if (!company) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
 
   const reg = await prisma.periodoEmpresa.findUnique({ where: { companyId_periodo: { companyId, periodo } } });
-  const pode = podeFechar(reg);
+  // Documentos LÓGICOS do período (cadeia de substituição resolvida) — fechar
+  // exige ter o que conferir.
+  const docsDoPeriodo = derivarDocumentosLogicos(await docsDaEmpresa(companyId))
+    .filter((d) => d.competencia === periodo);
+  const pode = podeFechar(reg, docsDoPeriodo);
   if (!pode.ok) { res.status(409).json({ error: pode.erro }); return; }
 
   const agora = new Date();

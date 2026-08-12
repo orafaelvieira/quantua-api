@@ -109,8 +109,18 @@ describe("estado do período", () => {
 
   it("fechar: bloqueado se já fechado; reabrir: exige motivo", () => {
     const fechado = reg({ fechadoEm: new Date("2026-07-15") });
-    expect(podeFechar(null).ok).toBe(true);
-    expect(podeFechar(fechado).ok).toBe(false);
+    const comDoc = derivarDocumentosLogicos([doc({ tipo: "Balancete", competencia: "2026-06" })]);
+    expect(podeFechar(null, comDoc).ok).toBe(true);
+    expect(podeFechar(fechado, comDoc).ok).toBe(false);
+
+    /**
+     * FECHAR PERÍODO VAZIO (12/08/2026, relato do dono): "fechado" afirma que os
+     * documentos daquele período estão completos e conferidos. Sem documento não
+     * há o que conferir — e era isso que produzia "2023 · sem documento ·
+     * FECHADO" numa Data room com ZERO documentos.
+     */
+    expect(podeFechar(null, []).ok).toBe(false);
+    expect(podeFechar(null, []).erro).toMatch(/não há documento contábil/i);
 
     expect(podeReabrir(fechado, "retificação do contador").ok).toBe(true);
     expect(podeReabrir(fechado, "").ok).toBe(false);
