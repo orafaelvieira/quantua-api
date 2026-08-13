@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolverCascataDicionario, prioridadeEscopo, whereCascataDicionario } from "./dicionario-escopo";
+import { resolverCascataDicionario, prioridadeEscopo, whereCascataDicionario, situacaoDaCascata } from "./dicionario-escopo";
 
 const global_ = (nome: string, destino: string, grupo = "Ativo Circulante") =>
   ({ nomeOriginal: nome, contaDestino: destino, grupoConta: grupo, tipo: "BP", userId: null, companyId: null });
@@ -146,5 +146,67 @@ describe("ignorar é veto — e perde para classificação mais específica", ()
       "BP",
     );
     expect(r.some((e) => e.contaDestino === "__IGNORAR__")).toBe(true);
+  });
+});
+
+describe("situacaoDaCascata — quem vale e quem é sombra", () => {
+  const linha = (id: string, nome: string, destino: string, escopo: "g" | "u" | "e", extra: Record<string, unknown> = {}) => ({
+    id, nomeOriginal: nome, contaDestino: destino, grupoConta: "Ativo Circulante", tipo: "BP",
+    userId: escopo === "g" ? null : "u1",
+    companyId: escopo === "e" ? "c1" : null,
+    ...extra,
+  });
+
+  it("mesmo destino em duas camadas: a de cima vale e é REDUNDANTE; a de baixo fica sem efeito", () => {
+    const s = situacaoDaCascata([
+      linha("g1", "Autônomos", "Serviços de Terceiros", "g"),
+      linha("u1", "Autônomos", "Serviços de Terceiros", "u"),
+    ]);
+    expect(s.get("u1")).toEqual({ emUso: true, sobrepostaPor: null, redundante: true });
+    expect(s.get("g1")).toEqual({ emUso: false, sobrepostaPor: "Usuário", redundante: false });
+  });
+
+  it("destino DIFERENTE não é redundante — o override muda número", () => {
+    const s = situacaoDaCascata([
+      linha("g1", "Autônomos", "Serviços de Terceiros", "g"),
+      linha("e1", "Autônomos", "Despesas com Pessoal", "e"),
+    ]);
+    expect(s.get("e1")!.redundante).toBe(false);
+    expect(s.get("g1")).toEqual({ emUso: false, sobrepostaPor: "Empresa", redundante: false });
+  });
+
+  it("entrada única vale e não é redundante", () => {
+    const s = situacaoDaCascata([linha("g1", "Caixa", "Caixa e Equivalentes de Caixa", "g")]);
+    expect(s.get("g1")).toEqual({ emUso: true, sobrepostaPor: null, redundante: false });
+  });
+
+  it("cancelada fica fora do jogo: não vale e não sombreia ninguém", () => {
+    const s = situacaoDaCascata([
+      linha("g1", "Autônomos", "Serviços de Terceiros", "g"),
+      linha("u1", "Autônomos", "Despesas com Pessoal", "u", { revisao: "cancelada" }),
+    ]);
+    expect(s.get("u1")).toEqual({ emUso: false, sobrepostaPor: null, redundante: false });
+    expect(s.get("g1")!.emUso).toBe(true);
+  });
+
+  it("BP e DRE são dicionários distintos — mesmo nome nos dois, ambos valem", () => {
+    const s = situacaoDaCascata([
+      linha("b1", "Fretes", "Fornecedores", "g"),
+      { ...linha("d1", "Fretes", "Despesas com Vendas", "g"), tipo: "DRE" },
+    ]);
+    expect(s.get("b1")!.emUso).toBe(true);
+    expect(s.get("d1")!.emUso).toBe(true);
+  });
+});
+
+describe("situacaoDaCascata — DRE aponta o culpado mesmo com grupo diferente", () => {
+  it("na DRE o grupo espelha o destino: a sombra ainda sabe quem manda", () => {
+    const dre = (id: string, destino: string, escopo: "g" | "e") => ({
+      id, nomeOriginal: "Fretes", contaDestino: destino, grupoConta: destino, tipo: "DRE",
+      userId: escopo === "g" ? null : "u1", companyId: escopo === "e" ? "c1" : null,
+    });
+    const s = situacaoDaCascata([dre("g1", "Despesas com Vendas", "g"), dre("e1", "Custo dos Produtos Vendidos", "e")]);
+    expect(s.get("e1")!.emUso).toBe(true);
+    expect(s.get("g1")).toEqual({ emUso: false, sobrepostaPor: "Empresa", redundante: false });
   });
 });

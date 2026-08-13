@@ -90,6 +90,85 @@ export function resolverCascataDicionario<T extends EntradaDicionarioEscopo>(
   return lista;
 }
 
+export type SituacaoEntrada = {
+  /** Esta entrada é a que o fold usa para esse (nome, grupo, tipo)? */
+  emUso: boolean;
+  /** Quando não está em uso: o escopo que a sobrepõe ("Usuário", "Empresa"…). */
+  sobrepostaPor: string | null;
+  /**
+   * Está em uso, mas há entrada de escopo MENOR com o MESMO destino — ou seja,
+   * apagá-la não mudaria número nenhum.
+   */
+  redundante: boolean;
+};
+
+const NOME_ESCOPO = ["Sistema", "Usuário", "Empresa"];
+
+/**
+ * QUEM VALE E QUEM É SOMBRA (13/08/2026, pergunta do dono: "parece que o
+ * dicionário global está duplicando contas").
+ *
+ * Não estava duplicando: a tela lista as CAMADAS cruas (global + workspace +
+ * empresa) e o fold usa só a vencedora da cascata. "Autônomos" aparecia duas
+ * vezes — uma "Sistema", uma "Usuário" — com o MESMO destino, e nada na tela
+ * dizia qual das duas manda. Duas linhas iguais sem hierarquia visível leem-se
+ * como erro de base, e o operador que "arruma" apagando a errada mexe no que
+ * vale.
+ *
+ * Aqui a cascata é a MESMA de `resolverCascataDicionario` (uma régua só) — esta
+ * função apenas conta quem venceu, para a tela poder dizer.
+ *
+ * `cancelada` fica fora do jogo: o fold não a lê (whereCascataDicionarioAtiva),
+ * então ela nem sombreia nem é sombreada.
+ */
+export function situacaoDaCascata<T extends EntradaDicionarioEscopo & { id: string; revisao?: string | null }>(
+  entradas: T[]
+): Map<string, SituacaoEntrada> {
+  const ativas = entradas.filter((e) => e.revisao !== "cancelada");
+  const tipos = [...new Set(ativas.map((e) => e.tipo ?? "BP"))];
+  const vencedoras = new Set<string>();
+  for (const t of tipos) for (const v of resolverCascataDicionario(ativas, t)) vencedoras.add(v.id);
+
+  // Índice por chave (nome|grupo|tipo) para achar quem sombreia quem.
+  const porChave = new Map<string, T[]>();
+  // ...e por NOME|tipo, porque na DRE o `grupoConta` espelha o destino: lá quem
+  // sobrepõe está numa chave diferente e sem este índice a tela diria "sem
+  // efeito" sem conseguir apontar o culpado.
+  const porNome = new Map<string, T[]>();
+  for (const e of ativas) {
+    const k = `${chaveDe(e)}|${e.tipo ?? "BP"}`;
+    (porChave.get(k) ?? porChave.set(k, []).get(k)!).push(e);
+    const kn = `${e.nomeOriginal.toLowerCase()}|${e.tipo ?? "BP"}`;
+    (porNome.get(kn) ?? porNome.set(kn, []).get(kn)!).push(e);
+  }
+
+  const out = new Map<string, SituacaoEntrada>();
+  for (const e of entradas) {
+    if (e.revisao === "cancelada") {
+      out.set(e.id, { emUso: false, sobrepostaPor: null, redundante: false });
+      continue;
+    }
+    const irmas = porChave.get(`${chaveDe(e)}|${e.tipo ?? "BP"}`) ?? [e];
+    const emUso = vencedoras.has(e.id);
+    if (emUso) {
+      const menorIgual = irmas.some(
+        (o) => o.id !== e.id && prioridadeEscopo(o) < prioridadeEscopo(e) && o.contaDestino === e.contaDestino
+      );
+      out.set(e.id, { emUso: true, sobrepostaPor: null, redundante: menorIgual });
+    } else {
+      const porNomeMesmo = porNome.get(`${e.nomeOriginal.toLowerCase()}|${e.tipo ?? "BP"}`) ?? [];
+      const vencedora = irmas.find((o) => o.id !== e.id && vencedoras.has(o.id))
+        ?? porNomeMesmo.find((o) => o.id !== e.id && vencedoras.has(o.id));
+      out.set(e.id, {
+        emUso: false,
+        sobrepostaPor: vencedora ? (NOME_ESCOPO[prioridadeEscopo(vencedora)] ?? null) : null,
+        redundante: false,
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * Filtro Prisma padrão da cascata: global + workspace + (se houver) a empresa.
  * Entradas de OUTRAS empresas nunca entram — isolamento por cliente.

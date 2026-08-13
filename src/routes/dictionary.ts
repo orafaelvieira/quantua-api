@@ -5,7 +5,7 @@ import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from
 import { bumpDictionaryVersion, getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { DEFAULT_BP_MODEL, IGNORAR_DESTINO } from "../services/account-mapper";
 import { avaliaBloqueioEstrutural } from "../services/conta-estrutural";
-import { prioridadeEscopo, whereCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
+import { prioridadeEscopo, situacaoDaCascata, whereCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
 import { avaliarContaParticular, grupoImediatoDoCaminho } from "../services/conta-particular";
 
 const router = Router();
@@ -128,7 +128,19 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
     where,
     orderBy: [{ grupoConta: "asc" }, { contaDestino: "asc" }, { nomeOriginal: "asc" }],
   });
-  res.json(entries);
+  // Cada linha diz se É ELA que o fold usa. Ver situacaoDaCascata: a lista
+  // mostra camadas, não duplicatas — mas sem dizer quem vence, camada parecia
+  // duplicata. A busca/tipo/grupo acima filtram ANTES, então a situação é
+  // calculada sobre o RESULTADO FILTRADO: uma busca por "Autônomos" pode
+  // esconder a irmã que sombreia. Por isso a situação sai da cascata COMPLETA.
+  const universo = (search || tipo || grupo)
+    ? await prisma.accountDictionary.findMany({ where: { OR: where.OR } })
+    : entries;
+  const situacao = situacaoDaCascata(universo);
+  res.json(entries.map((e) => ({
+    ...e,
+    ...(situacao.get(e.id) ?? { emUso: true, sobrepostaPor: null, redundante: false }),
+  })));
 });
 
 // GET /dictionary/template — contas-destino disponíveis para os dropdowns,
