@@ -100,6 +100,12 @@ model Workspace {
   fiscalYearStart String   @default("january") @map("fiscal_year_start") // january | april | july
   auditLogsOn     Boolean  @default(true) @map("audit_logs_on")
   aiAnalysisModel String   @default("sonnet") @map("ai_analysis_model") // haiku | sonnet | opus — modelo de IA da análise (generateAnalysis)
+  /// WORKSPACE DA PLATAFORMA (13/08/2026) — o dono da Quantua. O dicionário
+  /// GLOBAL é ativo da plataforma, não de cada firma: só quem é sócio DESTE
+  /// workspace promove conta ao global. Enquanto NENHUM workspace estiver
+  /// marcado, o portão cai para "sócio explícito" e avisa no log — assim ligar a
+  /// trava nunca tranca ninguém para fora por deploy.
+  plataforma      Boolean  @default(false)
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 

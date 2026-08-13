@@ -600,16 +600,93 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
 // revisão humana. APROVAR promove ao dicionário GLOBAL (novas empresas herdam);
 // REPROVAR mantém a entrada valendo SÓ para aquela empresa. Nada é automático.
 
-// Aprovar/reprovar mexe no dicionário global → mesmo gate do modelo padrão
-// (partner; role null = contas antigas de sócio).
+/**
+ * QUEM PODE ESCREVER NO DICIONÁRIO GLOBAL (endurecido em 13/08/2026).
+ *
+ * O global é ativo da PLATAFORMA: uma linha ali vale para todos os clientes de
+ * todas as firmas. O portão tinha duas fechaduras quebradas:
+ *
+ *  1. `role` NULA era lida como sócio. Conta sem papel nenhum promovia conta ao
+ *     dicionário de todo mundo.
+ *  2. O onboarding público carimba `role: "partner"` em quem cria um workspace
+ *     (routes/onboarding.ts:110). Ou seja: qualquer pessoa se cadastra, cria uma
+ *     firma e vira sócia — com direito de escrita no global. Medido no banco
+ *     local: uma conta auto-cadastrada de teste passava.
+ *
+ * Agora exige papel EXPLÍCITO de sócio e, quando existe workspace de plataforma
+ * declarado, ser sócio DELE. Enquanto nenhum workspace estiver marcado, a trava
+ * de tenant fica desligada e avisa no log — assim este deploy não tranca ninguém
+ * para fora, e o dono liga a trava com um POST em /dictionary/plataforma/assumir.
+ */
 async function podeValidarGlobal(userId?: string): Promise<boolean> {
   if (!userId) return false;
-  const u = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, tipoUsuario: true } });
-  if (!u) return false;
+  const u = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true, tipoUsuario: true, workspaceId: true, desativadoEm: true },
+  });
+  if (!u || u.desativadoEm) return false;
   // F2 SaaS: externo NUNCA aprova/reprova para o dicionário global.
   if (u.tipoUsuario === "empresa" || u.tipoUsuario === "parceiro") return false;
-  return !u.role || u.role === "partner";
+  if (u.role !== "partner") return false;
+
+  const plataforma = await prisma.workspace.findFirst({ where: { plataforma: true }, select: { id: true } });
+  if (!plataforma) {
+    console.warn("[DICIONÁRIO] Nenhum workspace marcado como plataforma — o global aceita qualquer sócio interno. Ligue a trava em POST /dictionary/plataforma/assumir.");
+    return true;
+  }
+  return u.workspaceId === plataforma.id;
 }
+
+/**
+ * GET /dictionary/plataforma — quem é o dono do dicionário global hoje.
+ * Sem workspace marcado, a resposta diz que a trava está DESLIGADA.
+ */
+router.get("/plataforma", async (req: AuthRequest, res: Response): Promise<void> => {
+  const ws = await prisma.workspace.findFirst({
+    where: { plataforma: true },
+    select: { id: true, razaoSocial: true, nomeFantasia: true },
+  });
+  const eu = await prisma.user.findUnique({ where: { id: req.userId! }, select: { role: true, workspaceId: true } });
+  res.json({
+    travaLigada: !!ws,
+    workspace: ws ? { id: ws.id, nome: ws.nomeFantasia || ws.razaoSocial } : null,
+    souDaPlataforma: !!ws && eu?.workspaceId === ws.id,
+    podeAssumir: !ws && eu?.role === "partner" && !!eu?.workspaceId,
+  });
+});
+
+/**
+ * POST /dictionary/plataforma/assumir — marca o workspace do chamador como o
+ * DONO do dicionário global. Só funciona enquanto NENHUM estiver marcado: é um
+ * ato único, feito pelo sócio da Quantua, e depois disso nenhuma outra firma
+ * escreve no global. Reverter é ato de banco, de propósito.
+ */
+router.post("/plataforma/assumir", async (req: AuthRequest, res: Response): Promise<void> => {
+  const eu = await prisma.user.findUnique({
+    where: { id: req.userId! },
+    select: { role: true, tipoUsuario: true, workspaceId: true, name: true },
+  });
+  if (!eu || eu.role !== "partner" || eu.tipoUsuario === "empresa" || eu.tipoUsuario === "parceiro") {
+    res.status(403).json({ error: "Só sócio da equipe interna pode assumir o dicionário global." });
+    return;
+  }
+  if (!eu.workspaceId) { res.status(400).json({ error: "Sua conta não está em nenhum workspace." }); return; }
+  const jaTem = await prisma.workspace.findFirst({ where: { plataforma: true }, select: { id: true, razaoSocial: true } });
+  if (jaTem) {
+    res.status(409).json({
+      error: jaTem.id === eu.workspaceId
+        ? "Seu workspace já é o dono do dicionário global."
+        : `O dicionário global já pertence a outro workspace ("${jaTem.razaoSocial}"). Trocar é ato de banco, de propósito.`,
+    });
+    return;
+  }
+  const ws = await prisma.workspace.update({ where: { id: eu.workspaceId }, data: { plataforma: true } });
+  await bumpDictionaryVersion({
+    acao: "edit", fonte: "manual", criadoPor: eu.name,
+    nota: `Workspace "${ws.nomeFantasia || ws.razaoSocial}" assumiu o dicionário global — a partir de agora só sócios dele promovem conta ao global.`,
+  });
+  res.json({ ok: true, workspace: { id: ws.id, nome: ws.nomeFantasia || ws.razaoSocial } });
+});
 
 async function companiesDoEscopo(scopeUserIds: string[]): Promise<Map<string, string>> {
   const companies = await prisma.company.findMany({
