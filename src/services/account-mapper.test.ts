@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapAccountToBPGroup, mapAccountToDRE, normalizeDRESigns } from "./account-mapper";
+import { mapAccountToBPGroup, mapAccountToDRE, normalizeDRESigns, ehRedutora } from "./account-mapper";
 
 // Regressões do caso AOCP (visualizador SPED, 2026-07-14).
 
@@ -95,5 +95,38 @@ describe("normalizeDRESigns — receita negativa é informação, não erro (cas
     const dre = [linha("Receita Bruta", 1000), linha("Despesas Financeiras", 457123.28)];
     normalizeDRESigns(dre, P);
     expect(val(dre, "Despesas Financeiras")).toBeCloseTo(-457123.28, 2);
+  });
+});
+
+/**
+ * CONTA REDUTORA (13/08/2026 — inversão medida em produção). `normalize` apaga
+ * toda pontuação, então redutora e conta normal caíam na mesma chave e quem
+ * vencia era a ordem física das linhas do banco.
+ */
+describe("conta redutora não vira ativo positivo", () => {
+  const dict = [
+    { nomeOriginal: "(-) Moveis E Utensilios", contaDestino: "(-) Depreciação", grupoConta: "Ativo Não Circulante" },
+    { nomeOriginal: "Moveis e Utensilios", contaDestino: "Imobilizado", grupoConta: "Ativo Não Circulante" },
+  ];
+
+  it("a linha COM sinal casa a entrada redutora", () => {
+    expect(mapAccountToBPGroup("(-) Moveis E Utensilios", "ANC", dict)).toBe("(-) Depreciação");
+  });
+
+  it("a linha SEM sinal casa o ativo", () => {
+    expect(mapAccountToBPGroup("Moveis e Utensilios", "ANC", dict)).toBe("Imobilizado");
+  });
+
+  it("o resultado não depende da ORDEM do dicionário", () => {
+    for (const nome of ["(-) Moveis E Utensilios", "Moveis e Utensilios"]) {
+      expect(mapAccountToBPGroup(nome, "ANC", dict)).toBe(mapAccountToBPGroup(nome, "ANC", [...dict].reverse()));
+    }
+  });
+
+  it("ehRedutora lê o sinal, não a pontuação solta", () => {
+    expect(ehRedutora("(-) Depreciação Acumulada")).toBe(true);
+    expect(ehRedutora("- Depreciação")).toBe(true);
+    expect(ehRedutora("Depreciação Acumulada")).toBe(false);
+    expect(ehRedutora("13o Salário")).toBe(false);
   });
 });

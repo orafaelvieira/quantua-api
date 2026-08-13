@@ -50,6 +50,15 @@ export function isContaIgnorada(nome: string, dict?: DictionaryEntry[]): boolean
   return dict.some((e) => e.contaDestino === IGNORAR_DESTINO && normalize(e.nomeOriginal) === n);
 }
 
+/**
+ * A conta é REDUTORA? O "(-)" na frente do nome é a marca de conta retificadora
+ * (depreciação acumulada, PDD, devoluções). `normalize` apaga toda pontuação e
+ * cega o motor para isso — este predicado lê o sinal ANTES de qualquer limpeza.
+ */
+export function ehRedutora(nome: string): boolean {
+  return /^\s*\(?\s*[-–—]\s*\)?\s*[a-zA-ZÀ-ÿ(]/.test(String(nome ?? ""));
+}
+
 /** Remove common prefixes like (-), (–) and leading whitespace */
 function cleanAccountName(name: string): string {
   return name
@@ -131,6 +140,23 @@ function findBestMatch(
 
   // 0. Dictionary exact match (highest priority — user-defined mappings)
   if (dictionaryEntries && dictionaryEntries.length > 0) {
+    // CONTA REDUTORA PRIMEIRO (13/08/2026 — inversão de depreciação medida em
+    // produção). `normalize` apaga toda pontuação, então "(-) Móveis E
+    // Utensílios" → "(-) Depreciação" e "Móveis e Utensílios" → "Imobilizado"
+    // caem na MESMA chave: 38 colisões no BP do dicionário oficial, 22 com
+    // destinos diferentes. Quem vencia era o PRIMEIRO do array — e os três folds
+    // leem o dicionário com findMany sem orderBy, ou seja, pela ordem física do
+    // heap. Medido: as duas contas devolvem "Imobilizado" hoje e devolvem
+    // "(-) Depreciação" se a ordem do array for invertida. Depreciação
+    // classificada como ativo positivo, decidido por sorteio.
+    //
+    // A correção é ORDENAR, não endurecer a chave: o sinal vira critério de
+    // DESEMPATE. Documento que imprime a redutora COM sinal casa a entrada
+    // redutora; documento que imprime sem sinal continua casando como hoje —
+    // endurecer a chave quebraria todo balanço que não imprime o "(-)".
+    dictionaryEntries = [...dictionaryEntries].sort(
+      (a, b) => Number(ehRedutora(b.nomeOriginal) === ehRedutora(conta)) - Number(ehRedutora(a.nomeOriginal) === ehRedutora(conta))
+    );
     // First pass: match by name + grupo
     if (grupo) {
       for (const entry of dictionaryEntries) {
