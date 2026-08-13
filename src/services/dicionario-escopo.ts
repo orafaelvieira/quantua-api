@@ -38,7 +38,7 @@ export function prioridadeEscopo(e: { userId: string | null; companyId: string |
  * o mesmo IBR refoldado duas vezes podia trocar de destino. Colapsando na mesma
  * chave, a cascata volta a decidir — e decide sempre igual.
  */
-const chaveDe = (e: { nomeOriginal: string; grupoConta: string | null }): string =>
+export const chaveDe = (e: { nomeOriginal: string; grupoConta: string | null }): string =>
   `${limparCodigoDoNome(e.nomeOriginal).toLowerCase()}|${(e.grupoConta ?? "").toLowerCase()}`;
 
 /** Entre duas entradas do MESMO escopo, vence a que já está no formato limpo. */
@@ -176,7 +176,7 @@ const NOME_ESCOPO = ["Sistema", "Usuário", "Empresa"];
  * O QUE A CASCATA ENTREGA HOJE: para cada chave viva, o destino resolvido. É a
  * régua de comparação — se este mapa não muda, número nenhum muda.
  */
-function resolvido<T extends EntradaDicionarioEscopo>(ativas: T[], tipos: string[]): Map<string, string> {
+export function resolvido<T extends EntradaDicionarioEscopo>(ativas: T[], tipos: string[]): Map<string, string> {
   const m = new Map<string, string>();
   for (const t of tipos) {
     for (const v of resolverCascataDicionario(ativas, t)) {

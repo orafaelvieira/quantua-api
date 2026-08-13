@@ -9,6 +9,7 @@ import { acharNaCamada, prioridadeEscopo, resolverCascataDicionario, situacaoDaC
 import { avaliarContaParticular, grupoImediatoDoCaminho } from "../services/conta-particular";
 import { limparNomeConta } from "../services/nome-conta";
 import { avaliaValorNoNome } from "../services/valor-no-nome";
+import { planejarDissolucaoWorkspace } from "../services/dissolver-workspace";
 
 const router = Router();
 router.use(requireAuth);
@@ -297,18 +298,47 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
 
   const { nomeOriginal, contaDestino, grupoConta } = req.body;
 
-  // If it's a global entry, create a user override instead of modifying
+  // NO-OP NÃO GRAVA (13/08/2026): abrir "Editar" numa linha do Sistema e clicar
+  // "Salvar" sem mudar nada criava um clone de workspace — a fábrica de UM
+  // CLIQUE dos pares duplicados. Como 467 das 1.411 globais já foram corrigidas
+  // depois de criadas, cada clone congelava silenciosamente a correção futura
+  // do global para a firma inteira.
+  const nadaMudou =
+    (!nomeOriginal || nomeOriginal === existing.nomeOriginal) &&
+    (!contaDestino || contaDestino === existing.contaDestino) &&
+    (!grupoConta || grupoConta === existing.grupoConta);
+  if (nadaMudou) { res.json(existing); return; }
+
+  // EDITAR LINHA GLOBAL (invariante I4 do dono): a mudança ou é LOCAL de uma
+  // empresa (manda companyId, vira override de EMPRESA) ou é GLOBAL e passa
+  // pela tela de Validação de contas. A camada de workspace — que valia para
+  // todas as empresas da firma de uma vez — não recebe mais entradas.
   if (existing.userId === null) {
-    const override = await prisma.accountDictionary.create({
-      data: {
-        nomeOriginal: nomeOriginal || existing.nomeOriginal,
-        contaDestino: contaDestino || existing.contaDestino,
-        grupoConta: grupoConta || existing.grupoConta,
-        tipo: existing.tipo,
-        userId: req.userId!,
-      },
+    const companyId = typeof req.body.companyId === "string" ? req.body.companyId : null;
+    if (!companyId) {
+      res.status(409).json({
+        error: `Esta entrada é do dicionário global. Para valer só numa empresa, edite pela aba "Dicionário & Modelos" da empresa (a alteração fica restrita a ela). Para mudar o global — que vale para todos os clientes —, reclassifique a conta num IBR e aprove na Validação de contas.`,
+      });
+      return;
+    }
+    const c = await prisma.company.findFirst({ where: { id: companyId, ...whereEmpresaVisivel(req) }, select: { id: true } });
+    if (!c) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+    const dadosOverride = {
+      nomeOriginal: nomeOriginal || existing.nomeOriginal,
+      contaDestino: contaDestino || existing.contaDestino,
+      grupoConta: grupoConta || existing.grupoConta,
+      tipo: existing.tipo,
+    };
+    // Mesma identidade já existente na empresa → atualiza em vez de duplicar.
+    const daEmpresa = await prisma.accountDictionary.findMany({
+      where: { companyId: c.id, tipo: existing.tipo },
+      select: { id: true, nomeOriginal: true, contaDestino: true, grupoConta: true, tipo: true },
     });
-    await bumpDictionaryVersion({ acao: "edit", fonte: "manual", nomeOriginal: override.nomeOriginal, contaDestino: override.contaDestino, grupoConta: override.grupoConta, tipo: override.tipo, criadoPor: await nomeUsuario(req.userId) });
+    const jaExiste = acharNaCamada(daEmpresa, dadosOverride.nomeOriginal, existing.tipo, dadosOverride.grupoConta);
+    const override = jaExiste
+      ? await prisma.accountDictionary.update({ where: { id: jaExiste.id }, data: { contaDestino: dadosOverride.contaDestino, revisao: "local" } })
+      : await prisma.accountDictionary.create({ data: { ...dadosOverride, userId: req.userId!, companyId: c.id, revisao: "local" } });
+    await bumpDictionaryVersion({ acao: "edit", fonte: "manual", nomeOriginal: override.nomeOriginal, contaDestino: override.contaDestino, grupoConta: override.grupoConta, tipo: override.tipo, criadoPor: await nomeUsuario(req.userId), companyId: c.id });
     res.json(override);
     return;
   }
@@ -571,21 +601,17 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
         continue;
       }
 
-      // Sem análise (chamada avulsa/legado): comportamento anterior — entrada de workspace.
-      const antes = await prisma.accountDictionary.findFirst({ where: { ...chaveBase, userId: req.userId!, companyId: null } });
-      const result = antes
-        ? await prisma.accountDictionary.update({ where: { id: antes.id }, data: { contaDestino: entry.contaDestino } })
-        : await prisma.accountDictionary.create({ data: { ...chaveBase, contaDestino: entry.contaDestino, userId: req.userId! } });
-      created.push(result);
-      // Autofeed: bumpa a versão SÓ quando a entrada é nova ou a conta-destino mudou
-      // (re-classificar igual não infla a versão). Registra o IBR de origem.
-      if (!antes || antes.contaDestino !== entry.contaDestino) {
-        await bumpDictionaryVersion({
-          acao: "classify", fonte: "autofeed",
-          nomeOriginal: entry.nomeOriginal, contaDestino: entry.contaDestino, grupoConta: entry.grupoConta, tipo: tipoE,
-          criadoPor: autor, analysisId: typeof analysisId === "string" ? analysisId : null,
-        });
-      }
+      // FÁBRICA FECHADA (13/08/2026, invariante I4 do dono: "alterações no
+      // workspace devem impactar apenas a empresa"). O ramo sem contexto gravava
+      // entrada de WORKSPACE — a camada que vale para TODAS as empresas da firma
+      // e que produziu os pares duplicados do dicionário. Todos os chamadores
+      // reais mandam analysisId ou companyId; chamada sem contexto não tem onde
+      // pendurar a classificação e é recusada com o caminho certo.
+      rejeitadas.push({
+        nomeOriginal: entry.nomeOriginal,
+        contaDestino: entry.contaDestino,
+        motivo: "Classificação sem contexto de empresa: envie analysisId (classificação dentro de um IBR) ou companyId (aba Dicionário & Modelos da empresa). A camada de workspace não recebe mais entradas.",
+      });
     } catch (err) {
       // skip duplicates
       console.error("Error classifying entry:", entry.nomeOriginal, err);
@@ -686,6 +712,105 @@ router.post("/plataforma/assumir", async (req: AuthRequest, res: Response): Prom
     nota: `Workspace "${ws.nomeFantasia || ws.razaoSocial}" assumiu o dicionário global — a partir de agora só sócios dele promovem conta ao global.`,
   });
   res.json({ ok: true, workspace: { id: ws.id, nome: ws.nomeFantasia || ws.razaoSocial } });
+});
+
+/**
+ * DISSOLUÇÃO DA CAMADA WORKSPACE (invariante I4 do dono). A prévia planeja e
+ * PROVA por simulação, empresa a empresa; o aplicar exige a assinatura da
+ * prévia — se o dicionário mudou entre a leitura e o clique, recusa com 409 em
+ * vez de aplicar um plano que ninguém leu (exigência da revisão adversarial).
+ */
+const assinaturaDoPlanoWs = (linhas: Array<{ id: string; updatedAt: Date }>, empresas: string[]): string =>
+  require("crypto").createHash("sha256")
+    .update([...linhas.map((l) => `${l.id}:${l.updatedAt.toISOString()}`).sort(), ...[...empresas].sort()].join("|"))
+    .digest("hex").slice(0, 16);
+
+async function montarPlanoWs(scopeUserIds: string[]) {
+  const nomes = await companiesDoEscopo(scopeUserIds);
+  const empresas = [...nomes.keys()];
+  const linhas = await prisma.accountDictionary.findMany({
+    where: {
+      OR: [
+        { userId: null, companyId: null },
+        { userId: { in: scopeUserIds }, companyId: null },
+        { companyId: { in: empresas } },
+      ],
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  const plano = planejarDissolucaoWorkspace(linhas, empresas);
+  const doWorkspace = linhas.filter((l) => plano.workspaceIds.includes(l.id));
+  const assinatura = assinaturaDoPlanoWs(doWorkspace, empresas);
+  return { nomes, empresas, linhas, plano, doWorkspace, assinatura };
+}
+
+// GET /dictionary/workspace/dissolucao — prévia (não escreve nada).
+router.get("/workspace/dissolucao", async (req: AuthRequest, res: Response): Promise<void> => {
+  const { nomes, plano, doWorkspace, assinatura } = await montarPlanoWs(req.scopeUserIds!);
+  res.json({
+    entradasWorkspace: doWorkspace.map((w) => ({ id: w.id, nomeOriginal: w.nomeOriginal, contaDestino: w.contaDestino, tipo: w.tipo })),
+    copias: plano.copias.map((c) => ({ empresa: nomes.get(c.companyId) ?? c.companyId, nomeOriginal: c.nomeOriginal, contaDestino: c.contaDestino, tipo: c.tipo })),
+    conflitos: plano.conflitos.map((c) => ({ empresa: nomes.get(c.companyId) ?? c.companyId, chave: c.chave, motivo: c.motivo })),
+    provas: plano.provas.map((p) => ({ empresa: nomes.get(p.companyId) ?? p.companyId, chaves: p.chaves, copias: p.copias, identico: p.identico })),
+    aplicavel: plano.aplicavel,
+    assinatura,
+  });
+});
+
+// POST /dictionary/workspace/dissolver { assinatura } — aplica o plano da prévia.
+router.post("/workspace/dissolver", async (req: AuthRequest, res: Response): Promise<void> => {
+  if (!(await podeValidarGlobal(req.userId))) {
+    res.status(403).json({ error: "Dissolver a camada de workspace é ação de sócio (partner)." });
+    return;
+  }
+  const { nomes, plano, doWorkspace, assinatura } = await montarPlanoWs(req.scopeUserIds!);
+  if (req.body?.assinatura !== assinatura) {
+    res.status(409).json({ code: "PLANO_MUDOU", error: "O dicionário mudou desde a prévia — recarregue e revise o plano de novo antes de aplicar.", assinatura });
+    return;
+  }
+  if (!plano.aplicavel) {
+    res.status(422).json({ error: "O plano tem conflitos ou provas que não fecham — nada foi aplicado. Resolva os conflitos listados na prévia.", conflitos: plano.conflitos });
+    return;
+  }
+  if (plano.workspaceIds.length === 0) { res.json({ ok: true, copias: 0, canceladas: 0 }); return; }
+
+  const validador = await nomeUsuario(req.userId);
+  await prisma.$transaction(async (tx) => {
+    for (const c of plano.copias) {
+      // Colisão exata na unique da empresa → a linha já existe: atualiza destino.
+      const jaExiste = await tx.accountDictionary.findFirst({
+        where: { nomeOriginal: c.nomeOriginal, tipo: c.tipo, grupoConta: c.grupoConta ?? "", userId: c.userId, companyId: c.companyId },
+        select: { id: true },
+      });
+      if (jaExiste) {
+        await tx.accountDictionary.update({ where: { id: jaExiste.id }, data: { contaDestino: c.contaDestino, revisao: "local" } });
+      } else {
+        await tx.accountDictionary.create({
+          data: {
+            nomeOriginal: c.nomeOriginal, contaDestino: c.contaDestino, grupoConta: c.grupoConta ?? "",
+            tipo: c.tipo, userId: c.userId, companyId: c.companyId,
+            revisao: "local", grupoCaminho: c.grupoCaminho,
+            revisaoMotivo: "Migrada da camada de workspace na dissolução (13/08/2026) — preserva o número que esta empresa já tinha.",
+          },
+        });
+      }
+    }
+    await tx.accountDictionary.updateMany({
+      where: { id: { in: plano.workspaceIds } },
+      data: {
+        revisao: "cancelada",
+        revisaoMotivo: "Camada de workspace dissolvida — a regra agora vive nas empresas que a usavam (invariante: alteração local nunca vaza para as outras).",
+        revisadoPor: validador,
+        revisadoEm: new Date(),
+      },
+    });
+  });
+
+  await bumpDictionaryVersion({
+    acao: "edit", fonte: "validacao", criadoPor: validador,
+    nota: `Camada de workspace dissolvida: ${doWorkspace.length} entrada(s) canceladas, ${plano.copias.length} cópia(s) criadas em ${new Set(plano.copias.map((c) => c.companyId)).size} empresa(s). Prova por simulação: mapa resolvido idêntico em ${plano.provas.length} empresa(s).`,
+  });
+  res.json({ ok: true, copias: plano.copias.length, canceladas: doWorkspace.length, empresas: [...new Set(plano.copias.map((c) => nomes.get(c.companyId) ?? c.companyId))] });
 });
 
 async function companiesDoEscopo(scopeUserIds: string[]): Promise<Map<string, string>> {
