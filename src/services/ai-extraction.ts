@@ -8,6 +8,7 @@ import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccou
 import { construirArvoreBPporIndentacao, linhasParaTextoIndentado } from "./bp-tree-indent";
 import { construirArvoreDREporIndentacao } from "./dre-tree-indent";
 import type { ParsedDocument, ExtractedRow } from "./parser";
+import { limparNomeConta } from "./nome-conta";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
 const AI_MODEL = "claude-sonnet-4-6";        // visão (lê o PDF) — caro
@@ -122,7 +123,35 @@ async function ask(input: { buffer?: Buffer; text?: string }, prompt: string, mo
     if (ini >= 0 && fim > ini) { try { data = JSON.parse(txt.slice(ini, fim + 1)); } catch { data = {}; } }
     if (!Object.keys(data).length) console.warn(`[ask] resposta não-JSON (${outTok} tk out): "${txt.slice(0, 220).replace(/\n/g, " ")}…"`);
   }
-  return { data, inTok, outTok };
+  return { data: limparNomesDaResposta(data), inTok, outTok };
+}
+
+/**
+ * UM FUNIL SÓ PARA O NOME QUE A IA DEVOLVE (13/08/2026).
+ *
+ * O nome que o modelo entrega virava árvore original, "não mapeados", tela e
+ * chave de dicionário SEM PASSAR POR RÉGUA NENHUMA — enquanto o caminho
+ * determinístico já limpava código do plano e sinal desde o parser. Como 85 dos
+ * 115 PDFs de BP/DRE do acervo caem no LLM, a limpeza valia para a minoria dos
+ * documentos: quem caísse na IA continuava alimentando o dicionário com
+ * "4.03.02.01 PROCESSO …" e com o "(-)" duplicado do SPED.
+ *
+ * A limpeza vai AQUI, no ponto onde o JSON do modelo entra no sistema, e não nos
+ * vinte lugares que leem `it.nome` depois — remendo espalhado vira régua
+ * divergente na primeira correção.
+ *
+ * `limparNomeConta` (código + sinal) é a régua do que vem do DOCUMENTO, a mesma
+ * que o parser aplica. A régua de IDENTIDADE é outra (`limparCodigoDoNome`) e
+ * não é usada aqui de propósito.
+ */
+function limparNomesDaResposta<T>(no: T): T {
+  if (Array.isArray(no)) return no.map((x) => limparNomesDaResposta(x)) as unknown as T;
+  if (!no || typeof no !== "object") return no;
+  const saida: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(no as Record<string, unknown>)) {
+    saida[k] = (k === "nome" || k === "conta") && typeof v === "string" ? limparNomeConta(v) : limparNomesDaResposta(v);
+  }
+  return saida as unknown as T;
 }
 
 /** Preço por TOKEN em USD (tabela Anthropic — atualizar se mudar). Haiku 4.5 = $1/$5 por

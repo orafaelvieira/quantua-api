@@ -29,6 +29,7 @@
  * (total impresso, Ativo=Passivo, conservação de valor).
  */
 import * as XLSX from "xlsx";
+import { limparNomeConta } from "./nome-conta";
 import type { ExtractedRow } from "./parser";
 import { type Matriz, csvParaMatriz, ehArquivoTabular } from "./balancete-tabular";
 
@@ -198,7 +199,10 @@ function blocosDaLinha(
     // NOME COM ACENTO: `norm` serve para COMPARAR, nunca para guardar — o nome
     // vai para a tela e para o dicionário, e "Obrigacoes a pagar" no lugar de
     // "Obrigações a pagar" suja os dois.
-    atual = { indent: c * 10 + Math.min(espacos, 40), nome: bruto.trim().replace(/\s{2,}/g, " "), valores: new Map() };
+    // MESMA RÉGUA DO PARSER: o código do plano e o sinal duplicado saem aqui
+    // também. A célula chegava CRUA e o nome ia direto para a tela e para o
+    // dicionário — o leitor tabular era um dos caminhos que escapavam da régua.
+    atual = { indent: c * 10 + Math.min(espacos, 40), nome: limparNomeConta(bruto.trim().replace(/\s{2,}/g, " ")), valores: new Map() };
   }
   if (atual && atual.valores.size) blocos.push(atual);
   return blocos;
@@ -250,7 +254,7 @@ function lerComCabecalho(m: Matriz, cab: Cabecalho): DemonstrativoTabular | null
       // Linha só com nome (grupo sem valor na coluna): entra como estrutura,
       // porque a árvore precisa do nível para pendurar os filhos.
       const cn = colunaDoNome(bruta);
-      const nome = cn >= 0 ? (bruta[cn] ?? "").toString().trim().replace(/\s{2,}/g, " ") : "";
+      const nome = cn >= 0 ? limparNomeConta((bruta[cn] ?? "").toString().trim().replace(/\s{2,}/g, " ")) : "";
       if (nome && nome.length > 2 && !/^(total|soma)\b/i.test(nome)) {
         const cel = (bruta[cn] ?? "").toString();
         const indent = cn * 10 + Math.min(cel.length - cel.replace(/^\s+/, "").length, 40);
