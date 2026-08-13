@@ -11,7 +11,7 @@
  * contas), nunca automática.
  */
 
-import { limparNomeConta } from "./nome-conta";
+import { limparCodigoDoNome } from "./nome-conta";
 
 export interface EntradaDicionarioEscopo {
   nomeOriginal: string;
@@ -39,11 +39,11 @@ export function prioridadeEscopo(e: { userId: string | null; companyId: string |
  * chave, a cascata volta a decidir — e decide sempre igual.
  */
 const chaveDe = (e: { nomeOriginal: string; grupoConta: string | null }): string =>
-  `${limparNomeConta(e.nomeOriginal).toLowerCase()}|${(e.grupoConta ?? "").toLowerCase()}`;
+  `${limparCodigoDoNome(e.nomeOriginal).toLowerCase()}|${(e.grupoConta ?? "").toLowerCase()}`;
 
 /** Entre duas entradas do MESMO escopo, vence a que já está no formato limpo. */
 const nomeLimpo = (e: { nomeOriginal: string }): boolean =>
-  limparNomeConta(e.nomeOriginal) === e.nomeOriginal.trim();
+  limparCodigoDoNome(e.nomeOriginal) === e.nomeOriginal.trim();
 
 /**
  * Resolve a cascata: para cada (nomeOriginal, grupoConta) devolve UMA entrada —

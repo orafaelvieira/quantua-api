@@ -32,6 +32,26 @@ const RE_SINAL_PREFIXO = /^(\s*\(?\s*[=\-+]\s*\)?\s*)+/;
  * Se sobrar vazio, o nome ORIGINAL fica: conta que é só código continua
  * rastreável, e perder a linha seria pior que exibir o código.
  */
+/**
+ * SÓ O CÓDIGO SAI — O SINAL FICA (13/08/2026, regressão que eu mesmo introduzi e
+ * a revisão adversarial pegou no mesmo dia).
+ *
+ * O sinal "(-)" não é sujeira: é CONTA REDUTORA. No dicionário oficial convivem
+ * "(-) Móveis E Utensílios" → "(-) Depreciação" e "Móveis e Utensílios" →
+ * "Imobilizado". Ao usar `limparNomeConta` (que tira o sinal) como chave da
+ * cascata, as duas colapsaram numa chave só, a redutora foi DESCARTADA e a
+ * depreciação passaria a valer como ativo positivo no BP. Medido: 2 trocas de
+ * destino em 1.412 entradas globais.
+ *
+ * Onde a régua é de IDENTIDADE (chave de cascata, comparação entre entradas),
+ * use esta. Onde a régua é de LIMPEZA do que veio do documento (o parser), use
+ * `limparNomeConta`.
+ */
+export function limparCodigoDoNome(s: string): string {
+  const t = s.trim().replace(RE_CODIGO_PREFIXO, "").replace(/\s*R\$\s*$/, "").trim();
+  return t.length >= 2 ? t : s.trim();
+}
+
 export function limparNomeConta(s: string): string {
   let t = s.trim();
   for (let i = 0; i < 3; i++) {

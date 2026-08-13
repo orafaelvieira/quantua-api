@@ -246,3 +246,41 @@ describe("cascata ignora o código do plano — a entrada velha e a nova são a 
     expect(s.get("v")!.emUso).toBe(false);
   });
 });
+
+/**
+ * O SINAL "(-)" É CONTA REDUTORA, NÃO SUJEIRA (13/08/2026 — regressão que a
+ * revisão adversarial pegou no mesmo dia em que subiu).
+ */
+describe("cascata preserva a conta redutora", () => {
+  const glob = (id: string, nome: string, destino: string) => ({
+    id, nomeOriginal: nome, contaDestino: destino, grupoConta: "Ativo Não Circulante",
+    tipo: "BP", userId: null, companyId: null,
+  });
+
+  it('"(-) Móveis E Utensílios" e "Móveis e Utensílios" são contas DIFERENTES', () => {
+    const r = resolverCascataDicionario([
+      glob("dep", "(-) Moveis E Utensilios", "(-) Depreciação"),
+      glob("ativo", "Moveis e Utensilios", "Imobilizado"),
+    ], "BP");
+    expect(r).toHaveLength(2);
+    expect(r.map((e) => e.contaDestino).sort()).toEqual(["(-) Depreciação", "Imobilizado"]);
+  });
+
+  it("o CÓDIGO do plano continua colapsando — é sujeira, não significado", () => {
+    const r = resolverCascataDicionario([
+      glob("v", "1.02.03 Moveis e Utensilios", "Imobilizado"),
+      glob("n", "Moveis e Utensilios", "Imobilizado"),
+    ], "BP");
+    expect(r).toHaveLength(1);
+    expect(r[0].id).toBe("n");
+  });
+
+  it("código E sinal juntos: colapsa só o código, o sinal segue distinguindo", () => {
+    const r = resolverCascataDicionario([
+      glob("a", "1.02.09 (-) Moveis E Utensilios", "(-) Depreciação"),
+      glob("b", "(-) Moveis E Utensilios", "(-) Depreciação"),
+      glob("c", "Moveis e Utensilios", "Imobilizado"),
+    ], "BP");
+    expect(r).toHaveLength(2);
+  });
+});
