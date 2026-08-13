@@ -1087,6 +1087,12 @@ model FinancialModel {
   cenarioAtivoId String?  @map("cenario_ativo_id")
   /// Análise (IBR) usada como fonte do realizado/seed, quando houver
   analysisSeedId String?  @map("analysis_seed_id")
+  /// CARIMBO DA ORIGEM (13/08/2026, invariante I6 do dono: versão plugada em
+  /// TODOS os produtos). Fotografia do versaoExtracao/dicionarioVersao do IBR
+  /// NO MOMENTO da semeadura — sem isto, se o IBR fosse reprocessado antes de
+  /// concluir, o modelo perdia o registro de qual leitura o alimentou.
+  origemVersaoExtracao   String? @map("origem_versao_extracao")
+  origemDicionarioVersao Int?    @map("origem_dicionario_versao")
   /// Realizado consolidado: { meses: [...], porGrupo: {receita|custos|despesas: {"YYYY-MM": n}} }
   realizado      Json?
   /// Cache do último cálculo do motor (séries, DRE, checks) + hash dos inputs

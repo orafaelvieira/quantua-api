@@ -441,6 +441,8 @@ router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise
       horizonteMeses: origem.horizonteMeses,
       visao: origem.visao,
       analysisSeedId: origem.analysisSeedId,
+      origemVersaoExtracao: origem.origemVersaoExtracao,
+      origemDicionarioVersao: origem.origemDicionarioVersao,
       realizado: origem.realizado ?? undefined,
       resultadoCache: origem.resultadoCache ?? undefined,
       indicesMacro: origem.indicesMacro ?? undefined,
@@ -844,6 +846,10 @@ router.post("/", async (req: AuthRequest, res: Response): Promise<void> => {
       mesInicial: mesInicialEfetivo,
       horizonteMeses: horizonteEfetivo,
       analysisSeedId: analysis?.id ?? null,
+      // Fotografia da leitura que semeou o modelo (invariante I6): se o IBR for
+      // reprocessado depois, o modelo continua sabendo de qual versão nasceu.
+      origemVersaoExtracao: (analysis?.dadosEstruturados as any)?.versaoExtracao ?? null,
+      origemDicionarioVersao: (analysis?.dadosEstruturados as any)?.dicionarioVersao ?? null,
       realizado: realizado ? (realizado as object) : undefined,
       blocks: {
         create: [
@@ -1109,7 +1115,18 @@ router.post("/:id/orcamento/congelar", async (req: AuthRequest, res: Response): 
   // etiqueta e a jogava fora — `snap.estrutura` morria na memória e a pergunta
   // "contra qual versão do modelo?" continuava sem resposta). Dentro do
   // conteúdo, o contentHash SELA a proveniência junto com os números.
-  const conteudo = { dre: snap.dre, bp: snap.bp, fc: snap.fc, ...(snap.estrutura ? { estrutura: snap.estrutura } : {}) };
+  const conteudo = {
+    dre: snap.dre, bp: snap.bp, fc: snap.fc,
+    ...(snap.estrutura ? { estrutura: snap.estrutura } : {}),
+    // Proveniência SELADA junto com os números (invariante I6): de qual IBR,
+    // qual leitura e qual dicionário este orçamento nasceu. Entra no
+    // contentHash — adulterar a origem quebra o selo.
+    origem: {
+      analysisSeedId: model.analysisSeedId ?? null,
+      versaoExtracao: (model as any).origemVersaoExtracao ?? null,
+      dicionarioVersao: (model as any).origemDicionarioVersao ?? null,
+    },
+  };
   const contentHash = crypto.createHash("sha256").update(JSON.stringify(conteudo)).digest("hex");
 
   // F2 (25/07/2026): congelar cria RASCUNHO — a baseline (ativo) passa a ser
@@ -1730,6 +1747,16 @@ router.get("/:id/dfs-origem", async (req: AuthRequest, res: Response): Promise<v
     atualizadaEm: analysis!.createdAt,
     dicionarioVersao: de.dicionarioVersao ?? null,
     versaoExtracao: de.versaoExtracao ?? null,
+    // O que o modelo FOTOGRAFOU na semeadura × o que o IBR tem HOJE. Diferença
+    // = o IBR foi reprocessado depois que este modelo nasceu — o analista
+    // decide se reatualiza, mas nunca sem saber.
+    origemCarimbada: {
+      versaoExtracao: (model as any).origemVersaoExtracao ?? null,
+      dicionarioVersao: (model as any).origemDicionarioVersao ?? null,
+    },
+    origemMudouDesdeSemeadura:
+      !!(model as any).origemVersaoExtracao && !!de.versaoExtracao &&
+      (model as any).origemVersaoExtracao !== de.versaoExtracao,
     periodos: de.periodos ?? [],
     bp: de.bp ?? [],
     dre: de.dre ?? [],
