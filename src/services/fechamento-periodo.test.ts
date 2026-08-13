@@ -264,3 +264,25 @@ describe("competência de ANO FECHADO (YYYY)", () => {
     expect(faltantes).toEqual(["2026-05", "2026-06"]);
   });
 });
+
+/**
+ * "FECHADO" + "RETIFICADO" ao mesmo tempo num período que nunca teve documento
+ * foi o que o dono flagrou em 12/08/2026. Retificar é SUBSTITUIR um número que
+ * se declarou conferido; período fechado vazio nunca teve número.
+ */
+describe("fechamento em período vazio não gera retificação", () => {
+  const fechadoEm = new Date("2026-08-05T12:00:00Z");
+  const reg = { fechadoEm, reabertoEm: null } as never;
+
+  it("primeiro documento chegando DEPOIS do fechamento é entrega atrasada, não retificação", () => {
+    const v = { id: "d1", nome: "Balancete 2025.pdf", tipo: "Balancete", competencia: "2025", status: "Processado", createdAt: new Date("2026-08-12T09:00:00Z"), versao: 1, substituidoPorId: null } as never;
+    expect(retificacoesAposFechamento(reg, derivarDocumentosLogicos([v]))).toEqual([]);
+  });
+
+  it("com documento ANTERIOR ao fechamento, o que chega depois É retificação", () => {
+    const antes = { id: "d0", nome: "Balancete 2025.pdf", tipo: "Balancete", competencia: "2025", status: "Processado", createdAt: new Date("2026-08-01T09:00:00Z"), versao: 1, substituidoPorId: null } as never;
+    const depois = { id: "d1", nome: "Balancete 2025 (v2).pdf", tipo: "Balancete", competencia: "2025", status: "Processado", createdAt: new Date("2026-08-12T09:00:00Z"), versao: 2, substituidoPorId: null } as never;
+    const r = retificacoesAposFechamento(reg, derivarDocumentosLogicos([antes, depois]));
+    expect(r.map((x) => x.id)).toEqual(["d1"]);
+  });
+});

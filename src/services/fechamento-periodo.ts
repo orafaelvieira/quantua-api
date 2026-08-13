@@ -169,6 +169,16 @@ export function podeReabrir(
  * RETIFICAÇÃO PÓS-FECHAMENTO (derivada): versões criadas DEPOIS do ato de
  * fechar, num período que segue fechado. É o selo vermelho do workspace —
  * aceita-se a retificação, mas ela nunca passa despercebida.
+ *
+ * FECHAMENTO EM PERÍODO VAZIO NÃO RETIFICA (12/08/2026, pergunta do dono: "o que
+ * significa este retificado?"). Ele viu três exercícios marcados FECHADO e
+ * RETIFICADO ao mesmo tempo numa empresa cujos períodos apareciam "sem
+ * documento". A regra estava certa pela letra — todo documento entrou depois do
+ * fechamento — e absurda no sentido: retificar é SUBSTITUIR um número que se
+ * declarou conferido, e um período fechado VAZIO nunca teve número nenhum.
+ * Fechar antes de receber e o primeiro documento chegar depois é entrega
+ * atrasada, não retificação — e chamar as duas coisas pelo mesmo nome gasta a
+ * credibilidade do selo justamente onde ele precisa ser levado a sério.
  */
 export function retificacoesAposFechamento(
   reg: FechamentoRegistro | null | undefined,
@@ -176,8 +186,12 @@ export function retificacoesAposFechamento(
 ): DocFechamento[] {
   if (!estaFechado(reg) || !reg?.fechadoEm) return [];
   const corte = reg.fechadoEm.getTime();
-  return documentosDoPeriodo
-    .flatMap((d) => d.versoes)
+  const versoes = documentosDoPeriodo.flatMap((d) => d.versoes);
+  // Havia ALGUMA versão quando se fechou? Sem isso, não existe número anterior
+  // para ser retificado.
+  const tinhaAlgoAoFechar = versoes.some((v) => v.createdAt.getTime() <= corte);
+  if (!tinhaAlgoAoFechar) return [];
+  return versoes
     .filter((v) => v.createdAt.getTime() > corte)
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 }
