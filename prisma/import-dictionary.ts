@@ -1,6 +1,8 @@
 import { PrismaClient } from "@prisma/client";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { avaliarContaParticular } from "../src/services/conta-particular";
+import { avaliaValorNoNome } from "../src/services/valor-no-nome";
 
 const prisma = new PrismaClient();
 
@@ -35,13 +37,27 @@ async function main() {
 
   // Dedup por chave (nome,tipo,grupo) defensivo + normalização.
   const porChave = new Map<string, DictEntry>();
+  const recusadas: string[] = [];
   for (const e of entries) {
     const nomeOriginal = e.nomeOriginal?.trim();
     const contaDestino = e.contaDestino?.trim();
     const grupoConta = e.grupoConta?.trim();
     const tipo = e.tipo === "DRE" ? "DRE" : "BP";
     if (!nomeOriginal || !contaDestino || !grupoConta) continue;
+    // O ARQUIVO OFICIAL PASSA PELAS MESMAS TRAVAS DA PORTA (13/08/2026).
+    // O dicionário global é SEED: instala em toda base e é visível a todos os
+    // clientes da plataforma. Estava lá dentro "Bradesco Ag.0049 C/C 0329707-1"
+    // — agência e conta de um cliente. Uma trava que só vale no /classify não
+    // protege nada se o arquivo curado entra por baixo dela.
+    const lgpd = avaliarContaParticular(nomeOriginal, grupoConta);
+    if (lgpd.bloqueioDuro) { recusadas.push(`${nomeOriginal} — ${lgpd.motivo}`); continue; }
+    const comValor = avaliaValorNoNome(nomeOriginal);
+    if (comValor.bloqueado) { recusadas.push(`${nomeOriginal} — valor "${comValor.trecho}" no nome`); continue; }
     porChave.set(keyOf({ nomeOriginal, tipo, grupoConta }), { nomeOriginal, contaDestino, grupoConta, tipo });
+  }
+  if (recusadas.length) {
+    console.warn(`[DICIONÁRIO] ${recusadas.length} entrada(s) do arquivo oficial RECUSADAS pelas travas:`);
+    for (const r of recusadas) console.warn(`  · ${r}`);
   }
   const oficiais = [...porChave.values()];
   console.log(`Sincronizando dicionário global com ${oficiais.length} entradas oficiais...`);

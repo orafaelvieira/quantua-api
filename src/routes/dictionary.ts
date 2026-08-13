@@ -5,7 +5,7 @@ import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from
 import { bumpDictionaryVersion, getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { DEFAULT_BP_MODEL, IGNORAR_DESTINO } from "../services/account-mapper";
 import { avaliaBloqueioEstrutural } from "../services/conta-estrutural";
-import { prioridadeEscopo, situacaoDaCascata, whereCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
+import { prioridadeEscopo, resolverCascataDicionario, situacaoDaCascata, whereCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
 import { avaliarContaParticular, grupoImediatoDoCaminho } from "../services/conta-particular";
 import { limparNomeConta } from "../services/nome-conta";
 import { avaliaValorNoNome } from "../services/valor-no-nome";
@@ -482,8 +482,19 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
             ...whereCascataDicionario(req.scopeUserIds!, companyIdClassify),
           },
         });
-        const vencedor = existentes.length
-          ? existentes.reduce((a, b) => (prioridadeEscopo(b) >= prioridadeEscopo(a) ? b : a))
+        // QUEM VENCE AQUI TEM DE SER QUEM VENCE NO FOLD (13/08/2026, achado da
+        // revisão adversarial). Duas divergências:
+        //  1. `existentes` inclui CANCELADA de propósito (é ela que o revive
+        //     abaixo precisa achar), mas o fold lê a cascata ATIVA — uma
+        //     cancelada podia ser eleita "vencedora" aqui e fazer a trava
+        //     descartar a classificação que o analista acabou de fazer;
+        //  2. o `reduce` decidia empate de escopo pela ORDEM do findMany (sem
+        //     orderBy) — a mesma não-determinação que a chave da cascata matou.
+        // A régua é uma só: resolverCascataDicionario.
+        const ativasDaChave = existentes.filter((e) => e.revisao !== "cancelada");
+        const vencedoresDaChave = resolverCascataDicionario(ativasDaChave, tipoE);
+        const vencedor = vencedoresDaChave.length
+          ? vencedoresDaChave.reduce((a, b) => (prioridadeEscopo(b) > prioridadeEscopo(a) ? b : a))
           : null;
         // Já resolvido pelo global/workspace com o MESMO destino → nada a gravar
         // (não cria entrada de empresa redundante nem fila de validação à toa).
@@ -694,6 +705,30 @@ router.post("/validacao/:id/aprovar", async (req: AuthRequest, res: Response): P
   }
 
   const validador = await nomeUsuario(req.userId);
+
+  // O WORKSPACE VENCE O GLOBAL — promover sem olhar para ele é aprovar no vazio
+  // (13/08/2026, achado da revisão adversarial). Havendo entrada de workspace com
+  // destino DIFERENTE, o sócio aprovava X, a trilha registrava X, a tela mostrava
+  // X e o fold de TODAS as empresas da firma continuava entregando Y, calado.
+  const doWorkspace = await prisma.accountDictionary.findMany({
+    where: {
+      nomeOriginal: { equals: row.nomeOriginal, mode: "insensitive" },
+      tipo: row.tipo,
+      ...(row.tipo === "DRE" ? {} : { grupoConta: { equals: row.grupoConta, mode: "insensitive" as const } }),
+      userId: { in: req.scopeUserIds! }, companyId: null,
+      OR: [{ revisao: null }, { revisao: { not: "cancelada" } }],
+    },
+    select: { id: true, contaDestino: true },
+  });
+  const divergente = doWorkspace.find((w) => w.contaDestino !== row.contaDestino);
+  if (divergente) {
+    res.status(409).json({
+      code: "WORKSPACE_DIVERGENTE",
+      error: `Existe uma entrada de "Usuário" para "${row.nomeOriginal}" apontando para "${divergente.contaDestino}", e ela tem prioridade sobre o dicionário global. Promover para "${row.contaDestino}" agora não mudaria nada nos IBRs — a do workspace continuaria mandando. Ajuste ou cancele a entrada de Usuário no Dicionário de contas e aprove de novo.`,
+    });
+    return;
+  }
+
   // Case-insensitive: promover "CLIENTES" quando o global tem "Clientes" deve
   // ATUALIZAR a entrada existente, nunca criar uma quase-duplicata de caixa.
   const global = await prisma.accountDictionary.findFirst({
@@ -774,6 +809,28 @@ router.post("/validacao/:id/aprovar-grupo", async (req: AuthRequest, res: Respon
   if (bloqueio.bloqueado) { res.status(422).json({ error: bloqueio.motivo }); return; }
 
   const validador = await nomeUsuario(req.userId);
+
+  // Mesma regra do /aprovar: o workspace vence o global, então promover a regra
+  // de grupo por cima de um workspace divergente seria aprovar no vazio.
+  const grupoNoWorkspace = await prisma.accountDictionary.findMany({
+    where: {
+      nomeOriginal: { equals: nomeGrupo, mode: "insensitive" },
+      tipo: row.tipo,
+      ...(row.tipo === "DRE" ? {} : { grupoConta: { equals: row.grupoConta, mode: "insensitive" as const } }),
+      userId: { in: req.scopeUserIds! }, companyId: null,
+      OR: [{ revisao: null }, { revisao: { not: "cancelada" } }],
+    },
+    select: { contaDestino: true },
+  });
+  const grupoDivergente = grupoNoWorkspace.find((w) => w.contaDestino !== row.contaDestino);
+  if (grupoDivergente) {
+    res.status(409).json({
+      code: "WORKSPACE_DIVERGENTE",
+      error: `Existe uma entrada de "Usuário" para o grupo "${nomeGrupo}" apontando para "${grupoDivergente.contaDestino}", e ela tem prioridade sobre o global. Promover para "${row.contaDestino}" agora não mudaria nada nos IBRs. Ajuste ou cancele a entrada de Usuário no Dicionário de contas e aprove de novo.`,
+    });
+    return;
+  }
+
   const globalGrupo = await prisma.accountDictionary.findFirst({
     where: {
       nomeOriginal: { equals: nomeGrupo, mode: "insensitive" },
