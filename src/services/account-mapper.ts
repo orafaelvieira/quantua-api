@@ -1,5 +1,6 @@
 import type { ExtractedRow } from "./parser";
 import type { BPLineItem, DRELineItem, UnmatchedAccount } from "../types/financial";
+import { limparNomeConta } from "./nome-conta";
 import { BP_TEMPLATE, DRE_TEMPLATE, ACCOUNT_ALIASES } from "./financial-templates";
 
 export interface DictionaryEntry {
@@ -19,7 +20,11 @@ export interface DREMapResult {
 }
 
 function normalize(s: string): string {
-  return s.toLowerCase()
+  // O CÓDIGO DO PLANO SAI DOS DOIS LADOS DA COMPARAÇÃO (ver nome-conta.ts). O
+  // parser já entrega o nome limpo; aqui é a entrada ANTIGA do dicionário, que
+  // foi gravada com o código grudado, que precisa cair na mesma chave — senão o
+  // deploy transformaria classificação já feita em "conta não mapeada".
+  return limparNomeConta(s).toLowerCase()
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // remove accents
     // Expande abrevia\u00e7\u00f5es cont\u00e1beis ANTES de tirar a pontua\u00e7\u00e3o: "p/", "s/", "c/"
     // ("PROVIS\u00c3O P/ IRPJ" \u2261 "Provis\u00e3o para IRPJ", "ENCARGOS S/ PARCELAMENTOS" \u2261

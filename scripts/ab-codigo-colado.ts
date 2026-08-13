@@ -2,10 +2,18 @@
  * A/B do CÓDIGO COLADO NO NOME (13/08/2026, pergunta do dono: "por que algumas
  * contas vão para o dicionário no formato da primeira e segunda linha?").
  *
- * Roda o parser sobre TODO o corpus e imprime, por documento, quantos nomes de
- * conta chegam com o código contábil grudado ("4.03.02.01 PROCESSO …") e a
- * assinatura numérica (nome=valor). Rodar antes e depois da mudança: os VALORES
- * têm de ficar idênticos; só os nomes mudam.
+ * Roda o parser sobre TODO o corpus e imprime quantos nomes de conta chegam com
+ * o código contábil grudado ("4.03.02.01 PROCESSO …"), gravando a assinatura
+ * (documento|nome|valor).
+ *
+ * CUIDADO — ESTA ASSINATURA NÃO SERVE DE A/B (13/08/2026, aprendido no susto):
+ * `parsePDF` cai em `ocrPDFWithClaude` quando o PDF não tem camada de texto, e
+ * chamada de IA NÃO É DETERMINÍSTICA — duas rodadas do MESMO código deram 35.967
+ * e 36.254 linhas, e a comparação posicional acusou 27 mil "divergências" que
+ * não existiam. Serve para MEDIR a incidência. Para provar que nada regrediu,
+ * use `scripts/provas-corpus.ts --json` (determinístico, US$ 0,00, roda o
+ * caminho de produção da porta) ou `scripts/previa-colisao.ts` sobre esta
+ * assinatura.
  */
 import * as fs from "fs";
 import { parsePDF, parseExcel } from "../src/services/parser";

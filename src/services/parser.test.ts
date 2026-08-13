@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseBRNumber, yearFromFilename, detectPeriodsFromPDF, collapseOpeningClosing, juntarNomeValorQuebrados, ehLinhaDeCabecalho } from "./parser";
+import { limparNomeConta } from "./nome-conta";
 
 describe("parseBRNumber — sinal contábil (parênteses = negativo)", () => {
   it("positivo simples", () => {
@@ -199,5 +200,41 @@ describe("ehLinhaDeCabecalho — cabeçalho não pode comer conta", () => {
     "FOLHA 12",
   ])("identificação do relatório não vira conta nem com número: %s", (linha) => {
     expect(ehLinhaDeCabecalho(linha, true)).toBe(true);
+  });
+});
+
+describe("limparNomeConta — código do plano fora do nome", () => {
+  it("tira o código hierárquico do começo", () => {
+    expect(limparNomeConta("4.03.02.01 PROCESSO 000014.0316758/2020")).toBe("PROCESSO 000014.0316758/2020");
+  });
+
+  it("código na frente não pode blindar o sinal", () => {
+    expect(limparNomeConta("3.02.01.02 ( - ) ABATIMENTOS E DEVOLUÇÕES SOBRE VENDAS"))
+      .toBe("ABATIMENTOS E DEVOLUÇÕES SOBRE VENDAS");
+  });
+
+  it("sinal duplicado do SPED continua caindo", () => {
+    expect(limparNomeConta("(-) (-) ENCARGOS SOCIAIS")).toBe("ENCARGOS SOCIAIS");
+  });
+
+  it("R$ grudado no fim continua saindo", () => {
+    expect(limparNomeConta("1.01.01 CAIXA GERAL R$")).toBe("CAIXA GERAL");
+  });
+
+  it("nome que NÃO começa com código fica intacto", () => {
+    expect(limparNomeConta("13º SALÁRIO A PAGAR")).toBe("13º SALÁRIO A PAGAR");
+    expect(limparNomeConta("Caixa e Equivalentes de Caixa")).toBe("Caixa e Equivalentes de Caixa");
+  });
+
+  it("código de nível único (sem ponto) NÃO é tirado — 13, 14 são nomes de conta por aí", () => {
+    expect(limparNomeConta("1 ATIVO")).toBe("1 ATIVO");
+  });
+
+  it("linha que é SÓ código mantém o original — perder a conta seria pior", () => {
+    expect(limparNomeConta("1.01.01")).toBe("1.01.01");
+  });
+
+  it("separador traço entre código e nome", () => {
+    expect(limparNomeConta("2.03.01 - CAPITAL SOCIAL")).toBe("CAPITAL SOCIAL");
   });
 });

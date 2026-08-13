@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 import { createWithRetry } from "./ai-extraction";
 import { ETAPAS } from "./ai-usage";
 import { env } from "../config/env";
+import { limparNomeConta } from "./nome-conta";
 
 export interface ExtractedRow {
   conta: string;
@@ -1126,7 +1127,7 @@ export function juntarNomeValorQuebrados(text: string): string {
  * de R$ 823 milhões, "Página 106 de" virava R$ 29 mil e "Versão 10.0.7 do
  * Visualizador" virava R$ 126. Cabeçalho com número existe — só não é dinheiro.
  */
-const RE_NUNCA_CONTA = /^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CNPJ|CRC|INSCR|Página|Versão|Entidade|Período|Número de Ordem|Descri[çc][ãa]o|ContaSaldo|Assinado|Toledo|Este (documento|relatório))\b/i;
+const RE_NUNCA_CONTA =/^(FOLHA|Data|Hora|Consolidação|Grau|Reconhecemos|CPF|CNPJ|CRC|INSCR|Página|Versão|Entidade|Período|Número de Ordem|Descri[çc][ãa]o|ContaSaldo|Assinado|Toledo|Este (documento|relatório))\b/i;
 
 /**
  * PODE SER CONTA. Nomes próprios e palavras que entraram na lista para matar o
@@ -1150,10 +1151,7 @@ function extractInlinePDF(text: string, periodos: string[]): ExtractedRow[] {
   const lines = juntarNomeValorQuebrados(text).split("\n");
   const rawRows: Array<{ conta: string; valores: Record<string, number>; indent: number }> = [];
 
-  // Limpa um nome de conta: prefixos (=)/(-)/(+) — inclusive DUPLICADOS, o SPED
-  // imprime "(-) (-) ENCARGOS..." — e o "R$" da 1ª coluna que fica grudado no fim.
-  const limpaConta = (s: string) =>
-    s.replace(/^(\s*\(?[=\-+]\)?\s*)+/, "").replace(/\s*R\$\s*$/, "").trim();
+  const limpaConta = limparNomeConta;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -1246,7 +1244,8 @@ function extractStructuredLines(text: string): ExtractedRow[] {
 
     // Extrai o nome da conta (tudo antes do valor)
     const valorStr = match[1];
-    const conta = trimmed.slice(0, trimmed.lastIndexOf(valorStr)).trim();
+    // Mesma régua do caminho inline: código do plano e sinal fora do nome.
+    const conta = limparNomeConta(trimmed.slice(0, trimmed.lastIndexOf(valorStr)));
 
     if (!conta || conta.length < 2) continue;
     // Ignora linhas que parecem ser apenas números
