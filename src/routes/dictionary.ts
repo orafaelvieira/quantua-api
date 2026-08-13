@@ -258,16 +258,31 @@ router.post("/", requireQuantua, async (req: AuthRequest, res: Response): Promis
   const valorManual = avaliaValorNoNome(nomeOriginal);
   if (valorManual.bloqueado) { res.status(422).json({ error: valorManual.motivo }); return; }
 
-  const entry = await prisma.accountDictionary.create({
-    data: {
-      nomeOriginal,
-      contaDestino,
-      grupoConta,
-      tipo: tipo || "BP",
-      userId: req.userId!,
-    },
+  // ÚLTIMA FÁBRICA DA CAMADA WORKSPACE, FECHADA (13/08/2026, invariante I4).
+  // "Nova Entrada" sem contexto gravava workspace — a camada que vale para toda
+  // a firma de uma vez e que está sendo dissolvida. Agora: com companyId a
+  // entrada nasce na EMPRESA; sem, a rota explica os dois caminhos.
+  const companyIdManual = typeof req.body.companyId === "string" ? req.body.companyId : null;
+  if (!companyIdManual) {
+    res.status(409).json({
+      error: 'Entrada manual precisa de uma empresa: abra o dicionário pelo contexto da empresa (aba "Dicionário & Modelos") para a entrada valer só nela. Para o dicionário global — que vale para todos os clientes —, classifique num IBR e aprove na Validação de contas.',
+    });
+    return;
+  }
+  const empresaManual = await prisma.company.findFirst({ where: { id: companyIdManual, ...whereEmpresaVisivel(req) }, select: { id: true } });
+  if (!empresaManual) { res.status(404).json({ error: "Empresa não encontrada" }); return; }
+  // Identidade dobrada: não cria duplicata de acento/caixa/código na empresa.
+  const camadaEmpresaManual = await prisma.accountDictionary.findMany({
+    where: { companyId: empresaManual.id, tipo: tipo || "BP" },
+    select: { id: true, nomeOriginal: true, contaDestino: true, grupoConta: true, tipo: true },
   });
-  await bumpDictionaryVersion({ acao: "add", fonte: "manual", nomeOriginal, contaDestino, grupoConta, tipo: tipo || "BP", criadoPor: await nomeUsuario(req.userId) });
+  const duplicataManual = acharNaCamada(camadaEmpresaManual, nomeOriginal, tipo || "BP", grupoConta);
+  const entry = duplicataManual
+    ? await prisma.accountDictionary.update({ where: { id: duplicataManual.id }, data: { contaDestino, revisao: "local" } })
+    : await prisma.accountDictionary.create({
+        data: { nomeOriginal, contaDestino, grupoConta, tipo: tipo || "BP", userId: req.userId!, companyId: empresaManual.id, revisao: "local" },
+      });
+  await bumpDictionaryVersion({ acao: "add", fonte: "manual", nomeOriginal, contaDestino, grupoConta, tipo: tipo || "BP", criadoPor: await nomeUsuario(req.userId), companyId: empresaManual.id });
   res.status(201).json(entry);
 });
 

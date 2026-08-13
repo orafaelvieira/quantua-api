@@ -2700,6 +2700,37 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   }
   (dados as any).prontidao = prontidaoFinal;
 
+  // O CARIMBO ACOMPANHA O NÚMERO (13/08/2026, invariante I6 do dono: "controle
+  // de versão do dicionário/BP/DRE plugado nos documentos que utilizaram esta
+  // informação"). O refold re-dobra com o dicionário e os modelos DE HOJE — e
+  // era a única escrita que deixava a etiqueta velha: o número passava a vir da
+  // versão nova com dicionarioVersao/versaoExtracao antigos, e a prova de
+  // proveniência virava falso positivo.
+  {
+    const modeloVersoesRefold = await getActiveModelVersions(analysis.companyId);
+    const dicionarioVersaoRefold = await getCurrentDictionaryVersion();
+    const insumosAntigos = (dados as any).insumos ?? {};
+    const hashRefold = crypto.createHash("sha256")
+      .update(JSON.stringify({
+        documentos: (insumosAntigos.documentos ?? []).map((d: any) => `${d.hash}:${d.versao}:${d.editadoManualmente}`).sort(),
+        dicionarioVersao: dicionarioVersaoRefold,
+        modeloVersoes: modeloVersoesRefold,
+      }))
+      .digest("hex").slice(0, 12);
+    (dados as any).dicionarioVersao = dicionarioVersaoRefold;
+    (dados as any).modeloVersaoBP = modeloVersoesRefold.bp;
+    (dados as any).modeloVersaoDRE = modeloVersoesRefold.dre;
+    if ((dados as any).versaoExtracao !== hashRefold) {
+      (dados as any).versaoExtracao = hashRefold;
+      const jaTem = await prisma.analysisVersion.findFirst({ where: { analysisId: id, hash: hashRefold } });
+      if (!jaTem) {
+        await prisma.analysisVersion.create({
+          data: { analysisId: id, hash: hashRefold, motivo: "refold (dicionário/modelo atualizado)", insumos: insumosAntigos as object },
+        });
+      }
+    }
+  }
+
   await prisma.analysis.update({ where: { id }, data: { dadosEstruturados: dados } });
   await prisma.analysis.updateMany({
     where: { id, status: { in: ["Revisão necessária", "Pronta para gerar"] } },
