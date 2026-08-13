@@ -67,6 +67,109 @@ export interface PlanoDissolucao {
 
 const TIPOS = ["BP", "DRE"];
 
+/**
+ * DISSOLUÇÃO AUTOMÁTICA NO BOOT (13/08/2026 — "você não consegue fazer isso?").
+ *
+ * O dono não acessa o banco de produção e o padrão da casa é configurar
+ * produção por código + push. Este job roda no startup, UMA firma por vez:
+ * planeja, e SÓ aplica quando a prova fecha — 0 conflitos e mapa resolvido
+ * idêntico em toda empresa da firma. Firma com conflito fica intacta e o
+ * conflito vai para o log e para o changelog do dicionário, onde o dono vê
+ * pela tela (Histórico de versões).
+ *
+ * É seguro rodar sempre: sem entradas de workspace vira no-op instantâneo, e
+ * aplicar é cancelar (nunca deletar) + criar cópias já provadas.
+ */
+export async function dissolverWorkspaceNoBoot(prisma: {
+  accountDictionary: any; user: any; company: any; dictionaryVersion: any; $transaction: any;
+}): Promise<void> {
+  const donos = await prisma.accountDictionary.findMany({
+    where: { userId: { not: null }, companyId: null, OR: [{ revisao: null }, { revisao: { not: "cancelada" } }] },
+    select: { userId: true },
+    distinct: ["userId"],
+  });
+  if (donos.length === 0) return;
+  console.log(`[dissolucao] ${donos.length} dono(s) de entradas de workspace — planejando por firma…`);
+
+  // Agrupa por firma: membros do mesmo workspace compartilham escopo; usuário
+  // sem workspace é escopo de si mesmo (mesma régua do resolverEscopoAcesso).
+  const users = await prisma.user.findMany({
+    where: { id: { in: donos.map((d: any) => d.userId) } },
+    select: { id: true, workspaceId: true },
+  });
+  const firmas = new Map<string, string[]>();
+  for (const u of users) {
+    if (u.workspaceId) {
+      if (!firmas.has(`ws:${u.workspaceId}`)) {
+        const membros = await prisma.user.findMany({ where: { workspaceId: u.workspaceId }, select: { id: true } });
+        firmas.set(`ws:${u.workspaceId}`, membros.map((m: any) => m.id));
+      }
+    } else {
+      firmas.set(`solo:${u.id}`, [u.id]);
+    }
+  }
+
+  for (const [rotulo, scopeUserIds] of firmas) {
+    const empresas = (await prisma.company.findMany({ where: { userId: { in: scopeUserIds } }, select: { id: true } })).map((c: any) => c.id);
+    const linhas = await prisma.accountDictionary.findMany({
+      where: {
+        OR: [
+          { userId: null, companyId: null },
+          { userId: { in: scopeUserIds }, companyId: null },
+          ...(empresas.length ? [{ companyId: { in: empresas } }] : []),
+        ],
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    const plano = planejarDissolucaoWorkspace(linhas as LinhaDicionario[], empresas);
+    if (plano.workspaceIds.length === 0) continue;
+    if (!plano.aplicavel || plano.conflitos.length > 0) {
+      console.warn(`[dissolucao] firma ${rotulo}: ${plano.workspaceIds.length} entrada(s), ${plano.conflitos.length} conflito(s) — NADA aplicado. Conflitos:`);
+      for (const c of plano.conflitos.slice(0, 10)) console.warn(`  · ${c.chave}: ${c.motivo}`);
+      continue;
+    }
+
+    await prisma.$transaction(async (tx: any) => {
+      for (const c of plano.copias) {
+        const jaExiste = await tx.accountDictionary.findFirst({
+          where: { nomeOriginal: c.nomeOriginal, tipo: c.tipo, grupoConta: c.grupoConta ?? "", userId: c.userId, companyId: c.companyId },
+          select: { id: true },
+        });
+        if (jaExiste) {
+          await tx.accountDictionary.update({ where: { id: jaExiste.id }, data: { contaDestino: c.contaDestino, revisao: "local" } });
+        } else {
+          await tx.accountDictionary.create({
+            data: {
+              nomeOriginal: c.nomeOriginal, contaDestino: c.contaDestino, grupoConta: c.grupoConta ?? "",
+              tipo: c.tipo, userId: c.userId, companyId: c.companyId,
+              revisao: "local", grupoCaminho: c.grupoCaminho,
+              revisaoMotivo: "Migrada da camada de workspace na dissolução automática — preserva o número que esta empresa já tinha.",
+            },
+          });
+        }
+      }
+      await tx.accountDictionary.updateMany({
+        where: { id: { in: plano.workspaceIds } },
+        data: {
+          revisao: "cancelada",
+          revisaoMotivo: "Camada de workspace dissolvida (job de boot) — a regra agora vive nas empresas que a usavam.",
+          revisadoPor: "Dissolução (deploy)",
+          revisadoEm: new Date(),
+        },
+      });
+    });
+    const ultima = await prisma.dictionaryVersion.findFirst({ orderBy: { versao: "desc" }, select: { versao: true } });
+    await prisma.dictionaryVersion.create({
+      data: {
+        versao: (ultima?.versao ?? 0) + 1,
+        acao: "edit", fonte: "validacao", criadoPor: "Dissolução (deploy)",
+        nota: `Camada de workspace dissolvida automaticamente: ${plano.workspaceIds.length} entrada(s) canceladas, ${plano.copias.length} cópia(s) em ${new Set(plano.copias.map((c) => c.companyId)).size} empresa(s). Prova: mapa resolvido idêntico em ${plano.provas.length} empresa(s).`,
+      },
+    });
+    console.log(`[dissolucao] firma ${rotulo}: ${plano.workspaceIds.length} cancelada(s), ${plano.copias.length} cópia(s) — prova fechada.`);
+  }
+}
+
 /** Mapa chave→entrada VENCEDORA — a mesma régua do fold, com o dono junto. */
 function mapaComDono<T extends LinhaDicionario>(rows: T[]): Map<string, T> {
   const m = new Map<string, T>();

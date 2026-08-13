@@ -37,6 +37,7 @@ import { runtimeState } from "./services/runtime-state";
 import { prisma } from "./db/client";
 import { Prisma } from "@prisma/client";
 import { exec } from "node:child_process";
+import { dissolverWorkspaceNoBoot } from "./services/dissolver-workspace";
 
 const app = express();
 
@@ -215,6 +216,10 @@ app.listen(env.port, () => {
   // no meio — ou marcou "Erro" indevidamente — recuperamos para "Concluída"; só marcamos "Erro"
   // (com mensagem) quando de fato não há resultado. Evita perder análise boa por causa de deploy.
   recoverOrphanAnalyses().catch((e) => console.error("[boot] recuperação de jobs órfãos falhou:", e?.message ?? e));
+  // Dissolução da camada workspace do dicionário (invariante I4 do dono): roda
+  // por firma e SÓ aplica quando a prova fecha — sem entradas vira no-op. O
+  // resultado aparece no Histórico de versões do dicionário, conferível na tela.
+  dissolverWorkspaceNoBoot(prisma).catch((e) => console.error("[boot] dissolução da camada workspace falhou:", e?.message ?? e));
 });
 
 async function recoverOrphanAnalyses(): Promise<void> {
