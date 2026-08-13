@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { avaliarContaParticular } from "../src/services/conta-particular";
 import { avaliaValorNoNome } from "../src/services/valor-no-nome";
+import { avaliaBloqueioEstrutural } from "../src/services/conta-estrutural";
 
 const prisma = new PrismaClient();
 
@@ -64,6 +65,11 @@ async function main() {
     if (lgpd.bloqueioDuro) { recusadas.push(`${nomeOriginal} — ${lgpd.motivo}`); continue; }
     const comValor = avaliaValorNoNome(nomeOriginal);
     if (comValor.bloqueado) { recusadas.push(`${nomeOriginal} — valor "${comValor.trecho}" no nome`); continue; }
+    // Conta AGREGADA como folha colapsa o grupo — a mesma trava do /classify.
+    // Medido no arquivo: 3 entradas ("Creditos" → Contas a Receber - CP,
+    // "Outras Obrigações" → Outros Passivos C/NC) entravam por baixo dela.
+    const estrutural = avaliaBloqueioEstrutural(nomeOriginal, contaDestino);
+    if (estrutural.bloqueado) { recusadas.push(`${nomeOriginal} — ${estrutural.motivo}`); continue; }
     porChave.set(keyOf({ nomeOriginal, tipo, grupoConta }), { nomeOriginal, contaDestino, grupoConta, tipo });
   }
   if (recusadas.length) {

@@ -5,7 +5,7 @@ import { whereEmpresaVisivel, whereRecursoEmpresa, guardaEscritaSuspensao } from
 import { bumpDictionaryVersion, getCurrentDictionaryVersion } from "../services/dictionary-version";
 import { DEFAULT_BP_MODEL, IGNORAR_DESTINO } from "../services/account-mapper";
 import { avaliaBloqueioEstrutural } from "../services/conta-estrutural";
-import { prioridadeEscopo, resolverCascataDicionario, situacaoDaCascata, whereCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
+import { acharNaCamada, prioridadeEscopo, resolverCascataDicionario, situacaoDaCascata, whereCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
 import { avaliarContaParticular, grupoImediatoDoCaminho } from "../services/conta-particular";
 import { limparNomeConta } from "../services/nome-conta";
 import { avaliaValorNoNome } from "../services/valor-no-nome";
@@ -806,16 +806,37 @@ router.post("/validacao/:id/aprovar", async (req: AuthRequest, res: Response): P
     return;
   }
 
-  // Case-insensitive: promover "CLIENTES" quando o global tem "Clientes" deve
-  // ATUALIZAR a entrada existente, nunca criar uma quase-duplicata de caixa.
-  const global = await prisma.accountDictionary.findFirst({
+  // A camada EMPRESA também vence o global — e OUTRAS empresas da firma podem
+  // ter override próprio desta mesma conta. Aprovar não é bloqueado por isso
+  // (o override local é legítimo por definição), mas o sócio precisa saber em
+  // quem a aprovação NÃO vai valer (13/08/2026, achado da revisão adversarial:
+  // sem este aviso, "aprovado" lia-se como "vale para todas").
+  const overridesEmpresa = await prisma.accountDictionary.findMany({
     where: {
       nomeOriginal: { equals: row.nomeOriginal, mode: "insensitive" },
       tipo: row.tipo,
-      grupoConta: { equals: row.grupoConta, mode: "insensitive" },
-      userId: null, companyId: null,
+      ...(row.tipo === "DRE" ? {} : { grupoConta: { equals: row.grupoConta, mode: "insensitive" as const } }),
+      companyId: { in: [...nomes.keys()], not: row.companyId },
+      contaDestino: { not: row.contaDestino },
+      OR: [{ revisao: null }, { revisao: { not: "cancelada" } }],
     },
+    select: { companyId: true, contaDestino: true },
   });
+  const avisoOverrides = overridesEmpresa.length
+    ? `Atenção: ${overridesEmpresa.length} empresa(s) têm override próprio desta conta e continuarão usando o destino local (${overridesEmpresa
+        .slice(0, 4).map((o) => `${nomes.get(o.companyId!) ?? o.companyId} → ${o.contaDestino}`).join("; ")}${overridesEmpresa.length > 4 ? "; …" : ""}).`
+    : null;
+
+  // "A MESMA conta" é decidido pela chave de identidade, nunca por `equals` do
+  // banco: o `mode: "insensitive"` do Prisma NÃO dobra acento — promover
+  // "Depreciacoes Acumuladas" (grafia que o OCR entrega) quando o global tem
+  // "Depreciações Acumuladas" criava uma quase-duplicata (13/08/2026; há 16
+  // pares só de acento no dicionário real).
+  const camadaGlobal = await prisma.accountDictionary.findMany({
+    where: { userId: null, companyId: null, tipo: row.tipo },
+    select: { id: true, nomeOriginal: true, contaDestino: true, grupoConta: true, tipo: true },
+  });
+  const global = acharNaCamada(camadaGlobal, row.nomeOriginal, row.tipo, row.grupoConta);
   // revisao "promovida" na entrada GLOBAL = marcador para o sync do seed no boot:
   // decisão humana não é revertida nem apagada pelo arquivo oficial.
   if (global && global.contaDestino !== row.contaDestino) {
@@ -837,7 +858,7 @@ router.post("/validacao/:id/aprovar", async (req: AuthRequest, res: Response): P
       ? `Destino global alterado: "${global.contaDestino}" → "${row.contaDestino}" (promoção da empresa ${nomes.get(row.companyId)}).`
       : `Promovida ao global a partir da empresa ${nomes.get(row.companyId)}.`,
   });
-  res.json({ ok: true, entrada: atualizado });
+  res.json({ ok: true, entrada: atualizado, aviso: avisoOverrides });
 });
 
 // POST /dictionary/validacao/reavaliar — reroda o detector de conta PARTICULAR
@@ -908,14 +929,12 @@ router.post("/validacao/:id/aprovar-grupo", async (req: AuthRequest, res: Respon
     return;
   }
 
-  const globalGrupo = await prisma.accountDictionary.findFirst({
-    where: {
-      nomeOriginal: { equals: nomeGrupo, mode: "insensitive" },
-      tipo: row.tipo,
-      grupoConta: { equals: row.grupoConta, mode: "insensitive" },
-      userId: null, companyId: null,
-    },
+  // Mesma régua do /aprovar: identidade pela chave dobrada, não por equals.
+  const camadaGlobalGrupo = await prisma.accountDictionary.findMany({
+    where: { userId: null, companyId: null, tipo: row.tipo },
+    select: { id: true, nomeOriginal: true, contaDestino: true, grupoConta: true, tipo: true },
   });
+  const globalGrupo = acharNaCamada(camadaGlobalGrupo, nomeGrupo, row.tipo, row.grupoConta);
   if (globalGrupo && globalGrupo.contaDestino !== row.contaDestino) {
     await prisma.accountDictionary.update({ where: { id: globalGrupo.id }, data: { contaDestino: row.contaDestino, revisao: "promovida" } });
   } else if (!globalGrupo) {

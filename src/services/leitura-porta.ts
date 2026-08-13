@@ -192,6 +192,9 @@ async function carregarInsumosDaEmpresa(companyId: string | null): Promise<{
     const escopo = await resolverEscopoAcesso(empresa.userId);
     const entradas = await prisma.accountDictionary.findMany({
       where: whereCascataDicionarioAtiva(escopo.scopeUserIds, companyId),
+      // ORDEM DETERMINÍSTICA (13/08/2026): sem isto o empate entre duas linhas
+      // da MESMA camada é decidido pela ordem física do heap do Postgres.
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       select: { nomeOriginal: true, contaDestino: true, grupoConta: true, userId: true, companyId: true, tipo: true },
     });
     const porTipo = (tipo: string) => resolverCascataDicionario(entradas, tipo).map((e) => ({

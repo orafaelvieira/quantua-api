@@ -46,6 +46,38 @@ const nomeLimpo = (e: { nomeOriginal: string }): boolean =>
   limparCodigoDoNome(e.nomeOriginal) === e.nomeOriginal.trim();
 
 /**
+ * CHAVE DE IDENTIDADE do dicionário, por extenso (13/08/2026): código do plano
+ * FORA, caixa FORA, acento FORA, sinal "(-)" DENTRO (é conta redutora). É a
+ * régua que decide se duas linhas são A MESMA conta.
+ *
+ * Nasceu porque o `mode: "insensitive"` do Prisma NÃO dobra acento — medido:
+ * `equals "Emprestimos" insensitive` não encontra "Empréstimos". O /aprovar
+ * procurava a global assim e, não achando a variante acentuada, criava uma
+ * quase-duplicata; no dicionário real há 16 pares que só diferem por acento.
+ */
+export const chaveIdentidade = (nome: string): string =>
+  limparCodigoDoNome(String(nome ?? ""))
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .toLowerCase().replace(/\s+/g, " ").trim();
+
+/**
+ * Acha, numa camada carregada em memória, a entrada que é A MESMA conta do nome
+ * dado — pela chave de identidade, nunca por `equals` do banco.
+ */
+export function acharNaCamada<T extends { nomeOriginal: string; grupoConta?: string | null; tipo?: string }>(
+  camada: T[], nome: string, tipo: string, grupoConta?: string | null
+): T | undefined {
+  const alvo = chaveIdentidade(nome);
+  const grupoAlvo = (grupoConta ?? "").toLowerCase().trim();
+  // Na DRE o grupoConta espelha o destino e NÃO discrimina identidade.
+  const exigeGrupo = tipo !== "DRE";
+  return camada.find((e) =>
+    (e.tipo ?? "BP") === tipo &&
+    chaveIdentidade(e.nomeOriginal) === alvo &&
+    (!exigeGrupo || (e.grupoConta ?? "").toLowerCase().trim() === grupoAlvo));
+}
+
+/**
  * Resolve a cascata: para cada (nomeOriginal, grupoConta) devolve UMA entrada —
  * a de maior prioridade de escopo. A ordem de entrada não importa.
  * `tipo` (opcional) filtra antes de resolver (BP e DRE têm dicionários próprios).

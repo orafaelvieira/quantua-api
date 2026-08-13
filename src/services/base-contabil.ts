@@ -81,6 +81,10 @@ export async function insumosDaBase(companyId: string, scopeUserIds: string[], d
   // acima; dicionário por agregado; modelos por versão ativa.
   const dictAgg = await prisma.accountDictionary.aggregate({
     where: whereCascataDicionarioAtiva(scopeUserIds, companyId),
+    // ORDEM DETERMINÍSTICA (13/08/2026): sem isto o empate entre duas linhas
+    // da MESMA camada é decidido pela ordem física do heap do Postgres — o mesmo
+    // IBR, refoldado duas vezes sem mudar insumo, podia trocar de destino.
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     _count: { _all: true },
     _max: { updatedAt: true },
   });
@@ -281,6 +285,10 @@ async function montarBaseContabilSemCache(
   // a mesma régua do /refold do IBR.
   const dictRowsBrutos = await prisma.accountDictionary.findMany({
     where: whereCascataDicionarioAtiva(scopeUserIds, companyId),
+    // ORDEM DETERMINÍSTICA (13/08/2026): sem isto o empate entre duas linhas
+    // da MESMA camada é decidido pela ordem física do heap do Postgres — o mesmo
+    // IBR, refoldado duas vezes sem mudar insumo, podia trocar de destino.
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: { nomeOriginal: true, contaDestino: true, grupoConta: true, userId: true, companyId: true, tipo: true },
   });
   const dictRows = [...resolverCascataDicionario(dictRowsBrutos, "BP"), ...resolverCascataDicionario(dictRowsBrutos, "DRE")];

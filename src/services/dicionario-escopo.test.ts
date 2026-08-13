@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolverCascataDicionario, prioridadeEscopo, whereCascataDicionario, situacaoDaCascata } from "./dicionario-escopo";
+import { resolverCascataDicionario, prioridadeEscopo, whereCascataDicionario, situacaoDaCascata, chaveIdentidade, acharNaCamada } from "./dicionario-escopo";
 
 const global_ = (nome: string, destino: string, grupo = "Ativo Circulante") =>
   ({ nomeOriginal: nome, contaDestino: destino, grupoConta: grupo, tipo: "BP", userId: null, companyId: null });
@@ -337,5 +337,26 @@ describe("redundante é PROVADO por simulação, não presumido", () => {
   it("entrada sozinha nunca é redundante — apagá-la tira a conta do mapa", () => {
     const s = situacaoDaCascata([ent("g1", "Caixa Geral", "Caixa e Equivalentes de Caixa", "g")]);
     expect(s.get("g1")).toEqual({ emUso: true, sobrepostaPor: null, redundante: false });
+  });
+});
+
+describe("chaveIdentidade e acharNaCamada — acento não separa contas", () => {
+  it("acento, caixa e código dobram; o sinal (-) fica", () => {
+    expect(chaveIdentidade("Empréstimos")).toBe(chaveIdentidade("EMPRESTIMOS"));
+    expect(chaveIdentidade("1.02.01 Empréstimos")).toBe(chaveIdentidade("Empréstimos"));
+    expect(chaveIdentidade("(-) Depreciação")).not.toBe(chaveIdentidade("Depreciação"));
+  });
+
+  it("acharNaCamada encontra a global acentuada a partir da grafia do OCR", () => {
+    const camada = [
+      { nomeOriginal: "Depreciações Acumuladas", contaDestino: "(-) Depreciação", grupoConta: "Ativo Não Circulante", tipo: "BP" },
+    ];
+    expect(acharNaCamada(camada, "Depreciacoes Acumuladas", "BP", "Ativo Não Circulante")?.contaDestino).toBe("(-) Depreciação");
+    expect(acharNaCamada(camada, "Depreciacoes Acumuladas", "BP", "Passivo Circulante")).toBeUndefined();
+  });
+
+  it("na DRE o grupoConta não discrimina identidade", () => {
+    const camada = [{ nomeOriginal: "Fretes", contaDestino: "Despesas com Vendas", grupoConta: "Despesas com Vendas", tipo: "DRE" }];
+    expect(acharNaCamada(camada, "FRETES", "DRE", "Outro Grupo Qualquer")).toBeDefined();
   });
 });
