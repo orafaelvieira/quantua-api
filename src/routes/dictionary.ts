@@ -8,6 +8,7 @@ import { avaliaBloqueioEstrutural } from "../services/conta-estrutural";
 import { prioridadeEscopo, situacaoDaCascata, whereCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
 import { avaliarContaParticular, grupoImediatoDoCaminho } from "../services/conta-particular";
 import { limparNomeConta } from "../services/nome-conta";
+import { avaliaValorNoNome } from "../services/valor-no-nome";
 
 const router = Router();
 router.use(requireAuth);
@@ -252,6 +253,9 @@ router.post("/", requireQuantua, async (req: AuthRequest, res: Response): Promis
     res.status(400).json({ error: "nomeOriginal, contaDestino e grupoConta são obrigatórios" });
     return;
   }
+  // Valor do documento dentro do nome = linha lida errada. Ver [valor-no-nome.ts].
+  const valorManual = avaliaValorNoNome(nomeOriginal);
+  if (valorManual.bloqueado) { res.status(422).json({ error: valorManual.motivo }); return; }
 
   const entry = await prisma.accountDictionary.create({
     data: {
@@ -423,6 +427,17 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
       const bloqueio = avaliaBloqueioEstrutural(entry.nomeOriginal, entry.contaDestino);
       if (bloqueio.bloqueado) {
         rejeitadas.push({ nomeOriginal: entry.nomeOriginal, contaDestino: entry.contaDestino, motivo: bloqueio.motivo! });
+        continue;
+      }
+      // TRAVA DO VALOR NO NOME: linha lida errada não vira chave de dicionário.
+      // Fica DENTRO do mesmo if do __IGNORAR__ de propósito — marcar a linha
+      // como ignorada não aprende chave nenhuma, e recusar o ignorar deixaria o
+      // analista sem saída: conta não classificada COM VALOR vira pendência em
+      // prontidao-geracao e o /generate recusa. A trava existe para proteger o
+      // dicionário, não para travar a entrega do IBR. Ver [valor-no-nome.ts].
+      const comValor = avaliaValorNoNome(entry.nomeOriginal);
+      if (comValor.bloqueado) {
+        rejeitadas.push({ nomeOriginal: entry.nomeOriginal, contaDestino: entry.contaDestino, motivo: comValor.motivo! });
         continue;
       }
     }
@@ -658,6 +673,10 @@ router.post("/validacao/:id/aprovar", async (req: AuthRequest, res: Response): P
     const bloqueio = avaliaBloqueioEstrutural(row.nomeOriginal, row.contaDestino);
     if (bloqueio.bloqueado) { res.status(422).json({ error: bloqueio.motivo }); return; }
   }
+
+  // Valor no nome NUNCA sobe ao global: a chave morreria no próximo exercício.
+  const valorAprovar = avaliaValorNoNome(row.nomeOriginal);
+  if (valorAprovar.bloqueado) { res.status(422).json({ error: valorAprovar.motivo }); return; }
 
   // TRAVA LGPD (2026-07-18): nome com cara de PARTICULAR (terceiro) não sobe ao
   // global sem confirmação consciente; CNPJ/CPF no nome NUNCA sobe (sem override).

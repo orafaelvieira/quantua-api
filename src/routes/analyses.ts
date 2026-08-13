@@ -2534,9 +2534,17 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, ...whereRecursoEmpresa(req) },
-    select: { companyId: true, dadosEstruturados: true, indicadorConfig: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true },
+    select: { companyId: true, dadosEstruturados: true, indicadorConfig: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true, status: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  // IBR CONCLUÍDO NÃO REFOLDA (13/08/2026, achado da revisão adversarial). Esta
+  // rota grava dadosEstruturados no fim — BP, DRE, indicadores, validação — e era
+  // a ÚNICA das oito rotas de escrita da análise sem a trava. O caminho real:
+  // alguém abre a árvore original de um IBR já assinado, clica em qualquer
+  // classificação, a tela dispara refold, e o número gravado passa a divergir do
+  // PDF que já está com o credor — com o status ainda "Concluída". Sem trilha e
+  // sem volta.
+  if (analysis.status === "Concluída") { res.status(409).json({ error: ERRO_CONCLUIDA_IMUTAVEL }); return; }
   enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
   const dados = analysis.dadosEstruturados as any;
   const arvoreBP = dados?.arvoreOriginalBP;
