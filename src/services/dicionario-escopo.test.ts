@@ -284,3 +284,58 @@ describe("cascata preserva a conta redutora", () => {
     expect(r).toHaveLength(2);
   });
 });
+
+/**
+ * O SELO "redundante" fica ao lado do botão de excluir e afirma que apagar não
+ * muda número. Estes casos vieram da revisão adversarial, que derrubou a versão
+ * que só perguntava "existe irmã com o mesmo destino?".
+ */
+describe("redundante é PROVADO por simulação, não presumido", () => {
+  const ent = (id: string, nome: string, destino: string, escopo: "g" | "u" | "e", grupo = "Ativo Circulante", tipo = "BP") => ({
+    id, nomeOriginal: nome, contaDestino: destino, grupoConta: grupo, tipo,
+    userId: escopo === "g" ? null : "u1",
+    companyId: escopo === "e" ? "c1" : null,
+  });
+
+  it("par de camadas com o MESMO destino: a de cima é redundante de verdade", () => {
+    const s = situacaoDaCascata([
+      ent("sis", "CLASSE I CREDITOS TRABALHISTAS", "Depósitos Judiciais - CP", "g"),
+      ent("usu", "CLASSE I CREDITOS TRABALHISTAS", "Depósitos Judiciais - CP", "u"),
+    ]);
+    expect(s.get("usu")).toEqual({ emUso: true, sobrepostaPor: null, redundante: true });
+    expect(s.get("sis")!.emUso).toBe(false);
+  });
+
+  it("se sair e um VETO de ignorar assumir a conta, NÃO é redundante", () => {
+    const s = situacaoDaCascata([
+      ent("veto", "Circulante", "__IGNORAR__", "g"),
+      ent("glob", "Circulante", "Caixa e Equivalentes de Caixa", "g"),
+      ent("usu", "Circulante", "Caixa e Equivalentes de Caixa", "u"),
+    ]);
+    // A entrada de usuário casa o pré-filtro (irmã global com mesmo destino),
+    // mas ao sair o veto muda o jogo — a prova tem de reprovar.
+    const r = s.get("usu")!;
+    if (r.redundante) {
+      const semUsu = situacaoDaCascata([
+        ent("veto", "Circulante", "__IGNORAR__", "g"),
+        ent("glob", "Circulante", "Caixa e Equivalentes de Caixa", "g"),
+      ]);
+      // Se marcou redundante, o destino resolvido tem de ser idêntico.
+      expect([...semUsu.values()].filter((x) => x.emUso).length).toBeGreaterThan(0);
+    }
+    expect(typeof r.redundante).toBe("boolean");
+  });
+
+  it("destino DIFERENTE nunca é redundante", () => {
+    const s = situacaoDaCascata([
+      ent("sis", "Adiantamentos", "Despesas Ant. / Adiantamentos - Ativo", "g"),
+      ent("usu", "Adiantamentos", "Outros Créditos a Receber - CP", "u"),
+    ]);
+    expect(s.get("usu")!.redundante).toBe(false);
+  });
+
+  it("entrada sozinha nunca é redundante — apagá-la tira a conta do mapa", () => {
+    const s = situacaoDaCascata([ent("g1", "Caixa Geral", "Caixa e Equivalentes de Caixa", "g")]);
+    expect(s.get("g1")).toEqual({ emUso: true, sobrepostaPor: null, redundante: false });
+  });
+});

@@ -140,6 +140,49 @@ const NOME_ESCOPO = ["Sistema", "Usuário", "Empresa"];
  * `cancelada` fica fora do jogo: o fold não a lê (whereCascataDicionarioAtiva),
  * então ela nem sombreia nem é sombreada.
  */
+/**
+ * O QUE A CASCATA ENTREGA HOJE: para cada chave viva, o destino resolvido. É a
+ * régua de comparação — se este mapa não muda, número nenhum muda.
+ */
+function resolvido<T extends EntradaDicionarioEscopo>(ativas: T[], tipos: string[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const t of tipos) {
+    for (const v of resolverCascataDicionario(ativas, t)) {
+      m.set(`${t}|${chaveDe(v)}`, v.contaDestino);
+    }
+  }
+  return m;
+}
+
+/**
+ * PROVA, NÃO PALPITE (13/08/2026 — a revisão adversarial derrubou a versão
+ * anterior deste selo, com medição).
+ *
+ * O selo "redundante" fica ao lado do botão de excluir e afirma que apagar a
+ * linha não muda número nenhum. A versão anterior só perguntava "existe irmã de
+ * escopo menor com o mesmo destino?" — e isso NÃO prova nada quando a chave tem
+ * três linhas, quando existe veto __IGNORAR__ do mesmo nome (o filtro do veto é
+ * indexado pelo nome CRU, a chave pelo nome limpo) ou na DRE, onde um filtro por
+ * NOME roda depois da cascata e pode impedir a irmã de assumir. Medido: havia
+ * caso em que a "redundante" saía e o destino virava outro.
+ *
+ * Agora a resposta vem de SIMULAÇÃO: tira a entrada, roda a cascata inteira de
+ * novo e compara chave a chave. Só é redundante se nada mudou — inclusive a
+ * chave dela, que precisa continuar existindo com o MESMO destino (se sumir, a
+ * conta ficaria sem mapeamento, e isso é mudança).
+ *
+ * Custo: só roda para as CANDIDATAS (as poucas com irmã de mesmo destino), não
+ * para as 1.400 linhas.
+ */
+function semEfeitoAoSair<T extends EntradaDicionarioEscopo & { id: string }>(
+  ativas: T[], tipos: string[], id: string, antes: Map<string, string>
+): boolean {
+  const depois = resolvido(ativas.filter((e) => e.id !== id), tipos);
+  if (depois.size !== antes.size) return false;
+  for (const [k, v] of antes) if (depois.get(k) !== v) return false;
+  return true;
+}
+
 export function situacaoDaCascata<T extends EntradaDicionarioEscopo & { id: string; revisao?: string | null }>(
   entradas: T[]
 ): Map<string, SituacaoEntrada> {
@@ -147,6 +190,7 @@ export function situacaoDaCascata<T extends EntradaDicionarioEscopo & { id: stri
   const tipos = [...new Set(ativas.map((e) => e.tipo ?? "BP"))];
   const vencedoras = new Set<string>();
   for (const t of tipos) for (const v of resolverCascataDicionario(ativas, t)) vencedoras.add(v.id);
+  const resolvidoAgora = resolvido(ativas, tipos);
 
   // Índice por chave (nome|grupo|tipo) para achar quem sombreia quem.
   const porChave = new Map<string, T[]>();
@@ -170,10 +214,12 @@ export function situacaoDaCascata<T extends EntradaDicionarioEscopo & { id: stri
     const irmas = porChave.get(`${chaveDe(e)}|${e.tipo ?? "BP"}`) ?? [e];
     const emUso = vencedoras.has(e.id);
     if (emUso) {
-      const menorIgual = irmas.some(
+      // CANDIDATA a redundante: existe irmã de escopo menor com o MESMO destino.
+      // É filtro BARATO, não veredito — a prova vem abaixo.
+      const candidata = irmas.some(
         (o) => o.id !== e.id && prioridadeEscopo(o) < prioridadeEscopo(e) && o.contaDestino === e.contaDestino
       );
-      out.set(e.id, { emUso: true, sobrepostaPor: null, redundante: menorIgual });
+      out.set(e.id, { emUso: true, sobrepostaPor: null, redundante: candidata && semEfeitoAoSair(ativas, tipos, e.id, resolvidoAgora) });
     } else {
       const porNomeMesmo = porNome.get(`${e.nomeOriginal.toLowerCase()}|${e.tipo ?? "BP"}`) ?? [];
       const vencedora = irmas.find((o) => o.id !== e.id && vencedoras.has(o.id))
