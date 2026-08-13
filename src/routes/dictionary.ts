@@ -7,6 +7,7 @@ import { DEFAULT_BP_MODEL, IGNORAR_DESTINO } from "../services/account-mapper";
 import { avaliaBloqueioEstrutural } from "../services/conta-estrutural";
 import { prioridadeEscopo, situacaoDaCascata, whereCascataDicionario, whereCascataDicionarioAtiva } from "../services/dicionario-escopo";
 import { avaliarContaParticular, grupoImediatoDoCaminho } from "../services/conta-particular";
+import { limparNomeConta } from "../services/nome-conta";
 
 const router = Router();
 router.use(requireAuth);
@@ -243,7 +244,9 @@ function getParentGroup(item: { classificacao: string; conta: string; nivel: num
 
 // POST /dictionary — add entry
 router.post("/", requireQuantua, async (req: AuthRequest, res: Response): Promise<void> => {
-  const { nomeOriginal, contaDestino, grupoConta, tipo } = req.body;
+  const { contaDestino, grupoConta, tipo } = req.body;
+  // Mesma porta, mesma régua do classify: o código do plano não entra no nome.
+  const nomeOriginal = typeof req.body.nomeOriginal === "string" ? limparNomeConta(req.body.nomeOriginal) : req.body.nomeOriginal;
 
   if (!nomeOriginal || !contaDestino || !grupoConta) {
     res.status(400).json({ error: "nomeOriginal, contaDestino e grupoConta são obrigatórios" });
@@ -405,6 +408,12 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
   const rejeitadas: Array<{ nomeOriginal: string; contaDestino: string; motivo: string }> = [];
   for (const entry of entries) {
     if (!entry.nomeOriginal || !entry.contaDestino || !entry.grupoConta) continue;
+    // O NOME ENTRA LIMPO NA PORTA (13/08/2026). O parser já não emite código do
+    // plano, mas a classificação vem da TELA — e a tela pode estar mostrando uma
+    // leitura antiga, ou o analista pode colar o nome com o código. Limpar aqui
+    // é o que impede a varredura retroativa de virar rotina eterna: o que entra
+    // hoje já entra na forma final. Ver [nome-conta.ts].
+    entry.nomeOriginal = limparNomeConta(entry.nomeOriginal);
     const tipoE = entry.tipo || "BP";
 
     // TRAVA ESTRUTURAL: conta de AGRUPAMENTO (ex.: "Exigível a Curto Prazo") não

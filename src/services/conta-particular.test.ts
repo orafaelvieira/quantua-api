@@ -107,3 +107,71 @@ describe("nome próprio não sobe ao dicionário global (garantia do dono)", () 
     expect(particular("Mútuos - Maria Aparecida")).toBe(true);
   });
 });
+
+/**
+ * CONTEXTO POBRE — o que a fila REALMENTE entrega (13/08/2026).
+ *
+ * Os testes acima alimentam o caminho IDEAL do documento ("… > EMPRÉSTIMOS A
+ * PESSOAS LIGADAS") e por isso ficavam verdes enquanto a produção deixava
+ * "G Belusso Transportes" esperando um clique em Aprovar: o caminho só é
+ * gravado quando vem com ">", e na maioria das linhas o detector recebia só
+ * "Ativo Circulante". Suíte verde com produção errada é o pior estado possível
+ * — daí este bloco repetir os mesmos casos com o contexto que existe de fato.
+ */
+describe("avaliarContaParticular — contexto POBRE (o que a fila entrega)", () => {
+  const casos: Array<[string, string | null, boolean, string]> = [
+    ["G Belusso Transportes", "Ativo Circulante", true, "iniciais de razão social"],
+    ["G Belusso Transportes", null, true, "sem contexto nenhum"],
+    ["Adiantamento de estoque - WG Armazéns", "Ativo Circulante", true, "iniciais na cauda"],
+    ["Mútuo J. Belusso", null, true, "inicial com ponto"],
+    ["Clientes - Móveis Silva", "Ativo Circulante", true, "nome próprio depois do separador"],
+  ];
+  for (const [nome, ctx, esperado, porque] of casos) {
+    it(`"${nome}" (${porque}) → particular=${esperado}`, () => {
+      expect(avaliarContaParticular(nome, ctx).particular).toBe(esperado);
+    });
+  }
+});
+
+describe("avaliarContaParticular — identificador de terceiro é bloqueio duro", () => {
+  it("número de processo judicial no nome nunca vai ao global", () => {
+    const r = avaliarContaParticular("4.03.02.01 PROCESSO 000014.0316758/2020", "Outras Receitas Operacionais");
+    expect(r.particular).toBe(true);
+    expect(r.bloqueioDuro).toBe(true);
+  });
+
+  it("número de conta bancária também", () => {
+    expect(avaliarContaParticular("Bradesco Ag.0049 C/C 0329707-1", "Ativo Circulante > BANCOS").bloqueioDuro).toBe(true);
+  });
+
+  it("o CÓDIGO do plano não é identificador de terceiro — é da própria empresa", () => {
+    expect(avaliarContaParticular("1.1.1.01.0001 Caixa Geral", "Ativo Circulante").particular).toBe(false);
+  });
+
+  it("dois números curtos separados não viram um longo", () => {
+    expect(avaliarContaParticular("Conta 1234 5678", "Ativo Circulante").particular).toBe(false);
+  });
+});
+
+describe("avaliarContaParticular — o que NÃO pode virar particular", () => {
+  const generico: Array<[string, string | null]> = [
+    ["Ganho Commodities - Contratos relizados", "Outras Receitas Operacionais"],
+    ["Emprestimos Pessoas Ligadas", "Passivo Circulante"],
+    ["Consignados Empregados", "Passivo Circulante"],
+    ["Créditos com Controladas - LP", "Ativo Não Circulante"],
+    ["Partes Relacionadas - Ativo", "Ativo Não Circulante"],
+    ["Lucro Líquido Atribuível aos Acionistas Controladores", "DRE"],
+    ["Participação dos Não Controladores", "DRE"],
+    ["Anuidades de Conselhos (CRC, CREA, OAB)", "Despesas"],
+    ["Ações Classe B Preferenciais", "Patrimônio Líquido"],
+    ["IR Diferido", "Ativo Não Circulante"],
+    ["Fornecedores Nacionais", "Passivo Circulante > FORNECEDORES"],
+    ["Duplicatas a Receber", "Ativo Circulante > CLIENTES"],
+    ["3.02.01.02 ( - ) ABATIMENTOS E DEVOLUÇÕES SOBRE VENDAS", "Deduções da Receita Bruta"],
+  ];
+  for (const [nome, ctx] of generico) {
+    it(`"${nome}" é conta de plano, não terceiro`, () => {
+      expect(avaliarContaParticular(nome, ctx).particular).toBe(false);
+    });
+  }
+});

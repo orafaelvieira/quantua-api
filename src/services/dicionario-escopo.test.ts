@@ -210,3 +210,39 @@ describe("situacaoDaCascata — DRE aponta o culpado mesmo com grupo diferente",
     expect(s.get("g1")).toEqual({ emUso: false, sobrepostaPor: "Empresa", redundante: false });
   });
 });
+
+describe("cascata ignora o código do plano — a entrada velha e a nova são a MESMA conta", () => {
+  const linha = (id: string, nome: string, destino: string, escopo: "g" | "e") => ({
+    id, nomeOriginal: nome, contaDestino: destino, grupoConta: "Outras Receitas Operacionais", tipo: "DRE",
+    userId: escopo === "g" ? null : "u1", companyId: escopo === "e" ? "c1" : null,
+  });
+
+  it("mesma conta com e sem código colapsa numa vencedora só — nas DUAS ordens", () => {
+    const velha = linha("v", "4.03.02.01 PROCESSO 000014.0316758/2020", "Outras Receitas Operacionais", "e");
+    const nova = linha("n", "PROCESSO 000014.0316758/2020", "Outras Receitas Não Operacionais", "e");
+    const a = resolverCascataDicionario([velha, nova], "DRE");
+    const b = resolverCascataDicionario([nova, velha], "DRE");
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+    // Vence a LIMPA, venha na ordem que vier — antes decidia a ordem do findMany.
+    expect(a[0].id).toBe("n");
+    expect(b[0].id).toBe("n");
+  });
+
+  it("escopo maior continua vencendo o nome limpo de escopo menor", () => {
+    const globalLimpa = linha("g", "PROCESSO 000014.0316758/2020", "Outras Receitas Operacionais", "g");
+    const empresaComCodigo = linha("e", "4.03.02.01 PROCESSO 000014.0316758/2020", "Outras Receitas Não Operacionais", "e");
+    const r = resolverCascataDicionario([globalLimpa, empresaComCodigo], "DRE");
+    expect(r).toHaveLength(1);
+    expect(r[0].id).toBe("e");
+  });
+
+  it("a tela marca a entrada com código como sem efeito", () => {
+    const s = situacaoDaCascata([
+      { ...linha("v", "4.03.02.01 PROCESSO 000014.0316758/2020", "Outras Receitas Operacionais", "e") },
+      { ...linha("n", "PROCESSO 000014.0316758/2020", "Outras Receitas Operacionais", "e") },
+    ]);
+    expect(s.get("n")!.emUso).toBe(true);
+    expect(s.get("v")!.emUso).toBe(false);
+  });
+});

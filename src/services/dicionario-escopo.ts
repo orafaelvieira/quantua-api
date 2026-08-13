@@ -11,6 +11,8 @@
  * contas), nunca automática.
  */
 
+import { limparNomeConta } from "./nome-conta";
+
 export interface EntradaDicionarioEscopo {
   nomeOriginal: string;
   contaDestino: string;
@@ -27,8 +29,21 @@ export function prioridadeEscopo(e: { userId: string | null; companyId: string |
   return 0;
 }
 
+/**
+ * A CHAVE IGNORA O CÓDIGO DO PLANO (13/08/2026). Desde que o `normalize` do
+ * account-mapper limpa os dois lados da comparação, a entrada VELHA
+ * ("4.03.02.01 PROCESSO …") e a NOVA ("PROCESSO …") casam as duas com a mesma
+ * conta do documento — e, em chaves diferentes, as duas sobreviviam à cascata.
+ * Quem ganhava passava a depender da ORDEM em que o banco devolveu as linhas:
+ * o mesmo IBR refoldado duas vezes podia trocar de destino. Colapsando na mesma
+ * chave, a cascata volta a decidir — e decide sempre igual.
+ */
 const chaveDe = (e: { nomeOriginal: string; grupoConta: string | null }): string =>
-  `${e.nomeOriginal.toLowerCase()}|${(e.grupoConta ?? "").toLowerCase()}`;
+  `${limparNomeConta(e.nomeOriginal).toLowerCase()}|${(e.grupoConta ?? "").toLowerCase()}`;
+
+/** Entre duas entradas do MESMO escopo, vence a que já está no formato limpo. */
+const nomeLimpo = (e: { nomeOriginal: string }): boolean =>
+  limparNomeConta(e.nomeOriginal) === e.nomeOriginal.trim();
 
 /**
  * Resolve a cascata: para cada (nomeOriginal, grupoConta) devolve UMA entrada —
@@ -44,7 +59,11 @@ export function resolverCascataDicionario<T extends EntradaDicionarioEscopo>(
     if (tipo !== undefined && (e.tipo ?? "BP") !== tipo) continue;
     const chave = chaveDe(e);
     const atual = vencedores.get(chave);
-    if (!atual || prioridadeEscopo(e) >= prioridadeEscopo(atual)) vencedores.set(chave, e);
+    if (!atual) { vencedores.set(chave, e); continue; }
+    const p = prioridadeEscopo(e), pa = prioridadeEscopo(atual);
+    // Escopo maior vence sempre. NO EMPATE, vence o nome já limpo — critério do
+    // próprio dado, não da ordem do array (que vinha de findMany sem orderBy).
+    if (p > pa || (p === pa && (nomeLimpo(e) || !nomeLimpo(atual)))) vencedores.set(chave, e);
   }
   let lista = [...vencedores.values()];
 
