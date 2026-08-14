@@ -561,7 +561,12 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
         // empresa ("particular"). O conhecimento genérico é promovível como
         // REGRA DE GRUPO pela fila das demais.
         const caminho = caminhoPorConta.get(`${entry.nomeOriginal.toLowerCase()}|${tipoE}`) ?? null;
-        const globalEquivalente = existentes.find((e) => e.companyId === null && e.userId === null);
+        // Global CANCELADA não é equivalente (13/08/2026, caso AOCP): depois da
+        // limpeza dos legados, "RECUPERAÇÃO JUDICIAL" cancelada no global ainda
+        // contava como "o global já mapeia" — a classificação virava LOCAL e
+        // nunca subia para a fila. Cancelada está fora da cascata ativa; para a
+        // régua da fila ela não existe.
+        const globalEquivalente = existentes.find((e) => e.companyId === null && e.userId === null && e.revisao !== "cancelada");
         const particular = avaliarContaParticular(entry.nomeOriginal, caminho ?? entry.grupoConta);
         const revisaoNova = globalEquivalente ? "local" : particular.particular ? "particular" : "pendente";
         const daEmpresaTodas = existentes.filter((e) => e.companyId === companyIdClassify);
@@ -590,7 +595,11 @@ router.post("/classify", async (req: AuthRequest, res: Response): Promise<void> 
           mudou = daEmpresa.contaDestino !== entry.contaDestino ||
             daEmpresa.revisao === "cancelada" ||
             duplicatas.length > 0 ||
-            (caminho !== null && !daEmpresa.grupoCaminho);
+            (caminho !== null && !daEmpresa.grupoCaminho) ||
+            // A régua da fila mudou desde a gravação (ex.: o global equivalente
+            // foi cancelado — "local" tem de virar "pendente"). Reconfirmar o
+            // mesmo destino recalcula; decisão humana já tomada não reabre.
+            (daEmpresa.revisao !== revisaoNova && ["local", "pendente", "particular"].includes(daEmpresa.revisao ?? ""));
           result = mudou
             ? await prisma.accountDictionary.update({
                 where: { id: daEmpresa.id },
@@ -863,6 +872,8 @@ router.get("/validacao", async (req: AuthRequest, res: Response): Promise<void> 
     ? await prisma.accountDictionary.findMany({
         where: {
           userId: null, companyId: null,
+          // Cancelada fora: mostrar um global que o fold não lê confunde a decisão.
+          AND: [{ OR: [{ revisao: null }, { revisao: { not: "cancelada" } }] }],
           OR: rows.map((r) => ({
             nomeOriginal: { equals: r.nomeOriginal, mode: "insensitive" as const },
             tipo: r.tipo,
