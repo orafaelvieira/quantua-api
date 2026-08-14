@@ -2988,15 +2988,27 @@ router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Respons
   }
   const newIndicadores = await buildIndicators(dados.bp, dados.dre, dados.periodos, rowsIBRDe(analysis.indicadorConfig), periodosBalanceteDe(dados));
 
-  // Preserve user overrides from old indicators
-  for (const newInd of newIndicadores) {
-    const oldInd = dados.indicadores?.find((i: any) => i.nome === newInd.nome);
-    if (oldInd?.overrides) {
-      newInd.overrides = oldInd.overrides;
-    }
-  }
-
+  // OVERRIDE NÃO SOBREVIVE AO RECÁLCULO (14/08/2026, regra do dono "indicador não
+  // se edita"): o valor manual era re-colado sobre o número novo e o botão
+  // "Recalcular" não mudava nada — foi assim que um YoY de 4,2e17% (resíduo de
+  // ponto flutuante já corrigido no motor) continuou na tela depois do conserto.
+  // Indicador é RESULTADO: corrigir se faz na origem. Os valores antigos ficam
+  // registrados na trilha, não no número que o cliente lê.
+  const overridesDescartados = (dados.indicadores ?? []).flatMap((i: any) =>
+    Object.entries(i?.overrides ?? {})
+      .filter(([, v]) => v !== null && v !== undefined)
+      .map(([periodo, valor]) => ({ indicador: i.nome, periodo, valor })),
+  );
   dados.indicadores = newIndicadores;
+  if (overridesDescartados.length > 0) {
+    void registrarAuditoria({
+      userId: req.userId!, analysisId: id, entity: "analysis", entityId: id,
+      field: "recálculo de indicadores — overrides manuais descartados",
+      before: { overrides: overridesDescartados.slice(0, 50) },
+      after: { fonte: "motor determinístico" },
+      reason: "A aba Indicadores é somente leitura desde 14/08/2026: o número exibido é o do motor.",
+    });
+  }
 
   await prisma.analysis.update({
     where: { id },
