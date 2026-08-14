@@ -32,6 +32,12 @@ const RAIZES = [
 ];
 /** Os balanços da Dunamys chegaram por download e são o caso vivo do relato. */
 const AVULSOS = [
+  // Caso Clorofila (13/08/2026): PL como raiz própria + DRE encerrada dentro do
+  // grupo. O IBR concluiu com o PL inteiro dentro da DRE — estes três ficam na
+  // bancada para sempre. Aceite: DRE 739.305,59 / 5.357.628,00 / 4.442.063,36.
+  "C:/Users/Emerson/Downloads/BALANCETE ANALITICO 2023.pdf",
+  "C:/Users/Emerson/Downloads/BALANCETE ANALITICO 2024.pdf",
+  "C:/Users/Emerson/Downloads/BALANCETE FINAL ACUMULADO 2025.pdf",
   "C:/Users/Emerson/Downloads/1786394714942-BP 22.pdf",
   "C:/Users/Emerson/Downloads/1786394738103-BP 23.pdf",
   "C:/Users/Emerson/Downloads/1786394744376-BP 24.pdf",

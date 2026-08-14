@@ -111,7 +111,7 @@ export interface ConversaoBalancete {
  * fora do BP e da DRE. Detectado por ARITMÉTICA em converterBalancete, nunca
  * por nome — ver o bloco de quatro condições lá.
  */
-export type TipoGrupo = "ativo" | "passivo" | "resultado" | "apuracao" | "espelho";
+export type TipoGrupo = "ativo" | "passivo" | "pl" | "resultado" | "apuracao" | "espelho";
 
 const normalizar = (s: string): string =>
   s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
@@ -146,6 +146,14 @@ function tipoDoGrupo(nome: string, folhas: LinhaBalancete[]): TipoGrupo {
   const n = normalizar(nome);
   if (n.startsWith("ATIVO")) return "ativo";
   if (n.startsWith("PASSIVO")) return "passivo";
+  // PATRIMÔNIO LÍQUIDO COMO RAIZ PRÓPRIA (13/08/2026, caso Clorofila — o pior
+  // defeito do dia): o plano imprimia "Patrimonio Liquido" como raiz de nível 1
+  // e o roteador, que só conhecia ATIVO*/PASSIVO*, mandava o PL INTEIRO para a
+  // DRE. Capital social virava "Outras Receitas Não Operacionais", lucros
+  // acumulados viravam "receita", e o fechamento (A − P = resultado) provava
+  // uma tautologia: o "lucro líquido" do relatório era o PL total. PL é lado
+  // credor do BALANÇO — o balde do BP já separa PC/PNC/PL pelo nome.
+  if (/^PATRIMONIO\b|^SITUACAO LIQUIDA\b|^PL\b/.test(n)) return "pl";
   // Apuração: grupo de encerramento técnico — nunca vira linha de DRE.
   // Casos reais: "CONTAS DE APURAÇÃO" (Domínio), "RESULTADO LÍQUIDO DO
   // EXERCÍCIO" (Belagro) e grupo "RESULTADO" cujas folhas são todas de
@@ -533,8 +541,30 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
     gruposExcluidos.push({ nome: g.no.linha.nome, contas: folhas.length, movimento: arred(movimento) });
   }
 
+  // SUPRESSÃO EXIGE QUE A DEMONSTRAÇÃO CONTINUE EXISTINDO (13/08/2026, caso
+  // Clorofila). O balancete pós-encerramento tem a assinatura aritmética EXATA
+  // do espelho: raiz zera nos dois retratos e as contas se cancelam — porque o
+  // resultado foi transferido ao PL por uma perna interna. Só que ali dentro
+  // estava a DRE VERDADEIRA (92 contas: resultado operacional, financeiro,
+  // IRPJ/CSLL) e o veto a descartou inteira; o PL mal-roteado virou "a DRE".
+  // Regra nova: se o veto deixar o documento SEM NENHUM grupo de resultado, o
+  // candidato a espelho volta a ser resultado — descartar a única DRE possível
+  // nunca é limpeza, é mutilação. (No caso Budel, que motivou o veto, os grupos
+  // de resultado reais continuavam existindo — lá o veto segue valendo.)
+  if (gruposExcluidos.length > 0 && !grupos.some((g) => g.tipo === "resultado")) {
+    for (const g of grupos) {
+      if (g.tipo !== "espelho") continue;
+      g.tipo = "resultado";
+      avisos.push(
+        `"${g.no.linha.nome}" tem a forma de circuito fechado, mas é o ÚNICO grupo de resultado do documento — mantido como DRE (exercício encerrado dentro do próprio grupo). A perna de encerramento é identificada por prova cruzada com o PL.`,
+      );
+    }
+    gruposExcluidos.length = 0;
+  }
+
   const ativos = grupos.filter((g) => g.tipo === "ativo");
   const passivos = grupos.filter((g) => g.tipo === "passivo");
+  const patrimonios = grupos.filter((g) => g.tipo === "pl");
   const resultados = grupos.filter((g) => g.tipo === "resultado");
   const espelhos = grupos.filter((g) => g.tipo === "espelho");
   if (ativos.length === 0 || passivos.length === 0) {
@@ -559,10 +589,17 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
   // inteira trocaria de regime (saldo → movimento, e `derivarDREMensal` junto).
   const folhasResultadoTodas = [...folhasResultado, ...espelhos.flatMap((g) => folhasDe(g.no))];
   const saldosResultadoZerados = folhasResultadoTodas.every((f) => Math.abs(f.saldoAtual) < TOLERANCIA);
-  const exercicioEncerrado = saldosResultadoZerados && Math.abs(ativoAtual - passivoAtual) <= TOLERANCIA;
+  const exercicioEncerrado = saldosResultadoZerados && Math.abs(ativoAtual - passivoAtual - (patrimonios.length ? arred(patrimonios.flatMap((g) => folhasDe(g.no)).reduce((s2, f) => s2 + assinadoDRE(f, "saldoAtual"), 0)) : 0)) <= TOLERANCIA;
 
   // ── P2: fechamento ──
-  let delta = arred(ativoAtual - passivoAtual - (exercicioEncerrado ? 0 : resultadoAcumulado));
+  // O PL entra ASSINADO, nunca em módulo (13/08/2026): PL devedor (prejuízo
+  // acumulado maior que o capital) existe no corpus — 6 balancetes reais
+  // quebraram quando o PL foi somado com Math.abs no lado passivo. A soma
+  // assinada reproduz exatamente a aritmética que valia quando essas folhas
+  // eram contadas no "resultado acumulado".
+  const plAssinado = arred(
+    patrimonios.flatMap((g) => folhasDe(g.no)).reduce((s2, f) => s2 + assinadoDRE(f, "saldoAtual"), 0));
+  let delta = arred(ativoAtual - passivoAtual - plAssinado - (exercicioEncerrado ? 0 : resultadoAcumulado));
 
   // DESTINAÇÃO DE RESULTADO com saldo vivo (caso EXTRAMED, 01/08/2026): nos
   // sistemas do corpus original o grupo de apuração é DUPLICATA do resultado
@@ -688,7 +725,7 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
   const arvoreBP: ArvoreOriginalBP = {};
   const montarBPPeriodo = (campo: "saldoAtual" | "saldoAnterior", periodo: string): void => {
     const gruposBP: Record<string, BPN3Item[]> = {};
-    for (const g of [...ativos, ...passivos]) {
+    for (const g of [...ativos, ...passivos, ...patrimonios]) {
       const ladoAtivo = g.tipo === "ativo";
       const n2s = g.no.filhos.length ? g.no.filhos : [g.no];
       for (const n2 of n2s) {
@@ -736,12 +773,48 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
 
   const arvoreDRE: ArvoreOriginalDRE = {};
   if (periodoBP) {
-    const secoes: DRESecaoItem[] = [];
+    let secoes: DRESecaoItem[] = [];
     for (const g of resultados) {
       const base = g.no.filhos.length ? g.no.filhos : [g.no];
       for (const n2 of base) {
         const item = paraDREItem(n2, exercicioEncerrado);
         if (Math.abs(item.valor) > 0.004 || (item.filhos?.length ?? 0) > 0) secoes.push(item);
+      }
+    }
+
+    // PERNA DE ENCERRAMENTO IDENTIFICADA POR PROVA CRUZADA COM O PL (13/08/2026,
+    // caso Clorofila). Num grupo de resultado que FECHA EM ZERO, uma das seções
+    // é a transferência do lucro para o PL — mantê-la zera a DRE inteira. Nome
+    // não decide ("TRANSFERÊNCIAS" foi vetado como critério no caso Budel): a
+    // perna é a seção cuja REMOÇÃO faz o restante bater, ao centavo, com o
+    // "Resultado do Período" que o PRÓPRIO DOCUMENTO declara no PL. Se nenhuma
+    // seção satisfaz a prova, nada é removido e o aviso fica — supressão sem
+    // prova é proibida pela regra-mestra.
+    const somaSecoes = arred(secoes.reduce((soma, x) => soma + x.valor, 0));
+    if (secoes.length >= 2 && Math.abs(somaSecoes) <= TOLERANCIA) {
+      const folhasBalanco = [...ativos, ...passivos, ...patrimonios].flatMap((g) => folhasDe(g.no));
+      // A folha-âncora varia por sistema: "Resultado do Período", "Resultado
+      // APURADO NO Período", "Resultado do Exercício". "Lucros/Resultados
+      // ACUMULADOS" fica de fora — é estoque de anos anteriores, não o resultado
+      // do período que a DRE tem de reproduzir.
+      const resultadoDoPL = folhasBalanco.find((l) => {
+        const nm = normalizar(l.nome);
+        return /\bRESULTADO\s+(\w+\s+)?([DN][OEA]S?\s+)?(PERIODO|EXERCICIO)\b/.test(nm) && !/ACUMUL/.test(nm);
+      });
+      if (resultadoDoPL) {
+        const alvo = arred(Math.abs(resultadoDoPL.saldoAtual));
+        const perna = secoes.find((sec) => Math.abs(arred(somaSecoes - sec.valor) - (sec.valor < 0 ? alvo : -alvo)) <= TOLERANCIA
+          || Math.abs(Math.abs(arred(somaSecoes - sec.valor)) - alvo) <= TOLERANCIA);
+        if (perna) {
+          secoes = secoes.filter((sec) => sec !== perna);
+          avisos.push(
+            `"${perna.nome}" (${fmt(perna.valor)}) é a perna de ENCERRAMENTO do resultado — removida da DRE por prova cruzada: sem ela, a DRE soma ${fmt(arred(secoes.reduce((soma, x) => soma + x.valor, 0)))}, idêntico ao "Resultado do Período" declarado no PL do documento (${fmt(resultadoDoPL.saldoAtual)}).`,
+          );
+        } else {
+          avisos.push(
+            `O grupo de resultado fecha em zero (exercício encerrado dentro do grupo), mas nenhuma seção isolada reproduz o Resultado do Período do PL (${fmt(resultadoDoPL.saldoAtual)}) — NADA foi removido; a DRE precisa de revisão manual.`,
+          );
+        }
       }
     }
     arvoreDRE[periodoBP] = secoes;
@@ -754,7 +827,7 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
     // GROSSA (caso Belagro 2023: derivado −85,9 mi × PL +1,3 mi), não ruído.
     if (exercicioEncerrado && temSaldosAnteriores(b.linhas)) {
       const derivado = arred(secoes.reduce((s, x) => s + x.valor, 0));
-      const contasResultadoPL = [...ativos, ...passivos]
+      const contasResultadoPL = [...ativos, ...passivos, ...patrimonios]
         .flatMap((g) => folhasDe(g.no))
         .filter((l) => {
           const n = normalizar(l.nome);

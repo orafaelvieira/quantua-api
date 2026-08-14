@@ -8,7 +8,7 @@ import { normalizeDRESigns, recomputeDRESubtotals, mapAccountToBPGroup, mapAccou
 import { construirArvoreBPporIndentacao, linhasParaTextoIndentado } from "./bp-tree-indent";
 import { construirArvoreDREporIndentacao } from "./dre-tree-indent";
 import type { ParsedDocument, ExtractedRow } from "./parser";
-import { limparNomeConta } from "./nome-conta";
+import { limparNomeConta, ehContaDePatrimonio } from "./nome-conta";
 
 const client = new Anthropic({ apiKey: env.anthropicApiKey });
 const AI_MODEL = "claude-sonnet-4-6";        // visão (lê o PDF) — caro
@@ -295,6 +295,7 @@ const DESP_OP_DESTINOS = new Set([
  *  TECHWAY/AçãoCorretora/OCEANDROP). E "Impostos s/ vendas…" é DEDUÇÃO da receita. */
 function fallbackSemanticoDRE(nome: string): string | null {
   const n = normNome(nome);
+  if (ehContaDePatrimonio(nome)) return null;
   if (/^\(?\s*-?\s*\)?\s*custos?\b/.test(n) && !/despes/.test(n)) return "Custo Operacional";
   if (/\bcustos? (de|dos|da|das|com) /.test(n) && !/despes/.test(n)) return "Custo Operacional";
   // Impostos sobre vendas/serviços/faturamento têm linha canônica PRÓPRIA —

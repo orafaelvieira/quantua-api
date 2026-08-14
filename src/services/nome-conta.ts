@@ -62,3 +62,21 @@ export function limparNomeConta(s: string): string {
   t = t.replace(/\s*R\$\s*$/, "").trim();
   return t.length >= 2 ? t : s.replace(/\s*R\$\s*$/, "").trim();
 }
+
+const chaveSimples = (s: string): string =>
+  s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+
+/**
+ * VOCABULÁRIO DE PATRIMÔNIO — conta com esses nomes é BALANÇO, nunca DRE
+ * (13/08/2026, caso Clorofila: com o PL mal-roteado para a seção de resultado,
+ * "Capital Subscrito" caiu no fallback e virou "Outras Receitas Não
+ * Operacionais"; lucros acumulados viraram "receita" — e o IBR concluiu com o
+ * PL inteiro dentro da DRE). O fold jamais decide isso sozinho: devolve null,
+ * a conta fica NÃO MAPEADA, vira pendência e trava a geração até um humano
+ * olhar. Errado e parado > errado e assinado.
+ */
+export function ehContaDePatrimonio(nome: string): boolean {
+  const n = chaveSimples(nome);
+  return /capital (social|subscrito|realizado|integralizad|a integralizar)|^capital (social|realizado|subscrito)?$|lucros? (ou prejuizos? )?acumulad|prejuizos? acumulad|reserva (legal|de lucro|de capital|estatutaria)|patrimonio liquido|ajustes? de avaliacao patrimonial|acoes em tesouraria/.test(n);
+}
+

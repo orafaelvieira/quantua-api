@@ -14,6 +14,8 @@
  *      → o botão "Gerar análise" acende sozinho; sem beco sem saída).
  */
 
+import { ehContaDePatrimonio } from "./nome-conta";
+
 export interface ProntidaoGeracao {
   pronta: boolean;
   /** O que BLOQUEIA a geração — lista acionável exibida ao analista. */
@@ -75,6 +77,24 @@ export function avaliarProntidaoGeracao(dados: unknown): ProntidaoGeracao {
   const citar = (as: Array<{ mensagem: string; detalhes?: string }>, max = 3) =>
     as.slice(0, max).map((a) => `${a.mensagem}${a.detalhes ? ` — ${a.detalhes}` : ""}`).join(" · ")
     + (as.length > max ? ` (e mais ${as.length - max})` : "");
+
+  // 1b) CONTA DE PATRIMÔNIO DENTRO DA DRE — pendência DURA (13/08/2026, caso
+  //     Clorofila): o IBR concluiu com "Capital Subscrito" como receita não
+  //     operacional e lucros acumulados como receita — o "lucro líquido" do
+  //     relatório era o PL total. Toda prova aritmética passou; o que faltava
+  //     era esta régua SEMÂNTICA. Capital, reservas e lucros acumulados são
+  //     BALANÇO: aparecerem na DRE significa leitura errada na origem, e
+  //     geração fica travada até a leitura ser corrigida.
+  {
+    const contasPL = (Array.isArray(d.dre) ? d.dre : [])
+      .filter((l: any) => l && !l.subtotal && Object.values((l.valores ?? {}) as Record<string, number>).some((x) => Math.abs(Number(x) || 0) > 0.005) && ehContaDePatrimonio(String(l.conta ?? "")))
+      .map((l: any) => `"${l.conta}"`);
+    if (contasPL.length > 0) {
+      pendencias.push(
+        `A DRE contém ${contasPL.length} conta(s) de PATRIMÔNIO (${contasPL.slice(0, 3).join(", ")}${contasPL.length > 3 ? ", …" : ""}) — capital, reservas e lucros acumulados são contas de balanço; na DRE isso significa leitura errada do documento. Reprocesse a extração ou corrija a classificação na auditoria antes de gerar.`,
+      );
+    }
+  }
 
   // 2) EQUAÇÃO PATRIMONIAL (Ativo = Passivo em todos os períodos)
   if (temBP && v.equacaoPatrimonial === false) {
