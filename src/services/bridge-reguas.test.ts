@@ -129,6 +129,18 @@ describe("buildPontesVariacao com régua", () => {
     expect(p.disponiveis.some((x) => x.regua === "mes")).toBe(true);
   });
 
+  it("o aviso de ponto a ponto fala em ANO, não na data de fechamento", () => {
+    const periodos = ["31/12/2022", "31/12/2023", A2024];
+    const dre = [
+      dreL("Receita Bruta", false, { "31/12/2022": 750, "31/12/2023": 950, [A2024]: 1300 }),
+      dreL("Receita Líquida", true, { "31/12/2022": 700, "31/12/2023": 900, [A2024]: 1200 }),
+      dreL("EBITDA", true, { "31/12/2022": 200, "31/12/2023": 300, [A2024]: 480 }),
+    ];
+    const p = buildPontesVariacao({ dre, periodos }, { par: { de: "31/12/2022", ate: A2024 } })!;
+    expect(p.avisoPar).toContain("entre 2022 e 2024");
+    expect(p.avisoPar).not.toContain("31/12/"); // data de fechamento é chave, não texto
+  });
+
   it("par não comparável pedido pelo analista é recusado com motivo", () => {
     const p = buildPontesVariacao(cenarioMensal(), { par: { de: A2024, ate: M05 } })!;
     expect(p.par).toBeNull();

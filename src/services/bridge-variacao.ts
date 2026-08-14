@@ -560,6 +560,18 @@ export interface ParComparacao {
   saltaPeriodos: boolean;
 }
 
+/**
+ * RÓTULO DE PERÍODO nas mensagens do motor (regra do dono): exercício vira
+ * "2024", mês vira "05/2026" — a data de fechamento é chave do dado, não
+ * linguagem de relatório. Sem isto, o aviso na tela dizia "entre 31/12/2022 e
+ * 31/12/2024" ao lado de um seletor que já mostrava "2022 → 2024".
+ */
+export const rotuloPeriodoSrv = (p: string, ehMes = false): string => {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec((p ?? "").trim());
+  if (!m) return (p ?? "").trim();
+  return ehMes || m[2] !== "12" ? `${m[2]}/${m[3]}` : m[3]!;
+};
+
 const mesAno = (p: string): { mes: number; ano: number } | null => {
   const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(p.trim());
   if (m) return { mes: Number(m[2]), ano: Number(m[3]) };
@@ -726,10 +738,13 @@ export function buildPontesVariacao(
   //    ponto a ponto e não descreve o caminho entre eles;
   // 2. o par não alcança o fim da série (só quando o analista NÃO pediu o par —
   //    pedido explícito não precisa se justificar).
+  const ehMes = escolhido.regua !== "exercicio";
+  const rDe = rotuloPeriodoSrv(de, ehMes);
+  const rAte = rotuloPeriodoSrv(ate, ehMes);
   const avisoPar = escolhido.saltaPeriodos
-    ? `Comparação ponto a ponto entre ${de} e ${ate}: há período(s) entre os dois que não entram nesta conta — a variação mostra a diferença entre os dois retratos, não o caminho percorrido.`
+    ? `Comparação ponto a ponto entre ${rDe} e ${rAte}: há período(s) entre os dois que não entram nesta conta — a variação mostra a diferença entre os dois retratos, não o caminho percorrido.`
     : !opts?.par && ate !== ultimo
-      ? `Decomposição do par ${de} → ${ate}: o período mais recente (${ultimo}) não entra nesta comparação — só se compara janela igual com janela igual.`
+      ? `Decomposição do par ${rDe} → ${rAte}: o período mais recente (${rotuloPeriodoSrv(ultimo, !!ytd.has(ultimo))}) não entra nesta comparação — só se compara janela igual com janela igual.`
       : null;
 
   const fc = dados.fluxoCaixa ?? null;
