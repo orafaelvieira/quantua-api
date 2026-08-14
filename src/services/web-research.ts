@@ -32,15 +32,72 @@ export interface WebResearchResult {
   custo: CustoWebResearch;
 }
 
-function prompt(empresa: { razaoSocial: string; setor?: string | null; site?: string | null }): string {
-  const site = empresa.site ? ` Site: ${empresa.site}.` : "";
-  const setor = empresa.setor ? ` Setor: ${empresa.setor}.` : "";
+/**
+ * IDENTIDADE DA EMPRESA — o que o CADASTRO já sabe (Receita Federal via consulta
+ * de CNPJ). Entra no prompt como FATO, não como pergunta.
+ *
+ * Sem isto (até 14/08/2026) a pesquisa recebia só a razão social e o setor, e o
+ * prompt ainda MANDAVA pesquisar "dados cadastrais" na web — dado que já está no
+ * banco. O resultado chegou ao cliente: "há incerteza sobre a identidade
+ * jurídica exata, pois existem várias empresas com grafias parecidas... confirme
+ * o CNPJ e a razão social antes de fechar conclusões". Numa entrega assinada,
+ * isso não é ressalva: é o relatório dizendo que não sabe de quem está falando.
+ *
+ * NÃO inclui o quadro societário (nomes de sócios): dado pessoal de terceiro não
+ * viaja para prompt de IA nem para documento do cliente.
+ */
+export interface IdentidadeEmpresa {
+  razaoSocial: string;
+  nomeFantasia?: string | null;
+  cnpj?: string | null;
+  setor?: string | null;
+  porte?: string | null;
+  municipio?: string | null;
+  uf?: string | null;
+  cnae?: string | null;
+  cnaeDescricao?: string | null;
+  naturezaJuridica?: string | null;
+  dataInicioAtividade?: string | null;
+  situacaoCadastral?: string | null;
+  capitalSocial?: number | null;
+  regimeTributario?: string | null;
+}
+
+/** Bloco de identidade em texto — as linhas que o cadastro tem, nada inventado. */
+export function blocoIdentidade(e: IdentidadeEmpresa): string {
+  const linhas: string[] = [`- Razão social: ${e.razaoSocial}`];
+  const add = (rot: string, v: unknown): void => {
+    if (v === null || v === undefined || v === "") return;
+    linhas.push(`- ${rot}: ${v}`);
+  };
+  add("Nome fantasia", e.nomeFantasia);
+  add("CNPJ", e.cnpj);
+  add("Atividade principal (CNAE)", e.cnae && e.cnaeDescricao ? `${e.cnae} — ${e.cnaeDescricao}` : e.cnaeDescricao ?? e.cnae);
+  add("Setor (classificação do IBR)", e.setor);
+  add("Município/UF", e.municipio && e.uf ? `${e.municipio}/${e.uf}` : e.municipio ?? e.uf);
+  add("Natureza jurídica", e.naturezaJuridica);
+  add("Início das atividades", e.dataInicioAtividade);
+  add("Situação cadastral", e.situacaoCadastral);
+  add("Capital social", typeof e.capitalSocial === "number" ? `R$ ${e.capitalSocial.toLocaleString("pt-BR")}` : null);
+  add("Regime tributário", e.regimeTributario);
+  add("Porte", e.porte);
+  return linhas.join("\n");
+}
+
+function prompt(empresa: IdentidadeEmpresa): string {
+  const temCnpj = !!(empresa.cnpj && empresa.cnpj.replace(/\D/g, "").length === 14);
   return `Você é analista de um Independent Business Review (IBR). Pesquise na web informações ATUAIS e relevantes sobre a empresa abaixo para subsidiar a análise estratégica (diagnóstico financeiro/operacional e posicionamento).
 
-Empresa: "${empresa.razaoSocial}".${setor}${site}
+IDENTIDADE CONFIRMADA — dados do cadastro do cliente, conferidos na Receita Federal. São FATO:
+${blocoIdentidade(empresa)}
+
+REGRA INEGOCIÁVEL SOBRE A IDENTIDADE:
+- A empresa É esta. NÃO questione, NÃO peça para confirmar CNPJ ou razão social, NÃO escreva ressalvas do tipo "há incerteza sobre a identidade" ou "existem empresas com nomes parecidos". Esse relatório é assinado e entregue ao cliente que É essa empresa: duvidar de quem ele é seria constrangedor e falso.
+- USE os dados acima para direcionar a busca${temCnpj ? " (o CNPJ é o desempatador quando houver homônimos)" : ""}: procure pela razão social E pelo nome fantasia, no município/UF do cadastro e no ramo do CNAE.
+- Encontrou resultados de OUTRA empresa de nome parecido (outro CNPJ, outro estado, outro ramo)? DESCARTE em silêncio e siga com o que sobrar. Não relate a confusão.
 
 Organize o resultado EXATAMENTE nestas 6 seções NUMERADAS, nesta ordem:
-1) Dados cadastrais e estrutura societária
+1) A empresa na web — presença, marcas, unidades e o que ela diz de si
 2) Fatos relevantes e movimentos recentes
 3) Posicionamento de mercado
 4) Concorrentes
@@ -48,15 +105,16 @@ Organize o resultado EXATAMENTE nestas 6 seções NUMERADAS, nesta ordem:
 6) Alertas para o IBR
 
 FORMATAÇÃO (siga à risca):
-- SEM preâmbulo. Comece DIRETO no título "1) Dados cadastrais e estrutura societária".
+- SEM preâmbulo. Comece DIRETO no título "1) A empresa na web — presença, marcas, unidades e o que ela diz de si".
 - Cada título de seção em NEGRITO com o número, no formato **1) Título da seção** (markdown). NÃO use # nem ## em hipótese alguma.
-- Sob cada título, escreva os pontos como bullets começando com "- " SEGUIDO do texto NA MESMA LINHA (ex.: "- Razão social: ..."). NUNCA deixe uma linha contendo só "-" ou só um marcador sem texto.
+- Sob cada título, escreva os pontos como bullets começando com "- " SEGUIDO do texto NA MESMA LINHA. NUNCA deixe uma linha contendo só "-" ou só um marcador sem texto.
 - NÃO use "---" nem qualquer linha separadora entre seções.
 - Frases curtas e objetivas. NO MÁXIMO uma linha em branco entre seções; nunca pule várias linhas seguidas.
 - Texto total ≤ 380 palavras. Cite fonte/data quando relevante.
 
 REGRAS DE CONTEÚDO:
-- Se NÃO encontrar informação confiável sobre a empresa específica, diga isso na seção correspondente e foque no contexto setorial.
+- NÃO repita o bloco de identidade acima (o relatório já traz esses dados) — a seção 1 é sobre o que a WEB acrescenta: site, redes, marcas, unidades, catálogo, imprensa.
+- Achou pouco sobre a empresa? Escreva "Pouca presença digital encontrada" na seção e vá para o contexto SETORIAL — a escassez é sobre a web, NUNCA sobre a identidade da empresa.
 - NÃO invente fatos. Prefira fontes primárias (site da empresa, imprensa, órgãos reguladores).`;
 }
 
@@ -185,7 +243,7 @@ export async function researchSectorBenchmarksWeb(
 
 /** Pesquisa web sobre a empresa. Null se desligado/indisponível/erro (best-effort). */
 export async function researchCompanyWeb(
-  empresa: { razaoSocial: string; setor?: string | null; site?: string | null },
+  empresa: IdentidadeEmpresa,
   modelKey?: string | null,
 ): Promise<WebResearchResult | null> {
   if (process.env.RESEARCH_WEB_ATIVO === "false") return null;

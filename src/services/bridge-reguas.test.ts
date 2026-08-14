@@ -70,6 +70,36 @@ describe("paresComparaveis — o que pode ser comparado com o quê", () => {
     expect(pares).toHaveLength(1);
     expect(pares[0]!.regua).toBe("exercicio");
   });
+
+  it("PAR NÃO SEQUENCIAL existe (2022 × 2024) e vem marcado como salto", () => {
+    const periodos = ["31/12/2022", "31/12/2023", A2024];
+    const dre = [dreL("Receita Líquida", true, { "31/12/2022": 700, "31/12/2023": 900, [A2024]: 1200 })];
+    const pares = paresComparaveis({ dre, periodos });
+    const distante = pares.find((p) => p.de === "31/12/2022" && p.ate === A2024);
+    expect(distante).toBeTruthy();
+    expect(distante!.saltaPeriodos).toBe(true);
+    // Os consecutivos continuam existindo e NÃO são salto.
+    expect(pares.find((p) => p.de === "31/12/2023" && p.ate === A2024)?.saltaPeriodos).toBe(false);
+  });
+
+  it("o padrão nunca é um par que salta períodos", () => {
+    const periodos = ["31/12/2022", "31/12/2023", A2024];
+    const dre = [
+      dreL("Receita Bruta", false, { "31/12/2022": 750, "31/12/2023": 950, [A2024]: 1300 }),
+      dreL("Receita Líquida", true, { "31/12/2022": 700, "31/12/2023": 900, [A2024]: 1200 }),
+      dreL("EBITDA", true, { "31/12/2022": 200, "31/12/2023": 300, [A2024]: 480 }),
+    ];
+    const p = buildPontesVariacao({ dre, periodos })!;
+    expect(p.par).toEqual({ de: "31/12/2023", ate: A2024 });
+  });
+
+  it("lacuna de DADOS continua bloqueando, mesmo com par distante", () => {
+    // 2023 não existe na série E a série declara a lacuna: 2022 × 2024 atravessa vazio.
+    const periodos = ["31/12/2022", A2024];
+    const dre = [dreL("Receita Líquida", true, { "31/12/2022": 700, [A2024]: 1200 })];
+    const serie = { ok: false, lacunas: [{ de: "01/01/2023", ate: "31/12/2023", rotulo: "2023" }] };
+    expect(paresComparaveis({ dre, periodos, serie })).toHaveLength(0);
+  });
 });
 
 describe("buildPontesVariacao com régua", () => {

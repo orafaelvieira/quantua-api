@@ -3,6 +3,7 @@ import { env } from "../config/env";
 import { calcCusto, modeloAnaliseId, createWithRetry, type CustoIA } from "./ai-extraction";
 import { ETAPAS } from "./ai-usage";
 import type { PeerComparisonRow } from "./peer-benchmark";
+import { blocoIdentidade, type IdentidadeEmpresa } from "./web-research";
 import { INDICADORES_TEMPLATE } from "./financial-templates";
 import { calcularValorCanonico, type AlavancaValor, type ValorCanonico } from "./valor-na-mesa";
 import { calcularContaRegressiva } from "./conta-regressiva";
@@ -283,8 +284,40 @@ ${blocos}`;
 }
 
 /** Formata o bloco de contexto da WEB (Input 3) pro prompt. Vazio se não houver. */
+/**
+ * REDE DE SEGURANÇA (14/08/2026): mesmo com o prompt da pesquisa proibindo, uma
+ * ressalva de identidade que escape da web NÃO pode contaminar a análise — o
+ * bloco web entra com "NÃO extrapole", então a dúvida viraria âncora do Opus.
+ * Frase que questiona quem é a empresa sai do resumo antes de entrar no prompt.
+ */
+// O gatilho é incerteza SOBRE A IDENTIDADE — "incerteza" sozinha é palavra
+// legítima de análise ("incerteza regulatória do setor") e não pode ser cortada.
+const RESSALVA_IDENTIDADE = new RegExp(
+  [
+    // dúvida/incerteza a até ~80 caracteres de um termo de identidade
+    "(?:incerteza|d[úu]vida|n[ãa]o\\s+(?:foi\\s+poss[íi]vel|se\\s+pode|consegui\\w*)\\s+(?:confirmar|identificar|determinar))[^.\\n]{0,80}(?:identidade|cnpj|raz[ãa]o\\s+social|qual\\s+empresa|empresa\\s+(?:correta|exata|analisada))",
+    // pedido explícito de conferir o cadastro
+    "confirm(?:ar|e|ação\\s+d)[eoa]?\\s+(?:o\\s+|a\\s+)?(?:cnpj|raz[ãa]o\\s+social)",
+    "raz[ãa]o\\s+social\\s+corret",
+    // homônimo / nomes parecidos
+    "empresas?\\s+com\\s+(?:grafias?|nomes?)\\s+(?:parecid|similar)",
+    "hom[óôo]nim", // homônimo (ô), homónimo (ó) e homonimo (sem acento)
+  ].join("|"),
+  "i",
+);
+export function limparRessalvaIdentidade(resumo: string): string {
+  return resumo
+    .split(/\n/)
+    .filter((linha) => !RESSALVA_IDENTIDADE.test(linha))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function buildWebBlock(web?: { resumo: string; fontes: { titulo: string; url: string }[] } | null): string {
   if (!web || !web.resumo.trim()) return "";
+  web = { ...web, resumo: limparRessalvaIdentidade(web.resumo) };
+  if (!web.resumo.trim()) return "";
   const fontes = web.fontes.slice(0, 8).map((f) => `- ${f.titulo}: ${f.url}`).join("\n");
   return `
 CONTEXTO DA WEB (pesquisa de notícias/mercado sobre a empresa — use para SWOT, posicionamento e opções; NÃO extrapole além do que está aqui):
@@ -340,7 +373,7 @@ ${linhasInternas ? linhasInternas + "\n" : ""}${linhasExternas ? "REFERÊNCIA EX
 export async function generateAnalysis(
   indicadores: IndicadorLite[],
   periodosBrutos: string[],
-  empresa: { razaoSocial: string; setor: string; porte: string },
+  empresa: { razaoSocial: string; setor: string; porte: string; identidade?: Partial<IdentidadeEmpresa> },
   periodo: string,
   modelKey?: string | null,
   peer?: PeerBlockInput | null,
@@ -399,7 +432,11 @@ export async function generateAnalysis(
 
 A empresa pode estar em QUALQUER momento — crescendo bem, madura e estável, ou sob pressão. NÃO assuma crise POR PADRÃO; mas quando os números mostram aperto (caixa baixo, margem operacional negativa, dívida insustentável), NOMEIE a situação com honestidade — suavizar um problema real é um erro tão grave quanto exagerar um inexistente. ADAPTE a leitura ao estágio: empresa saudável recebe foco em crescer com rentabilidade, alocar capital e defender a posição; empresa sob pressão recebe foco em estabilizar e recuperar. O mesmo rigor serve para planejar o futuro de uma empresa boa e para virar o jogo de uma empresa em dificuldade.
 
-Empresa: "${empresa.razaoSocial}" · Setor: ${empresa.setor} · Porte: ${empresa.porte} · Período analisado: ${periodo}
+EMPRESA ANALISADA — identidade conferida no cadastro (Receita Federal). É FATO, não hipótese:
+${blocoIdentidade({ razaoSocial: empresa.razaoSocial, setor: empresa.setor, porte: empresa.porte, ...(empresa.identidade ?? {}) })}
+Período analisado: ${periodo}
+
+NUNCA questione a identidade da empresa, NUNCA sugira "confirmar o CNPJ/razão social" e NUNCA escreva ressalvas de homônimo ("empresas com nomes parecidos"). O relatório é assinado e entregue a ESTA empresa — duvidar de quem ela é seria falso e constrangedor. Se a pesquisa web trouxer dúvida de identidade, IGNORE-A: o cadastro vence.
 
 Você recebe VÁRIAS fontes. USE TODAS e CRUZE-AS — o valor está em conectar número → causa → contexto → ação:
 

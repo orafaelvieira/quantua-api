@@ -165,6 +165,31 @@ export interface SerieLacunasSrv {
   lacunas: Array<{ de: string; ate: string; rotulo: string }>;
 }
 
+/**
+ * O par atravessa LACUNA DE DADOS (período que não existe na base)?
+ *
+ * Diferente de `parComparavelSrv`: aquela valida pares CONSECUTIVOS (e rejeita
+ * distância, por desenho); esta responde só "há buraco de dados entre os dois?",
+ * que é o que importa quando o analista escolhe 2024 contra 2022 de propósito.
+ * Sem a série declarada (IBR legado) não há como afirmar buraco — não bloqueia.
+ */
+export function atravessaLacuna(
+  anterior: string,
+  atual: string,
+  serie?: SerieLacunasSrv | null
+): { lacuna: boolean; motivo?: string } {
+  if (!serie?.lacunas?.length) return { lacuna: false };
+  const a = dataDoPeriodo(anterior);
+  const b = dataDoPeriodo(atual);
+  if (!a || !b) return { lacuna: false };
+  const [ini, fim] = a <= b ? [a, b] : [b, a];
+  for (const l of serie.lacunas) {
+    const de = dataDoPeriodo(l.de);
+    if (de && de > ini && de < fim) return { lacuna: true, motivo: `lacuna na série (${l.rotulo})` };
+  }
+  return { lacuna: false };
+}
+
 /** O par (anterior → atual) é comparável? Lacuna do motor > heurística de rótulo. */
 export function parComparavelSrv(
   anterior: string,
@@ -531,6 +556,8 @@ export interface ParComparacao {
   regua: ReguaComparacao;
   /** Meses cobertos por cada lado (iguais por construção) — a prova da janela. */
   mesesJanela: number;
+  /** Há períodos ENTRE os dois: comparação ponto a ponto, não tendência. */
+  saltaPeriodos: boolean;
 }
 
 const mesAno = (p: string): { mes: number; ano: number } | null => {
@@ -547,38 +574,46 @@ const mesAno = (p: string): { mes: number; ano: number } | null => {
 export function paresComparaveis(dados: DadosParaPontes): ParComparacao[] {
   const periodos = [...(dados.periodos ?? [])].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
   const ytd = new Set((dados.arvoresBalancete ?? []).map((a) => a?.periodo).filter(Boolean) as string[]);
-  const serie = dados.serie ?? null;
   const out: ParComparacao[] = [];
 
-  for (let i = 1; i < periodos.length; i++) {
-    const de = periodos[i - 1]!;
-    const ate = periodos[i]!;
-    if (!parComparavelSrv(de, ate, serie).ok) continue;
-    const a = mesAno(de), b = mesAno(ate);
-    if (!a || !b) continue;
-    const ehMes = ytd.has(de) && ytd.has(ate);
-    if (ehMes) {
-      // Meses consecutivos do MESMO exercício: MoM pela DRE do mês.
-      const consecutivo = a.ano === b.ano && b.mes === a.mes + 1;
-      if (consecutivo) out.push({ de, ate, regua: "mes", mesesJanela: 1 });
-    } else if (!ytd.has(de) && !ytd.has(ate)) {
-      // Dois exercícios (ou dois períodos anuais) consecutivos.
-      out.push({ de, ate, regua: "exercicio", mesesJanela: 12 });
-    }
-  }
+  // QUALQUER PAR DE JANELA IGUAL, não só o consecutivo (14/08/2026, pedido do
+  // dono: "preciso escolher períodos não sequenciais, por exemplo 2024 contra
+  // 2022"). Comparar dois exercícios distantes é leitura legítima — são dois
+  // RETRATOS completos, e pular um ano no meio não falsifica nenhum dos dois.
+  // O que continua proibido é misturar janelas (ano cheio × acumulado parcial).
+  // `saltaPeriodos` marca quando há períodos entre os dois: a variação é ponto a
+  // ponto, não tendência, e a tela precisa poder dizer isso.
+  const serie = dados.serie ?? null;
+  for (let i = 0; i < periodos.length; i++) {
+    for (let j = i + 1; j < periodos.length; j++) {
+      const de = periodos[i]!;
+      const ate = periodos[j]!;
+      const a = mesAno(de), b = mesAno(ate);
+      if (!a || !b) continue;
+      // LACUNA DE DADOS ≠ PERÍODO PULADO. Pular 2023 que EXISTE é escolha do
+      // analista (vira `saltaPeriodos`); atravessar um ano que NÃO existe é
+      // variação sobre vazio e segue bloqueada.
+      if (atravessaLacuna(de, ate, serie).lacuna) continue;
+      const salto = j - i - 1;
+      const anuais = !ytd.has(de) && !ytd.has(ate);
+      const mensais = ytd.has(de) && ytd.has(ate);
 
-  // ANO A ANO no mensal: mesmo mês do ano anterior, YTD contra YTD (janela igual
-  // em meses). Não precisa ser consecutivo na série — precisa existir.
-  for (const ate of periodos) {
-    if (!ytd.has(ate)) continue;
-    const b = mesAno(ate);
-    if (!b) continue;
-    const de = periodos.find((p) => {
-      if (!ytd.has(p)) return false;
-      const a = mesAno(p);
-      return a && a.mes === b.mes && a.ano === b.ano - 1;
-    });
-    if (de) out.push({ de, ate, regua: "ano-a-ano", mesesJanela: b.mes });
+      if (anuais) {
+        out.push({ de, ate, regua: "exercicio", mesesJanela: 12, saltaPeriodos: salto > 0 });
+        continue;
+      }
+      if (!mensais) continue; // ano cheio × YTD parcial: nunca
+
+      if (a.ano === b.ano && b.mes === a.mes + 1) {
+        // MoM: mês contra o mês anterior, pela DRE do mês.
+        out.push({ de, ate, regua: "mes", mesesJanela: 1, saltaPeriodos: false });
+      } else if (a.mes === b.mes && a.ano < b.ano) {
+        // Mesmo mês de anos diferentes: YTD × YTD (janela igual em meses).
+        out.push({ de, ate, regua: "ano-a-ano", mesesJanela: b.mes, saltaPeriodos: b.ano - a.ano > 1 });
+      }
+      // Meses de meses diferentes que não são o mesmo mês (ex.: mar × ago) ficam
+      // de fora: acumulados de janelas diferentes (3 meses × 8) não se comparam.
+    }
   }
 
   return out.sort((x, y) => ordPeriodo(y.ate) - ordPeriodo(x.ate) || ordPeriodo(y.de) - ordPeriodo(x.de));
@@ -659,8 +694,9 @@ export function buildPontesVariacao(
     }
   } else {
     // Preferência: o par mais recente da régua mais informativa disponível —
-    // ano-a-ano vence MoM no mensal (neutraliza sazonalidade); no anual, exercício.
-    const porRegua = (r: ReguaComparacao) => disponiveis.filter((p) => p.regua === r)[0] ?? null;
+    // ano-a-ano vence MoM no mensal (neutraliza sazonalidade); no anual,
+    // exercício. Par que SALTA períodos nunca é o padrão: é escolha do analista.
+    const porRegua = (r: ReguaComparacao) => disponiveis.filter((p) => p.regua === r && !p.saltaPeriodos)[0] ?? null;
     escolhido = porRegua("ano-a-ano") ?? porRegua("exercicio") ?? porRegua("mes") ?? null;
     if (!escolhido) {
       for (let i = periodos.length - 1; i >= 1; i--) {
@@ -685,11 +721,16 @@ export function buildPontesVariacao(
     diasPorPeriodo[de] = 30;
     diasPorPeriodo[ate] = 30;
   }
-  // O aviso só existe quando o analista NÃO pediu o par e o escolhido não chega
-  // ao fim da série — pedido explícito não precisa se justificar.
-  const avisoPar = !opts?.par && ate !== ultimo
-    ? `Decomposição do par ${de} → ${ate}: o período mais recente (${ultimo}) não entra nesta comparação — só se compara janela igual com janela igual.`
-    : null;
+  // Dois avisos possíveis, nesta ordem de importância:
+  // 1. par SALTA períodos (escolha do analista: 2024 contra 2022) — a variação é
+  //    ponto a ponto e não descreve o caminho entre eles;
+  // 2. o par não alcança o fim da série (só quando o analista NÃO pediu o par —
+  //    pedido explícito não precisa se justificar).
+  const avisoPar = escolhido.saltaPeriodos
+    ? `Comparação ponto a ponto entre ${de} e ${ate}: há período(s) entre os dois que não entram nesta conta — a variação mostra a diferença entre os dois retratos, não o caminho percorrido.`
+    : !opts?.par && ate !== ultimo
+      ? `Decomposição do par ${de} → ${ate}: o período mais recente (${ultimo}) não entra nesta comparação — só se compara janela igual com janela igual.`
+      : null;
 
   const fc = dados.fluxoCaixa ?? null;
   return {

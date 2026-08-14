@@ -958,11 +958,26 @@ async function runAnalysisBackground(
       console.log(`[generate] ${analysisId} web: REUSADA do cache (0 buscas novas), ${cachedWeb.fontes.length} fontes`);
     } else {
       try {
+        // A IDENTIDADE INTEIRA vai para a pesquisa (14/08/2026): o `company` já
+        // está carregado com os campos da Receita — mandar só razão social fazia
+        // a IA pesquisar às cegas e devolver ressalva de identidade ao cliente.
+        // QSA fica de fora (dado pessoal de terceiro não entra em prompt).
         web = await researchCompanyWeb(
           {
             razaoSocial: analysis.company.razaoSocial,
+            nomeFantasia: analysis.company.nomeFantasia,
+            cnpj: analysis.company.cnpj,
             setor: analysis.sectorCustom ?? analysis.company.setor ?? null,
-            site: (analysis.company as { site?: string | null }).site ?? null,
+            porte: analysis.company.porte,
+            municipio: analysis.company.municipio,
+            uf: analysis.company.uf,
+            cnae: analysis.company.cnae,
+            cnaeDescricao: analysis.company.cnaeDescricao,
+            naturezaJuridica: analysis.company.naturezaJuridica,
+            dataInicioAtividade: analysis.company.dataInicioAtividade,
+            situacaoCadastral: analysis.company.situacaoCadastral,
+            capitalSocial: analysis.company.capitalSocial,
+            regimeTributario: analysis.company.regimeTributario,
           },
           modelKey,
         );
@@ -1017,8 +1032,23 @@ async function runAnalysisBackground(
       periodos,
       {
         razaoSocial: analysis.company.razaoSocial,
-        setor: analysis.company.setor ?? "Não informado",
+        // MESMO setor que a pesquisa web usou (sectorCustom vence) — os dois
+        // pontos divergiam e a análise falava de um setor, a web de outro.
+        setor: analysis.sectorCustom ?? analysis.company.setor ?? "Não informado",
         porte: analysis.company.porte ?? "Não informado",
+        identidade: {
+          nomeFantasia: analysis.company.nomeFantasia,
+          cnpj: analysis.company.cnpj,
+          municipio: analysis.company.municipio,
+          uf: analysis.company.uf,
+          cnae: analysis.company.cnae,
+          cnaeDescricao: analysis.company.cnaeDescricao,
+          naturezaJuridica: analysis.company.naturezaJuridica,
+          dataInicioAtividade: analysis.company.dataInicioAtividade,
+          situacaoCadastral: analysis.company.situacaoCadastral,
+          capitalSocial: analysis.company.capitalSocial,
+          regimeTributario: analysis.company.regimeTributario,
+        },
       },
       analysis.periodo ?? "Período não informado",
       "opus",
