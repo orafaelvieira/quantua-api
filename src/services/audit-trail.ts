@@ -24,14 +24,18 @@ export async function registrarAuditoria(opts: {
   after?: unknown;
   source?: string;
   reason?: string;
+  /** Rótulo de ATOR para mutações automáticas (ex.: "Sistema (Receita/ECF)") —
+   *  o userId segue sendo o dono do workspace (FK + escopo da tela), mas a tela
+   *  não deve exibir uma pessoa como autora do que o sistema fez sozinho. */
+  userName?: string;
 }): Promise<void> {
   try {
-    const user = await prisma.user.findUnique({ where: { id: opts.userId }, select: { name: true } });
+    const user = opts.userName ? null : await prisma.user.findUnique({ where: { id: opts.userId }, select: { name: true } });
     await prisma.auditEvent.create({
       data: {
         analysisId: opts.analysisId ?? null,
         userId: opts.userId,
-        userName: user?.name ?? "Usuário",
+        userName: opts.userName ?? user?.name ?? "Usuário",
         entity: opts.entity,
         entityId: opts.entityId ?? null,
         field: opts.field,

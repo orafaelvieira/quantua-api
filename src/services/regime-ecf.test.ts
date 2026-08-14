@@ -25,6 +25,25 @@ describe("regimeEcfDoCnpjData", () => {
     expect(regimeEcfDoCnpjData(null)).toBeNull();
     expect(regimeEcfDoCnpjData(undefined)).toBeNull();
   });
+
+  it("ignora escriturações de SCP (cnpj_da_scp preenchido) — regime de OUTRA entidade", () => {
+    const scp = { ano: 2024, cnpj_da_scp: "12345678000190", forma_de_tributacao: "LUCRO REAL", quantidade_de_escrituracoes: 1 };
+    // SCP no mesmo ano, ANTES da linha própria: vence a própria empresa.
+    expect(regimeEcfDoCnpjData({ regime_tributario: [scp, linha(2024, "LUCRO PRESUMIDO")] }))
+      .toEqual({ ano: 2024, forma: "LUCRO PRESUMIDO", sugerido: "Lucro Presumido" });
+    // SCP em ano MAIS RECENTE que a linha própria: ainda vence a própria empresa.
+    expect(regimeEcfDoCnpjData({ regime_tributario: [{ ...scp, ano: 2025 }, linha(2023, "LUCRO PRESUMIDO")] }))
+      .toEqual({ ano: 2023, forma: "LUCRO PRESUMIDO", sugerido: "Lucro Presumido" });
+    // Só linhas de SCP: nada é inventado.
+    expect(regimeEcfDoCnpjData({ regime_tributario: [scp] })).toBeNull();
+  });
+
+  it("formas DIFERENTES no mesmo ano-calendário é ambíguo — devolve null", () => {
+    expect(regimeEcfDoCnpjData({ regime_tributario: [linha(2024, "LUCRO REAL"), linha(2024, "LUCRO PRESUMIDO")] })).toBeNull();
+    // Duas linhas do mesmo ano com a MESMA forma não são ambíguas.
+    expect(regimeEcfDoCnpjData({ regime_tributario: [linha(2024, "LUCRO REAL"), linha(2024, "LUCRO REAL")] }))
+      .toEqual({ ano: 2024, forma: "LUCRO REAL", sugerido: "Lucro Real" });
+  });
 });
 
 describe("sugerirRegimeTributario", () => {
@@ -42,5 +61,13 @@ describe("sugerirRegimeTributario", () => {
   it("sem flags e sem ECF aproveitável, devolve null (nada é inventado)", () => {
     expect(sugerirRegimeTributario({ opcao_pelo_simples: false })).toBeNull();
     expect(sugerirRegimeTributario({ regime_tributario: [linha(2023, "LUCRO ARBITRADO")] })).toBeNull();
+  });
+
+  it("anoMinimoEcf (caminho automático): ECF velha demais não vira seed; flags seguem valendo", () => {
+    const velha = { regime_tributario: [linha(2019, "LUCRO REAL")] };
+    expect(sugerirRegimeTributario(velha, { anoMinimoEcf: 2022 })).toBeNull();
+    expect(sugerirRegimeTributario(velha)).toEqual({ valor: "Lucro Real", fonte: "Receita Federal/ECF, ano-calendário 2019" });
+    expect(sugerirRegimeTributario({ ...velha, opcao_pelo_simples: true }, { anoMinimoEcf: 2022 }))
+      .toEqual({ valor: "Simples Nacional", fonte: "Receita Federal (cadastro CNPJ)" });
   });
 });
