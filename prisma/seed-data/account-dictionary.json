@@ -498,12 +498,6 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "Disponivel",
-    "contaDestino": "Caixa e Equivalentes de Caixa",
-    "grupoConta": "Ativo Circulante",
-    "tipo": "BP"
-  },
-  {
     "nomeOriginal": "Disponível",
     "contaDestino": "Caixa e Equivalentes de Caixa",
     "grupoConta": "Ativo Circulante",
@@ -744,12 +738,6 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "Creditos A Receber",
-    "contaDestino": "Contas a Receber - CP",
-    "grupoConta": "Ativo Circulante",
-    "tipo": "BP"
-  },
-  {
     "nomeOriginal": "Créditos a Receber",
     "contaDestino": "Contas a Receber - CP",
     "grupoConta": "Ativo Circulante",
@@ -955,12 +943,6 @@
   },
   {
     "nomeOriginal": "Adiantamentos A Fornecedores",
-    "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
-    "grupoConta": "Ativo Circulante",
-    "tipo": "BP"
-  },
-  {
-    "nomeOriginal": "Adiantamentos a Funcionarios",
     "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
     "grupoConta": "Ativo Circulante",
     "tipo": "BP"
@@ -1309,12 +1291,6 @@
   },
   {
     "nomeOriginal": "Produtos em Processo",
-    "contaDestino": "Estoques - CP",
-    "grupoConta": "Ativo Circulante",
-    "tipo": "BP"
-  },
-  {
-    "nomeOriginal": "Produtos em Transito",
     "contaDestino": "Estoques - CP",
     "grupoConta": "Ativo Circulante",
     "tipo": "BP"
@@ -2034,12 +2010,6 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "(-) Depreciaçoes Acumuladas",
-    "contaDestino": "(-) Depreciação",
-    "grupoConta": "Ativo Não Circulante",
-    "tipo": "BP"
-  },
-  {
     "nomeOriginal": "(-) Depreciações Acumuladas",
     "contaDestino": "(-) Depreciação",
     "grupoConta": "Ativo Não Circulante",
@@ -2214,12 +2184,6 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "Instalacoes",
-    "contaDestino": "Imobilizado",
-    "grupoConta": "Ativo Não Circulante",
-    "tipo": "BP"
-  },
-  {
     "nomeOriginal": "Instalaçoes",
     "contaDestino": "Imobilizado",
     "grupoConta": "Ativo Não Circulante",
@@ -2239,12 +2203,6 @@
   },
   {
     "nomeOriginal": "Máquinas, Aparelhos e Equipamentos",
-    "contaDestino": "Imobilizado",
-    "grupoConta": "Ativo Não Circulante",
-    "tipo": "BP"
-  },
-  {
-    "nomeOriginal": "Maquinas e Equipamentos",
     "contaDestino": "Imobilizado",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
@@ -2358,7 +2316,7 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "ATIVOS INTAGIVEL",
+    "nomeOriginal": "Ativos Intagivel",
     "contaDestino": "Intangível",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
@@ -2449,12 +2407,6 @@
   },
   {
     "nomeOriginal": "Goodwill",
-    "contaDestino": "Intangível",
-    "grupoConta": "Ativo Não Circulante",
-    "tipo": "BP"
-  },
-  {
-    "nomeOriginal": "Intangivel",
     "contaDestino": "Intangível",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
@@ -2646,7 +2598,7 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "PARTICIPACOES",
+    "nomeOriginal": "Participacoes",
     "contaDestino": "Investimentos",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
@@ -2713,12 +2665,6 @@
   },
   {
     "nomeOriginal": "Ativo Diferido",
-    "contaDestino": "Realizável a Longo Prazo",
-    "grupoConta": "Ativo Não Circulante",
-    "tipo": "BP"
-  },
-  {
-    "nomeOriginal": "Ativo Realizavel a Longo Prazo",
     "contaDestino": "Realizável a Longo Prazo",
     "grupoConta": "Ativo Não Circulante",
     "tipo": "BP"
@@ -2856,7 +2802,7 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "ATIVO TOTAL",
+    "nomeOriginal": "Ativo Total",
     "contaDestino": "Ativo Total",
     "grupoConta": "Ativo Total",
     "tipo": "BP"
@@ -2988,12 +2934,6 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "CUSTO DOS PRODUTOS/MERCADORIAS/SERVICOS",
-    "contaDestino": "Custo Operacional",
-    "grupoConta": "Custo Operacional",
-    "tipo": "DRE"
-  },
-  {
     "nomeOriginal": "Custo dos Produtos/Mercadorias/Serviços",
     "contaDestino": "Custo Operacional",
     "grupoConta": "Custo Operacional",
@@ -3036,7 +2976,7 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "CUSTOS",
+    "nomeOriginal": "Custos",
     "contaDestino": "Custo Operacional",
     "grupoConta": "Custo Operacional",
     "tipo": "BP"
@@ -3048,31 +2988,31 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "CUSTOS REF. OPERAÇÕES NO MERCADO INTERNO",
+    "nomeOriginal": "Custos ref. Operações no Mercado Interno",
     "contaDestino": "Custo Operacional",
     "grupoConta": "Custo Operacional",
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "CUSTOS S/ OPERAÇÕES",
+    "nomeOriginal": "Custos s/ Operações",
     "contaDestino": "Custo Operacional",
     "grupoConta": "Custo Operacional",
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "DEDUCOES DOS CUSTOS",
+    "nomeOriginal": "Deducoes dos Custos",
     "contaDestino": "Custo Operacional",
     "grupoConta": "Custo Operacional",
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "ESTOQUES",
+    "nomeOriginal": "Estoques",
     "contaDestino": "Custo Operacional",
     "grupoConta": "Custo Operacional",
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "MERCADORIAS PARA REVENDA",
+    "nomeOriginal": "Mercadorias para Revenda",
     "contaDestino": "Custo Operacional",
     "grupoConta": "Custo Operacional",
     "tipo": "DRE"
@@ -3744,7 +3684,7 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "GASTOS GERAIS",
+    "nomeOriginal": "Gastos Gerais",
     "contaDestino": "Despesas Gerais e Administrativas",
     "grupoConta": "Despesas Gerais e Administrativas",
     "tipo": "DRE"
@@ -3792,7 +3732,7 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "TAXAS E CONTRIBUIÇÕES",
+    "nomeOriginal": "Taxas e Contribuições",
     "contaDestino": "Despesas Taxas, Tributos e Contribuições",
     "grupoConta": "Despesas Taxas, Tributos e Contribuições",
     "tipo": "DRE"
@@ -3804,7 +3744,7 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "UTILIDADES E SERVIÇOS",
+    "nomeOriginal": "Utilidades e Serviços",
     "contaDestino": "Despesas com Energia, Água, Telefone e Internet",
     "grupoConta": "Despesas com Energia, Água, Telefone e Internet",
     "tipo": "DRE"
@@ -4728,7 +4668,7 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "IMPOSTOS E ENC. FATURADOS",
+    "nomeOriginal": "Impostos e Enc. Faturados",
     "contaDestino": "Impostos s/ Faturamento",
     "grupoConta": "Impostos s/ Faturamento",
     "tipo": "DRE"
@@ -4752,13 +4692,13 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "IMPOSTOS INCIDENTES S/ SERVIÇOS",
+    "nomeOriginal": "Impostos Incidentes s/ Serviços",
     "contaDestino": "Impostos s/ Faturamento",
     "grupoConta": "Impostos s/ Faturamento",
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "IMPOSTOS INCID S/ VENDAS E SERV",
+    "nomeOriginal": "Impostos Incid s/ Vendas e Serv",
     "contaDestino": "Impostos s/ Faturamento",
     "grupoConta": "Impostos s/ Faturamento",
     "tipo": "DRE"
@@ -4890,7 +4830,7 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "(-) PROVISÃO PARA CONTRIBUIÇÃO SOCIAL",
+    "nomeOriginal": "(-) Provisão para Contribuição Social",
     "contaDestino": "IR e CSLL",
     "grupoConta": "IR e CSLL",
     "tipo": "DRE"
@@ -4902,13 +4842,13 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "(-) PROVISÃO PARA IMPOSTO DE RENDA",
+    "nomeOriginal": "(-) Provisão para Imposto de Renda",
     "contaDestino": "IR e CSLL",
     "grupoConta": "IR e CSLL",
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "PROVISÃO P/I.R.P.J.",
+    "nomeOriginal": "Provisão P/I.R.P.J.",
     "contaDestino": "IR e CSLL",
     "grupoConta": "IR e CSLL",
     "tipo": "DRE"
@@ -5112,19 +5052,13 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "COM VEICULOS",
-    "contaDestino": "Outras Despesas Operacionais",
-    "grupoConta": "Outras Despesas Operacionais",
-    "tipo": "DRE"
-  },
-  {
     "nomeOriginal": "Com Veículos",
     "contaDestino": "Outras Despesas Operacionais",
     "grupoConta": "Outras Despesas Operacionais",
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "DESPESAS INDEDUTIVEIS",
+    "nomeOriginal": "Despesas Indedutiveis",
     "contaDestino": "Outras Despesas Operacionais",
     "grupoConta": "Outras Despesas Operacionais",
     "tipo": "DRE"
@@ -5148,7 +5082,7 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "OCUPAÇÕES EM OPERAÇÃO",
+    "nomeOriginal": "Ocupações em Operação",
     "contaDestino": "Outras Despesas Operacionais",
     "grupoConta": "Outras Despesas Operacionais",
     "tipo": "DRE"
@@ -5256,7 +5190,7 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "RECEITAS DIVERSAS",
+    "nomeOriginal": "Receitas Diversas",
     "contaDestino": "Outras Receitas Operacionais",
     "grupoConta": "Outras Receitas Operacionais",
     "tipo": "DRE"
@@ -5280,7 +5214,7 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "ADIANTAMENTOS DIVERSOS",
+    "nomeOriginal": "Adiantamentos Diversos",
     "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
     "grupoConta": "Passivo Circulante",
     "tipo": "BP"
@@ -5515,12 +5449,6 @@
   },
   {
     "nomeOriginal": "Emprest Financ C.Prazo",
-    "contaDestino": "Empréstimos e Financiamentos - CP",
-    "grupoConta": "Passivo Circulante",
-    "tipo": "BP"
-  },
-  {
-    "nomeOriginal": "Emprestimos",
     "contaDestino": "Empréstimos e Financiamentos - CP",
     "grupoConta": "Passivo Circulante",
     "tipo": "BP"
@@ -5910,12 +5838,6 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "Obrigacoes Trabalhistas",
-    "contaDestino": "Obrigações Trabalhistas - CP",
-    "grupoConta": "Passivo Circulante",
-    "tipo": "BP"
-  },
-  {
     "nomeOriginal": "Obrigações Trabalhistas",
     "contaDestino": "Obrigações Trabalhistas - CP",
     "grupoConta": "Passivo Circulante",
@@ -5940,7 +5862,7 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "OBRIG. SOCIAIS A RECOLHER",
+    "nomeOriginal": "Obrig. Sociais a Recolher",
     "contaDestino": "Obrigações Trabalhistas - CP",
     "grupoConta": "Passivo Circulante",
     "tipo": "BP"
@@ -6264,7 +6186,7 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "IMPOSTOS E CONTRIBUICOES",
+    "nomeOriginal": "Impostos e Contribuicoes",
     "contaDestino": "Obrigações Tributárias - CP",
     "grupoConta": "Passivo Circulante",
     "tipo": "BP"
@@ -6384,12 +6306,6 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "Obrigacoes Tributarias",
-    "contaDestino": "Obrigações Tributárias - CP",
-    "grupoConta": "Passivo Circulante",
-    "tipo": "BP"
-  },
-  {
     "nomeOriginal": "Obrigações Tributárias",
     "contaDestino": "Obrigações Tributárias - CP",
     "grupoConta": "Passivo Circulante",
@@ -6474,7 +6390,7 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "RETENÇÕES A RECOLHER",
+    "nomeOriginal": "Retenções a Recolher",
     "contaDestino": "Obrigações Tributárias - CP",
     "grupoConta": "Passivo Circulante",
     "tipo": "BP"
@@ -6930,12 +6846,6 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "Emprestimos",
-    "contaDestino": "Empréstimos e Financiamentos - LP",
-    "grupoConta": "Passivo Não Circulante",
-    "tipo": "BP"
-  },
-  {
     "nomeOriginal": "Empréstimos",
     "contaDestino": "Empréstimos e Financiamentos - LP",
     "grupoConta": "Passivo Não Circulante",
@@ -7080,7 +6990,7 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "INSTITUIÇÕES FINANCEIRAS",
+    "nomeOriginal": "Instituições Financeiras",
     "contaDestino": "Empréstimos e Financiamentos - LP",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
@@ -7200,7 +7110,7 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "RECEITAS DIFERIDAS",
+    "nomeOriginal": "Receitas Diferidas",
     "contaDestino": "Outros Passivos não Circulantes",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
@@ -7260,7 +7170,7 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "NÃO CIRCULANTE",
+    "nomeOriginal": "Não Circulante",
     "contaDestino": "Passivo Não Circulante",
     "grupoConta": "Passivo Não Circulante",
     "tipo": "BP"
@@ -7740,12 +7650,6 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "Patrimonio Liquido",
-    "contaDestino": "Patrimônio Líquido",
-    "grupoConta": "Patrimônio Líquido",
-    "tipo": "BP"
-  },
-  {
     "nomeOriginal": "Patrimonio Líquido",
     "contaDestino": "Patrimônio Líquido",
     "grupoConta": "Patrimônio Líquido",
@@ -7974,7 +7878,7 @@
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "LUCRO/PREJUÍZO DO PERÍODO",
+    "nomeOriginal": "Lucro/Prejuízo do Período",
     "contaDestino": "Resultado do Exercício",
     "grupoConta": "Patrimônio Líquido",
     "tipo": "BP"
@@ -8136,7 +8040,7 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "REVENDA DE MERCADORIAS",
+    "nomeOriginal": "Revenda de Mercadorias",
     "contaDestino": "Receita Bruta",
     "grupoConta": "Receita Bruta",
     "tipo": "DRE"
@@ -8406,49 +8310,25 @@
     "tipo": "DRE"
   },
   {
-    "nomeOriginal": "CLASSE I CREDITOS TRABALHISTAS",
-    "contaDestino": "Depósitos Judiciais - CP",
-    "grupoConta": "Ativo Circulante",
-    "tipo": "BP"
-  },
-  {
-    "nomeOriginal": "CLASSE III CREDITOS GERAIS",
-    "contaDestino": "Depósitos Judiciais - CP",
-    "grupoConta": "Ativo Circulante",
-    "tipo": "BP"
-  },
-  {
-    "nomeOriginal": "CLASSE IV CREDITOS EPP-ME-EIRELI",
-    "contaDestino": "Depósitos Judiciais - CP",
-    "grupoConta": "Ativo Circulante",
-    "tipo": "BP"
-  },
-  {
-    "nomeOriginal": "ADIANTAMENTO P/ VIAGEM",
+    "nomeOriginal": "Adiantamento p/ Viagem",
     "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
     "grupoConta": "Ativo Circulante",
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "ANTECIPAÇÕES",
+    "nomeOriginal": "Antecipações",
     "contaDestino": "Despesas Ant. / Adiantamentos - Ativo",
     "grupoConta": "Ativo Circulante",
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "ANTECIPACAO DE RECEITAS",
+    "nomeOriginal": "Antecipacao de Receitas",
     "contaDestino": "Despesas Ant. / Adiantamentos - Passivo",
     "grupoConta": "Passivo Circulante",
     "tipo": "BP"
   },
   {
-    "nomeOriginal": "RECUPERAÇÃO JUDICIAL",
-    "contaDestino": "Outros Passivos Circulantes",
-    "grupoConta": "Passivo Circulante",
-    "tipo": "BP"
-  },
-  {
-    "nomeOriginal": "EMPRESTIMOS A PAGAR AOS SÓCIOS",
+    "nomeOriginal": "Emprestimos a Pagar aos Sócios",
     "contaDestino": "Passivos com Partes Relacionadas - CP",
     "grupoConta": "Passivo Circulante",
     "tipo": "BP"
