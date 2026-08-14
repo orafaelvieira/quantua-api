@@ -293,7 +293,7 @@ const DESP_OP_DESTINOS = new Set([
 /** Rede semântica mínima ANTES do balde: "Custo(s) …" é CUSTO (acima do Lucro Bruto),
  *  nunca despesa — cair no balde de despesas desloca o Lucro Bruto (visto no sweep:
  *  TECHWAY/AçãoCorretora/OCEANDROP). E "Impostos s/ vendas…" é DEDUÇÃO da receita. */
-function fallbackSemanticoDRE(nome: string): string | null {
+export function fallbackSemanticoDRE(nome: string): string | null {
   const n = normNome(nome);
   if (ehContaDePatrimonio(nome)) return null;
   if (/^\(?\s*-?\s*\)?\s*custos?\b/.test(n) && !/despes/.test(n)) return "Custo Operacional";
@@ -306,6 +306,18 @@ function fallbackSemanticoDRE(nome: string): string | null {
   // caía em Outras Receitas e a Receita Bruta ficava só com os serviços). Anclado no
   // início: nunca casa "Outras Receitas Operacionais" nem "Receita Líquida".
   if (/^receitas? operacion/.test(n) && !/liquida/.test(n)) return "Receita Bruta";
+  // RECEITA DE (RE)VENDA — a regra-espelho do custo (13/08/2026, conciliação
+  // manual do dono na Clorofila): "Custos Vendas Prod Terceiros" caía em Custo
+  // Operacional pela regra de custo, mas "Receita de Revenda Producao
+  // Terceitos" (R$ 947.961 em 2024; R$ 7.442.896 em 2025) não casava NADA e
+  // ficava FORA da Receita Bruta — custo dentro, receita fora, margem mentindo
+  // em todas as linhas abaixo. Regra de custo sem a regra-espelho de receita é
+  // assimetria que só aparece na conciliação. Medido no corpus (12.088 nomes):
+  // 3 casam, todos Receita Bruta legítima; a guarda barra venda de imobilizado/
+  // sucata/canceladas (não-operacional ou dedução, nunca Receita Bruta).
+  if (/^receitas? (de |da |com )?(re)?vendas?\b/.test(n) && !/imobilizad|ativo fixo|sucata|cancelad|devolu|nao operacional/.test(n)) {
+    return "Receita Bruta";
+  }
   return null;
 }
 
@@ -616,7 +628,7 @@ export function foldBP(arvore: ArvoreOriginalBP, periodos: string[], dict?: Dict
     const canonico = OUTROS_GRUPO[g];
     if (canonico && model.names.includes(canonico)) return canonico;
     const doGrupo = model.lines.filter((l) => l.tipo === "input" && l.classificacao === g);
-    return doGrupo.find((l) => /^outr[oa]s?/i.test(l.conta))?.conta ?? null;
+    return doGrupo.find((l) => /^outr[oa]s?\b/i.test(l.conta))?.conta ?? null;
   };
   const alertasComposicao: AlertaComposicaoBP[] = [];
   const vazamentos: ConservacaoValorBP["vazamentos"] & { periodo: string }[] = [] as never;

@@ -11,7 +11,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
 // env importa process.env no load — fornecemos uma chave fake.
 vi.mock("../config/env", () => ({ env: { anthropicApiKey: "test-key" } }));
 
-import { extractFinancialsWithAI } from "./ai-extraction";
+import { extractFinancialsWithAI, fallbackSemanticoDRE } from "./ai-extraction";
 import { DEFAULT_BP_MODEL } from "./account-mapper";
 
 const aiReply = (payload: unknown) => ({ content: [{ type: "text", text: JSON.stringify(payload) }] });
@@ -161,4 +161,28 @@ describe("extractFinancialsWithAI — árvore da DRE por LINHAS (determinística
     expect(createMock).toHaveBeenCalled(); // builder recusou → LLM assumiu
     expect(r.arvoreOriginalDRE[P]?.[0]?.nome).toBe("Receita Operacional");
   });
+});
+
+/**
+ * REGRA-ESPELHO DA RECEITA (13/08/2026, conciliação manual do dono na
+ * Clorofila): o custo da revenda caía em Custo Operacional pela regra de custo,
+ * mas a RECEITA da revenda não casava nada — R$ 947.961 (2024) e R$ 7.442.896
+ * (2025) fora da Receita Bruta, custo dentro, margem mentindo. Regra de custo
+ * sem regra-espelho de receita só aparece na conciliação.
+ */
+describe("fallbackSemanticoDRE — receita de (re)venda", () => {
+  const casos: Array<[string, string | null]> = [
+    ["Receita de Revenda Producao Terceitos", "Receita Bruta"],
+    ["Receita Revenda Prod Terceiros ME", "Receita Bruta"],
+    ["RECEITA COM VENDA DE MERCADORIAS", "Receita Bruta"],
+    ["Receita de Venda de Imobilizado", null],          // não-operacional
+    ["Receita com Venda de Sucata", null],              // não-operacional
+    ["Receitas de Vendas Canceladas", null],            // dedução, não receita
+    ["Receita Operacional Liquida da Atividade Rural", null], // subtotal líquido
+  ];
+  for (const [nome, esperado] of casos) {
+    it(`"${nome}" → ${esperado}`, () => {
+      expect(fallbackSemanticoDRE(nome)).toBe(esperado);
+    });
+  }
 });
