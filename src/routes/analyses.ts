@@ -2967,6 +2967,33 @@ router.post("/:id/indicador-config/recalibrar", async (req: AuthRequest, res: Re
   res.json({ ok: true, config: cfg, indicadoresRecalculados: recalculado });
 });
 
+/**
+ * GET /:id/pontes?de=&ate= — pontes de variação de um PAR ESCOLHIDO.
+ *
+ * O /process persiste o par padrão (o que o PDF e a primeira carga usam); aqui o
+ * analista pede qualquer outro par comparável. É recálculo determinístico sobre
+ * o que já está no banco — sem IA, sem I/O externo —, então sai na hora e não
+ * infla o `dadosEstruturados` com uma combinação de pares que ninguém abriu.
+ */
+router.get("/:id/pontes", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, ...whereRecursoEmpresa(req) },
+    select: { companyId: true, dadosEstruturados: true },
+  });
+  if (!analysis?.dadosEstruturados) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  const de = typeof req.query.de === "string" ? req.query.de : null;
+  const ate = typeof req.query.ate === "string" ? req.query.ate : null;
+  const regime = analysis.companyId
+    ? (await prisma.company.findUnique({ where: { id: analysis.companyId }, select: { regimeTributario: true } }))?.regimeTributario ?? null
+    : null;
+  const pontes = buildPontesVariacao(analysis.dadosEstruturados as never, {
+    regimeCadastro: regime,
+    par: de && ate ? { de, ate } : null,
+  });
+  res.json(pontes);
+});
+
 router.post("/:id/recalcular-indicadores", async (req: AuthRequest, res: Response): Promise<void> => {
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({

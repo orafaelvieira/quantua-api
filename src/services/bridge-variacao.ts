@@ -24,6 +24,7 @@
 import type { BPLineItem, DRELineItem } from "../types/financial";
 import type { FluxoCaixaIndireto } from "./cash-flow-indirect";
 import { diasDoPeriodo, diasYTD } from "./indicator-calculator";
+import { derivarDREMensal } from "./balancete-conversao";
 
 // ── Tipos persistidos em dadosEstruturados.pontes ──────────────────────────────
 
@@ -111,6 +112,10 @@ export interface PontesVariacao {
   calculadoEm: string;
   /** Par decomposto (anterior → atual). null + bloqueio quando não comparável. */
   par: { de: string; ate: string } | null;
+  /** Régua do par exibido — o que está sendo comparado com o quê. */
+  regua: ReguaComparacao | null;
+  /** Todos os pares que o analista pode escolher (o seletor da tela). */
+  disponiveis: ParComparacao[];
   bloqueio: string | null;
   /** Preenchido quando o par NÃO é o último da série (ex.: o último é YTD parcial
    *  e não há janela igual para comparar) — a tela precisa declarar o recuo. */
@@ -496,6 +501,109 @@ export interface DadosParaPontes {
   fluxoCaixa?: FluxoCaixaIndireto | null;
   serie?: SerieLacunasSrv | null;
   arvoresBalancete?: Array<{ periodo?: string }>;
+  balancetes?: unknown;
+}
+
+/**
+ * RÉGUAS DE COMPARAÇÃO (14/08/2026, pergunta do dono: "quando começarmos a
+ * receber balancetes mensais, como será feito estas pontes?").
+ *
+ * A DRE é FLUXO: só se compara janela igual com janela igual. Com balancete
+ * mensal existem três réguas legítimas, e cada uma responde a uma pergunta
+ * diferente:
+ *
+ * - `exercicio`  — ano cheio × ano cheio anterior. "Como foi o ano."
+ * - `mes`        — mês × mês anterior (MoM). Usa a DRE DO MÊS (YTD N − YTD N−1);
+ *                  é a régua do acompanhamento recorrente. Sazonalidade pesa:
+ *                  dezembro contra novembro engana em negócio sazonal.
+ * - `ano-a-ano`  — acumulado no ano × mesmo acumulado do ano anterior
+ *                  (mai/26 YTD vs mai/25 YTD). Neutraliza sazonalidade — é a
+ *                  régua que o analista quer no recorrente quando há histórico.
+ *
+ * O que NUNCA se compara: ano cheio com YTD parcial (12 meses vs 5). É o
+ * bloqueio que já existia e continua.
+ */
+export type ReguaComparacao = "exercicio" | "mes" | "ano-a-ano";
+
+export interface ParComparacao {
+  de: string;
+  ate: string;
+  regua: ReguaComparacao;
+  /** Meses cobertos por cada lado (iguais por construção) — a prova da janela. */
+  mesesJanela: number;
+}
+
+const mesAno = (p: string): { mes: number; ano: number } | null => {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(p.trim());
+  if (m) return { mes: Number(m[2]), ano: Number(m[3]) };
+  const y = /^(\d{4})$/.exec(p.trim());
+  return y ? { mes: 12, ano: Number(y[1]) } : null;
+};
+
+/**
+ * Todos os pares comparáveis da série, do mais recente para o mais antigo.
+ * Leve (só rótulos) — vai persistido para a tela montar o seletor sem recalcular.
+ */
+export function paresComparaveis(dados: DadosParaPontes): ParComparacao[] {
+  const periodos = [...(dados.periodos ?? [])].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
+  const ytd = new Set((dados.arvoresBalancete ?? []).map((a) => a?.periodo).filter(Boolean) as string[]);
+  const serie = dados.serie ?? null;
+  const out: ParComparacao[] = [];
+
+  for (let i = 1; i < periodos.length; i++) {
+    const de = periodos[i - 1]!;
+    const ate = periodos[i]!;
+    if (!parComparavelSrv(de, ate, serie).ok) continue;
+    const a = mesAno(de), b = mesAno(ate);
+    if (!a || !b) continue;
+    const ehMes = ytd.has(de) && ytd.has(ate);
+    if (ehMes) {
+      // Meses consecutivos do MESMO exercício: MoM pela DRE do mês.
+      const consecutivo = a.ano === b.ano && b.mes === a.mes + 1;
+      if (consecutivo) out.push({ de, ate, regua: "mes", mesesJanela: 1 });
+    } else if (!ytd.has(de) && !ytd.has(ate)) {
+      // Dois exercícios (ou dois períodos anuais) consecutivos.
+      out.push({ de, ate, regua: "exercicio", mesesJanela: 12 });
+    }
+  }
+
+  // ANO A ANO no mensal: mesmo mês do ano anterior, YTD contra YTD (janela igual
+  // em meses). Não precisa ser consecutivo na série — precisa existir.
+  for (const ate of periodos) {
+    if (!ytd.has(ate)) continue;
+    const b = mesAno(ate);
+    if (!b) continue;
+    const de = periodos.find((p) => {
+      if (!ytd.has(p)) return false;
+      const a = mesAno(p);
+      return a && a.mes === b.mes && a.ano === b.ano - 1;
+    });
+    if (de) out.push({ de, ate, regua: "ano-a-ano", mesesJanela: b.mes });
+  }
+
+  return out.sort((x, y) => ordPeriodo(y.ate) - ordPeriodo(x.ate) || ordPeriodo(y.de) - ordPeriodo(x.de));
+}
+
+/**
+ * DRE ajustada à régua: no MoM os dois lados precisam do valor DO MÊS (a DRE de
+ * balancete é acumulada no exercício — comparar YTD de maio com YTD de abril
+ * daria "variação" que é só o mês de maio somado ao resto do ano).
+ */
+function dreDaRegua(dre: DRELineItem[], dados: DadosParaPontes, par: ParComparacao): DRELineItem[] | null {
+  if (par.regua !== "mes") return dre;
+  const mensal = derivarDREMensal({ dre, balancetes: dados.balancetes, arvoresBalancete: dados.arvoresBalancete });
+  const infoDe = mensal?.periodos?.[par.de];
+  const infoAte = mensal?.periodos?.[par.ate];
+  // Sem o mês isolado dos DOIS lados não há MoM honesto.
+  if (!mensal || !infoDe?.mesIsolado || !infoAte?.mesIsolado) return null;
+  return dre.map((l) => ({
+    ...l,
+    valores: {
+      ...l.valores,
+      [par.de]: mensal.valores?.[l.conta]?.[par.de] ?? 0,
+      [par.ate]: mensal.valores?.[l.conta]?.[par.ate] ?? 0,
+    },
+  }));
 }
 
 /**
@@ -505,12 +613,13 @@ export interface DadosParaPontes {
  */
 export function buildPontesVariacao(
   dados: DadosParaPontes,
-  opts?: { regimeCadastro?: string | null }
+  opts?: { regimeCadastro?: string | null; par?: { de: string; ate: string } | null }
 ): PontesVariacao | null {
   const periodos = [...(dados.periodos ?? [])].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
   if (periodos.length < 2) return null;
   const bp = dados.bp ?? [];
-  const dre = dados.dre ?? [];
+  const dreOriginal = dados.dre ?? [];
+  let dre = dreOriginal;
 
   // Dias-base por período (mesma precedência do buildIndicators: YTD de
   // balancete = mês×30; demais pela cadência da série).
@@ -520,9 +629,12 @@ export function buildPontesVariacao(
     diasPorPeriodo[p] = ytd.has(p) ? diasYTD(p) : diasDoPeriodo(p, periodos.filter((x) => !ytd.has(x) || x === p));
   }
 
+  const disponiveis = paresComparaveis(dados);
   const base: PontesVariacao = {
     calculadoEm: new Date().toISOString(),
     par: null,
+    regua: null,
+    disponiveis,
     bloqueio: null,
     avisoPar: null,
     ponteEbitda: null,
@@ -534,36 +646,56 @@ export function buildPontesVariacao(
 
   // ESCOLHA DO PAR: a DRE é FLUXO — comparar 12 meses com um YTD de 5 seria
   // variação inventada (o mesmo erro que o gráfico da onda 1 evita). Exige-se
-  // JANELA IGUAL (mesma base de dias) além da continuidade; sem par assim no
-  // fim da série, recua para o par comparável mais recente e declara o recuo.
+  // JANELA IGUAL além da continuidade. O analista pode PEDIR um par (opts.par);
+  // sem pedido, vale o mais recente comparável — e o recuo é declarado.
   const ultimo = periodos[periodos.length - 1]!;
-  let de: string | null = null;
-  let ate: string | null = null;
+  let escolhido: ParComparacao | null = null;
   let motivoBloqueio: string | null = null;
-  for (let i = periodos.length - 1; i >= 1; i--) {
-    const cand = { de: periodos[i - 1]!, ate: periodos[i]! };
-    const cmp = parComparavelSrv(cand.de, cand.ate, dados.serie ?? null);
-    if (!cmp.ok) { motivoBloqueio ??= cmp.motivo ?? null; continue; }
-    if (diasPorPeriodo[cand.de] !== diasPorPeriodo[cand.ate]) {
-      motivoBloqueio ??= "os dois períodos cobrem janelas diferentes (ex.: ano cheio vs acumulado parcial)";
-      continue;
+
+  if (opts?.par) {
+    escolhido = disponiveis.find((p) => p.de === opts.par!.de && p.ate === opts.par!.ate) ?? null;
+    if (!escolhido) {
+      return { ...base, bloqueio: "O par pedido não é comparável (janela diferente ou lacuna na série)." };
     }
-    de = cand.de; ate = cand.ate;
-    break;
+  } else {
+    // Preferência: o par mais recente da régua mais informativa disponível —
+    // ano-a-ano vence MoM no mensal (neutraliza sazonalidade); no anual, exercício.
+    const porRegua = (r: ReguaComparacao) => disponiveis.filter((p) => p.regua === r)[0] ?? null;
+    escolhido = porRegua("ano-a-ano") ?? porRegua("exercicio") ?? porRegua("mes") ?? null;
+    if (!escolhido) {
+      for (let i = periodos.length - 1; i >= 1; i--) {
+        const cmp = parComparavelSrv(periodos[i - 1]!, periodos[i]!, dados.serie ?? null);
+        if (!cmp.ok) { motivoBloqueio ??= cmp.motivo ?? null; continue; }
+        if (diasPorPeriodo[periodos[i - 1]!] !== diasPorPeriodo[periodos[i]!]) {
+          motivoBloqueio ??= "os dois períodos cobrem janelas diferentes (ex.: ano cheio vs acumulado parcial)";
+        }
+      }
+      return { ...base, bloqueio: `Variação não decomposta: ${motivoBloqueio ?? "sem par de períodos comparável"}.` };
+    }
   }
-  if (!de || !ate) {
-    return { ...base, bloqueio: `Variação não decomposta: ${motivoBloqueio ?? "sem par de períodos comparável"}.` };
+
+  const { de, ate } = escolhido;
+  // MoM precisa da DRE DO MÊS nos dois lados; sem ela, o par não vira ponte.
+  const dreAjustada = dreDaRegua(dre, dados, escolhido);
+  if (!dreAjustada) {
+    return { ...base, bloqueio: "Mês a mês indisponível: falta o mês anterior na série para isolar o resultado do mês (a DRE do balancete é acumulada no exercício)." };
   }
-  // O aviso carrega o motivo REAL do recuo (janela diferente ou lacuna) — dizer
-  // "janela diferente" quando o buraco é de série seria informação errada.
-  const avisoPar = ate !== ultimo
-    ? `Decomposição do par ${de} → ${ate}: o período mais recente (${ultimo}) não é comparável linha a linha — ${motivoBloqueio ?? "sem par comparável no fim da série"}.`
+  dre = dreAjustada;
+  if (escolhido.regua === "mes") {
+    diasPorPeriodo[de] = 30;
+    diasPorPeriodo[ate] = 30;
+  }
+  // O aviso só existe quando o analista NÃO pediu o par e o escolhido não chega
+  // ao fim da série — pedido explícito não precisa se justificar.
+  const avisoPar = !opts?.par && ate !== ultimo
+    ? `Decomposição do par ${de} → ${ate}: o período mais recente (${ultimo}) não entra nesta comparação — só se compara janela igual com janela igual.`
     : null;
 
   const fc = dados.fluxoCaixa ?? null;
   return {
     ...base,
     par: { de, ate },
+    regua: escolhido.regua,
     avisoPar,
     ponteEbitda: ponteResultadoDe(dre, "EBITDA", de, ate),
     ponteLucro: ponteResultadoDe(dre, "Lucro Líquido", de, ate),
