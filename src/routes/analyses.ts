@@ -31,6 +31,7 @@ import { catalogoPadraoEfetivo, calibrarSemaforoComPares, sanitizeRowsIBR, type 
 import { classificarSetor } from "../services/setor-classificador";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { buildPontesVariacao } from "../services/bridge-variacao";
+import { medirExtracaoDesatualizada } from "../services/extracao-desatualizada";
 import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
 import { extrairComCascata, paraTelaManual, mergeItensPorConta } from "../services/extracao-cascata";
@@ -520,49 +521,16 @@ router.get("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   // EXTRAÇÃO DESATUALIZADA: algum documento financeiro vigente entrou DEPOIS da
   // última extração (upload novo ou substituição de versão) — os números exibidos
   // não refletem a base atual até reprocessar. Nada muda silencioso: só o aviso.
-  const extraidoEm = (analysis.dadosEstruturados as any)?.extraidoEm as string | undefined;
-  // Documento HERDADO (fixação Processada, fase B/nova-versão) carrega a própria
-  // extração — não conta como "adicionado depois": sem isto, toda v2 herdada
-  // acendia "extração desatualizada" à toa (falso positivo real, 21/07/2026).
-  const marcaGravada = (analysis.dadosEstruturados as any)?.marcaBase as string | undefined;
-  const motivoDesatualizacao: string[] = [];
-  let extracaoDesatualizada = false;
-  if (marcaGravada) {
-    // CAMINHO DA BASE: compara a IMPRESSÃO DIGITAL dos insumos. Mudou o hash de
-    // um arquivo, entrou/saiu documento da seleção, a leitura foi refeita ou o
-    // dicionário/modelo mudou → os números na tela são de antes. Não mudou nada
-    // disso → não há o que reprocessar, mesmo que a linha do documento seja nova.
-    const poolIds = analysis.documents
-      .filter((d) => d.fixadoDeId && d.tipo !== MATERIAL_TIPO && d.status !== "Substituído")
-      .map((d) => d.fixadoDeId!);
-    try {
-      const agora = await insumosDaBase(analysis.companyId, req.scopeUserIds!, poolIds);
-      if (agora.marca !== marcaGravada) {
-        extracaoDesatualizada = true;
-        // Nome do documento na mão, para o aviso poder ser CONFERIDO.
-        const nomePorId: Record<string, string> = {};
-        for (const d of agora.docs) nomePorId[d.id] = d.nome;
-        for (const d of analysis.documents) if (d.fixadoDeId) nomePorId[d.fixadoDeId] ??= d.nome;
-        motivoDesatualizacao.push(...diferencasDaMarca(marcaGravada, agora.marca, nomePorId).slice(0, 6));
-      }
-    } catch { /* falha ao medir não acende alarme falso */ }
-  } else if (extraidoEm) {
-    // CAMINHO ANTIGO (extração própria do IBR): documento vigente que entrou
-    // DEPOIS da última extração. Documento HERDADO (fixação Processada) carrega
-    // a própria extração e não conta — sem isto toda v2 herdada acendia à toa.
-    const novos = analysis.documents.filter((d) =>
-      d.tipo !== MATERIAL_TIPO && d.status !== "Substituído" &&
-      !(d.status === "Processado" && d.fixadoDeId) &&
-      d.createdAt > new Date(extraidoEm),
-    );
-    extracaoDesatualizada = novos.length > 0;
-    // O AVISO PRECISA SER FALSIFICÁVEL (12/08/2026, dono: "não localizei esta
-    // mudança"). Sem o nome do documento e a data, o analista não tem como
-    // conferir se é verdade — e um aviso que não se pode conferir vira ruído.
-    for (const d of novos.slice(0, 5)) {
-      motivoDesatualizacao.push(`"${d.nome}" entrou em ${d.createdAt.toLocaleString("pt-BR")}, depois da extração de ${new Date(extraidoEm).toLocaleString("pt-BR")}`);
-    }
-  }
+  // MESMA MEDIDA da trava de geração (serviço extracao-desatualizada): o aviso
+  // da tela e o 409 do /generate não podem discordar.
+  const medidaDesatualizacao = await medirExtracaoDesatualizada(
+    { companyId: analysis.companyId, dadosEstruturados: analysis.dadosEstruturados, documents: analysis.documents as never },
+    req.scopeUserIds!,
+  );
+  // O aviso PRECISA SER FALSIFICÁVEL (12/08/2026, dono: "não localizei esta
+  // mudança"): os motivos trazem o nome do documento / o insumo que mudou.
+  const extracaoDesatualizada = medidaDesatualizacao.desatualizada;
+  const motivoDesatualizacao = medidaDesatualizacao.motivos;
   // VALUATIONS/MODELOS vinculados a este IBR (pode ser mais de um): o cabeçalho
   // do IBR mostra os links — a relação IBR↔produto fica visível dos dois lados.
   const modelosVinculados = await prisma.financialModel.findMany({
@@ -2304,6 +2272,30 @@ router.post("/:id/generate", async (req: AuthRequest, res: Response): Promise<vo
       field: "geração com lacuna de série DECLARADA",
       after: declaracao, source: "generate",
     });
+  }
+
+  // EXTRAÇÃO DESATUALIZADA BARRA A GERAÇÃO (14/08/2026, regra do dono: "a
+  // extração precisa estar correta antes de rodar o IBR"). Antes era só um
+  // aviso na tela: dava para gerar — com custo de IA — uma análise inteira
+  // sobre números que o próprio sistema já sabia estarem velhos (dicionário ou
+  // modelo mudou depois da extração), e o resultado saía com cara de fato.
+  // Sem confirmação silenciosa: reprocessar é grátis e leva segundos.
+  const docsParaMedida = await prisma.document.findMany({
+    where: { analysisId: analysis.id },
+    select: { id: true, nome: true, tipo: true, status: true, fixadoDeId: true, createdAt: true },
+  });
+  const medida = await medirExtracaoDesatualizada(
+    { companyId: analysis.companyId, dadosEstruturados: analysis.dadosEstruturados, documents: docsParaMedida },
+    req.scopeUserIds!,
+  );
+  if (medida.desatualizada) {
+    res.status(409).json({
+      error: "A extração está desatualizada — os números atuais são de antes da última mudança na base. " +
+        "Reprocesse (é grátis e reusa os documentos já lidos) e gere depois: a análise sairia sobre números velhos, com custo de IA.",
+      pendencias: medida.motivos,
+      tipo: "extracao-desatualizada",
+    });
+    return;
   }
 
   const prontidao = avaliarProntidaoGeracao(dados);
