@@ -346,7 +346,10 @@ export function parseExcel(buffer: Buffer, tipo: string): ParsedDocument {
     const row = rows[i] as unknown[];
     if (!row || row.length === 0) continue;
 
-    const conta = String(row[contaColIdx] ?? "").trim();
+    // MESMA RÉGUA DOS CAMINHOS DE PDF (13/08/2026): a célula do Excel entrava
+    // CRUA — código do plano e sinal duplicado iam direto para a árvore e para
+    // a chave do dicionário. Era o último caminho do parser fora da régua.
+    const conta = limparNomeConta(String(row[contaColIdx] ?? "").trim());
     if (!conta || conta.length < 2) continue;
     // Skip pure numeric "conta" names (likely row numbers or codes without names)
     if (/^\d+$/.test(conta)) continue;

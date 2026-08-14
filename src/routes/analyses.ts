@@ -2750,6 +2750,13 @@ router.put("/:id/dados-estruturados/arvore", async (req: AuthRequest, res: Respo
   enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
 
   const dados = (analysis.dadosEstruturados as any) || { bp: [], dre: [], indicadores: [], periodos: [], version: 1 };
+  // FRONTEIRA DELIBERADA (13/08/2026, fechamento de I2): a árvore original NÃO
+  // passa por limparNomeConta aqui. Ela é a visão FIEL do documento — o rastro
+  // que o analista usa para conferir cada número até a origem — e limpá-la
+  // apagaria o sinal "(-)" de conta redutora impressa. O DICIONÁRIO continua
+  // protegido do mesmo jeito: toda porta de escrita dele (classify, POST, PUT,
+  // aprovar) limpa e recusa na entrada — nome sujo aqui vira no máximo rótulo
+  // de exibição, nunca chave de dicionário.
   dados.arvoreOriginalBP = req.body.arvoreOriginalBP ?? null;
   dados.arvoreOriginalDRE = req.body.arvoreOriginalDRE ?? null;
   dados.naoMapeados = req.body.naoMapeados ?? [];
