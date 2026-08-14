@@ -251,8 +251,12 @@ export async function propagarMetadadosDoPool(
  *
  * Casos LEGÍTIMOS que a regra NÃO pode quebrar (revisão do fluxo do analista):
  *  - IBR CANCELADO: não é entrega, não conta;
- *  - NOVA VERSÃO do mesmo IBR: é outro `analysisId`, mas o conjunto é o mesmo
- *    de propósito — por isso a resposta é 409 CONFIRMÁVEL, não bloqueio duro;
+ *  - NOVA VERSÃO do mesmo produto (mesmo `produtoId`): NÃO dispara. Versão é a
+ *    evolução do MESMO trabalho — usar os mesmos documentos ali é a definição
+ *    de versionar. Antes disparava como 409 confirmável, e o texto mandava
+ *    "use Nova versão" para quem já ESTAVA na nova versão (flagrado pelo dono,
+ *    14/08/2026): aviso autocontraditório treina o analista a confirmar sem
+ *    ler, que é justamente o que mata o valor da garantia nos casos reais;
  *  - dois IBRs de períodos diferentes que compartilham UM balancete: conjuntos
  *    diferentes, não dispara.
  */
@@ -261,21 +265,26 @@ export async function conjuntoJaUsadoEmOutroIBR(
   companyId: string,
 ): Promise<{ analysisId: string; nome: string; status: string; documentos: number } | null> {
   const contabil = (tipo: string) => !/material complementar/i.test(tipo);
-  const meus = await prisma.document.findMany({
-    where: { analysisId, fixadoDeId: { not: null } },
-    select: { fixadoDeId: true, tipo: true },
-  });
+  const [meus, eu] = await Promise.all([
+    prisma.document.findMany({
+      where: { analysisId, fixadoDeId: { not: null } },
+      select: { fixadoDeId: true, tipo: true },
+    }),
+    prisma.analysis.findUnique({ where: { id: analysisId }, select: { produtoId: true } }),
+  ]);
   const meuConjunto = new Set(meus.filter((d) => contabil(d.tipo)).map((d) => d.fixadoDeId!));
   if (meuConjunto.size === 0) return null;
 
   const outros = await prisma.document.findMany({
     where: { companyId, analysisId: { not: null, notIn: [analysisId] }, fixadoDeId: { in: [...meuConjunto] } },
-    select: { analysisId: true, fixadoDeId: true, tipo: true, analysis: { select: { nome: true, status: true } } },
+    select: { analysisId: true, fixadoDeId: true, tipo: true, analysis: { select: { nome: true, status: true, produtoId: true } } },
   });
   const porAnalise = new Map<string, { nome: string; status: string; docs: Set<string> }>();
   for (const d of outros) {
     if (!d.analysisId || !d.fixadoDeId || !contabil(d.tipo)) continue;
     if (d.analysis?.status === "Cancelada") continue;
+    // Versões do MESMO produto compartilham os insumos por definição.
+    if (eu?.produtoId && d.analysis?.produtoId === eu.produtoId) continue;
     const atual = porAnalise.get(d.analysisId) ?? { nome: d.analysis?.nome ?? "IBR", status: d.analysis?.status ?? "?", docs: new Set<string>() };
     atual.docs.add(d.fixadoDeId);
     porAnalise.set(d.analysisId, atual);
