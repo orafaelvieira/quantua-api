@@ -152,8 +152,7 @@ router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
 // workspace). Assim cobre BP e DRE, e garante que qualquer entrada existente
 // seja re-selecionável ao ser editada (o valor sempre está entre as opções).
 router.get("/template", async (req: AuthRequest, res: Response): Promise<void> => {
-  const { BP_TEMPLATE } = require("../services/financial-templates");
-  const { loadActiveDREModel } = require("../services/model-version");
+  const { loadActiveDREModel, loadActiveBPModel } = require("../services/model-version");
   // ?analysisId= → contexto de EMPRESA: o dropdown reflete o modelo DAQUELA
   // empresa (cascata empresa→global). Sem o parâmetro, modelo global (como antes).
   let templateCompanyId: string | null = null;
@@ -171,9 +170,14 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
     });
     templateCompanyId = c?.id ?? null;
   }
-  // Bridge: o dropdown da DRE reflete o MODELO VIGENTE do banco (contas adicionadas no
-  // editor de modelos aparecem aqui na hora).
+  // Bridge: os dropdowns refletem o MODELO VIGENTE do banco (conta adicionada no
+  // editor de modelos aparece aqui na hora). A DRE tinha a ponte desde o início;
+  // o BP montava do template FIXO do código — a conta "(-) Lucros Distribuidos
+  // no Periodo" publicada no modelo do workspace não aparecia no dropdown de
+  // classificação (13/08/2026, print do dono). Agora os dois leem o banco, com
+  // a mesma cascata empresa → global.
   const dreModel = await loadActiveDREModel(templateCompanyId);
+  const bpModel = await loadActiveBPModel(templateCompanyId);
 
   const grouped: Record<string, string[]> = {};
   const add = (grupo: string, conta: string): void => {
@@ -182,8 +186,8 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
     if (!grouped[grupo].includes(conta)) grouped[grupo].push(conta);
   };
 
-  // 1) Contas canônicas do template de BP (agrupadas pelo grupo-pai)
-  for (const item of BP_TEMPLATE) {
+  // 1) Contas do MODELO BP VIGENTE (agrupadas pelo grupo-pai)
+  for (const item of bpModel.lines) {
     add(getParentGroup(item), item.conta);
   }
 
@@ -227,7 +231,8 @@ router.get("/template", async (req: AuthRequest, res: Response): Promise<void> =
   const descricoes: Record<string, string> = {};
   for (const l of linhasGuia) if (l.descricao && !descricoes[l.nome]) descricoes[l.nome] = l.descricao;
 
-  res.json({ template: BP_TEMPLATE, dreTemplate: dreModel.lines, grouped, dreGrouped, descricoes });
+  // template = as linhas do MODELO VIGENTE (a tela usa p/ autofill do grupo).
+  res.json({ template: bpModel.lines, dreTemplate: dreModel.lines, grouped, dreGrouped, descricoes });
 });
 
 // Helper to determine parent group based on classificacao
