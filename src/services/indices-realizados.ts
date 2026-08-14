@@ -102,6 +102,17 @@ function ultimoDoAno(pontos: PontoSgs[], anos: Set<string>): Record<string, numb
 
 const cache = new Map<string, { em: number; dados: IndicesRealizados }>();
 const CACHE_MS = 12 * 3600 * 1000;
+// TETO do cache (instância única, memória crítica): a chave é a COMBINAÇÃO de
+// anos — usuário autenticado em loop poderia crescer o Map sem limite. LRU
+// simples pela ordem de inserção do Map; entrada vencida sai na leitura.
+const CACHE_MAX = 200;
+function guardarNoCache(chave: string, dados: IndicesRealizados): void {
+  if (cache.size >= CACHE_MAX) {
+    const maisAntiga = cache.keys().next().value;
+    if (maisAntiga !== undefined) cache.delete(maisAntiga);
+  }
+  cache.set(chave, { em: Date.now(), dados });
+}
 
 /**
  * Índices realizados nos anos pedidos. Anos sem 12 meses de dado são omitidos
@@ -115,6 +126,7 @@ export async function indicesRealizadosPorAno(anos: string[]): Promise<IndicesRe
   const chave = alvo.join(",");
   const cacheado = cache.get(chave);
   if (cacheado && Date.now() - cacheado.em < CACHE_MS) return cacheado.dados;
+  if (cacheado) cache.delete(chave); // vencida: sai já, não ocupa vaga do teto
 
   const anoSet = new Set(alvo);
   // Um ano antes do primeiro: base da variação cambial do ano mais antigo.
@@ -165,7 +177,7 @@ export async function indicesRealizadosPorAno(anos: string[]): Promise<IndicesRe
       ...memoria,
     ],
   };
-  cache.set(chave, { em: Date.now(), dados });
+  guardarNoCache(chave, dados);
   return dados;
 }
 

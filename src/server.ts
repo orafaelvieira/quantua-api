@@ -24,6 +24,7 @@ import sectorsRouter from "./routes/sectors";
 import adminRouter from "./routes/admin";
 import peersRouter from "./routes/peers";
 import indicatorsRouter from "./routes/indicators";
+import macroRouter from "./routes/macro";
 import aiUsageRouter from "./routes/ai-usage";
 import modelsRouter from "./routes/models";
 import produtosRouter from "./routes/produtos";
@@ -164,6 +165,8 @@ app.use("/sectors", sectorsRouter);
 app.use("/admin", adminRouter);
 app.use("/peers", peersRouter);
 app.use("/indicators", indicatorsRouter);
+// Macro realizado (BCB/SGS) — nota nominal×real do Sumário do IBR.
+app.use("/macro", macroRouter);
 app.use("/ai-usage", aiUsageRouter);
 app.use("/models", modelsRouter);
 // Workspace FP&A (W1): envelopes de produto/versões da empresa.
