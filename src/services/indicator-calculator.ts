@@ -20,10 +20,20 @@ function dreVal(dre: DRELineItem[], conta: string, periodo: string): number {
   return item?.valores[periodo] ?? 0;
 }
 
-// Safe division — returns null on divide by zero
+/** Denominador NULO na prática: resíduo de arredondamento (|v| < meio centavo)
+ *  não é base de nada. Dividir por 2,1e-9 devolvia indicadores astronômicos
+ *  (produção: Crescimento da Receita = 4,2e17%) — a régua de centavos do motor
+ *  vale aqui também. */
+const EPS_DENOMINADOR = 0.005;
+export function ehDenominadorValido(v: number | null | undefined): v is number {
+  return typeof v === "number" && Number.isFinite(v) && Math.abs(v) >= EPS_DENOMINADOR;
+}
+
+// Safe division — null quando o denominador é zero ou resíduo, ou o resultado não é finito
 function div(a: number, b: number): number | null {
-  if (b === 0) return null;
-  return a / b;
+  if (!ehDenominadorValido(b)) return null;
+  const r = a / b;
+  return Number.isFinite(r) ? r : null;
 }
 
 type StatusLevel = "ok" | "atencao" | "critico" | null;
@@ -234,16 +244,19 @@ function computeIndicator(
       if (cdg < 0 && ncg > 0) return "Muito Ruim";
       return "Indefinida";
     }
+    // Prazos: o denominador precisa ser base DE VERDADE — `receitaLiquida ?` era
+    // truthy para resíduo ~1e-9 e devolvia prazo astronômico (mesma família do
+    // YoY de 4e17%).
     case "Prazo Médio Contas a Receber":
-      return receitaLiquida ? Math.round((contasReceber * diasPeriodo) / receitaLiquida) : null;
+      return ehDenominadorValido(receitaLiquida) ? Math.round((contasReceber * diasPeriodo) / receitaLiquida) : null;
     case "Prazo Médio Estoque":
-      return custoOperacional ? Math.round((estoques * diasPeriodo) / custoOperacional) : null;
+      return ehDenominadorValido(custoOperacional) ? Math.round((estoques * diasPeriodo) / custoOperacional) : null;
     case "Prazo Médio Fornecedores":
-      return custoOperacional ? Math.round((fornecedores * diasPeriodo) / custoOperacional) : null;
+      return ehDenominadorValido(custoOperacional) ? Math.round((fornecedores * diasPeriodo) / custoOperacional) : null;
     case "Ciclo Financeiro": {
-      const pmr = receitaLiquida ? Math.round((contasReceber * diasPeriodo) / receitaLiquida) : null;
-      const pme = custoOperacional ? Math.round((estoques * diasPeriodo) / custoOperacional) : null;
-      const pmf = custoOperacional ? Math.round((fornecedores * diasPeriodo) / custoOperacional) : null;
+      const pmr = ehDenominadorValido(receitaLiquida) ? Math.round((contasReceber * diasPeriodo) / receitaLiquida) : null;
+      const pme = ehDenominadorValido(custoOperacional) ? Math.round((estoques * diasPeriodo) / custoOperacional) : null;
+      const pmf = ehDenominadorValido(custoOperacional) ? Math.round((fornecedores * diasPeriodo) / custoOperacional) : null;
       if (pmr !== null && pme !== null && pmf !== null) return pmr + pme - pmf;
       return null;
     }
@@ -259,7 +272,7 @@ function computeIndicator(
     case "Capital Terceiros s/ PL": return div(capitalTerceiros, patrimonioLiquido);
     case "Dívida Líquida/EBITDA": return div(dividaLiquida, ebitda);
     case "Índice de Cobertura de Juros":
-      return despesasFinanceiras !== 0 ? div(ebitda, Math.abs(despesasFinanceiras)) : null;
+      return div(ebitda, Math.abs(despesasFinanceiras));
     case "Despesa Financeira / Rec. Líquida":
       return div(Math.abs(despesasFinanceiras), receitaLiquida);
 
@@ -368,7 +381,9 @@ export function calculateIndicators(
         const idx = periodosOrd.indexOf(periodo);
         const antP = idx > 0 ? periodosOrd[idx - 1] : null;
         const cur = rlPor[periodo], antV = antP ? rlPor[antP] : null;
-        val = cur != null && antV != null && antV !== 0 ? (cur - antV) / Math.abs(antV) : null;
+        // Base do YoY precisa ser receita DE VERDADE: coluna sem movimento
+        // (resíduo ~1e-9) não pode virar "crescimento de 4e17%".
+        val = cur != null && ehDenominadorValido(antV) ? (cur - antV) / Math.abs(antV) : null;
       } else {
         val = computeIndicator(template.nome, bp, dre, periodo, computed, diasPorPeriodo[periodo], extras?.custoCapital);
       }

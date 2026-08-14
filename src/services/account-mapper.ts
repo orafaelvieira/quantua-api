@@ -638,13 +638,21 @@ export function recomputeDRESubtotals(dre: DRELineItem[], periodos: string[], ex
   // na cascata pelo SUBTOTAL do bloco onde foram posicionadas no editor de modelos.
   const extras = (bloco: string, p: string): number =>
     (extrasPorBloco?.[bloco] ?? []).reduce((soma, conta) => soma + get(conta, p), 0);
+  // RESÍDUO DE PONTO FLUTUANTE NÃO É VALOR (14/08/2026): somar dezenas de folhas
+  // que se cancelam (exercício encerrado, receita transferida ao PL) não dá zero
+  // exato — dá ~1e-9. Gravado como subtotal, esse resíduo virava DENOMINADOR e
+  // produzia indicadores astronômicos (visto em produção: Crescimento da Receita
+  // = 423.750.634.875.618.400%, que é 8,97 mi ÷ 2,1e-9). Abaixo de meio centavo
+  // o valor É zero — a mesma régua de centavos usada no resto do motor.
+  const limpaResiduo = (v: number): number => (Math.abs(v) < 0.005 ? 0 : v);
   const set = (conta: string, p: string, val: number): void => {
     const item = dre.find(d => d.conta === conta);
-    if (item) item.valores[p] = val;
+    if (item) item.valores[p] = limpaResiduo(val);
   };
-  // Mantém subtotal extraído se não houver componentes (soma === 0)
+  // Mantém subtotal extraído quando não há componentes (soma ~ 0, com tolerância
+  // de centavos — comparar com !== 0 exato deixava o resíduo vencer o extraído).
   const resolve = (comp: number, conta: string, p: string): number =>
-    comp !== 0 ? comp : get(conta, p);
+    Math.abs(comp) > 0.005 ? comp : get(conta, p);
 
   for (const p of periodos) {
     const receitaLiquida = resolve(
