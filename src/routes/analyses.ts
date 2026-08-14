@@ -241,7 +241,30 @@ router.post("/:id/nova-versao", async (req: AuthRequest, res: Response): Promise
   // TODOS os insumos idênticos → herda também a extração CONSOLIDADA: a nova
   // versão nasce "Pronta para gerar", sem reprocessar e sem custo. Qualquer
   // documento novo/trocado depois disso acende "extração desatualizada".
-  const herancaTotal = herdados > 0 && idsParaReextrair.length === 0 && origem.dadosEstruturados !== null;
+  //
+  // INSUMO NÃO É SÓ DOCUMENTO (14/08/2026, flagrado pelo dono): dicionário e
+  // modelos padrão entram na MARCA dos insumos e mudam o número tanto quanto um
+  // arquivo novo. Herdar só porque os PDFs são os mesmos fazia a v2 nascer com a
+  // extração velha e o aviso "extração desatualizada" ACESO — justamente o
+  // motivo pelo qual o analista criou a versão nova. Pior: já concluída, ela só
+  // oferecia "criar nova versão", fechando um ciclo que nunca atualiza. Marca
+  // diferente → a v2 reextrai com o dicionário/modelos de hoje.
+  const marcaOrigem = (origem.dadosEstruturados as { marcaBase?: string } | null)?.marcaBase;
+  let insumosDaEmpresaMudaram = false;
+  if (marcaOrigem) {
+    try {
+      const poolIdsOrigem = (await prisma.document.findMany({
+        where: { analysisId: origem.id, tipo: { not: MATERIAL_TIPO }, status: { not: "Substituído" }, fixadoDeId: { not: null } },
+        select: { fixadoDeId: true },
+      })).map((d) => d.fixadoDeId!);
+      const agora = await insumosDaBase(origem.companyId, req.scopeUserIds!, poolIdsOrigem);
+      insumosDaEmpresaMudaram = agora.marca !== marcaOrigem;
+      if (insumosDaEmpresaMudaram) {
+        avisos.push("Dicionário ou modelo padrão mudaram desde a versão anterior — esta versão reprocessa a extração com os insumos atuais.");
+      }
+    } catch { /* falha ao medir não pode transformar herança legítima em reprocessamento caro */ }
+  }
+  const herancaTotal = herdados > 0 && idsParaReextrair.length === 0 && origem.dadosEstruturados !== null && !insumosDaEmpresaMudaram;
   if (herancaTotal) {
     await prisma.analysis.update({
       where: { id: nova.id },
