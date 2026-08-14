@@ -14,7 +14,7 @@ const doc = (over: Partial<{ id: string; nome: string; tipo: string; status: str
 });
 
 describe("medirExtracaoDesatualizada", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => { vi.clearAllMocks(); });
 
   it("caminho da base: marca diferente = desatualizada, com motivo conferível", async () => {
     (insumosDaBase as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ marca: "marca-NOVA", docs: [] });
