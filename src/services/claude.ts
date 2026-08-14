@@ -4,6 +4,8 @@ import { calcCusto, modeloAnaliseId, createWithRetry, type CustoIA } from "./ai-
 import { ETAPAS } from "./ai-usage";
 import type { PeerComparisonRow } from "./peer-benchmark";
 import { blocoIdentidade, type IdentidadeEmpresa } from "./web-research";
+import { avaliarBaseDoRetorno } from "./base-do-retorno";
+import type { BPLineItem, DRELineItem } from "../types/financial";
 import { INDICADORES_TEMPLATE } from "./financial-templates";
 import { calcularValorCanonico, type AlavancaValor, type ValorCanonico } from "./valor-na-mesa";
 import { calcularContaRegressiva } from "./conta-regressiva";
@@ -422,6 +424,14 @@ export async function generateAnalysis(
   const regressivaBlock = contaRegressiva
     ? `\nCONTA REGRESSIVA DE CAIXA (calculada pelo MOTOR — use como VERDADE, NÃO recalcule): ${contaRegressiva.leitura}`
     : "";
+
+  // BASE DOS RETORNOS: ROE/ROA com denominador minúsculo viravam "melhor que
+  // praticamente todas as comparáveis" no semáforo (caso DUNAMYS: ROE 626%).
+  // O motor mede a base e entrega a regra de leitura junto.
+  const baseRetorno = bp && dre && ultimoPeriodo
+    ? avaliarBaseDoRetorno(bp as BPLineItem[], dre as DRELineItem[], ultimoPeriodo)
+    : null;
+  const baseRetornoBlock = baseRetorno?.alerta ? `\n${baseRetorno.alerta}` : "";
   const estagioBlock = estagioDet
     ? `\nESTÁGIO DO CICLO (determinado pelo MOTOR a partir do histórico — use como VERDADE, NÃO reclassifique): ${estagioDet.estagio}. ${estagioDet.justificativa}`
     : periodoInsuficiente
@@ -442,7 +452,7 @@ Você recebe VÁRIAS fontes. USE TODAS e CRUZE-AS — o valor está em conectar 
 
 [1] INDICADORES JÁ CALCULADOS E AUDITADOS (determinísticos — NÃO recalcule, apenas INTERPRETE):
 ${det.tabela || "(indicadores indisponíveis)"}
-${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${doresBlock}${estagioBlock}${regressivaBlock}${canonicoBlock}
+${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${doresBlock}${estagioBlock}${regressivaBlock}${baseRetornoBlock}${canonicoBlock}
 
 IMPORTANTE — olhe o HISTÓRICO: leia SEMPRE a evolução multi-ano (tendência entre os períodos), nunca um ano isolado. A força de um IBR está na trajetória.
 
