@@ -232,7 +232,10 @@ describe("buildPontesVariacao — guardas de período", () => {
     const pontes = buildPontesVariacao(comMes)!;
     // O último par (ano cheio → YTD de 5 meses) é descartado; vale 2024 → 2025.
     expect(pontes.par).toEqual({ de: P0, ate: P1 });
-    expect(pontes.avisoPar).toMatch(/31\/05\/2026/);
+    // O aviso NOMEIA o período que ficou de fora — em rótulo de leitura
+    // (05/2026), nunca na data de fechamento (regra de período do dono).
+    expect(pontes.avisoPar).toMatch(/05\/2026/);
+    expect(pontes.avisoPar).not.toMatch(/31\/05\/2026/);
     expect(pontes.ponteEbitda!.prova.fecha).toBe(true);
   });
 
