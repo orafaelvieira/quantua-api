@@ -729,7 +729,15 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
       const ladoAtivo = g.tipo === "ativo";
       const n2s = g.no.filhos.length ? g.no.filhos : [g.no];
       for (const n2 of n2s) {
-        (gruposBP[baldeBP(n2.linha.nome, ladoAtivo)] ??= []).push(paraBPItem(n2, ladoAtivo, campo));
+        // FILHO DE RAIZ "pl" É PATRIMÔNIO POR HERANÇA, não por nome (13/08/2026,
+        // segunda rodada do caso Clorofila): "Resultados" e "Capital Realizado"
+        // são filhos da raiz "Patrimonio Liquido", mas "Resultados" não casa o
+        // vocabulário de PL e despencava no fallback "Passivo Circulante" — a
+        // tela então sugeria "Outros Passivos Circulantes" para lucros
+        // acumulados e o dropdown SÓ oferecia contas de PC (a trava de grupo
+        // filtra os destinos pelo balde). Quem nasce debaixo do PL é PL.
+        const balde = g.tipo === "pl" ? "Patrimônio Líquido" : baldeBP(n2.linha.nome, ladoAtivo);
+        (gruposBP[balde] ??= []).push(paraBPItem(n2, ladoAtivo, campo));
       }
     }
     // AJUSTE-CHAVE: resultado do período entra no PL para o balanço fechar.

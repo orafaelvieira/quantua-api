@@ -51,6 +51,16 @@ describe("PL como raiz própria + DRE encerrada dentro do grupo (caso Clorofila)
     expect(Math.abs(soma - 300)).toBeLessThan(0.01);          // = Resultado Apurado no Periodo
   });
 
+  it("filhos da raiz PL caem no balde Patrimônio Líquido do BP — nunca em Passivo Circulante", () => {
+    const conv = converterBalancete(documento());
+    const bp = Object.values(conv.arvoreBP ?? {})[0] as any;
+    const baldes = bp?.grupos ?? bp;
+    const pl = (baldes["Patrimônio Líquido"] ?? []) as Array<{ nome: string }>;
+    const pc = (baldes["Passivo Circulante"] ?? []) as Array<{ nome: string }>;
+    expect(pl.map((x) => x.nome)).toEqual(expect.arrayContaining(["Capital Social", "Resultado Apurado no Periodo"]));
+    expect(pc.some((x) => /Capital|Resultado/.test(x.nome))).toBe(false);
+  });
+
   it("fechamento com PL assinado: A = P + PL, delta zero", () => {
     const conv = converterBalancete(documento());
     expect(conv.provas.fechamento.ok).toBe(true);
