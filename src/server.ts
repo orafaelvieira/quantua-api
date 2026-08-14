@@ -38,6 +38,7 @@ import { prisma } from "./db/client";
 import { Prisma } from "@prisma/client";
 import { exec } from "node:child_process";
 import { dissolverWorkspaceNoBoot } from "./services/dissolver-workspace";
+import { backfillRegimeEcf } from "./services/backfill-regime-ecf";
 
 const app = express();
 
@@ -220,6 +221,9 @@ app.listen(env.port, () => {
   // por firma e SÓ aplica quando a prova fecha — sem entradas vira no-op. O
   // resultado aparece no Histórico de versões do dicionário, conferível na tela.
   dissolverWorkspaceNoBoot(prisma).catch((e) => console.error("[boot] dissolução da camada workspace falhou:", e?.message ?? e));
+  // Regime tributário retroativo: a ECF já estava gravada em cnpjData; preenche
+  // campo vazio (nunca o valor do analista) com trilha na Audit Trail.
+  backfillRegimeEcf().catch((e) => console.error("[boot] backfill do regime tributário falhou:", e?.message ?? e));
 });
 
 async function recoverOrphanAnalyses(): Promise<void> {

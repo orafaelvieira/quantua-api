@@ -8,6 +8,7 @@ import { deleteFile } from "../services/storage";
 import { registrarAuditoria, diffCampos } from "../services/audit-trail";
 import { sugerirSetores } from "../services/cnae-b3";
 import { normContaGmd } from "../services/gmd-matricial";
+import { regimeEcfDoCnpjData, sugerirRegimeTributario } from "../services/regime-ecf";
 
 const router = Router();
 
@@ -268,7 +269,7 @@ router.post("/", requireQuantua, async (req: AuthRequest, res: Response): Promis
   });
   void registrarAuditoria({
     userId: req.userId!, entity: "company", entityId: company.id, field: "criação",
-    after: { razaoSocial: company.razaoSocial, nomeFantasia: company.nomeFantasia, cnpj: company.cnpj, setor: company.setor, porte: company.porte, uf: company.uf },
+    after: { razaoSocial: company.razaoSocial, nomeFantasia: company.nomeFantasia, cnpj: company.cnpj, setor: company.setor, porte: company.porte, uf: company.uf, regimeTributario: company.regimeTributario },
   });
   res.status(201).json(company);
 });
@@ -357,6 +358,8 @@ router.get("/:id/cadastro", requireInternal, async (req: AuthRequest, res: Respo
         dataOpcaoSimples: texto(d.data_opcao_pelo_simples),
         optanteMei: typeof d.opcao_pelo_mei === "boolean" ? d.opcao_pelo_mei : null,
       },
+      // Regime declarado na ECF (dados abertos) — ano-calendário mais recente.
+      regimeEcf: regimeEcfDoCnpjData(d),
       fonte: texto(d._fonte) ?? (Object.keys(d).length ? "brasilapi" : null),
     },
     // ── QUADRO SOCIETÁRIO — dado pessoal de terceiros, uso interno ──
@@ -396,6 +399,9 @@ router.post("/:id/reconsultar-cnpj", requireInternal, async (req: AuthRequest, r
   if ("naoEncontrado" in dados) { res.status(404).json({ error: "CNPJ não encontrado na Receita Federal." }); return; }
 
   const d = dados;
+  // Regime tributário: SEED-IF-EMPTY — a Receita/ECF só preenche campo vazio; o
+  // valor escolhido pelo analista nunca é sobrescrito (override dele vale mais).
+  const regimeSeed = !company.regimeTributario ? sugerirRegimeTributario(d) : null;
   const antes = { situacaoCadastral: company.situacaoCadastral, capitalSocial: company.capitalSocial, municipio: company.municipio };
   const atualizado = await prisma.company.update({
     where: { id: company.id },
@@ -408,12 +414,17 @@ router.post("/:id/reconsultar-cnpj", requireInternal, async (req: AuthRequest, r
       dataInicioAtividade: typeof d.data_inicio_atividade === "string" ? d.data_inicio_atividade : company.dataInicioAtividade,
       situacaoCadastral: typeof d.descricao_situacao_cadastral === "string" ? d.descricao_situacao_cadastral : company.situacaoCadastral,
       capitalSocial: Number.isFinite(Number(d.capital_social)) ? Number(d.capital_social) : company.capitalSocial,
+      ...(regimeSeed ? { regimeTributario: regimeSeed.valor } : {}),
     },
   });
   void registrarAuditoria({
     userId: req.userId!, entity: "company", entityId: company.id, field: "reconsulta da Receita",
-    before: antes,
-    after: { situacaoCadastral: atualizado.situacaoCadastral, capitalSocial: atualizado.capitalSocial, municipio: atualizado.municipio, fonte: d._fonte ?? "brasilapi" },
+    before: { ...antes, ...(regimeSeed ? { regimeTributario: company.regimeTributario ?? null } : {}) },
+    after: {
+      situacaoCadastral: atualizado.situacaoCadastral, capitalSocial: atualizado.capitalSocial, municipio: atualizado.municipio,
+      ...(regimeSeed ? { regimeTributario: regimeSeed.valor, regimeFonte: regimeSeed.fonte } : {}),
+      fonte: d._fonte ?? "brasilapi",
+    },
   });
   res.json({ ok: true });
 });
