@@ -30,6 +30,7 @@ import { buildIndicators, type ConfigRow } from "../services/indicator-config";
 import { catalogoPadraoEfetivo, calibrarSemaforoComPares, sanitizeRowsIBR, type IBRIndicadorConfig } from "../services/indicador-config-ibr";
 import { classificarSetor } from "../services/setor-classificador";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
+import { buildPontesVariacao } from "../services/bridge-variacao";
 import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
 import { extrairComCascata, paraTelaManual, mergeItensPorConta } from "../services/extracao-cascata";
@@ -2076,6 +2077,14 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
     // Correções de tipo pelo conteúdo: persistidas para o GET /validacao e o /refold
     // (que recalculam a validação do zero) continuarem mostrando o aviso ao analista.
     if (alertasTipoDoc.length > 0) (dadosEstruturados as any).alertasTipoDocumento = alertasTipoDoc;
+    // PONTES DE VARIAÇÃO (onda 2): decomposições determinísticas com prova de
+    // fechamento — precisam da `serie` (guarda de lacuna) e do fluxoCaixa acima;
+    // mesma vida do FC (recalculadas no /refold). Regime do cadastro só carimba
+    // a premissa da alíquota — nunca re-taxa nada.
+    const regimeEmpresaPontes = analysis.companyId
+      ? (await prisma.company.findUnique({ where: { id: analysis.companyId }, select: { regimeTributario: true } }))?.regimeTributario ?? null
+      : null;
+    (dadosEstruturados as any).pontes = buildPontesVariacao(dadosEstruturados as any, { regimeCadastro: regimeEmpresaPontes });
 
     // HASH DE VERSÃO da extração (política 2026-07-15): proveniência COMPLETA dos
     // insumos usados — documentos (sha256 + versão), dicionário e modelos padrão de
@@ -2652,6 +2661,14 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   // FC continua visível mesmo sem validação completa: é SUPERFÍCIE DE AUDITORIA
   // (tem prova de fechamento própria) e ajuda a diagnosticar as pendências.
   dados.fluxoCaixa = buildIndirectCashFlow(dados.bp ?? [], dados.dre ?? [], periodos); // FC acompanha o refold (grátis)
+  // Pontes acompanham o refold pelo MESMO motivo do FC: reclassificar conta
+  // muda os números — a decomposição não pode ficar velha ao lado deles.
+  {
+    const regimeEmpresaRefold = analysis.companyId
+      ? (await prisma.company.findUnique({ where: { id: analysis.companyId }, select: { regimeTributario: true } }))?.regimeTributario ?? null
+      : null;
+    (dados as any).pontes = buildPontesVariacao(dados as any, { regimeCadastro: regimeEmpresaRefold });
+  }
 
   // VALIDAÇÃO + PRONTIDÃO acompanham o refold: reclassificar muda subtotais (DRE) e zera
   // pendências — sem recalcular, o gate ficava preso no estado da extração. Classificou a
