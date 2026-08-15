@@ -98,6 +98,46 @@ describe("cards de decisão", () => {
     expect(card.premissas.join(" ")).toMatch(/não tem dívida financeira registrada/i);
   });
 
+  it("dívida alta e retirada do período entram na resposta, mesmo sem vencer no exercício", () => {
+    // O caso real que o dono trouxe: passivo circulante 100% operacional (dívida
+    // de curto prazo = 0), R$ 9,98 mi de dívida em LONGO prazo (+123% no ano) e
+    // ~R$ 10 mi saindo do PL. A conta do caixa sozinha prometia "volta a caber em
+    // 9 meses". Distribuir nesse quadro não é decisão de 9 meses.
+    const d = cenario();
+    d.bp = [
+      ...d.bp.filter((l) => !/Empréstimos|Partes Relacionadas/.test(l.conta)),
+      bpL("PNC", "Empréstimos e Financiamentos - LP", 2, { [P0]: 4_473_684, [P1]: 9_979_329 }),
+    ];
+    // SUBSTITUI o indicador da fixture — acrescentar um segundo com o mesmo nome
+    // não faz efeito: o motor (e a tela) resolvem pelo primeiro que casa.
+    d.indicadores = d.indicadores.map((i) =>
+      i.nome === "Dívida Líquida/EBITDA" ? ({ ...i, valores: { [P1]: 4.2 }, status: { [P1]: "critico" } } as never) : i,
+    );
+    (d.fluxoCaixa as never as { fcf: Array<{ nome: string; valores: Record<string, number> }> }).fcf = [
+      { nome: "Dividendos e ajustes do PL (ΔPL − lucro − Δ capital)", valores: { [P1]: -10_040_000 } },
+    ];
+    const card = montarCardsDecisao(d)!.cards.find((c) => c.id === "distribuicao")!;
+
+    expect(card.status).toBe("critico");
+    expect(card.resposta).not.toMatch(/volta a caber/i);       // sem promessa
+    expect(card.resposta).toMatch(/dívida total é R\$ 9,98 mi/i);
+    expect(card.resposta).toMatch(/4,2x EBITDA/);
+    expect(card.resposta).toMatch(/já saíram R\$ 10,04 mi do patrimônio/i);
+    expect(card.premissas.join(" ")).toMatch(/variação do patrimônio líquido menos o lucro/i);
+  });
+
+  it("alavancagem acesa rebaixa o card mesmo com caixa sobrando", () => {
+    const d = cenario();
+    d.bp = d.bp.map((l) => (/Caixa/.test(l.conta) ? { ...l, valores: { [P0]: 9_000_000, [P1]: 9_000_000 } } : l));
+    d.indicadores = d.indicadores.map((i) =>
+      i.nome === "Dívida Líquida/EBITDA" ? ({ ...i, valores: { [P1]: 3.8 }, status: { [P1]: "atencao" } } as never) : i,
+    );
+    const card = montarCardsDecisao(d)!.cards.find((c) => c.id === "distribuicao")!;
+    expect(card.linhas.find((l) => l.destaque)!.bruto!).toBeGreaterThan(0); // há folga de caixa
+    expect(card.status).toBe("atencao");                                    // mas não é "ok"
+    expect(card.resposta).toMatch(/aumenta a alavancagem/i);
+  });
+
   it("crítico é quando a operação NÃO repõe a reserva", () => {
     const d = cenario();
     // Mesma falta de caixa, mas a operação queima em vez de gerar.

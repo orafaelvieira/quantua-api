@@ -95,6 +95,17 @@ const num = (v: unknown): number | null => (typeof v === "number" && Number.isFi
 const ind = (dados: DadosParaCards, nome: string, p: string): number | null =>
   num(dados.indicadores?.find((i) => i.nome === nome)?.valores?.[p]);
 
+/** Semáforo do indicador, já calibrado pelo motor — não inventar limiar aqui. */
+const indStatus = (dados: DadosParaCards, nome: string, p: string): "ok" | "atencao" | "critico" | null => {
+  const s = (dados.indicadores?.find((i) => i.nome === nome) as { status?: Record<string, string | null> } | undefined)?.status?.[p];
+  return s === "ok" || s === "atencao" || s === "critico" ? s : null;
+};
+
+/** O pior de dois status — a boa notícia nunca apaga a ruim. */
+const PESO_STATUS: Record<StatusCard, number> = { informativo: 0, ok: 1, atencao: 2, critico: 3 };
+const pior = (a: StatusCard, b: StatusCard | null): StatusCard =>
+  b !== null && PESO_STATUS[b] > PESO_STATUS[a] ? b : a;
+
 // ── Card 1: quanto dá para distribuir ─────────────────────────────────────────
 
 function cardDistribuicao(
@@ -153,20 +164,63 @@ function cardDistribuicao(
   const falta = -sobra;
   const geracaoMensal = geraCaixa ? fcRecorrente! / (dias / 30) : null;
   const mesesParaRepor = geracaoMensal && falta > 0 ? falta / geracaoMensal : null;
-  const reporNoAno = mesesParaRepor !== null && mesesParaRepor <= 12;
   const nMeses = mesesParaRepor !== null ? Math.ceil(mesesParaRepor) : 0;
 
-  const status: StatusCard = sobra > 0
-    ? (sobra < caixaMinimo * 0.5 ? "atencao" : "ok")
-    : reporNoAno ? "atencao" : "critico";
+  /**
+   * ALAVANCAGEM E RETIRADA JÁ FEITA entram na pergunta "quanto posso tirar".
+   *
+   * A conta do caixa sozinha dizia "em 9 meses a distribuição volta a caber" para
+   * uma empresa cuja dívida subiu 123% no ano e cujo PL caiu pela metade — porque
+   * a dívida era toda de LONGO prazo e não entrava na subtração. Continuar não
+   * subtraindo está certo (ela não vence no exercício), mas ignorá-la na leitura
+   * não: quem decide dividendo precisa ver os dois números.
+   *
+   * O limiar da alavancagem NÃO é inventado aqui — vem do semáforo que o motor já
+   * calibra para Dívida Líquida/EBITDA. E a retirada do período é a linha que o
+   * fluxo indireto já calcula (ΔPL − lucro − Δ capital), não uma conta nova.
+   */
+  const alavancagem = ind(dados, "Dívida Líquida/EBITDA", p);
+  const statusAlavancagem = indStatus(dados, "Dívida Líquida/EBITDA", p);
+  const retiradaLinha = dados.fluxoCaixa?.fcf?.find((l) => /dividendo|ajustes do pl/i.test(l.nome))?.valores?.[p] ?? 0;
+  const jaRetirado = retiradaLinha < 0 ? Math.abs(retiradaLinha) : 0;
+  // ALERTA só quando o semáforo ACENDE. Status nulo é desconhecido, não perigo:
+  // sem esta guarda, empresa com dívida líquida NEGATIVA (mais caixa que dívida)
+  // ouvia "distribuir aumenta a alavancagem".
+  const alavancagemAcesa = statusAlavancagem === "atencao" || statusAlavancagem === "critico";
+  // A promessa de "volta a caber em N meses" só vale com a alavancagem apagada:
+  // senão a geração dos próximos meses já tem dono.
+  const reporNoAno = mesesParaRepor !== null && mesesParaRepor <= 12;
+  const podePrometer = reporNoAno && !alavancagemAcesa;
 
-  const resposta = sobra > 0
+  const statusCaixa: StatusCard = sobra > 0
+    ? (sobra < caixaMinimo * 0.5 ? "atencao" : "ok")
+    : podePrometer ? "atencao" : "critico";
+  const status = pior(statusCaixa, statusAlavancagem);
+
+  const alavancagemTxt = alavancagem !== null
+    ? ` (${alavancagem.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}x EBITDA)`
+    : "";
+  const contexto = [
+    dividaTotal > 0 && alavancagemAcesa
+      ? `A dívida total é ${brl(dividaTotal)}${alavancagemTxt}: distribuir agora aumenta a alavancagem.`
+      : null,
+    jaRetirado > 0
+      ? `Neste período já saíram ${brl(jaRetirado)} do patrimônio em dividendos e ajustes.`
+      : null,
+  ].filter(Boolean).join(" ");
+
+  const base = sobra > 0
     ? `Distribuição segura hoje: até ${brl(sobra)} — o que sobra depois de manter ${mesesTxt} de reserva e cobrir a dívida de curto prazo.`
-    : reporNoAno
+    : podePrometer
       ? `Nada a distribuir hoje: o caixa (${brl(caixa)}) está ${brl(falta)} abaixo da linha de segurança. A operação gera ${brl(fcRecorrente!)} no período, o que recompõe essa diferença em cerca de ${nMeses} ${nMeses === 1 ? "mês" : "meses"} no mesmo ritmo — a partir daí a distribuição volta a caber.`
-      : geraCaixa
+      : geraCaixa && !reporNoAno
         ? `Nada a distribuir: o caixa (${brl(caixa)}) está ${brl(falta)} abaixo da linha de segurança, e no ritmo atual a operação levaria mais de um ano para recompor.`
-        : `Não há folga para distribuir: o caixa de hoje (${brl(caixa)}) não cobre a reserva mínima e os compromissos de curto prazo, e a operação não está gerando caixa para repor.`;
+        : geraCaixa
+          // Repõe dentro do ano, mas a alavancagem está acesa: a geração tem dono.
+          ? `Nada a distribuir: o caixa (${brl(caixa)}) está ${brl(falta)} abaixo da linha de segurança, e a geração do período tem compromisso antes de virar dividendo.`
+          : `Não há folga para distribuir: o caixa de hoje (${brl(caixa)}) não cobre a reserva mínima e os compromissos de curto prazo, e a operação não está gerando caixa para repor.`;
+
+  const resposta = contexto ? `${base} ${contexto}` : base;
 
   return {
     id: "distribuicao",
@@ -203,8 +257,14 @@ function cardDistribuicao(
       ...(fcRecorrente !== null
         ? [`Geração recorrente do período = ${brl(fcRecorrente)} (caixa da operação menos o investimento, capex estimado do fluxo indireto).`]
         : []),
-      ...(mesesParaRepor !== null
+      ...(podePrometer
         ? ["O prazo de reposição supõe o mesmo ritmo de geração dos próximos meses, sem sazonalidade — é ordem de grandeza, não cronograma."]
+        : []),
+      ...(jaRetirado > 0
+        ? [`Retirada do período (${brl(jaRetirado)}) = variação do patrimônio líquido menos o lucro e menos a variação de capital social, do fluxo de caixa indireto: inclui dividendos e outros ajustes do PL.`]
+        : []),
+      ...(statusAlavancagem === "critico" || statusAlavancagem === "atencao"
+        ? ["O alerta de alavancagem vem do semáforo de Dívida Líquida/EBITDA da aba Indicadores, com os mesmos limites usados no resto do IBR."]
         : []),
       "Não considera obrigações fiscais parceladas nem sazonalidade do recebimento — confira antes de deliberar.",
     ],
