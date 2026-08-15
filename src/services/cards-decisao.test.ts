@@ -54,14 +54,37 @@ describe("cards de decisão", () => {
     const linhaSobra = card.linhas.find((l) => l.destaque)!;
     expect(linhaSobra.rotulo).toBe("Distribuição segura");
     expect(linhaSobra.bruto!).toBeLessThan(0);
-    expect(card.status).toBe("critico");
-    expect(card.resposta).toMatch(/Não há folga/i);
+    // Sem folga HOJE, mas a operação gera caixa e recompõe a diferença rápido:
+    // isso é atenção, não crítico. Marcar crítico numa empresa sem dívida que
+    // gera caixa foi o primeiro defeito que o dono viu na tela real.
+    expect(card.status).toBe("atencao");
+    expect(card.resposta).toMatch(/Nada a distribuir hoje/i);
+    expect(card.resposta).toMatch(/recompõe.*em cerca de \d+ (mês|meses)/i);
+    // A conta PARA na linha de destaque — a geração recorrente não é parcela dela.
+    expect(card.linhas[card.linhas.length - 1]!.rotulo).toBe("Distribuição segura");
     // A premissa do prazo aparece SEMPRE — o número sozinho não decide nada.
     expect(card.edicao).toMatchObject({ chave: "mesesCaixaMinimo", valor: MESES_CAIXA_MINIMO_PADRAO });
     expect(card.edicao!.depois).toMatch(/desembolso operacional/i);
     expect(card.premissas.join(" ")).toMatch(/cronograma de vencimentos/i);
     // A frase editável NÃO se repete na lista fixa: a tela desenha uma só vez.
     expect(card.premissas.join(" ")).not.toMatch(/Reserva mínima/i);
+  });
+
+  it("crítico é quando a operação NÃO repõe a reserva", () => {
+    const d = cenario();
+    // Mesma falta de caixa, mas a operação queima em vez de gerar.
+    (d.fluxoCaixa as never as { totais: { fco: Record<string, number> } }).totais.fco[P1] = -400_000;
+    const card = montarCardsDecisao(d)!.cards.find((c) => c.id === "distribuicao")!;
+    expect(card.status).toBe("critico");
+    expect(card.resposta).toMatch(/não está gerando caixa para repor/i);
+  });
+
+  it("geração que levaria mais de um ano para repor não vira promessa", () => {
+    const d = cenario();
+    (d.fluxoCaixa as never as { totais: { fco: Record<string, number> } }).totais.fco[P1] = 160_000;
+    const card = montarCardsDecisao(d)!.cards.find((c) => c.id === "distribuicao")!;
+    expect(card.status).toBe("critico");
+    expect(card.resposta).toMatch(/mais de um ano/i);
   });
 
   it("premissa de caixa mínimo é editável e muda a conta", () => {
@@ -199,12 +222,25 @@ describe("cards de decisão", () => {
     expect(r.cards.find((c) => c.id === "qualidade-lucro")!.linhas.map((l) => l.rotulo)).toEqual(["2024"]);
   });
 
-  it("período de balancete se lê como mês, mesmo fechando em dezembro", () => {
-    const d = cenario();
-    // Balancete acumulado até 31/12/2024: é YTD, então o rótulo é 12/2024.
-    const r = montarCardsDecisao({ ...d, arvoresBalancete: [{ periodo: P1 }] })!;
+  it("balancete que fecha em dezembro é o EXERCÍCIO, não o mês 12", () => {
+    // O acumulado do balancete termina em 31/12: cobre o ano inteiro. Rotular
+    // "12/2024" fazia um exercício cheio parecer um mês na tela do cliente.
+    const r = montarCardsDecisao({ ...cenario(), arvoresBalancete: [{ periodo: P1 }] })!;
     expect(r.periodo).toBe(P1); // a CHAVE do dado não muda
-    expect(JSON.stringify(r.cards)).not.toMatch(/\d{2}\/\d{2}\/\d{4}/);
+    expect(r.periodoRotulo).toBe("2024");
+    expect(JSON.stringify(r.cards)).not.toMatch(/12\/2024/);
+  });
+
+  it("balancete que para no meio do ano se lê como mês", () => {
+    const P = "31/05/2026";
+    const d = {
+      ...cenario(),
+      periodos: [P],
+      arvoresBalancete: [{ periodo: P }],
+      dre: [{ conta: "Receita Líquida", subtotal: true, editado: false, valores: { [P]: 3_000_000 } }] as never,
+      bp: [{ classificacao: "AF", conta: "Caixa e Equivalentes de Caixa", nivel: 2, editado: false, valores: { [P]: 500_000 } }] as never,
+    };
+    expect(montarCardsDecisao(d)!.periodoRotulo).toBe("05/2026");
   });
 
   it("sem dados não inventa card", () => {

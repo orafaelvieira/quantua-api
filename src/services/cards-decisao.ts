@@ -121,12 +121,36 @@ function cardDistribuicao(
   const capex = Math.abs(dados.fluxoCaixa?.fci?.find((l) => /capex/i.test(l.nome))?.valores?.[p] ?? 0);
   const fcRecorrente = fco !== null ? fco - capex : null;
 
-  const status: StatusCard = sobra <= 0 ? "critico" : sobra < caixaMinimo * 0.5 ? "atencao" : "ok";
   // "1 meses" num relatório que vai ao cliente denuncia texto montado por máquina.
   const mesesTxt = `${meses.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} ${meses === 1 ? "mês" : "meses"}`;
-  const resposta = sobra <= 0
-    ? `Não há folga para distribuir: o caixa de hoje (${brl(caixa)}) não cobre a reserva mínima e os compromissos de curto prazo.`
-    : `Distribuição segura hoje: até ${brl(sobra)} — o que sobra depois de manter ${mesesTxt} de reserva e cobrir a dívida de curto prazo.`;
+
+  /**
+   * FOTO DO CAIXA × FILME DA OPERAÇÃO.
+   *
+   * O caixa é o saldo de UMA data; a geração recorrente é o que a operação repõe
+   * mês a mês. Julgar só pela foto marcava "crítico" numa empresa SEM DÍVIDA que
+   * gera R$ 3,5 mi no período — o dono viu isso na primeira tela real, e ele
+   * estava certo: não ter folga hoje é fato, mas só é crítico quando a operação
+   * também não repõe. O tempo de reposição sai do próprio número do motor.
+   */
+  const geraCaixa = fcRecorrente !== null && fcRecorrente > 0;
+  const falta = -sobra;
+  const geracaoMensal = geraCaixa ? fcRecorrente! / (dias / 30) : null;
+  const mesesParaRepor = geracaoMensal && falta > 0 ? falta / geracaoMensal : null;
+  const reporNoAno = mesesParaRepor !== null && mesesParaRepor <= 12;
+  const nMeses = mesesParaRepor !== null ? Math.ceil(mesesParaRepor) : 0;
+
+  const status: StatusCard = sobra > 0
+    ? (sobra < caixaMinimo * 0.5 ? "atencao" : "ok")
+    : reporNoAno ? "atencao" : "critico";
+
+  const resposta = sobra > 0
+    ? `Distribuição segura hoje: até ${brl(sobra)} — o que sobra depois de manter ${mesesTxt} de reserva e cobrir a dívida de curto prazo.`
+    : reporNoAno
+      ? `Nada a distribuir hoje: o caixa (${brl(caixa)}) está ${brl(falta)} abaixo da linha de segurança. A operação gera ${brl(fcRecorrente!)} no período, o que recompõe essa diferença em cerca de ${nMeses} ${nMeses === 1 ? "mês" : "meses"} no mesmo ritmo — a partir daí a distribuição volta a caber.`
+      : geraCaixa
+        ? `Nada a distribuir: o caixa (${brl(caixa)}) está ${brl(falta)} abaixo da linha de segurança, e no ritmo atual a operação levaria mais de um ano para recompor.`
+        : `Não há folga para distribuir: o caixa de hoje (${brl(caixa)}) não cobre a reserva mínima e os compromissos de curto prazo, e a operação não está gerando caixa para repor.`;
 
   return {
     id: "distribuicao",
@@ -134,14 +158,14 @@ function cardDistribuicao(
     pergunta: "Quanto posso tirar de dividendos sem comprometer o caixa?",
     status,
     resposta,
+    // A conta fecha na linha em destaque e PARA nela: a geração recorrente não
+    // entra na soma (é de outro período), então vive na resposta acima, não como
+    // uma linha solta depois do total, parecendo uma parcela esquecida.
     linhas: [
       { rotulo: "Caixa disponível", valor: brl(caixa), bruto: caixa },
       { rotulo: `Reserva mínima (${mesesTxt} de operação)`, valor: `-${brl(caixaMinimo)}`, bruto: -caixaMinimo },
       { rotulo: "Dívida de curto prazo", valor: dividaCP > 0 ? `-${brl(dividaCP)}` : brl(0), bruto: -dividaCP },
       { rotulo: "Distribuição segura", valor: brl(sobra), bruto: sobra, destaque: true },
-      ...(fcRecorrente !== null
-        ? [{ rotulo: "Geração recorrente no período (depois de investir)", valor: brl(fcRecorrente), bruto: fcRecorrente }]
-        : []),
     ],
     edicao: {
       chave: "mesesCaixaMinimo",
@@ -151,7 +175,12 @@ function cardDistribuicao(
     },
     premissas: [
       "Compromissos de curto prazo = SALDO de empréstimos e financiamentos CP: a base contábil não traz cronograma de vencimentos.",
-      ...(fcRecorrente !== null ? ["Geração recorrente = caixa da operação menos o investimento do período (capex estimado do fluxo indireto)."] : []),
+      ...(fcRecorrente !== null
+        ? [`Geração recorrente do período = ${brl(fcRecorrente)} (caixa da operação menos o investimento, capex estimado do fluxo indireto).`]
+        : []),
+      ...(mesesParaRepor !== null
+        ? ["O prazo de reposição supõe o mesmo ritmo de geração dos próximos meses, sem sazonalidade — é ordem de grandeza, não cronograma."]
+        : []),
       "Não considera obrigações fiscais parceladas nem sazonalidade do recebimento — confira antes de deliberar.",
     ],
   };
@@ -329,7 +358,8 @@ function cardQualidadeLucro(dados: DadosParaCards, rot: (p: string) => string): 
     somaFco += fco;
     linhas.push({
       rotulo: rot(col),
-      valor: `lucro ${brl(lucro)} · caixa da operação ${brl(fco)} (${(fco / lucro).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}x)`,
+      // Duas casas FIXAS: lado a lado, "0,9x" e "0,79x" parecem escalas diferentes.
+      valor: `lucro ${brl(lucro)} · caixa da operação ${brl(fco)} (${(fco / lucro).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}x)`,
       bruto: lucro !== 0 ? fco / lucro : null,
     });
   }
@@ -446,9 +476,10 @@ export function montarCardsDecisao(
   const dias = ytd.has(p) ? diasYTD(p) : diasDoPeriodo(p, periodos.filter((x) => !ytd.has(x) || x === p));
   const premissas = opts?.premissas ?? {};
   // RÓTULO, não chave: "2024" e "05/2026" — nunca "31/12/2024" na cara do leitor
-  // (regra do dono). Período de balancete é acumulado do exercício, então mesmo
-  // fechando em dezembro ele se lê como mês.
-  const rot = (x: string): string => rotuloPeriodoSrv(x, ytd.has(x));
+  // (regra do dono). Balancete ACUMULADO que fecha em dezembro É o exercício e se
+  // lê "2024"; só o que para no meio do ano vira mês ("05/2026"). Forçar mês em
+  // todo balancete rotulava ano cheio como "12/2024" — o próprio dono viu.
+  const rot = (x: string): string => rotuloPeriodoSrv(x, ytd.has(x) && !/^\d{2}\/12\//.test(x));
 
   const cards = [
     cardDistribuicao(dados, p, dias, premissas),
