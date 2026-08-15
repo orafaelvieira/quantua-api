@@ -16,6 +16,9 @@ function cenario() {
     bpL("AF", "Caixa e Equivalentes de Caixa", 2, { [P0]: 1_200_000, [P1]: 1_500_000 }),
     bpL("AO", "Contas a Receber - CP", 2, { [P0]: 800_000, [P1]: 900_000 }),
     bpL("PF", "Empréstimos e Financiamentos - CP", 2, { [P0]: 200_000, [P1]: 150_000 }),
+    // Empréstimo de sócio/empresa ligada: dívida de curto prazo como qualquer outra.
+    bpL("PF", "Passivos com Partes Relacionadas - CP", 2, { [P0]: 60_000, [P1]: 50_000 }),
+    bpL("PNC", "Empréstimos e Financiamentos - LP", 2, { [P0]: 900_000, [P1]: 700_000 }),
     bpL("PL", "Patrimônio Líquido", 1, { [P0]: 2_000_000, [P1]: 2_300_000 }),
   ];
   const dre: DRELineItem[] = [
@@ -68,6 +71,31 @@ describe("cards de decisão", () => {
     expect(card.premissas.join(" ")).toMatch(/cronograma de vencimentos/i);
     // A frase editável NÃO se repete na lista fixa: a tela desenha uma só vez.
     expect(card.premissas.join(" ")).not.toMatch(/Reserva mínima/i);
+  });
+
+  it("dívida de curto prazo soma empréstimo de sócio, não só o bancário", () => {
+    const card = montarCardsDecisao(cenario())!.cards.find((c) => c.id === "distribuicao")!;
+    const linha = card.linhas.find((l) => /Dívida de curto prazo/.test(l.rotulo))!;
+    expect(linha.bruto).toBe(-200_000); // 150k bancário + 50k partes relacionadas
+    // A dívida de longo prazo não entra na subtração, mas é declarada.
+    expect(card.premissas.join(" ")).toContain("Dívida total");
+    expect(card.premissas.join(" ")).toMatch(/vencem depois do exercício/);
+  });
+
+  it("dívida só no longo prazo não vira 'R$ 0' mudo", () => {
+    const d = cenario();
+    d.bp = d.bp.filter((l) => !/- CP$/.test(l.conta) || !/Empréstimos|Partes Relacionadas/.test(l.conta));
+    const card = montarCardsDecisao(d)!.cards.find((c) => c.id === "distribuicao")!;
+    const linha = card.linhas.find((l) => /Dívida de curto prazo/.test(l.rotulo))!;
+    expect(linha.rotulo).toContain("toda no longo prazo");
+    expect(card.premissas.join(" ")).toContain("Dívida total");
+  });
+
+  it("empresa sem dívida nenhuma diz isso, em vez de calar", () => {
+    const d = cenario();
+    d.bp = d.bp.filter((l) => !/Empréstimos|Partes Relacionadas/.test(l.conta));
+    const card = montarCardsDecisao(d)!.cards.find((c) => c.id === "distribuicao")!;
+    expect(card.premissas.join(" ")).toMatch(/não tem dívida financeira registrada/i);
   });
 
   it("crítico é quando a operação NÃO repõe a reserva", () => {

@@ -112,7 +112,23 @@ function cardDistribuicao(
 
   const meses = premissas.mesesCaixaMinimo ?? MESES_CAIXA_MINIMO_PADRAO;
   const caixaMinimo = regressiva.desembolsoDiario * meses * 30;
-  const dividaCP = Math.abs(val(bp, "Empréstimos e Financiamentos - CP", p));
+
+  /**
+   * DÍVIDA COMO O MOTOR DEFINE — as quatro contas, não uma.
+   *
+   * Lia só "Empréstimos e Financiamentos - CP". Empréstimo de sócio ou de empresa
+   * ligada (Passivos com Partes Relacionadas), que é o normal em PME, ficava de
+   * fora; e quem tinha a dívida toda em longo prazo via "R$ 0" na linha, que se
+   * lê como "não tem dívida". O dono viu esse zero numa empresa endividada.
+   * Mesma definição de "Capital de Terceiros + Partes Relacionadas".
+   */
+  const dividaCP = Math.abs(val(bp, "Empréstimos e Financiamentos - CP", p))
+    + Math.abs(val(bp, "Passivos com Partes Relacionadas - CP", p));
+  const dividaLP = Math.abs(val(bp, "Empréstimos e Financiamentos - LP", p))
+    + Math.abs(val(bp, "Passivos com Partes Relacionadas - LP", p));
+  // O indicador do motor manda quando existe (fonte única); as contas são o piso.
+  const dividaTotal = ind(dados, "Capital de Terceiros + Partes Relacionadas", p) ?? (dividaCP + dividaLP);
+
   const sobra = caixa - caixaMinimo - dividaCP;
 
   // Capacidade RECORRENTE: o que a operação gera depois de investir e pagar juros
@@ -164,7 +180,13 @@ function cardDistribuicao(
     linhas: [
       { rotulo: "Caixa disponível", valor: brl(caixa), bruto: caixa },
       { rotulo: `Reserva mínima (${mesesTxt} de operação)`, valor: `-${brl(caixaMinimo)}`, bruto: -caixaMinimo },
-      { rotulo: "Dívida de curto prazo", valor: dividaCP > 0 ? `-${brl(dividaCP)}` : brl(0), bruto: -dividaCP },
+      {
+        // Quando não há vencimento no exercício mas EXISTE dívida, o rótulo diz —
+        // "R$ 0" sozinho passa a impressão de empresa sem dívida.
+        rotulo: dividaCP <= 0 && dividaTotal > 0 ? "Dívida de curto prazo (toda no longo prazo)" : "Dívida de curto prazo",
+        valor: dividaCP > 0 ? `-${brl(dividaCP)}` : brl(0),
+        bruto: -dividaCP,
+      },
       { rotulo: "Distribuição segura", valor: brl(sobra), bruto: sobra, destaque: true },
     ],
     edicao: {
@@ -174,7 +196,10 @@ function cardDistribuicao(
       depois: `${meses === 1 ? "mês" : "meses"} de desembolso operacional (${brl(regressiva.desembolsoDiario * 30)}/mês), premissa desta empresa.`,
     },
     premissas: [
-      "Compromissos de curto prazo = SALDO de empréstimos e financiamentos CP: a base contábil não traz cronograma de vencimentos.",
+      dividaTotal > 0
+        ? `Dívida total de ${brl(dividaTotal)} (empréstimos e partes relacionadas); só a parcela de curto prazo, ${brl(dividaCP)}, entra nesta conta${dividaLP > 0 ? ` — os outros ${brl(dividaLP)} vencem depois do exercício e continuam pesando na decisão` : ""}.`
+        : "A empresa não tem dívida financeira registrada no balanço deste período.",
+      "Compromissos de curto prazo = SALDO das contas de dívida CP: a base contábil não traz cronograma de vencimentos.",
       ...(fcRecorrente !== null
         ? [`Geração recorrente do período = ${brl(fcRecorrente)} (caixa da operação menos o investimento, capex estimado do fluxo indireto).`]
         : []),
