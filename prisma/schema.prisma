@@ -402,6 +402,12 @@ model Company {
   /// planilhas mapeadas mandam e o balancete concilia retroativamente. Define
   /// QUANDO o mês fecha — o gate da Apresentação de resultados.
   regimeFechamento String @default("contabil") @map("regime_fechamento")
+  /// PREMISSAS DE DECISÃO da empresa (onda 3, 14/08/2026): hoje só
+  /// `mesesCaixaMinimo` (default 3) — quantos meses de desembolso operacional a
+  /// empresa quer manter em caixa antes de distribuir. É premissa do DONO, não
+  /// número do motor: entra no card "Quanto dá para distribuir" e fica declarada
+  /// na tela. Aditiva e anulável — o `db push` do boot cria sozinho.
+  premissasDecisao Json? @map("premissas_decisao")
 
   analyses     Analysis[]
   documents    Document[]

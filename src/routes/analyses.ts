@@ -32,6 +32,7 @@ import { classificarSetor } from "../services/setor-classificador";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { buildPontesVariacao } from "../services/bridge-variacao";
 import { medirExtracaoDesatualizada } from "../services/extracao-desatualizada";
+import { montarCardsDecisao } from "../services/cards-decisao";
 import { extractFinancialsWithAI, foldBP, foldDRE, type NaoMapeado } from "../services/ai-extraction";
 import { getActiveModelVersions, loadActiveBPModel, loadActiveDREModel } from "../services/model-version";
 import { extrairComCascata, paraTelaManual, mergeItensPorConta } from "../services/extracao-cascata";
@@ -2341,10 +2342,12 @@ router.get("/:id/dados-estruturados", async (req: AuthRequest, res: Response): P
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, ...whereRecursoEmpresa(req) },
-    select: { dadosEstruturados: true },
+    // companyId entra no select: os cards de decisão precisam da premissa da
+    // EMPRESA (caixa mínimo), não só dos dados do IBR.
+    select: { dadosEstruturados: true, companyId: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
-  enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
+  enriquecerContextoIA({ companyId: analysis.companyId ?? null });
   if (!analysis.dadosEstruturados) { res.json({ bp: [], dre: [], indicadores: [], periodos: [], version: 1 }); return; }
   const dadosOut = analysis.dadosEstruturados as any;
   // Ocultação de indicadores aplicada NA LEITURA (config atual, não a do momento do
@@ -2374,7 +2377,61 @@ router.get("/:id/dados-estruturados", async (req: AuthRequest, res: Response): P
   // (YTD N − YTD N−1) na leitura, junto com a marcação de quais períodos
   // acumulam. A tela mostra o mês; o gravado segue fiel ao documento.
   try { (dadosOut as any).dreMensal = derivarDREMensal(dadosOut); } catch { /* best-effort */ }
+  // CARDS DE DECISÃO (onda 3) — calculados NA LEITURA, não persistidos: eles
+  // dependem de premissa por empresa (caixa mínimo) e dos covenants do IBR, que
+  // mudam sem reprocessar. São contas simples sobre dado já pronto.
+  try { (dadosOut as any).cardsDecisao = await calcularCardsDecisao(id, analysis.companyId, dadosOut); }
+  catch { /* best-effort — card é leitura, nunca bloqueia os dados */ }
   res.json(dadosOut);
+});
+
+/** Covenants do IBR + premissa da empresa → cards. Compartilhado pelos dois caminhos. */
+async function calcularCardsDecisao(
+  analysisId: string,
+  companyId: string | null,
+  dados: unknown,
+  periodo?: string,
+): Promise<ReturnType<typeof montarCardsDecisao>> {
+  const [covenants, empresa] = await Promise.all([
+    prisma.covenant.findMany({ where: { analysisId }, select: { name: true, metric: true, operator: true, threshold: true } }),
+    companyId
+      ? prisma.company.findUnique({ where: { id: companyId }, select: { premissasDecisao: true } })
+      : Promise.resolve(null),
+  ]);
+  return montarCardsDecisao(dados as never, {
+    covenants,
+    premissas: (empresa?.premissasDecisao ?? {}) as never,
+    periodo,
+  });
+}
+
+/**
+ * CARDS DE DECISÃO no período que o analista escolheu.
+ *
+ * Rota própria (e não um campo a mais em /dados-estruturados) porque a resposta
+ * depende de DUAS coisas que mudam sem reprocessar: o período do seletor e a
+ * premissa de caixa mínimo da empresa. O dono já reclamou de card que fica preso
+ * numa data enquanto o seletor acima muda — aqui ele acompanha.
+ */
+router.get("/:id/cards-decisao", async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = req.params.id as string;
+  const analysis = await prisma.analysis.findFirst({
+    where: { id, ...whereRecursoEmpresa(req) },
+    select: { dadosEstruturados: true, companyId: true },
+  });
+  if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
+  if (!analysis.dadosEstruturados) { res.json(null); return; }
+  const dados = analysis.dadosEstruturados as any;
+  // MESMO pré-processamento da leitura principal: sem isso o balancete mensal
+  // chega sem as árvores mescladas e o card lê uma DRE diferente da que a tela
+  // mostra — a armadilha que já mordeu as pontes e a DRE mensal.
+  try { mesclarArvoresBalancete(dados); } catch { /* best-effort */ }
+  const periodo = typeof req.query.periodo === "string" ? req.query.periodo : undefined;
+  try {
+    res.json(await calcularCardsDecisao(id, analysis.companyId, dados, periodo));
+  } catch {
+    res.json(null);
+  }
 });
 
 router.put("/:id/dados-estruturados/bp", async (req: AuthRequest, res: Response): Promise<void> => {

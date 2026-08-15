@@ -106,6 +106,34 @@ export interface AnalysisResult {
   /** Apresentação da empresa em TEXTO CORRIDO (15-20 linhas): quem é, história, o que faz,
    *  modelo de negócio e momento. Abre a Análise Estratégica no PDF. Sem tópicos, sem fontes. */
   perfilEmpresa?: string;
+  /**
+   * O ESSENCIAL (onda 3) — a leitura de 30 segundos para quem decide: dono de
+   * PME, diretor ou conselheiro. Abre o Sumário e o PDF.
+   *
+   * Deliberadamente CURTO: cada campo tem teto de tamanho no prompt porque o
+   * JSON já é grande e truncamento aqui derruba a análise inteira (o guard de
+   * campos essenciais falha alto). Não repete `destaques` nem `situacao` — aqui
+   * é VEREDICTO + DECISÃO, não diagnóstico.
+   */
+  parecerExecutivo?: {
+    /** Tese em até 3 frases: onde a empresa está, do que isso decorre, o que exige. */
+    tese: string;
+    /**
+     * Os indicadores que MANDAM nesta empresa: a IA ESCOLHE quais (juízo editorial),
+     * o motor diz QUANTO. Guarda só o NOME canônico — o valor é resolvido na
+     * leitura, a partir da aba Indicadores, no período que o analista escolher.
+     *
+     * Por que não guardar o valor escrito pela IA: num painel executivo o número
+     * grande passa a impressão de vir do motor. Se a IA transcrever errado (já
+     * aconteceu: EBITDA acima da receita), o erro aparece com cara de fato e ao
+     * lado do valor certo. Nome + leitura é o que a IA faz bem; número é do motor.
+     */
+    numeros?: Array<{ indicador: string; leitura: string }>;
+    /** Decisões a tomar, com prazo e valor quando houver — derivadas das recomendações. */
+    decisoes?: Array<{ decisao: string; prazo: string; valor?: string | null; porque: string }>;
+    /** O que proteger — condensado de `protecoes`. */
+    proteger?: string[];
+  };
 }
 
 interface IndicadorLite {
@@ -502,6 +530,12 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
   "protecoes": [ { "oQueProteger": "<força que SUSTENTA o resultado atual>", "ameaca": "<o que pode destruí-la>", "acaoDefensiva": "<como blindar, concreto>" } ],
   "confrontoDores": [ { "dor": "<a dor declarada, resumida>", "veredicto": "confirmada|desmentida|parcial", "evidencia": "<os números que confirmam/desmentem>", "leitura": "<o que isso muda na prioridade — 1-2 frases diretas>" } ],
   "pontosCegos": [ { "titulo": "<problema que os números mostram e NINGUÉM declarou como dor>", "evidencia": "<número/tendência>", "porQueImporta": "<consequência em R$/caixa se continuar invisível>", "acaoSugerida": "<primeiro passo concreto>" } ],
+  "parecerExecutivo": {
+    "tese": "<VEREDICTO em no MÁXIMO 3 frases, conclusão primeiro: onde a empresa está, do que isso decorre e o que exige agora. Linguagem de quem decide, sem sigla não explicada. NÃO repita destaques nem o racional da situação.>",
+    "numeros": [ { "indicador": "<NOME EXATO de um indicador da série acima, copiado caractere a caractere. NÃO escreva o valor: o sistema busca o número no motor. Nome que não existir na série é DESCARTADO.>", "leitura": "<1 frase: o que esse indicador significa para a decisão, com o de→para quando houver>" } ],
+    "decisoes": [ { "decisao": "<o que fazer, no imperativo>", "prazo": "0–30d|30–90d|90–180d", "valor": "<R$ em jogo, ou null>", "porque": "<1 frase com o número que justifica>" } ],
+    "proteger": ["<o que não pode ser perdido — 1 linha cada>"]
+  },
   "destaques": ["<insight 1>", "<insight 2>", "<insight 3>", "<insight 4>"],
   "confianca": <0-100>
 }
@@ -518,6 +552,7 @@ PAPÉIS DAS SEÇÕES (NÃO haja overlap — cada uma responde a uma pergunta dif
 - valorNaMesa/alavancasAdicionais = o PLACAR: quando o motor entregou as ALAVANCAS CANÔNICAS (bloco acima), elas JÁ ESTÃO CONTADAS — você só ADICIONA alavancas específicas que o motor não calcula, cada uma com memória em prosa; NUNCA repita prazos-vs-mediana ou gap-de-margem-vs-mediana. Sem o bloco canônico, monte o placar completo você mesmo. SEM DUPLA CONTAGEM; ordem de grandeza, não promessa.
 - protecoes = O QUE NÃO PODE QUEBRAR: 2-3 forças que sustentam o resultado atual e como blindá-las (pessoa-chave, contrato, canal, licença, cliente-âncora). Em empresa saudável esta seção é TÃO importante quanto as opções — manter o que funciona também é resultado.
 - confrontoDores = REALIDADE × PERCEPÇÃO: cada dor declarada julgada pelos números (confirmada/desmentida/parcial) com honestidade — desmentir uma dor liberta energia da gestão; confirmar dá prioridade. pontosCegos = o INVERSO: problema numérico relevante que NINGUÉM declarou — apresente com respeito, mas sem suavizar.
+- parecerExecutivo = O ESSENCIAL, a leitura de 30 SEGUNDOS de quem decide (dono de PME, diretor ou conselheiro). É VEREDICTO + DECISÃO, não diagnóstico: a tese conclui (não descreve), os "numeros" são 3 ou 4 indicadores (nunca mais que 4) que sustentam a conclusão, escolhidos pelo NOME EXATO da série (prefira os que mudaram; o sistema busca o valor no motor, você NÃO escreve número nesse campo), as "decisoes" saem das recomendacoes já priorizadas (mesmo horizonte, com o R$ em jogo quando existir) e "proteger" condensa as protecoes. NÃO repita frases de destaques/situacao/saudeFinanceira: aqui o texto é mais curto e mais duro. Escreva para quem tem 30 segundos e vai agir — se a empresa está bem, a tese diz o que consolidar; se está sob pressão, diz o que estancar primeiro.
 
 PRINCÍPIOS (inegociáveis):
 - Hipótese e FATO sempre separados. A IA NÃO inventa nem recalcula número — cita os números já prontos (indicadores, DRE, pares).
@@ -637,6 +672,33 @@ PRINCÍPIOS (inegociáveis):
     confrontoDores: Array.isArray(ai.confrontoDores) ? ai.confrontoDores.filter((c: any) => c && c.dor) : [],
     pontosCegos: Array.isArray(ai.pontosCegos) ? ai.pontosCegos.filter((p: any) => p && p.titulo) : [],
     perfilEmpresa: typeof ai.perfilEmpresa === "string" && ai.perfilEmpresa.trim().length > 0 ? ai.perfilEmpresa.trim() : undefined,
+    // O ESSENCIAL: tolerante por construção — o campo é NOVO e não entra no guard
+    // de campos essenciais. Análise que venha sem ele (ou com ele pela metade)
+    // continua válida; o bloco simplesmente não renderiza. Truncar a análise
+    // inteira por causa da seção de abertura seria trocar o todo pela parte.
+    parecerExecutivo: (() => {
+      const p = ai.parecerExecutivo;
+      const tese = typeof p?.tese === "string" ? p.tese.trim() : "";
+      if (!tese) return undefined;
+      const lista = <T,>(v: unknown, ok: (x: any) => boolean): T[] | undefined =>
+        Array.isArray(v) ? (v.filter(ok) as T[]) : undefined;
+      return {
+        tese,
+        // VALIDA CONTRA O MOTOR: nome que não existe na série de indicadores é
+        // descartado aqui, não na tela — o dado persistido só carrega referência
+        // resolvível. Grava o nome COMO ESTÁ NO DADO (achaIndicador aceita o nome
+        // antigo dos renames): a tela procura por igualdade exata.
+        numeros: Array.isArray(p.numeros)
+          ? p.numeros.flatMap((n: any) => {
+              if (typeof n?.indicador !== "string" || typeof n?.leitura !== "string" || !n.leitura.trim()) return [];
+              const achado = achaIndicador(indicadores, n.indicador.trim());
+              return achado ? [{ indicador: achado.nome, leitura: n.leitura.trim() }] : [];
+            })
+          : undefined,
+        decisoes: lista<{ decisao: string; prazo: string; valor?: string | null; porque: string }>(p.decisoes, (d) => d?.decisao),
+        proteger: Array.isArray(p.proteger) ? p.proteger.filter((s: unknown) => typeof s === "string" && s.trim()) : undefined,
+      };
+    })(),
   };
 
   // Conta regressiva: número do MOTOR, nunca estimativa da IA (mesma régua do estágio).

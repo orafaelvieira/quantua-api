@@ -117,6 +117,12 @@ const companySchema = z.object({
   capitalSocial: z.number().finite().optional(),
   regimeTributario: z.string().optional(),
   cnpjData: z.record(z.unknown()).optional(),
+  // PREMISSAS DE DECISÃO (onda 3): premissa do dono, não número do motor. Entra
+  // aqui e não numa rota própria para herdar a trilha de auditoria do cadastro.
+  // Teto de 24 meses: acima disso não é reserva, é decisão de investimento.
+  premissasDecisao: z.object({
+    mesesCaixaMinimo: z.number().finite().min(0).max(24).optional(),
+  }).optional(),
 });
 
 router.get("/", async (req: AuthRequest, res: Response): Promise<void> => {
@@ -748,7 +754,7 @@ router.put("/:id", async (req: AuthRequest, res: Response): Promise<void> => {
   // TRILHA: grava só o que MUDOU (before/after), com quem e quando. cnpjData fica de
   // fora do diff (payload grande) — a reconsulta é registrada como flag.
   const d = diffCampos(existing as unknown as Record<string, unknown>, parsed.data as Record<string, unknown>,
-    ["razaoSocial", "nomeFantasia", "cnpj", "setor", "porte", "uf", "regimeTributario", "municipio", "cnae", "situacaoCadastral", "capitalSocial"]);
+    ["razaoSocial", "nomeFantasia", "cnpj", "setor", "porte", "uf", "regimeTributario", "municipio", "cnae", "situacaoCadastral", "capitalSocial", "premissasDecisao"]);
   if (d.mudou || parsed.data.cnpjData !== undefined) {
     void registrarAuditoria({
       userId: req.userId!, entity: "company", entityId: id, field: "edição do cadastro",
