@@ -84,6 +84,31 @@ export async function ultimoPeriodoCvm(): Promise<string | null> {
 }
 
 /**
+ * O NOME DO NÍVEL 2 NÃO É ÚNICO NA B3 (17/08/2026, caso Belagro).
+ *
+ * A taxonomia é uma árvore — classificação (nível 1) › setor (nível 2) — e o nome
+ * do nível 2 SE REPETE em ramos diferentes. Filtrar só por `setor` cola os ramos:
+ *
+ *   Consumo não Cíclico › Comércio e Distribuição → ASAI3, GMAT3            (2)
+ *   Saúde               › Comércio e Distribuição → RADL3, PFRM3, BLAU3…    (7)
+ *
+ * A Belagro (trading de grãos) está no primeiro ramo e o cartão listou os NOVE —
+ * 7 de farma/drogaria — e publicou mediana, percentil e "abaixo da mediana em 19
+ * de 25" sobre uma população que a B3 nunca definiu. Medido na base: 5 nomes de
+ * setor caem nisso (Programas e Serviços mistura TOTVS com Enjoei; Mineração
+ * mistura Vale com Bradespar, que é holding financeira), 31 empresas ao todo.
+ *
+ * O ramo é o par (classificação, setor). Quando a classificação não resolve
+ * (`resolveSegmentoCvm` devolve o bruto), filtra-se só pelo setor como antes — é
+ * o comportamento que já existia, não um caso novo.
+ */
+function filtroDoSetor(seg: SegmentoCvm): { setor: string; classificacao?: string } {
+  const f: { setor: string; classificacao?: string } = { setor: seg.setor as string };
+  if (seg.classificacao) f.classificacao = seg.classificacao;
+  return f;
+}
+
+/**
  * Posição da empresa vs pares CVM para cada indicador comparável, com cascata
  * setor B3 → classificação → mercado (mercado incluído; o chamador decide filtrar).
  */
@@ -101,7 +126,7 @@ export async function comparePeersCvm(
   // período — a mesma população dos quartis. Vai para o Apêndice do relatório.
   const empresas: string[] = seg.setor
     ? (await prisma.cvmCompany.findMany({
-        where: { setor: seg.setor, indicators: { some: { visao: "LTM", dtFim, valor: { not: null } } } },
+        where: { ...filtroDoSetor(seg), indicators: { some: { visao: "LTM", dtFim, valor: { not: null } } } },
         select: { pregao: true, denom: true },
         orderBy: { denom: "asc" },
       })).map((c) => c.pregao ?? c.denom)
@@ -112,7 +137,7 @@ export async function comparePeersCvm(
   // estruturas de custo incomparáveis — não é par, é prateleira. Sem 3 pares no
   // subsetor → sem percentil interno (cobertura "ausente" → referência externa/web).
   const niveis: Array<{ level: PeerComparisonRow["level"]; segment: string; filtro: object }> = [];
-  if (seg.setor) niveis.push({ level: "setor", segment: seg.setor, filtro: { setor: seg.setor } });
+  if (seg.setor) niveis.push({ level: "setor", segment: seg.setor, filtro: filtroDoSetor(seg) });
 
   const rows: PeerComparisonRow[] = [];
   for (const { indicador, valor } of valores) {
