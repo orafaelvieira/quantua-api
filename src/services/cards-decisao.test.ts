@@ -320,7 +320,10 @@ describe("cards de decisão", () => {
     expect(card.linhas.find((l) => /Dívida média/.test(l.rotulo))!.bruto).toBe(1_030_000);
     // 260 mil / 1,03 mi = 25,2% a.a. — acima de 1,3× a referência de 18,3%.
     expect(card.linhas.find((l) => l.destaque)!.bruto!).toBeCloseTo(0.2524, 4);
-    expect(card.status).toBe("critico");
+    // A fixture não traz semáforo de alavancagem nem de cobertura: sem perfil de
+    // risco, o desvio NÃO vira veredicto (correção do dono, 16/08) — o card
+    // informa e manda conferir composição e data de contratação.
+    expect(card.status).toBe("informativo");
     expect(card.resposta).toMatch(/acima da referência de mercado para crédito PJ/i);
     // Efeito em R$: 6,94 p.p. sobre 1,03 mi ≈ R$ 71,5 mil por ano.
     expect(card.linhas.find((l) => /custa por ano/.test(l.rotulo))!.bruto!).toBeCloseTo(71_510, 0);
@@ -390,7 +393,7 @@ describe("cards de decisão", () => {
       .cards.find((c) => c.id === "custo-divida")!;
     // 100 mil em 150 dias → 243 mil/ano sobre 1,2 mi de dívida = 20,3% a.a.
     expect(card.linhas.find((l) => l.destaque)!.bruto!).toBeCloseTo(0.2028, 4);
-    expect(card.status).toBe("atencao");
+    expect(card.status).toBe("informativo"); // sem indicadores, sem perfil de risco
     expect(card.linhas[0]!.rotulo).toBe("Despesa financeira (05/2026, anualizada)");
     expect(card.premissas.join(" ")).toMatch(/anualizada \(×2,43\)/);
     expect(card.premissas.join(" ")).toMatch(/Não há saldo de dívida no período anterior/i);
@@ -542,6 +545,60 @@ describe("cards de decisão", () => {
     const texto = JSON.stringify(r.cards);
     expect(texto).not.toMatch(/\d{2}\/\d{2}\/\d{4}/);
     expect(r.cards.find((c) => c.id === "qualidade-lucro")!.linhas.map((l) => l.rotulo)).toEqual(["2024"]);
+  });
+
+  describe("custo da dívida: o desvio depende do perfil de risco", () => {
+    /** Empresa pagando 30% a.a. contra referência de 18,3%. */
+    const caro = (perfil: { alav?: string; cob?: string }) => {
+      const d = cenario();
+      d.dre = d.dre.map((l) => (l.conta === "Despesas Financeiras" ? { ...l, valores: { [P0]: -40_000, [P1]: -300_000 } } : l));
+      d.indicadores = d.indicadores.map((i) =>
+        i.nome === "Dívida Líquida/EBITDA"
+          ? ({ ...i, valores: { [P1]: 1.2 }, status: { [P1]: perfil.alav ?? null } } as never)
+          : i,
+      );
+      if (perfil.cob) {
+        d.indicadores = [...d.indicadores, { nome: "Índice de Cobertura de Juros", valores: { [P1]: 8 }, status: { [P1]: perfil.cob } } as never];
+      }
+      return montarCardsDecisao(d, { benchmarks: { custoMedioDivida: REF_CREDITO_PJ } })!
+        .cards.find((c) => c.id === "custo-divida")!;
+    };
+
+    it("risco baixo pagando prêmio: há barganha a exercer", () => {
+      const card = caro({ alav: "ok", cob: "ok" });
+      expect(card.status).toBe("atencao");
+      expect(card.resposta).toMatch(/risco desta empresa não explica o prêmio/i);
+      expect(card.linhas.some((l) => /Cobertura de juros/.test(l.rotulo))).toBe(true);
+    });
+
+    it("risco elevado: o prêmio é preço de risco, não erro de negociação", () => {
+      const card = caro({ alav: "critico" });
+      expect(card.status).toBe("informativo");
+      expect(card.resposta).toMatch(/perfil de risco da empresa ajuda a explicar/i);
+      expect(card.resposta).toMatch(/depois da alavancagem, não antes/i);
+    });
+
+    it("sem sinal de perfil, o card não julga — manda conferir", () => {
+      const card = caro({});
+      expect(card.status).toBe("informativo");
+      expect(card.resposta).toMatch(/Antes de concluir que está cara/i);
+    });
+
+    it("nunca marca crítico pelo desvio, por maior que ele seja", () => {
+      const d = cenario();
+      d.dre = d.dre.map((l) => (l.conta === "Despesas Financeiras" ? { ...l, valores: { [P0]: -40_000, [P1]: -900_000 } } : l));
+      const card = montarCardsDecisao(d, { benchmarks: { custoMedioDivida: REF_CREDITO_PJ } })!
+        .cards.find((c) => c.id === "custo-divida")!;
+      expect(card.status).not.toBe("critico");
+    });
+
+    it("declara o descasamento de tempo e a composição da dívida", () => {
+      const prem = caro({ alav: "ok", cob: "ok" }).premissas.join(" ");
+      expect(prem).toMatch(/taxa de HOJE/);
+      expect(prem).toMatch(/CDI de cada época/i);
+      expect(prem).toMatch(/BNDES/);
+      expect(prem).toMatch(/NÃO é um rating de crédito/i);
+    });
   });
 
   it("distribuindo mais do que ganhou, a taxa sustentável não vira previsão", () => {

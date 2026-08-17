@@ -150,6 +150,8 @@ const pct = (v: number, casas = 1): string =>
 const mult = (v: number): string => `${v.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 })}x`;
 
 const NOME_ALAVANCAGEM = "Dívida Líquida/EBITDA";
+/** Nome exato no template de indicadores — o card de custo lê o perfil de risco daqui. */
+const NOME_COBERTURA_JUROS = "Índice de Cobertura de Juros";
 const NOME_ROE = "ROE (Retorno sobre Patrimônio Líquido)";
 const NOME_CRESCIMENTO = "Crescimento da Receita (YoY)";
 const NOME_DIVIDA = "Capital de Terceiros + Partes Relacionadas";
@@ -614,10 +616,24 @@ function cardHeadroomCaptacao(
  * empresa — e o texto do card não pode sugerir que seja, senão o leitor decide
  * trocar de banco com base numa comparação que não existe.
  *
- * RÉGUA DO STATUS: até a referência, "ok" (paga o preço do dinheiro ou menos);
- * até 1,3× a referência, atenção; acima disso, crítico — pagar 30% a mais que o
- * crédito PJ médio costuma valer mais em renegociação do que qualquer ganho
- * operacional que a empresa consiga no mesmo ano.
+ * O DESVIO SOZINHO NÃO É VEREDICTO (correção do dono, 16/08/2026).
+ *
+ * Comparar o custo da empresa com uma taxa média nacional e concluir "sua dívida
+ * está cara" ignora quatro coisas, e cada uma consegue inverter a leitura:
+ *  1. RISCO — empresa alavancada pagando prêmio pode estar pagando o preço JUSTO
+ *     do risco dela; o problema seria a alavancagem, não o banco.
+ *  2. COMPOSIÇÃO — a referência mistura capital de giro, desconto de duplicata e
+ *     BNDES subsidiado. Quem só tem giro DEVE pagar acima da média.
+ *  3. TEMPO — a referência é a taxa de HOJE; a dívida foi contratada ao longo de
+ *     anos, com o CDI de cada época. Parte do desvio é calendário, não gestão.
+ *  4. Nada disso é rating de crédito, e o card não pode fingir que é.
+ *
+ * O que o desvio significa depende do PERFIL DE RISCO da própria empresa, e esse
+ * nós temos: alavancagem e cobertura de juros, do motor. Com perfil confortável,
+ * pagar acima da referência é sinal de PODER DE BARGANHA não exercido — vale a
+ * conversa com o banco. Com perfil apertado, o prêmio é preço de risco: atacar a
+ * alavancagem vem antes de atacar a taxa. Por isso o card NUNCA marca crítico
+ * pelo desvio: no máximo atenção, e só quando o perfil não explica o prêmio.
  */
 function cardCustoDivida(
   dados: DadosParaCards,
@@ -648,7 +664,25 @@ function cardCustoDivida(
   const diferenca = custo - referencia;
   const efeitoAno = diferenca * dividaMedia;
 
-  const status: StatusCard = custo <= referencia ? "ok" : custo <= referencia * 1.3 ? "atencao" : "critico";
+  /**
+   * PERFIL DE RISCO DA PRÓPRIA EMPRESA — é ele que dá sentido ao desvio.
+   *
+   * Usa os semáforos que o motor JÁ calibra para alavancagem e cobertura de
+   * juros, em vez de inventar limiar aqui. Sem nenhum dos dois sinais, o card
+   * não classifica: fica informativo e entrega os ingredientes ao leitor.
+   */
+  const stAlav = indStatus(dados, NOME_ALAVANCAGEM, p);
+  const stCob = indStatus(dados, NOME_COBERTURA_JUROS, p);
+  const sinais = [stAlav, stCob].filter((s): s is "ok" | "atencao" | "critico" => s !== null);
+  const perfilFolgado = sinais.length > 0 && sinais.every((s) => s === "ok");
+  const perfilApertado = sinais.some((s) => s === "critico" || s === "atencao");
+
+  // NUNCA crítico pelo desvio: a comparação é contra uma média nacional, contra
+  // a taxa de HOJE, sobre uma dívida contratada no passado. Isso aponta onde
+  // olhar; não condena.
+  const status: StatusCard = custo <= referencia
+    ? "ok"
+    : perfilFolgado ? "atencao" : "informativo";
 
   const linhas: LinhaCard[] = [
     {
@@ -672,10 +706,29 @@ function cardCustoDivida(
     },
   ];
 
+  const alavancagem = ind(dados, NOME_ALAVANCAGEM, p);
+  const cobertura = ind(dados, NOME_COBERTURA_JUROS, p);
+  // O perfil de risco fica VISÍVEL ao lado do desvio: é com ele que o leitor
+  // julga se o prêmio é preço de risco ou barganha não exercida.
+  if (alavancagem !== null && alavancagem > 0) {
+    linhas.push({ rotulo: "Alavancagem da empresa", valor: `${mult(alavancagem)} EBITDA`, bruto: alavancagem });
+  }
+  if (cobertura !== null) {
+    linhas.push({ rotulo: "Cobertura de juros (EBIT ÷ juros)", valor: mult(cobertura), bruto: cobertura });
+  }
+
   const difPP = Math.abs(diferenca * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-  const resposta = diferenca > 0
-    ? `A empresa paga ${pct(custo)} ao ano pela dívida, ${difPP} pontos percentuais acima da referência de mercado para crédito PJ (${pct(referencia)}). Sobre a dívida média de ${brl(dividaMedia)}, essa diferença custa ${brl(Math.abs(efeitoAno))} por ano.`
-    : `A empresa paga ${pct(custo)} ao ano pela dívida, ${difPP} pontos percentuais abaixo da referência de mercado para crédito PJ (${pct(referencia)}) — sobre a dívida média de ${brl(dividaMedia)}, ${brl(Math.abs(efeitoAno))} por ano a menos do que custaria no preço de mercado.`;
+  const abertura = `A empresa paga ${pct(custo)} ao ano pela dívida, ${difPP} pontos percentuais ${diferenca > 0 ? "acima" : "abaixo"} da referência de mercado para crédito PJ (${pct(referencia)}).`;
+
+  const resposta = diferenca <= 0
+    ? `${abertura} Sobre a dívida média de ${brl(dividaMedia)}, são ${brl(Math.abs(efeitoAno))} por ano a menos do que custaria no preço de mercado.`
+    : perfilFolgado
+      // Risco baixo pagando prêmio: aqui o desvio é sinal de barganha não exercida.
+      ? `${abertura} Sobre a dívida média de ${brl(dividaMedia)}, a diferença custa ${brl(Math.abs(efeitoAno))} por ano. O risco desta empresa não explica o prêmio: alavancagem e cobertura de juros estão em faixa confortável, o que dá margem para renegociar taxa.`
+      : perfilApertado
+        // Risco elevado: o prêmio provavelmente É o preço do risco.
+        ? `${abertura} Sobre a dívida média de ${brl(dividaMedia)}, a diferença custa ${brl(Math.abs(efeitoAno))} por ano — mas o perfil de risco da empresa ajuda a explicar o prêmio. Aqui a taxa costuma ceder depois da alavancagem, não antes dela.`
+        : `${abertura} Sobre a dívida média de ${brl(dividaMedia)}, a diferença custa ${brl(Math.abs(efeitoAno))} por ano. Antes de concluir que está cara, confira a composição da dívida e a data de contratação: parte do desvio pode ser preço de risco ou taxa de outra época.`;
 
   return {
     id: "custo-divida",
@@ -697,6 +750,9 @@ function cardCustoDivida(
       ...(parcial
         ? [`O período cobre ${dias} dias, não um ano: a despesa financeira foi anualizada (×${fatorAno.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}) para comparar com uma taxa anual, supondo o mesmo ritmo nos meses restantes.`]
         : []),
+      "A referência é a taxa de HOJE; a dívida foi contratada ao longo dos últimos anos, com o CDI de cada época. Parte da diferença pode ser calendário, não gestão.",
+      "A referência mistura capital de giro, desconto de duplicata e linhas subsidiadas (BNDES). Empresa com dívida concentrada em giro de curto prazo tende a pagar acima dela por natureza; com linha subsidiada, abaixo.",
+      "Isto NÃO é um rating de crédito: aponta onde olhar, não decide se a taxa é justa. Taxa justa depende de garantia, relacionamento bancário e histórico, que não estão na contabilidade.",
       "Não substitui a leitura dos contratos: taxa, prazo e garantia de cada operação não estão na contabilidade.",
     ],
   };
