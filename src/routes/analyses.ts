@@ -2398,10 +2398,33 @@ async function calcularCardsDecisao(
       ? prisma.company.findUnique({ where: { id: companyId }, select: { premissasDecisao: true } })
       : Promise.resolve(null),
   ]);
+  /**
+   * REFERÊNCIA DE CUSTO DE CRÉDITO — série NACIONAL do Banco Central (CDI +
+   * spread médio PJ), gravada em SectorBenchmark pelo ingestor `bcb_sgs`. Vale
+   * para o mercado inteiro: o valor é o mesmo em todas as linhas de setor, então
+   * a busca não filtra por setor nenhum — e o card diz ao leitor que a
+   * comparação não é do ramo de atividade dele.
+   *
+   * try/catch PRÓPRIO: os outros cards não dependem de referência externa. Se a
+   * tabela estiver vazia (ingestor nunca rodou) ou a consulta falhar, o card de
+   * custo da dívida simplesmente não aparece — derrubar a mesa inteira por causa
+   * de um benchmark ausente seria trocar sete cards por nenhum.
+   */
+  let benchmarks: { custoMedioDivida?: number } | undefined;
+  try {
+    const ref = await prisma.sectorBenchmark.findFirst({
+      where: { source: "bcb_sgs", metric: "custo_medio_divida" },
+      orderBy: { year: "desc" },
+      select: { value: true },
+    });
+    // Valor em DECIMAL (0,183 = 18,3% a.a.) — é assim que o ingestor grava.
+    if (ref && Number.isFinite(ref.value) && ref.value > 0) benchmarks = { custoMedioDivida: ref.value };
+  } catch { /* sem referência o card de custo da dívida simplesmente não aparece */ }
   return montarCardsDecisao(dados as never, {
     covenants,
     premissas: (empresa?.premissasDecisao ?? {}) as never,
     periodo,
+    benchmarks,
   });
 }
 

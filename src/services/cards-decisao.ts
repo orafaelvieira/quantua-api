@@ -14,6 +14,12 @@
  *   como "não verificável com os documentos deste IBR".
  * - Sem marcação fixo × variável, o efeito de ±5% de receita no RESULTADO não é
  *   calculável — a mesa mostra o efeito na receita e diz o que falta.
+ * - NÃO existe taxa contratada por operação de crédito. O custo da dívida sai da
+ *   despesa financeira da DRE sobre a dívida média — aproximação POR CIMA, porque
+ *   essa linha carrega IOF, tarifas e descontos junto com o juro.
+ * - NÃO existe referência de custo de crédito POR RAMO DE ATIVIDADE: a série que
+ *   o produto ingere (Banco Central) é nacional para crédito PJ. O card compara
+ *   com ela e diz exatamente isso — nunca "acima da média do seu ramo".
  */
 import type { BPLineItem, DRELineItem } from "../types/financial";
 import type { FluxoCaixaIndireto } from "./cash-flow-indirect";
@@ -32,7 +38,15 @@ export interface LinhaCard {
 }
 
 export interface CardDecisao {
-  id: "distribuicao" | "covenants" | "reinvestimento" | "qualidade-lucro" | "sensibilidade";
+  id:
+    | "distribuicao"
+    | "covenants"
+    | "headroom-captacao"
+    | "custo-divida"
+    | "crescer-sem-captar"
+    | "reinvestimento"
+    | "qualidade-lucro"
+    | "sensibilidade";
   titulo: string;
   /** A pergunta que o card responde — o dono se reconhece nela. */
   pergunta: string;
@@ -74,10 +88,32 @@ export interface CovenantParaCard {
   threshold: number;
 }
 
+/**
+ * Referências EXTERNAS ao IBR (vêm do banco, não da contabilidade da empresa).
+ * Chegam por parâmetro justamente para o motor continuar puro: sem a referência,
+ * o card que depende dela não aparece — não existe "valor de mercado padrão"
+ * chutado aqui dentro.
+ */
+export interface BenchmarksParaCards {
+  /** Custo médio do crédito PJ no Brasil, DECIMAL ao ano (0,183 = 18,3%). */
+  custoMedioDivida?: number;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const val = (linhas: Array<{ conta: string; valores: Record<string, number> }> | undefined, conta: string, p: string): number =>
   linhas?.find((l) => l.conta === conta)?.valores?.[p] ?? 0;
+
+/** Como `val`, mas distingue AUSENTE de ZERO — a diferença entre "não sei" e
+ *  "é zero" decide se o card aparece ou some. */
+const valOpt = (
+  linhas: Array<{ conta: string; valores: Record<string, number> }> | undefined,
+  conta: string,
+  p: string,
+): number | null => {
+  const v = linhas?.find((l) => l.conta === conta)?.valores?.[p];
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+};
 
 const brl = (v: number): string => {
   const abs = Math.abs(v);
@@ -105,6 +141,51 @@ const indStatus = (dados: DadosParaCards, nome: string, p: string): "ok" | "aten
 const PESO_STATUS: Record<StatusCard, number> = { informativo: 0, ok: 1, atencao: 2, critico: 3 };
 const pior = (a: StatusCard, b: StatusCard | null): StatusCard =>
   b !== null && PESO_STATUS[b] > PESO_STATUS[a] ? b : a;
+
+/** Taxa em % ao leitor (0,183 → "18,3%"). */
+const pct = (v: number, casas = 1): string =>
+  `${(v * 100).toLocaleString("pt-BR", { minimumFractionDigits: casas, maximumFractionDigits: casas })}%`;
+
+/** Múltiplo com vírgula ("3,0x") — nunca "3x", que o leitor confunde com contagem. */
+const mult = (v: number): string => `${v.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 })}x`;
+
+const NOME_ALAVANCAGEM = "Dívida Líquida/EBITDA";
+const NOME_ROE = "ROE (Retorno sobre Patrimônio Líquido)";
+const NOME_CRESCIMENTO = "Crescimento da Receita (YoY)";
+const NOME_DIVIDA = "Capital de Terceiros + Partes Relacionadas";
+
+/**
+ * DÍVIDA BRUTA do período — as QUATRO contas, sempre.
+ *
+ * O indicador do motor manda quando existe (fonte única). O somatório das contas
+ * é o piso, e lê as quatro: ler só "Empréstimos e Financiamentos - CP" zerava a
+ * dívida de quem tem tudo em longo prazo ou em empréstimo de sócio (bug real).
+ */
+const dividaBruta = (dados: DadosParaCards, p: string): number => {
+  const doIndicador = ind(dados, NOME_DIVIDA, p);
+  if (doIndicador !== null) return Math.abs(doIndicador);
+  const bp = dados.bp ?? [];
+  return Math.abs(val(bp, "Empréstimos e Financiamentos - CP", p))
+    + Math.abs(val(bp, "Passivos com Partes Relacionadas - CP", p))
+    + Math.abs(val(bp, "Empréstimos e Financiamentos - LP", p))
+    + Math.abs(val(bp, "Passivos com Partes Relacionadas - LP", p));
+};
+
+/**
+ * EBITDA do período. O motor NÃO publica "EBITDA" na lista de indicadores (só
+ * "Margem EBITDA"), então a fonte é o subtotal da DRE — que é exatamente de onde
+ * o indicator-calculator também parte. Segunda via: margem × receita líquida, para
+ * a DRE que chegou sem o subtotal aberto. Sem nenhuma das duas, devolve null e o
+ * card some: EBITDA estimado por conta própria seria número inventado no
+ * denominador de todo o resto.
+ */
+function ebitdaDoPeriodo(dados: DadosParaCards, p: string): number | null {
+  const daDre = valOpt(dados.dre ?? [], "EBITDA", p);
+  if (daDre !== null) return daDre;
+  const margem = ind(dados, "Margem EBITDA", p);
+  const receita = ind(dados, "Receita Líquida", p) ?? valOpt(dados.dre ?? [], "Receita Líquida", p);
+  return margem !== null && receita !== null ? margem * receita : null;
+}
 
 // ── Card 1: quanto dá para distribuir ─────────────────────────────────────────
 
@@ -291,6 +372,19 @@ const ALIAS_METRICA: Record<string, string> = {
   interestcoverage: "índice de cobertura de juros",
 };
 
+/**
+ * Nome (minúsculo) do indicador para onde o `metric` do covenant aponta.
+ *
+ * Extraído para o card de headroom usar A MESMA resolução do card de covenants:
+ * se o limite de alavancagem do contrato é verificado ali, o teto de captação
+ * daqui tem que sair do mesmo covenant — duas telas do mesmo IBR discordando
+ * sobre qual é o limite do banco é pior que não ter o card.
+ */
+function nomeIndicadorDoCovenant(metric: string): string {
+  const alvo = (metric ?? "").toLowerCase().trim();
+  return ALIAS_METRICA[alvo.replace(/[^a-z]/g, "")] ?? alvo;
+}
+
 /** Formata pela unidade do indicador (o motor carrega tipoDado junto). */
 function fmtPorTipo(v: number, tipoDado: string | undefined): string {
   switch (tipoDado) {
@@ -329,9 +423,7 @@ function cardCovenants(dados: DadosParaCards, p: string, covenants: CovenantPara
   let apertados = 0;
 
   for (const c of covenants) {
-    const alvo = (c.metric ?? "").toLowerCase().trim();
-    const chaveAlias = alvo.replace(/[^a-z]/g, "");
-    const nomeBuscado = ALIAS_METRICA[chaveAlias] ?? alvo;
+    const nomeBuscado = nomeIndicadorDoCovenant(c.metric);
     const indicador = dados.indicadores?.find((i) => i.nome.toLowerCase().trim() === nomeBuscado);
     const atual = indicador ? num(indicador.valores?.[p]) : null;
     if (!indicador || atual === null) {
@@ -376,7 +468,382 @@ function cardCovenants(dados: DadosParaCards, p: string, covenants: CovenantPara
   };
 }
 
-// ── Card 3: reinvestimento (capex ÷ D&A) ──────────────────────────────────────
+// ── Card 3: headroom de captação ──────────────────────────────────────────────
+
+/** Limite da casa quando o IBR não tem covenant de alavancagem. NÃO é regra de
+ *  banco: é a régua de mercado mais comum em crédito PJ, e o card diz isso. */
+export const LIMITE_ALAVANCAGEM_PADRAO = 3.0;
+
+/**
+ * QUANTO AINDA DÁ PARA TOMAR DE DÍVIDA.
+ *
+ *   headroom = (limite × EBITDA) − dívida líquida
+ *
+ * A pergunta que o dono faz antes de ir ao banco. O limite sai do covenant do
+ * próprio IBR quando existe (é o contrato dele que manda); na falta, uma premissa
+ * declarada — e declarada COMO premissa, para ninguém sair da tela dizendo "o
+ * banco me deixa até 3x".
+ *
+ * RÉGUA DO STATUS (explícita porque não há semáforo do motor para headroom):
+ * - EBITDA ≤ 0 → crítico: não existe múltiplo de um EBITDA que não existe. O
+ *   card APARECE mesmo assim, porque sumir justamente na empresa em dificuldade
+ *   é o oposto do que um IBR serve para fazer.
+ * - headroom < 0 → crítico: o teto já foi furado; a conversa com o banco é de
+ *   amortização, não de captação.
+ * - headroom < 25% da dívida líquida → atenção: espaço que um trimestre fraco de
+ *   EBITDA consome sozinho não é espaço.
+ */
+function cardHeadroomCaptacao(
+  dados: DadosParaCards,
+  p: string,
+  dias: number,
+  covenants: CovenantParaCard[],
+  rot: (p: string) => string,
+): CardDecisao | null {
+  const ebitda = ebitdaDoPeriodo(dados, p);
+  if (ebitda === null) return null; // sem EBITDA não há régua — e não se inventa uma
+
+  // Só limite SUPERIOR ("<=" / "<") é teto de captação: um covenant de piso não
+  // diz até onde dá para tomar. Entre vários, vale o mais apertado.
+  const doContrato = covenants
+    .filter((c) => nomeIndicadorDoCovenant(c.metric) === NOME_ALAVANCAGEM.toLowerCase())
+    .filter((c) => (c.operator === "<=" || c.operator === "<") && Number.isFinite(c.threshold) && c.threshold > 0)
+    .sort((a, b) => a.threshold - b.threshold)[0];
+  const limite = doContrato?.threshold ?? LIMITE_ALAVANCAGEM_PADRAO;
+
+  const dividaLiquida = ind(dados, "Dívida Líquida", p)
+    ?? (dividaBruta(dados, p) - val(dados.bp ?? [], "Caixa e Equivalentes de Caixa", p));
+  const teto = limite * ebitda;
+  const headroom = teto - dividaLiquida;
+  const alavancagem = ind(dados, NOME_ALAVANCAGEM, p);
+  const parcial = dias < 360;
+
+  const origemLimite = doContrato
+    ? `covenant "${doContrato.name}" deste IBR`
+    : "premissa desta análise";
+
+  const linhas: LinhaCard[] = [
+    { rotulo: `EBITDA (${rot(p)})`, valor: brl(ebitda), bruto: ebitda },
+    { rotulo: `Limite de alavancagem (${origemLimite})`, valor: `${mult(limite)} EBITDA`, bruto: limite },
+    { rotulo: "Teto de dívida líquida no limite", valor: brl(teto), bruto: teto },
+    {
+      // Dívida líquida NEGATIVA é caixa líquido: escrever "-−R$ 600 mil" na coluna
+      // de subtração transformaria uma boa notícia em erro de digitação.
+      rotulo: dividaLiquida >= 0 ? "Dívida líquida hoje" : "Caixa líquido hoje (mais caixa que dívida)",
+      valor: dividaLiquida >= 0 ? `-${brl(dividaLiquida)}` : `+${brl(-dividaLiquida)}`,
+      bruto: -dividaLiquida,
+    },
+    { rotulo: "Espaço para dívida nova", valor: brl(headroom), bruto: headroom, destaque: true },
+  ];
+
+  if (ebitda <= 0) {
+    return {
+      id: "headroom-captacao",
+      titulo: "Quanto ainda dá para tomar de dívida",
+      pergunta: "Quanto de dívida nova a empresa aguenta sem furar o limite?",
+      status: "critico",
+      resposta: `Não há espaço para dívida nova: o EBITDA do período é ${brl(ebitda)}. Um limite em múltiplo de EBITDA não mede nada quando não há EBITDA — e dívida nova aqui não tem de onde ser paga.`,
+      linhas: linhas.slice(0, 2),
+      premissas: [
+        doContrato
+          ? `Limite de ${mult(limite)} vem do covenant "${doContrato.name}" deste IBR.`
+          : `Sem covenant de ${NOME_ALAVANCAGEM} neste IBR: a régua de ${mult(LIMITE_ALAVANCAGEM_PADRAO)} é premissa desta análise, não uma exigência de banco.`,
+        "Com EBITDA negativo ou zero a capacidade de tomar dívida não se calcula por múltiplo — ela depende de garantia e de projeção, que não estão nesta base.",
+        ...(parcial ? [`O período cobre ${dias} dias, não um ano: o EBITDA aqui é o acumulado desses meses.`] : []),
+      ],
+    };
+  }
+
+  // Sensibilidade do teto ao EBITDA: quem decide captar precisa ver que o espaço
+  // não é um saldo — ele encolhe junto com o resultado.
+  const perdaPor10 = limite * ebitda * 0.1;
+  linhas.push({
+    rotulo: "Cada 10% a menos de EBITDA reduz o teto em",
+    valor: brl(perdaPor10),
+    bruto: perdaPor10,
+  });
+
+  const folgaRelativa = dividaLiquida > 0 ? headroom / dividaLiquida : null;
+  const apertado = folgaRelativa !== null && folgaRelativa < 0.25;
+  const statusBase: StatusCard = headroom < 0 ? "critico" : apertado ? "atencao" : "ok";
+  const status = pior(statusBase, indStatus(dados, NOME_ALAVANCAGEM, p));
+
+  // Múltiplo NEGATIVO não é leitura de alavancagem — é o efeito aritmético de ter
+  // mais caixa que dívida, e "-0,18x EBITDA" na tela só confunde quem decide. O
+  // ponto de partida já diz que há caixa líquido.
+  const alavTxt = alavancagem !== null && alavancagem > 0 ? ` A alavancagem atual é ${mult(alavancagem)} EBITDA.` : "";
+  const pontoPartida = dividaLiquida >= 0
+    ? `partindo de uma dívida líquida de ${brl(dividaLiquida)}`
+    : `partindo de um caixa líquido de ${brl(-dividaLiquida)} (hoje há mais caixa do que dívida)`;
+  const resposta = headroom < 0
+    ? `Não há espaço para dívida nova: a empresa já está ${brl(-headroom)} acima do teto de ${mult(limite)} EBITDA (${brl(teto)}).${alavTxt} O caminho aqui é amortizar ou renegociar o limite, não captar.`
+    : apertado
+      ? `Sobram ${brl(headroom)} de espaço até o teto de ${mult(limite)} EBITDA — pouco perto da dívida líquida atual de ${brl(dividaLiquida)}.${alavTxt} Um trimestre fraco de EBITDA consome esse espaço sem a empresa tomar um centavo a mais.`
+      : `A empresa aguenta até ${brl(headroom)} de dívida nova antes de encostar no teto de ${mult(limite)} EBITDA (${brl(teto)}), ${pontoPartida}.${alavTxt}`;
+
+  return {
+    id: "headroom-captacao",
+    titulo: "Quanto ainda dá para tomar de dívida",
+    pergunta: "Quanto de dívida nova a empresa aguenta sem furar o limite?",
+    status,
+    resposta,
+    linhas,
+    premissas: [
+      doContrato
+        ? `Limite de ${mult(limite)} vem do covenant "${doContrato.name}" deste IBR — se o contrato mudar, o cadastro de covenants é o lugar de corrigir.`
+        : `Sem covenant de ${NOME_ALAVANCAGEM} neste IBR: a régua de ${mult(LIMITE_ALAVANCAGEM_PADRAO)} é premissa desta análise, não uma exigência do banco desta empresa. Cadastre o covenant real para o número valer como compromisso.`,
+      "Dívida líquida = empréstimos e financiamentos (curto e longo prazo) + passivos com partes relacionadas − caixa e equivalentes, a mesma definição da aba Indicadores.",
+      "A base contábil não traz cronograma de amortização: o número é um TETO DE SALDO, não uma janela de captação por vencimento — dívida que vence no mês que vem não abre espaço aqui.",
+      "Capacidade de tomar não é conveniência de tomar: o teto diz até onde o múltiplo aguenta, não se o projeto paga o juro nem se o banco aprova.",
+      ...(parcial
+        ? [`O período cobre ${dias} dias, não um ano, e o EBITDA NÃO foi anualizado (mesma base do indicador ${NOME_ALAVANCAGEM}): contra um limite anual, o teto sai subestimado.`]
+        : []),
+    ],
+  };
+}
+
+// ── Card 4: custo da dívida ───────────────────────────────────────────────────
+
+/**
+ * SUA DÍVIDA ESTÁ CARA?
+ *
+ *   custo da empresa = |Despesa Financeira| ÷ dívida média do período
+ *
+ * A referência de comparação é NACIONAL para crédito PJ (CDI + spread médio,
+ * Banco Central) e chega por parâmetro. Nunca é média do ramo de atividade da
+ * empresa — e o texto do card não pode sugerir que seja, senão o leitor decide
+ * trocar de banco com base numa comparação que não existe.
+ *
+ * RÉGUA DO STATUS: até a referência, "ok" (paga o preço do dinheiro ou menos);
+ * até 1,3× a referência, atenção; acima disso, crítico — pagar 30% a mais que o
+ * crédito PJ médio costuma valer mais em renegociação do que qualquer ganho
+ * operacional que a empresa consiga no mesmo ano.
+ */
+function cardCustoDivida(
+  dados: DadosParaCards,
+  p: string,
+  dias: number,
+  referencia: number,
+  rot: (p: string) => string,
+  periodoAnterior: string | null,
+): CardDecisao | null {
+  const despFinPeriodo = Math.abs(val(dados.dre ?? [], "Despesas Financeiras", p));
+  if (despFinPeriodo <= 0.005) return null; // sem juro registrado não há custo a medir
+
+  const dividaAtual = dividaBruta(dados, p);
+  const dividaAnterior = periodoAnterior ? dividaBruta(dados, periodoAnterior) : null;
+  // Dívida MÉDIA: o saldo de uma data sozinho mede errado quem captou (ou quitou)
+  // no meio do período — a despesa é do período inteiro, a base tem que ser também.
+  const dividaMedia = dividaAnterior !== null && dividaAnterior > 0
+    ? (dividaAnterior + dividaAtual) / 2
+    : dividaAtual;
+  if (dividaMedia <= 0.005) return null; // sem dívida não há custo de dívida
+
+  // ANUALIZA a despesa em período parcial: a referência é uma taxa AO ANO, e
+  // comparar 5 meses de juro com ela diria "sua dívida está barata" para quem paga caro.
+  const parcial = dias < 360;
+  const fatorAno = 365 / dias;
+  const despFinAno = parcial ? despFinPeriodo * fatorAno : despFinPeriodo;
+  const custo = despFinAno / dividaMedia;
+  const diferenca = custo - referencia;
+  const efeitoAno = diferenca * dividaMedia;
+
+  const status: StatusCard = custo <= referencia ? "ok" : custo <= referencia * 1.3 ? "atencao" : "critico";
+
+  const linhas: LinhaCard[] = [
+    {
+      rotulo: parcial ? `Despesa financeira (${rot(p)}, anualizada)` : `Despesa financeira (${rot(p)})`,
+      valor: brl(despFinAno),
+      bruto: despFinAno,
+    },
+    {
+      rotulo: dividaAnterior !== null && dividaAnterior > 0
+        ? `Dívida média do período (média entre ${rot(periodoAnterior!)} e ${rot(p)})`
+        : `Dívida no fim do período (${rot(p)})`,
+      valor: brl(dividaMedia),
+      bruto: dividaMedia,
+    },
+    { rotulo: "Custo da dívida da empresa", valor: `${pct(custo)} ao ano`, bruto: custo, destaque: true },
+    { rotulo: "Referência de mercado para crédito PJ", valor: `${pct(referencia)} ao ano`, bruto: referencia },
+    {
+      rotulo: diferenca >= 0 ? "Quanto a diferença custa por ano" : "Quanto a diferença economiza por ano",
+      valor: brl(Math.abs(efeitoAno)),
+      bruto: efeitoAno,
+    },
+  ];
+
+  const difPP = Math.abs(diferenca * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const resposta = diferenca > 0
+    ? `A empresa paga ${pct(custo)} ao ano pela dívida, ${difPP} pontos percentuais acima da referência de mercado para crédito PJ (${pct(referencia)}). Sobre a dívida média de ${brl(dividaMedia)}, essa diferença custa ${brl(Math.abs(efeitoAno))} por ano.`
+    : `A empresa paga ${pct(custo)} ao ano pela dívida, ${difPP} pontos percentuais abaixo da referência de mercado para crédito PJ (${pct(referencia)}) — sobre a dívida média de ${brl(dividaMedia)}, ${brl(Math.abs(efeitoAno))} por ano a menos do que custaria no preço de mercado.`;
+
+  return {
+    id: "custo-divida",
+    titulo: "Sua dívida está cara?",
+    pergunta: "O que a empresa paga de juros está acima ou abaixo do mercado?",
+    status,
+    resposta,
+    linhas,
+    premissas: [
+      "A linha \"Despesas Financeiras\" da DRE costuma trazer IOF, tarifas bancárias, descontos concedidos e variação cambial junto com o juro: o custo calculado é aproximação POR CIMA do juro contratado.",
+      "A referência é NACIONAL para crédito PJ (CDI + spread médio das operações de crédito, série do Banco Central), válida para o mercado inteiro — não é a média do ramo de atividade desta empresa, nem do porte dela.",
+      dividaAnterior !== null && dividaAnterior > 0
+        ? `Dívida média = média simples entre o saldo de ${rot(periodoAnterior!)} (${brl(dividaAnterior)}) e o de ${rot(p)} (${brl(dividaAtual)}), nas quatro contas de dívida (empréstimos e partes relacionadas, curto e longo prazo).`
+        // Cobre os DOIS casos em que a média não se forma: período anterior
+        // inexistente na série e período anterior sem saldo de dívida. Dizer "só
+        // um período disponível" no segundo caso seria descrever errado a base.
+        : `Não há saldo de dívida no período anterior para formar a média: a base é o saldo do próprio período (${brl(dividaAtual)}). Se a dívida foi tomada no meio do caminho, o custo apurado sai menor que o real.`,
+      "Dívida com partes relacionadas costuma não pagar juro: quando ela pesa na dívida média, o custo apurado sai menor que o juro efetivamente pago ao banco.",
+      ...(parcial
+        ? [`O período cobre ${dias} dias, não um ano: a despesa financeira foi anualizada (×${fatorAno.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}) para comparar com uma taxa anual, supondo o mesmo ritmo nos meses restantes.`]
+        : []),
+      "Não substitui a leitura dos contratos: taxa, prazo e garantia de cada operação não estão na contabilidade.",
+    ],
+  };
+}
+
+// ── Card 5: crescer sem captar ────────────────────────────────────────────────
+
+/**
+ * QUANTO DÁ PARA CRESCER SEM DINHEIRO NOVO (taxa de crescimento sustentável).
+ *
+ *   SGR = ROE × retenção, com retenção = 1 − (retirada do período ÷ lucro líquido)
+ *
+ * O caso que motivou o card: empresa que distribui quase tudo tem SGR perto de
+ * zero e mesmo assim cresce em receita — o crescimento veio de dívida ou de
+ * fornecedor, não do próprio lucro. Um número seco ("0,4%") não conta essa
+ * história; o texto conta.
+ *
+ * RÉGUA DO STATUS: prejuízo → crítico (não há lucro para reter). Crescimento real
+ * acima do sustentável por mais de 2 pontos percentuais → atenção: a diferença foi
+ * financiada por alguém. SGR praticamente zero → atenção. O semáforo de
+ * alavancagem do motor pode piorar o veredicto, nunca melhorar: crescer financiado
+ * com a alavancagem já acesa é outra conversa.
+ */
+function cardCrescerSemCaptar(
+  dados: DadosParaCards,
+  p: string,
+  dias: number,
+  rot: (p: string) => string,
+): CardDecisao | null {
+  const roe = ind(dados, NOME_ROE, p);
+  if (roe === null) return null; // sem ROE não há taxa sustentável — e não se estima uma
+
+  const lucro = ind(dados, "Lucro Líquido", p) ?? valOpt(dados.dre ?? [], "Lucro Líquido", p);
+  const crescimentoReal = ind(dados, NOME_CRESCIMENTO, p);
+  const parcial = dias < 360;
+
+  // Retirada = a MESMA linha que o card de distribuição lê (ΔPL − lucro − Δ capital):
+  // inclui dividendos e demais ajustes do PL, que é o que de fato saiu do patrimônio.
+  const linhaRetirada = dados.fluxoCaixa?.fcf?.find((l) => /dividendo|ajustes do pl/i.test(l.nome));
+  const valorRetirada = linhaRetirada?.valores?.[p] ?? null;
+  const retirada = typeof valorRetirada === "number" && valorRetirada < 0 ? Math.abs(valorRetirada) : 0;
+  const temLinhaRetirada = linhaRetirada !== undefined && typeof valorRetirada === "number";
+
+  if (lucro === null || lucro <= 0) {
+    // Sem lucro não existe retenção: a fórmula perde o sentido e o card diz o que
+    // acontece de verdade — todo crescimento, aqui, vem de fora.
+    return {
+      id: "crescer-sem-captar",
+      titulo: "Quanto dá para crescer sem dinheiro novo",
+      pergunta: "Até quanto a empresa cresce se financiando sozinha?",
+      status: "critico",
+      resposta: lucro === null
+        ? `Não é possível calcular a taxa de crescimento sustentável: o lucro líquido do período (${rot(p)}) não está disponível na base.`
+        : `Sem lucro no período (${rot(p)}) não há o que reter: qualquer crescimento hoje é financiado por dívida, por fornecedor ou por aporte do sócio — não pelo resultado da própria operação.`,
+      linhas: [
+        { rotulo: `ROE (${rot(p)})`, valor: pct(roe), bruto: roe },
+        ...(lucro !== null ? [{ rotulo: `Lucro líquido (${rot(p)})`, valor: brl(lucro), bruto: lucro }] : []),
+        ...(crescimentoReal !== null
+          ? [{ rotulo: "Crescimento da receita no período", valor: pct(crescimentoReal), bruto: crescimentoReal }]
+          : []),
+      ],
+      premissas: [
+        "A taxa de crescimento sustentável (ROE × retenção do lucro) pressupõe lucro positivo — com prejuízo o patrimônio encolhe em vez de financiar crescimento.",
+        ...(crescimentoReal !== null
+          ? ["O crescimento da receita mostrado é o realizado no período, medido pelo motor — não uma projeção."]
+          : []),
+      ],
+    };
+  }
+
+  const payout = retirada / lucro;
+  const retencao = 1 - payout;
+  const sgr = roe * retencao;
+  /**
+   * "Distribui quase tudo" é o caso que motivou o card, e ele se reconhece pelo
+   * PAYOUT, não pelo SGR: com ROE alto, reter 5% ainda dá um número que parece
+   * crescimento. A régua é a política de distribuição (≥ 90% do lucro sai) — ou
+   * um SGR que já nasce colado no zero, quando o ROE também é baixo.
+   */
+  const distribuiQuaseTudo = payout >= 0.9 || sgr < 0.005;
+  const financiado = crescimentoReal !== null && crescimentoReal > sgr + 0.02;
+
+  const statusBase: StatusCard = financiado || distribuiQuaseTudo ? "atencao" : "ok";
+  const status = pior(statusBase, indStatus(dados, NOME_ALAVANCAGEM, p));
+
+  const linhas: LinhaCard[] = [
+    { rotulo: `ROE (${rot(p)})`, valor: pct(roe), bruto: roe },
+    {
+      rotulo: temLinhaRetirada ? `Retirada do período (${rot(p)})` : "Retirada do período (não registrada)",
+      valor: retirada > 0 ? `-${brl(retirada)}` : brl(0),
+      bruto: -retirada,
+    },
+    { rotulo: "Distribuído sobre o lucro (payout)", valor: pct(payout), bruto: payout },
+    { rotulo: "Retido no negócio", valor: pct(retencao), bruto: retencao },
+    {
+      // TAXA NEGATIVA NÃO É PREVISÃO. Distribuindo MAIS do que ganhou, a conta
+      // devolve um número negativo que se lê como "vai encolher 40,7% ao ano" —
+      // e não é isso: é o patrimônio diminuindo porque a retirada passou do
+      // lucro. Mesma disciplina do card de qualidade do lucro, onde prejuízo não
+      // vira taxa de conversão: quando a fórmula perde o sentido, diz-se o fato.
+      rotulo: "Crescimento sustentável ao ano",
+      valor: retencao < 0 ? "não se aplica — o patrimônio encolheu no período" : pct(sgr),
+      bruto: retencao < 0 ? null : sgr,
+      destaque: true,
+    },
+    ...(crescimentoReal !== null
+      ? [{ rotulo: "Crescimento da receita no período", valor: pct(crescimentoReal), bruto: crescimentoReal }]
+      : []),
+  ];
+
+  const abre = retencao <= 0
+    ? `A empresa distribuiu ${pct(payout)} do lucro do período — mais do que ganhou. Sem retenção não há crescimento que se pague sozinho: o patrimônio encolheu.`
+    : distribuiQuaseTudo
+      ? `A empresa distribui praticamente tudo que ganha (${pct(payout)} do lucro): sobra ${pct(retencao)} no negócio, e com ROE de ${pct(roe)} isso sustenta só ${pct(sgr)} de crescimento ao ano por conta própria.`
+      : `Retendo ${pct(retencao)} do lucro, com ROE de ${pct(roe)}, a empresa cresce até ${pct(sgr)} ao ano sem dívida nova nem aporte.`;
+
+  const fecha = financiado
+    ? ` A receita cresceu ${pct(crescimentoReal!)} no período — acima disso. A diferença não veio do lucro retido: veio de dívida, de prazo de fornecedor ou de aporte.`
+    : crescimentoReal !== null && crescimentoReal > 0
+      ? ` A receita cresceu ${pct(crescimentoReal)} no período, dentro do que o próprio resultado sustenta.`
+      : "";
+
+  return {
+    id: "crescer-sem-captar",
+    titulo: "Quanto dá para crescer sem dinheiro novo",
+    pergunta: "Até quanto a empresa cresce se financiando sozinha?",
+    status,
+    resposta: `${abre}${fecha}`,
+    linhas,
+    premissas: [
+      "Taxa de crescimento sustentável = ROE × parcela do lucro retida. Supõe margem, giro do ativo e alavancagem CONSTANTES: é o quanto o patrimônio cresce sozinho, não uma meta de vendas.",
+      temLinhaRetirada
+        ? `Retirada do período = variação do patrimônio líquido menos o lucro e menos a variação de capital social, do fluxo de caixa indireto: inclui dividendos e outros ajustes do patrimônio.`
+        : "Não há linha de dividendos/ajustes do patrimônio no fluxo de caixa deste período: o cálculo ASSUME retenção total do lucro. Se houve distribuição não registrada, a taxa real é menor.",
+      "O payout usado é o DESTE período: uma distribuição extraordinária (ou um ano sem distribuir) derruba ou infla a taxa e não descreve a política recorrente.",
+      "ROE do período, da aba Indicadores — lucro líquido sobre patrimônio líquido de fechamento, sem média do patrimônio.",
+      ...(parcial
+        ? [`O período cobre ${dias} dias, não um ano: ROE e retirada são do acumulado desses meses, então a taxa sai menor que a de um exercício cheio.`]
+        : []),
+      ...(crescimentoReal !== null
+        ? ["O crescimento da receita comparado é o realizado (variação vs. o período anterior), medido pelo motor."]
+        : ["Não há crescimento de receita calculado para este período: sem período anterior comparável, o card não confronta a taxa sustentável com o crescimento real."]),
+    ],
+  };
+}
+
+// ── Card 6: reinvestimento (capex ÷ D&A) ──────────────────────────────────────
 
 function cardReinvestimento(dados: DadosParaCards, rot: (p: string) => string): CardDecisao | null {
   const fc = dados.fluxoCaixa;
@@ -541,7 +1008,14 @@ function cardSensibilidade(dados: DadosParaCards, p: string, dias: number): Card
 
 export function montarCardsDecisao(
   dados: DadosParaCards,
-  opts?: { covenants?: CovenantParaCard[]; premissas?: PremissasDecisao; periodo?: string },
+  opts?: {
+    covenants?: CovenantParaCard[];
+    premissas?: PremissasDecisao;
+    periodo?: string;
+    /** Referências externas (banco de benchmarks). Ausente = o card que depende
+     *  delas não aparece — comparar com número inventado é pior que não comparar. */
+    benchmarks?: BenchmarksParaCards;
+  },
 ): { periodo: string; periodoRotulo: string; cards: CardDecisao[] } | null {
   const periodos = [...(dados.periodos ?? [])];
   if (periodos.length === 0) return null;
@@ -566,9 +1040,21 @@ export function montarCardsDecisao(
   // todo balancete rotulava ano cheio como "12/2024" — o próprio dono viu.
   const rot = (x: string): string => rotuloPeriodoSrv(x, ytd.has(x) && !/^\d{2}\/12\//.test(x));
 
+  // Período IMEDIATAMENTE anterior na série ordenada — base da dívida média do
+  // custo da dívida (a despesa é do período inteiro; o saldo de uma data só, não).
+  const ordenados = [...periodos].sort(ordenar);
+  const idxAtual = ordenados.indexOf(p);
+  const periodoAnterior = idxAtual > 0 ? ordenados[idxAtual - 1]! : null;
+  const custoRef = opts?.benchmarks?.custoMedioDivida;
+
   const cards = [
     cardDistribuicao(dados, p, dias, premissas),
     cardCovenants(dados, p, opts?.covenants ?? []),
+    cardHeadroomCaptacao(dados, p, dias, opts?.covenants ?? [], rot),
+    typeof custoRef === "number" && Number.isFinite(custoRef) && custoRef > 0
+      ? cardCustoDivida(dados, p, dias, custoRef, rot, periodoAnterior)
+      : null,
+    cardCrescerSemCaptar(dados, p, dias, rot),
     cardReinvestimento(dados, rot),
     cardQualidadeLucro(dados, rot),
     cardSensibilidade(dados, p, dias),
