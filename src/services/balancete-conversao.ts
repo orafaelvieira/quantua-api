@@ -924,7 +924,14 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
       // muitos planos) ou fora dela. Não se sabe qual convenção o sistema usou,
       // então as duas valem — e a duplicação, que é o que esta prova existe para
       // pegar, reprova nas duas.
-      conferir("Passivo", b.resumo.passivo, passivoAtual, arred(passivoAtual + Math.abs(plAssinado)));
+      //
+      // O PL entra ASSINADO, como no P2 (17/08/2026, revisão adversarial). Com
+      // `Math.abs`, PL DEVEDOR (prejuízos acumulados > capital, situação real em
+      // 6 balancetes do corpus) somava onde a convenção do rodapé subtrai: as
+      // duas leituras erravam para o mesmo lado e o documento CORRETO saía com
+      // selo vermelho — e com a fixação recusada em IBR/Valuation. Falso alarme
+      // é pior que prova ausente: quebra a entrega de quem não tem defeito.
+      conferir("Passivo", b.resumo.passivo, passivoAtual, arred(passivoAtual + plAssinado));
       if (!exercicioEncerrado) {
         // GRUPO-ESPELHO SAI DA DRE COM RAZÃO, e o rodapé não sabe disso: o resumo
         // soma o espelho junto (é uma raiz do documento como qualquer outra), então

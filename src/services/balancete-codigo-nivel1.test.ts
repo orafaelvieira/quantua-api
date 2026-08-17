@@ -168,6 +168,52 @@ describe("P5: o que o motor monta × o RESUMO que o documento declara", () => {
   it("documento sem resumo não ganha prova nenhuma — ausência não é aprovação", () => {
     expect(converter(MISTO).provas.resumoDeclarado).toBeUndefined();
   });
+
+  /**
+   * PL DEVEDOR (prejuízos acumulados > capital). O arquivo declara que isso
+   * existe em 6 balancetes do corpus, e é por causa deles que o P2 soma o PL
+   * ASSINADO em vez de em módulo. A alternativa do P5 tinha de seguir a mesma
+   * régua: com `Math.abs`, "passivo + PL" produzia um número MAIOR quando o PL é
+   * devedor, quando a convenção do rodapé dá um MENOR — e as duas leituras
+   * erravam para o mesmo lado. Resultado: documento CORRETO com selo vermelho e
+   * fixação recusada em IBR/Valuation. Falso alarme é pior que prova ausente.
+   */
+  /*
+   * Toda linha tem natureza INEQUÍVOCA na própria equação. Isto não é capricho:
+   * na primeira versão desta fixture o "CAPITAL SOCIAL" fechava nas duas
+   * equações (ant 100 · sem movimento · atual 100), então a natureza vinha da
+   * HERANÇA da convenção do pai — que é devedor — e o PL dava −400 em vez de
+   * −200. O teste ficou vermelho por defeito da fixture, não do código.
+   *
+   * Ativo 1.300 · Passivo 1.200 · PL −200 (Capital +100 C, Prejuízos −300 D) ·
+   * resultado +300. Fechamento: 1300 − 1200 − (−200) − 300 = 0. Σdébitos =
+   * Σcréditos = 1.400 nas folhas.
+   */
+  const PL_DEVEDOR: Linha[] = [
+    ["1", "ATIVO", "1000.00", "500.00", "200.00", "1300.00"],
+    ["2", "PASSIVO", "1100.00", "0.00", "100.00", "1200.00"],
+    ["3", "PATRIMÔNIO LÍQUIDO", "100.00", "200.00", "100.00", "200.00"],
+    ["03.1", "CAPITAL SOCIAL", "0.00", "0.00", "100.00", "100.00"],
+    ["03.4", "PREJUÍZOS ACUMULADOS", "100.00", "200.00", "0.00", "300.00"],
+    ["4", "RECEITAS", "0.00", "0.00", "1000.00", "1000.00"],
+    ["5", "CUSTOS E DESPESAS", "0.00", "700.00", "0.00", "700.00"],
+  ];
+
+  it("PL DEVEDOR: o rodapé com o PL somado é 1.000, não 1.400", () => {
+    const base = converter(PL_DEVEDOR);
+    // O documento é internamente consistente — e é a prova de que o PL vale
+    // −200: com qualquer outro valor o fechamento não daria zero.
+    expect(base.provas.fechamento.ok).toBe(true);
+    expect(base.provas.fechamento.passivo).toBe(1200);
+    expect(base.provas.partidaDobrada.ok).toBe(true);
+    expect(base.resultadoAcumulado).toBe(300);
+    // Passivo COM o PL (assinado): 1200 + (−200) = 1000.
+    expect(converter(PL_DEVEDOR, [["Resumo"], ["PASSIVO", "1.000,00"]]).provas.resumoDeclarado?.ok).toBe(true);
+    // Passivo SEM o PL: 1200.
+    expect(converter(PL_DEVEDOR, [["Resumo"], ["PASSIVO", "1.200,00"]]).provas.resumoDeclarado?.ok).toBe(true);
+    // E o dobro continua reprovando nas duas convenções.
+    expect(converter(PL_DEVEDOR, [["Resumo"], ["PASSIVO", "2.400,00"]]).provas.resumoDeclarado?.ok).toBe(false);
+  });
 });
 
 /**
