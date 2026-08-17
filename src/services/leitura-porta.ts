@@ -42,6 +42,21 @@ export interface LeituraPortaConteudo {
   /** Linhas FOLHA do balancete, no plano do cliente (código, nome, saldos). */
   linhas: LinhaBalancete[];
   totalContas: number;
+  /**
+   * NÚMEROS QUE O DOCUMENTO DECLARA SOBRE SI MESMO (17/08/2026, caso Belagro).
+   *
+   * `linhas` guarda o corpo do balancete; estes dois guardam o RODAPÉ — "Total
+   * de débitos/créditos" e o bloco "Resumo" (ATIVO, PASSIVO, RECEITAS, CUSTOS E
+   * DESPESAS, Lucro do período). Sem eles aqui, quem RECONVERTE a partir da
+   * leitura gravada (`montarBaseContabil`) perde as duas únicas provas que
+   * comparam o motor com um número de FORA da montagem — e provas internas não
+   * enxergam duplicação simétrica (ver P5 em balancete-conversao.ts).
+   *
+   * Leitura de leitor anterior não traz os campos: aí a prova fica AUSENTE, que
+   * é diferente de aprovada. "Reprocessar" na Data room preenche.
+   */
+  totais?: BalanceteParseado["totais"];
+  resumo?: BalanceteParseado["resumo"];
   /** Provas aritméticas da conversão (P1 débito=crédito · P2 fechamento
    *  patrimonial · P3 coerência linha a linha) — "verde só com prova". */
   provas: ProvasBalancete | null;
@@ -102,6 +117,8 @@ export async function lerBalanceteDeterministico(
     periodoFim: parseado.periodoFim,
     linhas: parseado.linhas,
     totalContas: parseado.linhas.length,
+    ...(parseado.totais ? { totais: parseado.totais } : {}),
+    ...(parseado.resumo ? { resumo: parseado.resumo } : {}),
     provas,
     avisos,
   };
@@ -374,6 +391,30 @@ export async function lerDemonstrativoHibrido(
   } catch (e) {
     return { ...base, erro: `extração falhou (${e instanceof Error ? e.message : String(e)})` };
   }
+}
+
+/**
+ * A LEITURA GRAVADA DE VOLTA NO SHAPE DO PARSE (17/08/2026).
+ *
+ * Quem reconverte a partir da leitura (`montarBaseContabil`) montava o objeto à
+ * mão, campo por campo — e esquecer um campo novo não dá erro de tipo nenhum:
+ * `BalanceteParseado` tem os opcionais opcionais. Foi exatamente o que
+ * aconteceu com `resumo`: a prova P5 foi escrita, passou nos testes de unidade
+ * e nasceu MORTA no caminho que importa, porque o campo nunca chegava.
+ *
+ * Agora existe um lugar só para fazer essa ponte. Campo novo no parse entra
+ * aqui uma vez e todo reconvertedor ganha junto.
+ */
+export function parseadoDaLeitura(c: LeituraPortaConteudo): BalanceteParseado {
+  return {
+    periodoInicio: c.periodoInicio,
+    periodoFim: c.periodoFim,
+    ordemColunas: "ant-d-c-atual",
+    linhas: c.linhas,
+    ...(c.totais ? { totais: c.totais } : {}),
+    ...(c.resumo ? { resumo: c.resumo } : {}),
+    avisos: [],
+  };
 }
 
 /** Resumo curto para listagens (o conteúdo integral fica no registro). */

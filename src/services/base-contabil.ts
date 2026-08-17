@@ -24,7 +24,7 @@
  * (A/B byte a byte do payload nas 6 empresas do banco local) — o objetivo era
  * exatamente ter uma função chamável pelo IBR, não só por uma rota HTTP.
  */
-import { gravarLeituraPorta, VERSAO_LEITOR_DEMONSTRATIVO, type LeituraPortaConteudo, type LeituraDemonstrativoConteudo } from "./leitura-porta";
+import { gravarLeituraPorta, parseadoDaLeitura, VERSAO_LEITOR_DEMONSTRATIVO, type LeituraPortaConteudo, type LeituraDemonstrativoConteudo } from "./leitura-porta";
 import { prisma } from "../db/client";
 import { converterBalancete, ehNomeDeApuracao } from "./balancete-conversao";
 import { foldBP, foldDRE, type NaoMapeado, type BPN3Item } from "./ai-extraction";
@@ -360,13 +360,11 @@ async function montarBaseContabilSemCache(
     // as requisições — devolve o event loop entre documentos.
     await new Promise((r) => setImmediate(r));
     try {
-      const conv = converterBalancete({
-        periodoInicio: f.conteudo.periodoInicio,
-        periodoFim: f.conteudo.periodoFim,
-        ordemColunas: "ant-d-c-atual",
-        linhas: f.conteudo.linhas,
-        avisos: [],
-      });
+      // A ponte é `parseadoDaLeitura` (leitura-porta.ts), NUNCA um objeto montado
+      // à mão aqui: é AQUI que a base é montada, então é aqui que a duplicação
+      // simétrica tem de ser pega — e ela só é pega com o rodapé do documento
+      // (`totais` e `resumo`), que a montagem manual deixava de fora em silêncio.
+      const conv = converterBalancete(parseadoDaLeitura(f.conteudo));
       const periodo = conv.periodoBP;
       if (periodos.includes(periodo)) {
         avisos.push(`${f.nome}: período ${periodo} já coberto por outro balancete — este ficou de fora (remova a duplicidade na Data room).`);

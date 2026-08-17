@@ -26,6 +26,7 @@
 import { describe, it, expect } from "vitest";
 import { parseBalanceteMatriz } from "./balancete-tabular";
 import { converterBalancete, codigoEhAncestral, prepararArvore } from "./balancete-conversao";
+import { parseadoDaLeitura } from "./leitura-porta";
 
 const CAB = ["Classificação", "Nome da conta contábil", "Saldo anterior", "Débito", "Crédito", "Saldo atual"];
 type Linha = [string, string, string, string, string, string];
@@ -166,5 +167,50 @@ describe("P5: o que o motor monta × o RESUMO que o documento declara", () => {
 
   it("documento sem resumo não ganha prova nenhuma — ausência não é aprovação", () => {
     expect(converter(MISTO).provas.resumoDeclarado).toBeUndefined();
+  });
+});
+
+/**
+ * A PROVA TEM DE CHEGAR AO CAMINHO QUE IMPORTA.
+ *
+ * O P5 nasceu MORTO na primeira entrega: escrito, testado em unidade, verde —
+ * e inócuo, porque `montarBaseContabil` reconverte a partir da LEITURA GRAVADA
+ * montando o objeto do parse à mão, e o campo `resumo` não estava na lista.
+ * Nada acusa: os campos são opcionais, o TypeScript aceita, os testes de
+ * unidade continuam passando. Uma prova que só roda no teste é pior que
+ * nenhuma, porque dá a sensação de coberto.
+ *
+ * `parseadoDaLeitura` é a ponte única, e este teste é a trava dela.
+ */
+describe("parseadoDaLeitura: o rodapé sobrevive à ida e volta pela leitura gravada", () => {
+  const RODAPE = [["Resumo"], ["ATIVO", "1.200,00", "PASSIVO", "900,00"], ["Totaldedébitos", "1.400,00"], ["Totaldecréditos", "1.400,00"]];
+
+  it("leva `resumo` e `totais` da leitura para o parse reconvertido", () => {
+    const b = ler(MISTO, RODAPE);
+    // O que a leitura da porta GRAVA (só os campos do contrato, como no banco).
+    const gravado = {
+      versao: 1 as const, origem: "tabular" as const,
+      periodoInicio: b.periodoInicio, periodoFim: b.periodoFim,
+      linhas: b.linhas, totalContas: b.linhas.length,
+      totais: b.totais, resumo: b.resumo, provas: null, avisos: [],
+    };
+    const volta = parseadoDaLeitura(gravado);
+    expect(volta.resumo).toEqual({ ativo: 1200, passivo: 900 });
+    expect(volta.totais).toEqual({ debito: 1400, credito: 1400 });
+    // E a prova roda de verdade em cima do que voltou.
+    expect(converterBalancete(volta).provas.resumoDeclarado?.itens.map((x) => x.o)).toEqual(["Ativo", "Passivo"]);
+  });
+
+  it("leitura de leitor ANTIGO (sem os campos) não inventa prova", () => {
+    const b = ler(MISTO, RODAPE);
+    const legado = {
+      versao: 1 as const, origem: "tabular" as const,
+      periodoInicio: b.periodoInicio, periodoFim: b.periodoFim,
+      linhas: b.linhas, totalContas: b.linhas.length, provas: null, avisos: [],
+    };
+    const volta = parseadoDaLeitura(legado);
+    expect(volta.resumo).toBeUndefined();
+    expect(volta.totais).toBeUndefined();
+    expect(converterBalancete(volta).provas.resumoDeclarado).toBeUndefined();
   });
 });
