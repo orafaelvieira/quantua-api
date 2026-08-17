@@ -384,7 +384,12 @@ export function resumoDaLeitura(c: LeituraPortaConteudo): {
     ok: !c.erro,
     contas: c.totalContas,
     periodo: c.periodoInicio && c.periodoFim ? `${c.periodoInicio} a ${c.periodoFim}` : null,
-    fechamentoOk: c.provas ? c.provas.fechamento.ok && c.provas.linhas.ok : null,
+    // O resumo declarado no rodapé (P5) entra quando existe: leitura de leitor
+    // anterior não traz o campo, e prova ausente é NEUTRA — quem decide são as
+    // outras. O que ela nunca pode é deixar passar como ✓ o que reprovou nela.
+    fechamentoOk: c.provas
+      ? c.provas.fechamento.ok && c.provas.linhas.ok && (c.provas.resumoDeclarado?.ok ?? true)
+      : null,
     erro: c.erro ?? null,
   };
 }

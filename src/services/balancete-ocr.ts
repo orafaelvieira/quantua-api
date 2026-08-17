@@ -38,6 +38,7 @@
 import { PDFDocument } from "pdf-lib";
 import { createWithRetry, calcCusto, type CustoIA } from "./ai-extraction";
 import { parseBalanceteMatriz, type Matriz } from "./balancete-tabular";
+import { codigoEhAncestral } from "./balancete-conversao";
 import type { BalanceteParseado, LinhaBalancete } from "./balancete-parser";
 import { lerPDF as lerVision, matrizDasPaginas } from "./ocr-vision";
 import { precificarUnidades } from "./ai-pricing";
@@ -469,7 +470,10 @@ function consertarPelaArvore(linhas: string[][], periodo: string | null): { linh
   atuais.forEach((l, i) => {
     let paiIdx = -1, melhor = -1;
     for (const [cod, j] of idxPorCodigo) {
-      if (j === i || !l.classificacao.startsWith(cod) || cod.length >= l.classificacao.length) continue;
+      // Mesma régua de ancestralidade da árvore (zero à esquerda normalizado):
+      // sem ela, um documento com "1" e "01.1" não enxerga pai nenhum e o
+      // conserto de OCR simplesmente não acontece.
+      if (j === i || !codigoEhAncestral(cod, l.classificacao)) continue;
       if (cod.length > melhor) { melhor = cod.length; paiIdx = j; }
     }
     if (paiIdx >= 0) (filhos.get(paiIdx) ?? filhos.set(paiIdx, []).get(paiIdx)!).push(i);

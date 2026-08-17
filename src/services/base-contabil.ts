@@ -273,7 +273,7 @@ async function montarBaseContabilSemCache(
       documentId: d.id, nome: d.nome, contas: c.totalContas,
       periodo: c.periodoInicio && c.periodoFim ? `${c.periodoInicio} a ${c.periodoFim}` : null,
       lido: true,
-      fechamentoOk: c.provas ? !!(c.provas.fechamento.ok && c.provas.linhas.ok && partidaOk) : null,
+      fechamentoOk: c.provas ? !!(c.provas.fechamento.ok && c.provas.linhas.ok && partidaOk && (c.provas.resumoDeclarado?.ok ?? true)) : null,
       erro: pd?.verificavel && !pd.ok
         ? `partida dobrada não fecha: diferença de ${fmtBRL(pd.delta)} entre débitos e créditos lidos`
         : null,
@@ -326,6 +326,8 @@ async function montarBaseContabilSemCache(
   const arvoreOriginalBP: Record<string, unknown> = {};
   const arvoreOriginalDRE: Record<string, unknown> = {};
   const periodos: string[] = [];
+  /** Períodos de balancete que publicaram DRE — um encerramento reprovado no P4 fica fora. */
+  const periodosComDRE: string[] = [];
   const origemPorPeriodo: Record<string, string> = {};
   /** Como rotular cada coluna: "mes" → 05/2026 · "exercicio" → 2026. */
   const tipoPorPeriodo: Record<string, "mes" | "exercicio"> = {};
@@ -378,21 +380,69 @@ async function montarBaseContabilSemCache(
       // provas vêm da conversão FRESCA daqui (a leitura gravada é anterior a
       // esta prova e não a carrega).
       const p4 = conv.provas.dreEncerrada;
-      if (p4 && !p4.ok) {
+      /**
+       * DRE REPROVADA NÃO É PUBLICADA (17/08/2026, caso Belagro 2023).
+       *
+       * Até aqui a DRE do encerramento entrava na base mesmo reprovando o P4 —
+       * o aviso ficava na tela e o número ia para as DFs, os indicadores, o
+       * Dashboard e a análise. No Belagro 2023 isso significava um prejuízo de
+       * R$ 85,9 mi num ano em que a empresa apurou R$ 6,8 mi de lucro.
+       *
+       * Pior: `cobertoDRE` nascia com TODOS os períodos de balancete, então a
+       * DRE OFICIAL de 2023, se o analista a subisse, seria recusada com "já
+       * coberto por outra fonte de DRE". O número falso trancava a porta do
+       * número certo.
+       *
+       * Agora o documento contribui só com o BP (que fecha ao centavo e tem a
+       * prova do rodapé) e a coluna de DRE fica ABERTA para a fonte correta.
+       * Suprimir sem prova é proibido; aqui a prova de que o número não é fato
+       * é o próprio P4, medido contra o PL do documento.
+       */
+      const dreReprovada = !!(p4 && !p4.ok);
+      if (dreReprovada && p4) {
         avisos.push(
-          `${f.nome}: balancete de ENCERRAMENTO — a DRE derivada do movimento (${fmtBRL(p4.derivado)}) não reconcilia com o resultado que o próprio PL registra no ano (${fmtBRL(p4.declaradoPL)}). Transferência interna entre contas de resultado infla os dois lados: confira contra a demonstração oficial do exercício antes de usar estes números.`,
+          `${f.nome}: balancete de ENCERRAMENTO — a DRE derivada do movimento (${fmtBRL(p4.derivado)}) não reconcilia com o resultado que o próprio PL registra no ano (${fmtBRL(p4.declaradoPL)}). ` +
+          `Transferência interna entre contas de resultado infla os dois lados, então esta DRE NÃO foi publicada: o documento entrou só com o balanço patrimonial (que fecha) e a coluna de resultado deste exercício segue em aberto. ` +
+          `Para preenchê-la, suba a demonstração oficial do exercício ou um balancete de dezembro ANTES do encerramento.`,
         );
         const linha = relatorio.find((r) => r.documentId === f.id);
         if (linha) {
           linha.fechamentoOk = false;
-          linha.erro = `DRE do encerramento não reconcilia com o PL (${fmtBRL(p4.derivado)} × ${fmtBRL(p4.declaradoPL)})`;
+          linha.erro = `DRE do encerramento não reconcilia com o PL (${fmtBRL(p4.derivado)} × ${fmtBRL(p4.declaradoPL)}) — não publicada`;
+        }
+      }
+      // P5 (17/08/2026, caso Belagro 12/2025): o RESUMO do rodapé é o número que
+      // o contador escreveu — a única prova que enxerga duplicação SIMÉTRICA, que
+      // passa por P0/P2/P3 sem arranhão. Vem da conversão FRESCA por dois motivos:
+      // a leitura gravada pode ser de leitor anterior a esta prova, e o selo tem
+      // de reprovar hoje, não na próxima releitura.
+      const p5 = conv.provas.resumoDeclarado;
+      if (p5 && !p5.ok) {
+        const falhos = p5.itens.filter((x) => !x.ok);
+        for (const x of falhos) {
+          avisos.push(
+            `${f.nome}: ${x.o} montado em ${fmtBRL(x.montado)}, mas o resumo do próprio documento declara ${fmtBRL(x.declarado)} (diferença de ${fmtBRL(x.gap)}). Enquanto os dois não coincidirem, este número não é fato.`,
+          );
+        }
+        const linha = relatorio.find((r) => r.documentId === f.id);
+        if (linha) {
+          linha.fechamentoOk = false;
+          linha.erro = `${falhos.map((x) => x.o).join(", ")} ${falhos.length > 1 ? "divergem" : "diverge"} do resumo declarado no documento (${falhos.map((x) => `${fmtBRL(x.montado)} × ${fmtBRL(x.declarado)}`).join(" · ")})`;
         }
       }
       // Balancete que cobre o exercício INTEIRO (01/01 a 31/12) é exercício; o
       // resto é mês — a tela rotula "2025" × "05/2026" a partir daqui.
       tipoPorPeriodo[periodo] = /^01\/01\//.test(f.conteudo.periodoInicio ?? "") && /^31\/12\//.test(f.conteudo.periodoFim ?? "")
         ? "exercicio" : "mes";
-      arvoresBalancete.push({ docId: f.id, nome: f.nome, periodo, arvoreBP: conv.arvoreBP, arvoreDRE: conv.arvoreDRE });
+      // A ÁRVORE REPROVADA NÃO VIAJA. `arvoresBalancete` é o que o IBR re-dobra
+      // no /refold: deixar a DRE do encerramento aqui a faria RESSUSCITAR na
+      // primeira reclassificação de conta — a tela da base sem a coluna e o IBR
+      // com ela, o pior dos dois mundos. O BP continua indo (é ele que fecha).
+      arvoresBalancete.push({
+        docId: f.id, nome: f.nome, periodo,
+        arvoreBP: conv.arvoreBP,
+        arvoreDRE: dreReprovada ? {} : conv.arvoreDRE,
+      });
       if (f.conteudo.periodoInicio && f.conteudo.periodoFim) {
         intervaloPorDocumento[f.id] = {
           inicio: f.conteudo.periodoInicio, fim: f.conteudo.periodoFim,
@@ -405,10 +455,13 @@ async function montarBaseContabilSemCache(
       for (const k of rBP.conservacao) conservacaoPorPeriodo[k.periodo] = k;
       mergeItens(bp, rBP.bp as unknown as Item[]);
       naoMapeados.push(...comDono(rBP.naoMapeados, f.id));
-      const rDRE = foldDRE(conv.arvoreDRE, [periodo], dictRows, dreModel);
-      alertasComposicao.push(...rDRE.alertasComposicao);
-      mergeItens(dre, rDRE.dre as unknown as Item[]);
-      naoMapeados.push(...comDono(rDRE.naoMapeados, f.id));
+      if (!dreReprovada) {
+        periodosComDRE.push(periodo);
+        const rDRE = foldDRE(conv.arvoreDRE, [periodo], dictRows, dreModel);
+        alertasComposicao.push(...rDRE.alertasComposicao);
+        mergeItens(dre, rDRE.dre as unknown as Item[]);
+        naoMapeados.push(...comDono(rDRE.naoMapeados, f.id));
+      }
       // O fold MUTA as árvores carimbando destino/absorvido — é a auditoria.
       // SÓ a chave do PERÍODO DOBRADO viaja (09/08/2026, coluna em branco na
       // Belagro): a conversão devolve também o período de ABERTURA (saldo
@@ -428,7 +481,14 @@ async function montarBaseContabilSemCache(
   // fontes na mesma coluna. Cobertura é POR LADO: um BP anual e uma DRE anual
   // do mesmo ano se completam.
   const cobertoBP = new Set(periodos);
-  const cobertoDRE = new Set(periodos);
+  // A cobertura de DRE é só dos períodos que REALMENTE publicaram uma DRE. Um
+  // encerramento reprovado no P4 entra no BP e deixa a coluna de resultado
+  // aberta — senão o número que o motor recusou trancaria a porta do número
+  // certo (a demonstração oficial do exercício).
+  const cobertoDRE = new Set(periodosComDRE);
+  // A árvore de auditoria da DRE segue a mesma régua: o que não foi publicado
+  // não aparece como se tivesse sido.
+  for (const p of periodos) if (!periodosComDRE.includes(p)) delete arvoreOriginalDRE[p];
   const canonico = (p: string) => (/^\d{4}$/.test(p.trim()) ? `31/12/${p.trim()}` : p.trim());
   const registraPeriodo = (p: string, nomeDoc: string) => {
     if (!periodos.includes(p)) periodos.push(p);

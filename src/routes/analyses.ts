@@ -2701,7 +2701,12 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   for (const ab of arvoresBalanceteRefold) {
     if (!ab?.periodo) continue;
     if (ab.arvoreBP) { const r = foldBP(ab.arvoreBP as any, [ab.periodo], dictRows, bpModelRefold); anotarPeriodosSecundarios(ab.arvoreBP, ab.periodo, dictRows, bpModelRefold); if (!dados.bp?.length) dados.bp = r.bp; else mergeItensPorConta(dados.bp, r.bp); alertasComp.push(...r.alertasComposicao); naoMapeados.push(...semPlugBalancete(r.naoMapeados)); }
-    if (ab.arvoreDRE) { const r = foldDRE(ab.arvoreDRE as any, [ab.periodo], dictRows, dreModelRefold); if (!dados.dre?.length) dados.dre = r.dre; else mergeItensPorConta(dados.dre, r.dre); alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
+    // ÁRVORE VAZIA NÃO ENTRA NO FOLD (17/08/2026, caso Belagro 2023). `{}` é
+    // truthy: a DRE que a base RECUSOU publicar (encerramento reprovado no P4)
+    // voltava aqui como uma coluna de zeros — trocar um número errado por zero
+    // não é conserto. Sem chave de período, o documento simplesmente não fala
+    // de DRE, que é a verdade.
+    if (ab.arvoreDRE && Object.keys(ab.arvoreDRE as Record<string, unknown>).length > 0) { const r = foldDRE(ab.arvoreDRE as any, [ab.periodo], dictRows, dreModelRefold); if (!dados.dre?.length) dados.dre = r.dre; else mergeItensPorConta(dados.dre, r.dre); alertasComp.push(...r.alertasComposicao); naoMapeados.push(...r.naoMapeados); }
   }
   dados.alertasComposicao = alertasComp;
   // Carry-over das sugestões IA (cacheadas na extração) para os que continuam não-mapeados.

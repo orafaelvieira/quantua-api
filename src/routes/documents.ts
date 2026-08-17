@@ -187,12 +187,13 @@ router.get("/pool", async (req: AuthRequest, res: Response): Promise<void> => {
       leitura: (() => {
         const lp = (v as { leituraPorta?: { conteudo: unknown; hashArquivo: string | null } | null }).leituraPorta;
         if (!lp || lp.hashArquivo !== v.hash) return null;
-        const c = lp.conteudo as { totalContas?: number; periodoInicio?: string | null; periodoFim?: string | null; erro?: string; provas?: { fechamento?: { ok?: boolean }; linhas?: { ok?: boolean } } | null };
+        const c = lp.conteudo as { totalContas?: number; periodoInicio?: string | null; periodoFim?: string | null; erro?: string; provas?: { fechamento?: { ok?: boolean }; linhas?: { ok?: boolean }; resumoDeclarado?: { ok?: boolean } } | null };
         return {
           ok: !c.erro,
           contas: c.totalContas ?? 0,
           periodo: c.periodoInicio && c.periodoFim ? `${c.periodoInicio} a ${c.periodoFim}` : null,
-          fechamentoOk: c.provas ? !!(c.provas.fechamento?.ok && c.provas.linhas?.ok) : null,
+          // P5 (resumo do rodapé) entra quando a leitura o traz — ver `resumoDaLeitura`.
+          fechamentoOk: c.provas ? !!(c.provas.fechamento?.ok && c.provas.linhas?.ok && (c.provas.resumoDeclarado?.ok ?? true)) : null,
           erro: c.erro ?? null,
         };
       })(),

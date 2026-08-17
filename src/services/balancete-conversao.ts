@@ -83,6 +83,25 @@ export interface ProvasBalancete {
    * SALDO das contas de resultado, que é prova direta).
    */
   dreEncerrada?: { derivado: number; declaradoPL: number; gap: number; limite: number; ok: boolean };
+  /**
+   * P5 — O QUE O DOCUMENTO REDECLARA NO RODAPÉ (17/08/2026, caso Belagro).
+   *
+   * P0/P2/P3 são provas INTERNAS: conferem o documento contra ele mesmo. Nenhuma
+   * delas pega DUPLICAÇÃO SIMÉTRICA — no Belagro 12/2025 uma falha de hierarquia
+   * dobrou Ativo, Passivo e DRE de uma vez, e as três provas saíram verdes com
+   * Ativo R$ 242.398.476,82 no lugar de R$ 121.199.238,41.
+   *
+   * O bloco "Resumo" do rodapé é o número que o CONTADOR escreveu. Conferir o
+   * que o motor montou contra ele é a única prova que fecha esse ângulo — e é a
+   * regra da casa: prova cruzada com o número do documento.
+   *
+   * Só existe quando o documento traz o resumo. Cada item traz `declarado`,
+   * `montado` e o veredito; `ok` é o E de todos os itens verificados.
+   */
+  resumoDeclarado?: {
+    itens: Array<{ o: string; declarado: number; montado: number; gap: number; ok: boolean }>;
+    ok: boolean;
+  };
 }
 
 export interface ConversaoBalancete {
@@ -207,21 +226,48 @@ export interface ArvoreBalancete {
   naturezasAnterior: Map<LinhaBalancete, "D" | "C">;
 }
 
+/** Segmentos do código com o zero à esquerda normalizado: "01.1" → ["1","1"]. */
+const segmentosDeCodigo = (cls: string): string[] =>
+  cls.split(".").map((s) => s.replace(/^0+(?=\d)/, ""));
+
 /**
- * Floresta por prefixo: um nó é filho do último nó anterior cuja classificação
- * é PREFIXO da sua ("1.1" ⊂ "1.1.2"; Protheus "1.1.1" ⊂ "1.1.11"; corrida
- * "11211" ⊂ "11211001"). Documentos reais imprimem pais antes dos filhos.
+ * Um código é ANCESTRAL do outro? Duas réguas, e a segunda existe por documento
+ * real:
+ *
+ *   1) prefixo de TEXTO — a régua histórica, validada no corpus: "1.1" ⊂
+ *      "1.1.2", Protheus "1.1.1" ⊂ "1.1.11", corrida "11211" ⊂ "11211001".
+ *
+ *   2) prefixo de SEGMENTOS com o zero à esquerda normalizado. O MESMO
+ *      documento pode imprimir o nível 1 SEM zero e os filhos COM: o
+ *      "Balancete - Belagro - 12.2025_Auditado" traz "1 ATIVO" seguido de
+ *      "01.1 ATIVO CIRCULANTE" (os outros três balancetes da mesma empresa
+ *      trazem "01"). Só com a régua de texto, "01.1".startsWith("1") é falso: a
+ *      raiz vira FOLHA SOLTA ao lado dos próprios filhos e o Ativo entra DUAS
+ *      vezes na base.
+ *
+ *      E o pior: a duplicação é SIMÉTRICA, então nenhuma prova reclama. No
+ *      caso Belagro (17/08/2026) P0/P2/P3 saíram verdes com Ativo
+ *      R$ 242.398.476,82 no lugar de R$ 121.199.238,41 e lucro de
+ *      R$ 15.266.184,78 no lugar de R$ 7.633.092,39 — exatamente o dobro dos
+ *      dois. Prova que não pode falhar não protege ninguém.
+ */
+export function codigoEhAncestral(pai: string, filho: string): boolean {
+  if (filho.length > pai.length && filho.startsWith(pai)) return true;
+  const p = segmentosDeCodigo(pai), f = segmentosDeCodigo(filho);
+  return f.length > p.length && p.every((s, i) => s === f[i]);
+}
+
+/**
+ * Floresta por prefixo de código (ver `codigoEhAncestral`): um nó é filho do
+ * último nó anterior que seja seu ancestral. Documentos reais imprimem pais
+ * antes dos filhos.
  */
 export function montarArvore(linhas: LinhaBalancete[]): No[] {
   const raizes: No[] = [];
   const pilha: No[] = [];
   for (const linha of linhas) {
     const no: No = { linha, filhos: [] };
-    while (
-      pilha.length &&
-      !(linha.classificacao.length > pilha[pilha.length - 1].linha.classificacao.length &&
-        linha.classificacao.startsWith(pilha[pilha.length - 1].linha.classificacao))
-    ) {
+    while (pilha.length && !codigoEhAncestral(pilha[pilha.length - 1].linha.classificacao, linha.classificacao)) {
       pilha.pop();
     }
     if (pilha.length === 0) raizes.push(no);
@@ -855,6 +901,52 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
           `Balancete de ENCERRAMENTO: as contas de resultado estão zeradas e a DRE foi derivada do movimento — ela dá ${fmt(derivado)}, mas o resultado que o próprio PL registra no ano é ${fmt(declaradoPL)} (diferença de ${fmt(gap)}). ` +
           `Transferência interna entre contas de resultado infla os dois lados: confira a DRE deste exercício contra a demonstração oficial antes de usar os números.`,
         );
+      }
+    }
+
+    // ── P5 — contra o RESUMO que o documento redeclara no rodapé ──────────────
+    // Cada item só entra quando o documento declara o número: prova ausente é
+    // prova ausente, nunca aprovação. Tolerância RELATIVA porque documento de
+    // bilhões arredondado ao centavo não pode reprovar por uma dízima.
+    if (b.resumo) {
+      const itens: NonNullable<ProvasBalancete["resumoDeclarado"]>["itens"] = [];
+      const conferir = (o: string, declarado: number | undefined, montado: number, alternativa?: number): void => {
+        if (declarado == null || !Number.isFinite(declarado)) return;
+        const gap = Math.min(
+          Math.abs(arred(montado - declarado)),
+          alternativa == null ? Infinity : Math.abs(arred(alternativa - declarado)),
+        );
+        const limite = Math.max(TOLERANCIA, Math.abs(declarado) * 1e-9);
+        itens.push({ o, declarado, montado, gap, ok: gap <= limite });
+      };
+      conferir("Ativo", b.resumo.ativo, ativoAtual);
+      // O rodapé pode contar o PL DENTRO do passivo (é filho da raiz PASSIVO em
+      // muitos planos) ou fora dela. Não se sabe qual convenção o sistema usou,
+      // então as duas valem — e a duplicação, que é o que esta prova existe para
+      // pegar, reprova nas duas.
+      conferir("Passivo", b.resumo.passivo, passivoAtual, arred(passivoAtual + Math.abs(plAssinado)));
+      if (!exercicioEncerrado) {
+        // GRUPO-ESPELHO SAI DA DRE COM RAZÃO, e o rodapé não sabe disso: o resumo
+        // soma o espelho junto (é uma raiz do documento como qualquer outra), então
+        // conferir receita e custo bruto daria FALSO ALARME num documento sem
+        // defeito nenhum. O RESULTADO segue conferível mesmo com espelho — ele
+        // soma zero, é a condição 4 do detector.
+        if (espelhos.length === 0) {
+          const raizesResultado = resultados.map((g) => assinadoDRE(g.no.linha, "saldoAtual"));
+          conferir("Receitas", b.resumo.receitas, arred(raizesResultado.filter((v) => v > 0).reduce((s, v) => s + v, 0)));
+          conferir("Custos e despesas", b.resumo.custosDespesas,
+            Math.abs(arred(raizesResultado.filter((v) => v < 0).reduce((s, v) => s + v, 0))));
+        }
+        conferir("Resultado do período", b.resumo.resultado, arred(secoes.reduce((s, x) => s + x.valor, 0)));
+      }
+      if (itens.length) {
+        provas.resumoDeclarado = { itens, ok: itens.every((x) => x.ok) };
+        for (const x of itens.filter((y) => !y.ok)) {
+          avisos.push(
+            `${x.o}: o motor montou ${fmt(x.montado)}, mas o RESUMO do próprio documento declara ${fmt(x.declarado)} (diferença de ${fmt(x.gap)}). ` +
+            `O resumo é o número escrito pelo contador — enquanto os dois não coincidirem, a montagem deste documento não é fato.`,
+          );
+        }
       }
     }
   }

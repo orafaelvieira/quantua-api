@@ -47,6 +47,20 @@ export interface BalanceteParseado {
   /** Linha "Total de débitos/créditos" quando o documento declara. */
   totais?: { debito: number; credito: number };
   /**
+   * BLOCO "RESUMO" DO RODAPÉ (17/08/2026, caso Belagro 12/2025).
+   *
+   * Vários sistemas fecham o balancete com um resumo que REDECLARA os totais:
+   * "ATIVO 121.199.238,41 · PASSIVO 113.566.146,02 · CUSTOS E DESPESAS
+   * 742.699.472,10 · RECEITAS 750.332.564,49 · Lucro do período 7.633.092,39".
+   * São os números do PRÓPRIO documento, escritos pelo contador — a melhor
+   * âncora que existe para o que o motor montou.
+   *
+   * Existe porque um defeito de hierarquia dobrou Ativo E Passivo E DRE ao mesmo
+   * tempo no caso Belagro: simétrico, então P0/P2/P3 saíram todas verdes. Prova
+   * interna não pega duplicação simétrica; o número declarado pega.
+   */
+  resumo?: { ativo?: number; passivo?: number; receitas?: number; custosDespesas?: number; resultado?: number };
+  /**
    * true = o período NÃO veio do documento; foi assumido da competência
    * declarada pelo analista (planilha/OCR sem cabeçalho de período).
    * OPCIONAL de propósito — quem não preenche continua válido.

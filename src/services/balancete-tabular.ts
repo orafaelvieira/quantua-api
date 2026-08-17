@@ -194,10 +194,43 @@ export function parseBalanceteMatriz(m: Matriz, periodoFallback?: { inicio: stri
   interface Crua { classificacao: string; nome: string; sintetica?: boolean; ant: ReturnType<typeof valorPtBr>; deb: ReturnType<typeof valorPtBr>; cred: ReturnType<typeof valorPtBr>; atual: ReturnType<typeof valorPtBr> }
   const cruas: Crua[] = [];
   let totais: { debito: number; credito: number } | undefined;
+  /**
+   * RODAPÉ "RESUMO" — os totais que o próprio documento redeclara.
+   *
+   * Só é lido DEPOIS do marcador "Resumo": "ATIVO" também é nome de conta na
+   * primeira linha do balancete, e confundir os dois trocaria a âncora pelo
+   * número que ela deveria conferir (conferência circular).
+   */
+  const resumo: NonNullable<BalanceteParseado["resumo"]> = {};
+  let noResumo = false;
+  /** Só as letras do rótulo: o sistema cola as palavras ("Totaldedébitos"). */
+  const soLetras = (s: string): string => norm(s).replace(/[^a-z]/g, "");
+  const lerResumo = (linha: string[]): void => {
+    // Pares [rótulo, valor] na mesma linha: "ATIVO;121.199.238,41;PASSIVO;113.566.146,02".
+    for (let j = 0; j < linha.length; j++) {
+      const rot = soLetras((linha[j] ?? "").toString());
+      if (!rot) continue;
+      const bruto = (linha[j + 1] ?? "").toString().trim();
+      if (!bruto || !/\d/.test(bruto)) continue;
+      const v = valorPtBr(bruto).valor;
+      if (/^ativo/.test(rot)) resumo.ativo ??= Math.abs(v);
+      else if (/^passivo/.test(rot)) resumo.passivo ??= Math.abs(v);
+      else if (/^receitas?$/.test(rot)) resumo.receitas ??= Math.abs(v);
+      else if (/^custos?e?despesas?$/.test(rot)) resumo.custosDespesas ??= Math.abs(v);
+      else if (/^tota(l|is)de(?:dos)?debitos?$/.test(rot)) totais = { debito: Math.abs(v), credito: totais?.credito ?? 0 };
+      else if (/^tota(l|is)de(?:dos)?creditos?$/.test(rot)) totais = { debito: totais?.debito ?? 0, credito: Math.abs(v) };
+      // "Lucro do período" · "Prejuízo do período" · "Resultado do período é nulo".
+      else if (/^(lucro|prejuizo|resultado)doperiodo/.test(rot)) {
+        resumo.resultado ??= /^prejuizo/.test(rot) ? -Math.abs(v) : v;
+      }
+    }
+  };
 
   for (let i = achado.linhaCabecalho + 1; i < m.length; i++) {
     const linha = m[i] ?? [];
     const juntada = norm(linha.join(" "));
+    if (!noResumo && /^resumo\b/.test(juntada.trim())) { noResumo = true; continue; }
+    if (noResumo) { lerResumo(linha); continue; }
     if (achado.modo === "posicional") {
       const p = linhaPosicional(linha);
       if (!p) continue;
@@ -294,7 +327,11 @@ export function parseBalanceteMatriz(m: Matriz, periodoFallback?: { inicio: stri
   }));
   if (linhas.length === 0) avisos.push("Nenhuma linha de conta encontrada abaixo do cabeçalho.");
 
-  return { periodoInicio: inicio, periodoFim: fim, ordemColunas: "ant-d-c-atual", linhas, totais, periodoAssumido, avisos };
+  return {
+    periodoInicio: inicio, periodoFim: fim, ordemColunas: "ant-d-c-atual", linhas, totais,
+    ...(Object.keys(resumo).length ? { resumo } : {}),
+    periodoAssumido, avisos,
+  };
 }
 
 // ── leitura dos arquivos ─────────────────────────────────────────────────────
