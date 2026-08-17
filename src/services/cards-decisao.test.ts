@@ -601,6 +601,24 @@ describe("cards de decisão", () => {
     });
   });
 
+  it("ROE inflado por patrimônio residual não vira taxa de crescimento", () => {
+    // Caso real: empresa que distribui tudo fica com PL minúsculo, o ROE explode
+    // (626,5% numa tela de produção) e qualquer coisa multiplicada por ele vira
+    // ficção com cara de conta. Mesma régua da base-do-retorno: PL < 15% da receita.
+    const d = cenario();
+    d.bp = d.bp.map((l) => (l.conta === "Patrimônio Líquido" ? { ...l, valores: { [P0]: 300_000, [P1]: 200_000 } } : l));
+    trocarIndicador(d, "ROE (Retorno sobre Patrimônio Líquido)", { [P0]: 3.3, [P1]: 6.0 });
+    (d.fluxoCaixa as never as { fcf: Array<{ nome: string; valores: Record<string, number> }> }).fcf = [
+      { nome: "Dividendos e ajustes do PL (ΔPL − lucro − Δ capital)", valores: { [P1]: -900_000 } },
+    ];
+    const card = montarCardsDecisao(d)!.cards.find((c) => c.id === "crescer-sem-captar")!;
+    const roe = card.linhas.find((l) => /^ROE/.test(l.rotulo))!;
+    expect(roe.valor).toMatch(/não comparável/i);
+    expect(roe.bruto).toBeNull();
+    expect(JSON.stringify(card)).not.toMatch(/600,0%|626/); // nenhuma taxa absurda na tela
+    expect(card.premissas.join(" ")).toMatch(/abaixo de 15% da receita líquida/i);
+  });
+
   it("distribuindo mais do que ganhou, a taxa sustentável não vira previsão", () => {
     // Payout acima de 100%: a fórmula devolve um número negativo que se lê como
     // "vai encolher X% ao ano". Não é previsão — é o patrimônio diminuindo.

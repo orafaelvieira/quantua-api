@@ -785,6 +785,19 @@ function cardCrescerSemCaptar(
   const roe = ind(dados, NOME_ROE, p);
   if (roe === null) return null; // sem ROE não há taxa sustentável — e não se estima uma
 
+  /**
+   * ROE INFLADO POR PATRIMÔNIO MINÚSCULO não é retorno — e vira taxa absurda.
+   *
+   * Empresa que distribui tudo fica com PL residual; o ROE explode ("626,5%" numa
+   * tela real) e qualquer coisa multiplicada por ele vira ficção. A régua é a
+   * MESMA que o motor já usa para avisar a IA (base-do-retorno: PL abaixo de 15%
+   * da receita líquida). Aqui o card não some — a pergunta continua válida —,
+   * mas para de exibir ROE e taxa como se fossem medida.
+   */
+  const receitaLiq = Math.abs(valOpt(dados.dre ?? [], "Receita Líquida", p) ?? 0);
+  const plAbs = Math.abs(valOpt(dados.bp ?? [], "Patrimônio Líquido", p) ?? 0);
+  const roeInflado = receitaLiq > 0.005 && plAbs / receitaLiq < 0.15;
+
   const lucro = ind(dados, "Lucro Líquido", p) ?? valOpt(dados.dre ?? [], "Lucro Líquido", p);
   const crescimentoReal = ind(dados, NOME_CRESCIMENTO, p);
   const parcial = dias < 360;
@@ -808,7 +821,7 @@ function cardCrescerSemCaptar(
         ? `Não é possível calcular a taxa de crescimento sustentável: o lucro líquido do período (${rot(p)}) não está disponível na base.`
         : `Sem lucro no período (${rot(p)}) não há o que reter: qualquer crescimento hoje é financiado por dívida, por fornecedor ou por aporte do sócio — não pelo resultado da própria operação.`,
       linhas: [
-        { rotulo: `ROE (${rot(p)})`, valor: pct(roe), bruto: roe },
+        { rotulo: `ROE (${rot(p)})`, valor: roeInflado ? "não comparável — patrimônio residual" : pct(roe), bruto: roeInflado ? null : roe },
         ...(lucro !== null ? [{ rotulo: `Lucro líquido (${rot(p)})`, valor: brl(lucro), bruto: lucro }] : []),
         ...(crescimentoReal !== null
           ? [{ rotulo: "Crescimento da receita no período", valor: pct(crescimentoReal), bruto: crescimentoReal }]
@@ -839,7 +852,7 @@ function cardCrescerSemCaptar(
   const status = pior(statusBase, indStatus(dados, NOME_ALAVANCAGEM, p));
 
   const linhas: LinhaCard[] = [
-    { rotulo: `ROE (${rot(p)})`, valor: pct(roe), bruto: roe },
+    { rotulo: `ROE (${rot(p)})`, valor: roeInflado ? "não comparável — patrimônio residual" : pct(roe), bruto: roeInflado ? null : roe },
     {
       rotulo: temLinhaRetirada ? `Retirada do período (${rot(p)})` : "Retirada do período (não registrada)",
       valor: retirada > 0 ? `-${brl(retirada)}` : brl(0),
@@ -854,8 +867,10 @@ function cardCrescerSemCaptar(
       // lucro. Mesma disciplina do card de qualidade do lucro, onde prejuízo não
       // vira taxa de conversão: quando a fórmula perde o sentido, diz-se o fato.
       rotulo: "Crescimento sustentável ao ano",
-      valor: retencao < 0 ? "não se aplica — o patrimônio encolheu no período" : pct(sgr),
-      bruto: retencao < 0 ? null : sgr,
+      valor: retencao < 0
+        ? "não se aplica — o patrimônio encolheu no período"
+        : roeInflado ? "não se aplica — ROE inflado por patrimônio residual" : pct(sgr),
+      bruto: retencao < 0 || roeInflado ? null : sgr,
       destaque: true,
     },
     ...(crescimentoReal !== null
@@ -863,11 +878,15 @@ function cardCrescerSemCaptar(
       : []),
   ];
 
+  // Com ROE inflado por patrimônio residual, a FRASE também não pode citar taxa:
+  // "com ROE de 626,5% isso sustenta 40% ao ano" é ficção com cara de conta.
   const abre = retencao <= 0
     ? `A empresa distribuiu ${pct(payout)} do lucro do período — mais do que ganhou. Sem retenção não há crescimento que se pague sozinho: o patrimônio encolheu.`
-    : distribuiQuaseTudo
-      ? `A empresa distribui praticamente tudo que ganha (${pct(payout)} do lucro): sobra ${pct(retencao)} no negócio, e com ROE de ${pct(roe)} isso sustenta só ${pct(sgr)} de crescimento ao ano por conta própria.`
-      : `Retendo ${pct(retencao)} do lucro, com ROE de ${pct(roe)}, a empresa cresce até ${pct(sgr)} ao ano sem dívida nova nem aporte.`;
+    : roeInflado
+      ? `A empresa retém ${pct(retencao)} do lucro, mas o patrimônio líquido é residual perto da receita: o ROE fica inflado e a taxa de crescimento sustentável deixa de ser medida. O que dá para afirmar é que a base própria de financiamento é pequena — crescer aqui depende de dívida, de prazo ou de aporte.`
+      : distribuiQuaseTudo
+        ? `A empresa distribui praticamente tudo que ganha (${pct(payout)} do lucro): sobra ${pct(retencao)} no negócio, e com ROE de ${pct(roe)} isso sustenta só ${pct(sgr)} de crescimento ao ano por conta própria.`
+        : `Retendo ${pct(retencao)} do lucro, com ROE de ${pct(roe)}, a empresa cresce até ${pct(sgr)} ao ano sem dívida nova nem aporte.`;
 
   const fecha = financiado
     ? ` A receita cresceu ${pct(crescimentoReal!)} no período — acima disso. A diferença não veio do lucro retido: veio de dívida, de prazo de fornecedor ou de aporte.`
@@ -889,6 +908,9 @@ function cardCrescerSemCaptar(
         : "Não há linha de dividendos/ajustes do patrimônio no fluxo de caixa deste período: o cálculo ASSUME retenção total do lucro. Se houve distribuição não registrada, a taxa real é menor.",
       "O payout usado é o DESTE período: uma distribuição extraordinária (ou um ano sem distribuir) derruba ou infla a taxa e não descreve a política recorrente.",
       "ROE do período, da aba Indicadores — lucro líquido sobre patrimônio líquido de fechamento, sem média do patrimônio.",
+      ...(roeInflado
+        ? ["O patrimônio líquido está abaixo de 15% da receita líquida. Nessa faixa o ROE deixa de ser comparável (mesma régua que o motor usa para avisar a análise): ele fica inflado pelo denominador pequeno, e por isso nem ele nem a taxa sustentável são apresentados como medida."]
+        : []),
       ...(parcial
         ? [`O período cobre ${dias} dias, não um ano: ROE e retirada são do acumulado desses meses, então a taxa sai menor que a de um exercício cheio.`]
         : []),
