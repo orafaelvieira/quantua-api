@@ -544,8 +544,12 @@ model Analysis {
   /// (setor errado envenena pares/semáforo/valor na mesa). Análises legadas já geradas
   /// contam como confirmadas (regra no código — sem backfill).
   setorConfirmado   Boolean  @default(false) @map("setor_confirmado")
-  /// Proposta do CLASSIFICADOR DE SETOR (determinístico, zero IA): ranking de aderência
-  /// dos números da empresa às distribuições de cada subsetor da base CVM.
+    /// LEGADO — classificador de setor REMOVIDO em 17/08/2026. Ele propunha o setor
+  /// comparando os indicadores da empresa com as distribuições dos pares da CVM;
+  /// em atividade sem par no subsetor a proposta era ruído com cara de evidência.
+  /// Coluna preservada com o histórico: NINGUÉM escreve nem lê. NÃO REMOVER — o
+  /// boot roda `prisma db push --accept-data-loss` e dropar a coluna apaga os
+  /// dados sem migração nem trilha.
   setorProposta     Json?    @map("setor_proposta")
   /// Texto livre do setor/subsetor quando o analista escolhe "Outros" no picker
   /// (atividade que não encaixa na taxonomia B3). Alimenta o setorText do

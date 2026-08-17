@@ -4,7 +4,7 @@
  * O CNAE é um sinal FRACO (pode estar desatualizado ou registrado na matriz errada —
  * caso Move Farma: matriz "serviços de escritório", negócio real na filial). Por isso
  * a sugestão NUNCA confirma o setor sozinha: preenche o picker com selo "sugerido pelo
- * CNAE" e o classificador estatístico confere depois, com os números.
+ * CNAE" e a confirmação é sempre humana (card de setor do IBR ou aba Escopo).
  *
  * Mapa por DIVISÃO (2 dígitos, CNAE 2.0) + exceções por CLASSE (4 dígitos) onde a
  * divisão é ambígua (ex.: 46 atacado é Consumo não Cíclico, mas 4644 medicamentos é

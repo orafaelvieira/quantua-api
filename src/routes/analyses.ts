@@ -28,7 +28,6 @@ import { mapExtractedToBP, mapExtractedToDRE, normalizeDRESigns, recomputeDRESub
 import { DRE_TEMPLATE } from "../services/financial-templates";
 import { buildIndicators, type ConfigRow } from "../services/indicator-config";
 import { catalogoPadraoEfetivo, calibrarSemaforoComPares, sanitizeRowsIBR, type IBRIndicadorConfig } from "../services/indicador-config-ibr";
-import { classificarSetor } from "../services/setor-classificador";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
 import { buildPontesVariacao } from "../services/bridge-variacao";
 import { medirExtracaoDesatualizada } from "../services/extracao-desatualizada";
@@ -762,28 +761,14 @@ export interface PeerComparisonResult {
  */
 /* ───────── SETOR CONFIRMADO (gate) ─────────
  * Setor errado envenena pares/semáforo/valor na mesa — a GERAÇÃO só roda com o setor
- * confirmado pelo analista (escolha explícita ou clique na proposta do classificador).
+ * confirmado pelo analista (escolha explícita no wizard, na aba Escopo ou no card do IBR).
  * LEGADO sem migração: análise que JÁ FOI GERADA conta como confirmada. */
-const PEND_SETOR = "Setor da empresa não confirmado — confirme a proposta do sistema (ou escolha o setor) no aviso da tela antes de gerar.";
+const PEND_SETOR = "Setor da empresa não confirmado — escolha o setor no aviso desta tela (ou na aba Escopo) antes de gerar.";
 function setorPendente(a: { setorConfirmado: boolean; resultado: unknown }): boolean {
   if (a.setorConfirmado) return false;
   const r = a.resultado as Record<string, unknown> | null;
   const jaGerada = !!r && typeof r === "object" && Object.keys(r).some((k) => k !== "erro");
   return !jaGerada;
-}
-
-/** AVISO DA CONVICÇÃO: setor CONFIRMADO pelo analista, mas os números aderem com
- *  folga a OUTRO setor (proposta do classificador armazenada) → aviso âmbar, nunca
- *  bloqueio — escolha explícita do humano manda. */
-function avisoSetorDe(proposta: unknown, sectorId: string | null): string | null {
-  const p = proposta as { recomendado?: { setor: string; sectorCode: string | null; dentro: number; total: number }; ranking?: Array<{ setor: string; sectorCode: string | null; dentro: number; total: number }> } | null;
-  const rec = p?.recomendado;
-  if (!rec?.sectorCode || !sectorId || rec.sectorCode === sectorId) return null;
-  const atual = (p?.ranking ?? []).find((r) => r.sectorCode === sectorId);
-  const fr = rec.dentro / rec.total;
-  const fa = atual ? atual.dentro / atual.total : null;
-  if (fa != null && fr - fa < 0.25) return null; // discordância fraca não vira aviso
-  return `Os números da empresa aderem mais ao setor ${rec.setor} (${rec.dentro} de ${rec.total} indicadores na faixa dos pares${atual ? `, contra ${atual.dentro} de ${atual.total} no setor escolhido` : ""}) — revise a escolha do setor na aba Escopo.`;
 }
 
 /** Troca de setor → a calibração de indicadores POR PARES fica órfã. Recalibra na hora
@@ -2180,13 +2165,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       // resposta (202) já foi enviada — frontend acompanha por polling do status.
       return;
     }
-    // SETOR: extração validada → calcula a PROPOSTA do classificador (zero IA) SEMPRE
-    // (alimenta o card de confirmação E o aviso da convicção). Sem confirmação, segura
-    // em "Revisão necessária" com a pendência — a geração só destrava com o OK.
-    try {
-      const propostaSetor = await classificarSetor(dadosComValidacao.indicadores ?? [], allPeriodos);
-      if (propostaSetor) await prisma.analysis.update({ where: { id: analysis.id }, data: { setorProposta: propostaSetor as unknown as object } });
-    } catch (e) { console.warn(`[process] classificador de setor falhou (segue sem proposta):`, e instanceof Error ? e.message : e); }
+    // SETOR: sem confirmação, segura em "Revisão necessária" com a pendência — a
+    // geração só destrava com a escolha do analista. (O classificador que propunha
+    // o setor comparando os indicadores com os pares da CVM saiu em 17/08/2026.)
     if (setorPendente(analysis)) {
       const prontidaoComSetor = { ...prontidao, pronta: false, pendencias: [...prontidao.pendencias, PEND_SETOR] };
       const dadosSetor = { ...dadosComValidacao, prontidao: prontidaoComSetor };
@@ -2659,7 +2640,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, ...whereRecursoEmpresa(req) },
-    select: { companyId: true, dadosEstruturados: true, indicadorConfig: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true, status: true },
+    select: { companyId: true, dadosEstruturados: true, indicadorConfig: true, setorConfirmado: true, resultado: true, sectorId: true, status: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   // IBR CONCLUÍDO NÃO REFOLDA (13/08/2026, achado da revisão adversarial). Esta
@@ -2814,23 +2795,12 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
     dados.indicadores = [];
   }
 
-  // SETOR: com os indicadores prontos, o CLASSIFICADOR calcula/atualiza a proposta
-  // (zero IA) SEMPRE — os indicadores acima NÃO dependem disto (senão o classificador
-  // nunca teria números). Sem confirmação → PENDÊNCIA (gate); confirmado mas números
-  // discordando forte → AVISO da convicção (âmbar, não bloqueia). Best-effort.
+  // SETOR: sem confirmação → PENDÊNCIA (gate). O AVISO DA CONVICÇÃO ("os números
+  // aderem mais a outro setor") saiu junto com o classificador em 17/08/2026: ele
+  // nascia da proposta, e a proposta comparava indicadores com os pares da CVM.
   let prontidaoFinal = prontidaoRefold;
-  if (prontidaoRefold.pronta) {
-    let proposta: unknown = (analysis as any).setorProposta ?? null;
-    try {
-      const nova = await classificarSetor(dados.indicadores ?? [], periodos);
-      if (nova) { proposta = nova; await prisma.analysis.update({ where: { id }, data: { setorProposta: nova as unknown as object } }); }
-    } catch (e) { console.warn(`[refold] classificador de setor falhou (segue sem proposta):`, e instanceof Error ? e.message : e); }
-    if (setorPendente(analysis)) {
-      prontidaoFinal = { ...prontidaoRefold, pronta: false, pendencias: [...prontidaoRefold.pendencias, PEND_SETOR] };
-    } else {
-      const aviso = avisoSetorDe(proposta, (analysis as any).sectorId ?? null);
-      if (aviso) prontidaoFinal = { ...prontidaoRefold, avisos: [...prontidaoRefold.avisos, aviso] };
-    }
+  if (prontidaoRefold.pronta && setorPendente(analysis)) {
+    prontidaoFinal = { ...prontidaoRefold, pronta: false, pendencias: [...prontidaoRefold.pendencias, PEND_SETOR] };
   }
   (dados as any).prontidao = prontidaoFinal;
 
@@ -3287,6 +3257,10 @@ router.post("/:id/setor/confirmar", async (req: AuthRequest, res: Response): Pro
     field: "setor da empresa",
     before: `${analysis.sectorId ?? "(não definido)"}${analysis.sectorCustom ? ` — "${analysis.sectorCustom}"` : ""}`,
     after: `${sector.name} (confirmado)${sectorCustom ? ` — "${sectorCustom}"` : ""}`,
+    // A ETIQUETA FICA (17/08/2026). O classificador saiu, mas "setor-classificador"
+    // é o rótulo com que TODA confirmação de setor já foi gravada na trilha —
+    // renomeá-lo parte a série histórica em duas e colide com o rótulo usado em
+    // documentos-base.ts. Nome de etiqueta é chave de dado, não descrição.
     source: "setor-classificador", reason: mudou ? "Confirmação do setor (alterado)" : "Confirmação do setor",
   });
   if (mudou) await recalibrarConfigSeExistir(id); // calibração por pares nunca fica presa ao setor antigo
@@ -3297,7 +3271,7 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
   const id = req.params.id as string;
   const analysis = await prisma.analysis.findFirst({
     where: { id, ...whereRecursoEmpresa(req) },
-    select: { dadosEstruturados: true, setorConfirmado: true, resultado: true, setorProposta: true, sectorId: true, sectorCustom: true },
+    select: { dadosEstruturados: true, setorConfirmado: true, resultado: true, sectorId: true, sectorCustom: true },
   });
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   enriquecerContextoIA({ companyId: (analysis as any).companyId ?? null });
@@ -3343,21 +3317,16 @@ router.get("/:id/validacao", async (req: AuthRequest, res: Response): Promise<vo
   let prontidao = pendSetor && prontidaoDados.pronta
     ? { ...prontidaoDados, pronta: false, pendencias: [...prontidaoDados.pendencias, PEND_SETOR] }
     : prontidaoDados;
-  if (!pendSetor && prontidao.pronta) {
-    const avisoConviccao = avisoSetorDe(analysis.setorProposta, analysis.sectorId);
-    if (avisoConviccao) prontidao = { ...prontidao, avisos: [...prontidao.avisos, avisoConviccao] };
-  }
 
   res.json({
     ...validacao, benford, composicaoOk: errosComp.length === 0, alertasComposicao: alertasComp, prontidao,
-    // Card de confirmação do SETOR (classificador): proposta + estado atual.
+    // Card de confirmação do SETOR: estado atual (a escolha é sempre humana).
     // sectorCustom vai junto: com "Outros" no picker, o texto livre É o setor —
     // a nova versão o herda da anterior e o card precisa trazê-lo preenchido
     // (sem isto o analista redigitava, ou confirmava "Outros" sem descrição).
     setor: {
       confirmado: !pendSetor, sectorId: analysis.sectorId,
       sectorCustom: analysis.sectorCustom ?? null,
-      proposta: analysis.setorProposta ?? null,
     },
   });
 });
