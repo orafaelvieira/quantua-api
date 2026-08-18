@@ -115,7 +115,18 @@ function filtroDoSetor(seg: SegmentoCvm): { setor: string; classificacao?: strin
 export async function comparePeersCvm(
   segBruto: SegmentoCvm,
   valores: Array<{ indicador: string; valor: number }>,
-  minPeers = 3, // 3 concorrentes REAIS > 14 vizinhos de prateleira
+  /**
+   * PISO DE 1 (18/08/2026, decisão do dono: "se tiver duas empresas para
+   * comparar, ou uma, é melhor do que nada, mesmo sendo pequena a base").
+   *
+   * Era 3. O efeito colateral, MEDIDO e que o cartão precisa declarar: o
+   * percentil perde resolução muito antes de os pares acabarem — com n=5 ele só
+   * assume 6 valores (0/20/40/60/80/100), com n=2 assume três e com n=1 vira
+   * binário. Por isso a contagem de pares viaja em `count` por indicador e a
+   * linha-resumo do cartão passa a exibi-la: o leitor vê contra quantas empresas
+   * cada posição foi medida e julga se é comparação ou artefato.
+   */
+  minPeers = 1,
 ): Promise<ResultadoPeersCvm> {
   const dtFimStr = await ultimoPeriodoCvm();
   if (!dtFimStr) return { dtFim: null, periodo: null, rows: [], empresas: [] };
