@@ -158,7 +158,7 @@ export function calcularValorCanonico(
       if (valor >= MIN_VALOR) alavancas.push({
         origem: "motor", tipo: "margem", valor,
         titulo: "Levar a margem operacional à mediana do setor",
-        memoria: `A margem EBITDA é de ${(mg * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% contra ${(p50 * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% na mediana dos concorrentes. Fechar essa diferença sobre a receita de ${reais(receita)} (base de ${diasBase} dias) recupera cerca de ${reais(valor)} de resultado por ano — direcional, a validar na árvore de custos.`,
+        memoria: `A margem EBITDA é de ${(mg * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% contra ${(p50 * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% na mediana dos concorrentes. Fechar essa diferença ${anualiza > 1 ? `sobre a receita anualizada de ${reais(receita * anualiza)} (${reais(receita)} medidos em ${diasBase} dias)` : `sobre a receita de ${reais(receita)}`} recupera cerca de ${reais(valor)} de resultado por ano — direcional, a validar na árvore de custos.`,
       });
     }
   }

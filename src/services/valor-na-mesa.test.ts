@@ -92,11 +92,11 @@ describe("valor-na-mesa — alavancas canônicas (determinísticas)", () => {
 // Com `/365` a venda diária saía R$ 900 mil e a alavanca R$ 87,3 mi — que não
 // reconcilia com o saldo do balanço. Na régua de 150 dias a venda diária é
 // R$ 2,19 mi e a alavanca R$ 212,4 mi, que fecha contra o BP.
-const YTD_P = ["31/12/2025", "05/2026"];
+const YTD_P = ["31/12/2025", "31/05/2026"];
 const YTD_INDS = [
-  { nome: "Receita Líquida", valores: { "05/2026": 328_504_142 } },
-  { nome: "Prazo Médio Contas a Receber", valores: { "05/2026": 130 } },
-  { nome: "Margem EBITDA", valores: { "05/2026": -0.0125 } },
+  { nome: "Receita Líquida", valores: { "31/05/2026": 328_504_142 } },
+  { nome: "Prazo Médio Contas a Receber", valores: { "31/05/2026": 130 } },
+  { nome: "Margem EBITDA", valores: { "31/05/2026": -0.0125 } },
 ];
 const YTD_ROWS = [
   row("Prazo Médio Contas a Receber", 33, false),
@@ -108,7 +108,7 @@ describe("valor-na-mesa — período acumulado (balancete)", () => {
     r.alavancas.find((a) => a.titulo.startsWith(t))!;
 
   it("a venda diária sai da MESMA base de dias do prazo, e a alavanca fecha contra o balanço", () => {
-    const r = calcularValorCanonico(YTD_INDS, YTD_P, YTD_ROWS, [], BASE, ["05/2026"])!;
+    const r = calcularValorCanonico(YTD_INDS, YTD_P, YTD_ROWS, [], BASE, ["31/05/2026"])!;
     const a = pega(r, "Receber dos clientes");
     const receitaDia = 328_504_142 / 150;              // R$ 2.190.027,61
     expect(a.valor).toBeCloseTo(Math.round((130 - 33) * receitaDia), -2);
@@ -120,16 +120,15 @@ describe("valor-na-mesa — período acumulado (balancete)", () => {
   });
 
   it("a alavanca de margem é ANUALIZADA quando o período é parcial", () => {
-    const r = calcularValorCanonico(YTD_INDS, YTD_P, YTD_ROWS, [], BASE, ["05/2026"])!;
+    const r = calcularValorCanonico(YTD_INDS, YTD_P, YTD_ROWS, [], BASE, ["31/05/2026"])!;
     const gap = 0.0696 - -0.0125;
     expect(pega(r, "Levar a margem").valor).toBeCloseTo(Math.round(gap * 328_504_142 * (365 / 150)), -2);
   });
 
-  it("sem a lista de acumulados o defeito reaparece — 2,43× menor", () => {
-    const comYTD = calcularValorCanonico(YTD_INDS, YTD_P, YTD_ROWS, [], BASE, ["05/2026"])!;
-    const sem = calcularValorCanonico(YTD_INDS, YTD_P, YTD_ROWS, [], BASE)!;
-    expect(pega(comYTD, "Receber dos clientes").valor / pega(sem, "Receber dos clientes").valor)
-      .toBeCloseTo(365 / 150, 2);
+  it("o publicado (R$ 87,3 mi) era receita/365 — a régua nova é a do prazo", () => {
+    const r = calcularValorCanonico(YTD_INDS, YTD_P, YTD_ROWS, [], BASE, ["31/05/2026"])!;
+    const publicado = Math.round((130 - 33) * (328_504_142 / 365)); // 87.301.101, o do PDF
+    expect(pega(r, "Receber dos clientes").valor / publicado).toBeCloseTo(365 / 150, 1);
   });
 
   it("período ANUAL continua com base 365 — nada muda para quem já estava certo", () => {

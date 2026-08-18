@@ -434,6 +434,46 @@ export interface DREMensal {
   valores: Record<string, Record<string, number>>;
 }
 
+/**
+ * Períodos cuja DRE de fato ACUMULA no exercício — a mesma régra que
+ * `derivarDREMensal` usa, exposta para quem precisa só da lista (o Fluxo de
+ * Caixa indireto). NÃO é "a lista de balancetes": duas colunas de balancete
+ * podem não acumular.
+ *
+ *  · EXERCÍCIO ENCERRADO não acumula (03/08/2026, caça de regressão): no mês de
+ *    encerramento a apuração zera as contas de resultado e `paraDREItem` passa a
+ *    usar o MOVIMENTO da janela — o valor já é do período. Subtrair o mês
+ *    anterior inventa prejuízo com o selo dizendo "provado ao centavo".
+ *  · JANEIRO não acumula: YTD = o próprio mês, não há o que derivar.
+ *  · Coluna cuja DRE não foi PUBLICADA (reprovada na prova do PL) não entra:
+ *    o valor lido seria 0 e a subtração viraria prejuízo do tamanho do ano.
+ */
+export function periodosQueAcumulam(dados: {
+  dre?: Array<{ conta: string; valores?: Record<string, number> }>;
+  balancetes?: unknown;
+  arvoresBalancete?: unknown;
+}): string[] {
+  const bals = Array.isArray(dados?.balancetes) ? [...(dados.balancetes as Array<Record<string, any>>)] : [];
+  const arvores = Array.isArray(dados?.arvoresBalancete) ? (dados.arvoresBalancete as Array<Record<string, any>>) : [];
+  for (const ab of arvores) {
+    const p = String(ab?.periodo ?? "");
+    if (p && !bals.some((b) => String(b?.periodo ?? "") === p)) bals.push({ periodo: p });
+  }
+  const dre = Array.isArray(dados?.dre) ? dados.dre : [];
+  const temValor = (p: string) => dre.some((l) => typeof l?.valores?.[p] === "number");
+  const out: string[] = [];
+  for (const b of bals) {
+    const p = String(b?.periodo ?? "");
+    const m = p.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m || b?.erro) continue;
+    if (b?.provas?.exercicioEncerrado === true) continue; // movimento, não YTD
+    if (Number(m[2]) <= 1) continue;                      // janeiro: YTD = mês
+    if (!temValor(p)) continue;                           // DRE não publicada
+    out.push(p);
+  }
+  return out;
+}
+
 export function derivarDREMensal(dados: {
   dre?: Array<{ conta: string; valores?: Record<string, number> }>;
   balancetes?: unknown;

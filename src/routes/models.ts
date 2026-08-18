@@ -46,6 +46,7 @@ import { TIPOS_CONTA, type TipoConta, ehTipoConta, blocoDoTipo, tipoDaLinha, pro
 import { montarReceitasDeMemoria, type LinhaReceitaMontada } from "../services/memoria-calculo-receita";
 import { aliquotaEfetivaSimples } from "../services/model-engine";
 import { buildIndirectCashFlow } from "../services/cash-flow-indirect";
+import { periodosQueAcumulam } from "../services/balancete-conversao";
 import { cicloVidaModel } from "../services/ciclo-vida";
 import { TipoProduto, dataBaseDoModelo } from "../services/produto-empresa";
 import { vincularAoProduto, limparEnvelopeSeVazio, VinculoFeito, ColisaoProduto } from "../services/produto-vinculo";
@@ -1896,6 +1897,8 @@ router.get("/:id/historico-dfs", async (req: AuthRequest, res: Response): Promis
     periodos?: string[];
     bp?: Array<{ conta: string; valores: Record<string, number>; classificacao?: string; nivel?: number }>;
     dre?: Array<{ conta: string; valores: Record<string, number>; subtotal?: boolean }>;
+    balancetes?: unknown;
+    arvoresBalancete?: unknown;
   } | null;
   if (!de?.bp?.length) { res.json(vazio); return; }
   const bpExt = de.bp;
@@ -1954,7 +1957,10 @@ router.get("/:id/historico-dfs", async (req: AuthRequest, res: Response): Promis
   let periodosFC: string[] = [];
   let avisoFC: string | null = null;
   if (periodos.length >= 2 && de.dre?.length) {
-    const fc = buildIndirectCashFlow(bpExt as never, de.dre as never, periodos);
+    // MESMA regua do IBR: sem isto a aba DFs do Valuation publicava outro numero
+    // para o mesmo mes da mesma empresa (lucro YTD contra variacao mensal de BP).
+    const fc = buildIndirectCashFlow(bpExt as never, de.dre as never, periodos,
+      periodosQueAcumulam({ dre: de.dre, balancetes: de.balancetes, arvoresBalancete: de.arvoresBalancete }));
     if (fc) {
       periodosFC = fc.colunas;
       // Linhas nomeadas do FC indireto do IBR → linhas do FC projetado (mesma

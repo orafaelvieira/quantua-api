@@ -26,7 +26,7 @@
  */
 import { gravarLeituraPorta, parseadoDaLeitura, VERSAO_LEITOR_DEMONSTRATIVO, type LeituraPortaConteudo, type LeituraDemonstrativoConteudo } from "./leitura-porta";
 import { prisma } from "../db/client";
-import { converterBalancete, ehNomeDeApuracao } from "./balancete-conversao";
+import { converterBalancete, ehNomeDeApuracao, periodosQueAcumulam } from "./balancete-conversao";
 import { foldBP, foldDRE, type NaoMapeado, type BPN3Item } from "./ai-extraction";
 import { sugerirConta, GRUPO_CLASSIF_MAP, ordPeriodo } from "./account-mapper";
 import { sugerirContaCanonica } from "./sugerir-conta-canonica";
@@ -751,9 +751,9 @@ async function montarBaseContabilSemCache(
   const fc = periodos.length >= 2
     ? buildIndirectCashFlow(
         bp as unknown as BPLineItem[], dre as unknown as DRELineItem[], periodos,
-        // Balancete traz DRE ACUMULADA no ano: sem esta lista o FC pareia lucro
-        // do ano com variação de um mês e o plug do PL inventa distribuição.
-        arvoresBalancete.map((a) => a.periodo).filter(Boolean),
+        // So' as colunas que REALMENTE acumulam: encerramento usa movimento,
+        // janeiro nao acumula e DRE reprovada nao foi publicada (valor 0).
+        periodosQueAcumulam({ dre: dre as never, balancetes, arvoresBalancete }),
       )
     : null;
   if (periodos.length === 1) avisos.push("Fluxo de Caixa precisa de pelo menos 2 períodos lidos (método indireto compara balanços).");

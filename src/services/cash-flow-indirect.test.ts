@@ -213,7 +213,7 @@ describe("buildIndirectCashFlow", () => {
 //   Empréstimos CP    4.810.076 →  9.766.328 (linha de fechamento)
 //   PL               24.956.057 → 16.101.635 (ΔPL = −8.854.422)
 const bpYTD = (classificacao: string, conta: string, nivel: number, v0: number, v1: number): BPLineItem =>
-  ({ classificacao, conta, nivel, editado: false, valores: { "11/2025": v0, "12/2025": v1 } });
+  ({ classificacao, conta, nivel, editado: false, valores: { "30/11/2025": v0, "31/12/2025": v1 } });
 
 const BP_BALANCETE: BPLineItem[] = [
   bpYTD("AT", "Ativo Total", 0, 104_886_133, 68_747_963),
@@ -231,10 +231,10 @@ const BP_BALANCETE: BPLineItem[] = [
 ];
 // DRE ACUMULADA no ano: 11/2025 cobre jan–nov, 12/2025 cobre jan–dez.
 const DRE_BALANCETE: DRELineItem[] = [
-  { conta: "Lucro Líquido", subtotal: false, editado: false, valores: { "11/2025": 9_669_025, "12/2025": 6_454_351 } },
+  { conta: "Lucro Líquido", subtotal: false, editado: false, valores: { "30/11/2025": 9_669_025, "31/12/2025": 6_454_351 } },
 ];
-const YTD = ["11/2025", "12/2025"];
-const DEZ = "12/2025";
+const YTD = ["30/11/2025", "31/12/2025"];
+const DEZ = "31/12/2025";
 const val = (fc: FluxoCaixaIndireto, nome: string): number =>
   [...fc.fco, ...(fc.capitalGiro?.linhas ?? []), ...fc.fci, ...fc.fcf]
     .find((l) => l.nome.startsWith(nome))?.valores[DEZ] ?? 0;
@@ -271,9 +271,9 @@ describe("buildIndirectCashFlow · balancete com DRE acumulada no ano", () => {
   });
 
   it("virada de exercício NÃO subtrai: o YTD de janeiro já é o próprio mês", () => {
-    const bp = BP_BALANCETE.map((l) => ({ ...l, valores: { "12/2025": l.valores["11/2025"], "01/2026": l.valores[DEZ] } }));
-    const dre = [{ conta: "Lucro Líquido", subtotal: false, editado: false, valores: { "12/2025": 9_669_025, "01/2026": 6_454_351 } }];
-    const fc = buildIndirectCashFlow(bp, dre as DRELineItem[], ["12/2025", "01/2026"], ["12/2025", "01/2026"])!;
-    expect(fc.fco.find((l) => l.nome.startsWith("Lucro Líquido"))!.valores["01/2026"]).toBeCloseTo(6_454_351, 0);
+    const bp = BP_BALANCETE.map((l) => ({ ...l, valores: { "31/12/2025": l.valores["30/11/2025"], "31/01/2026": l.valores[DEZ] } }));
+    const dre = [{ conta: "Lucro Líquido", subtotal: false, editado: false, valores: { "31/12/2025": 9_669_025, "31/01/2026": 6_454_351 } }];
+    const fc = buildIndirectCashFlow(bp, dre as DRELineItem[], ["31/12/2025", "31/01/2026"], ["31/12/2025", "31/01/2026"])!;
+    expect(fc.fco.find((l) => l.nome.startsWith("Lucro Líquido"))!.valores["31/01/2026"]).toBeCloseTo(6_454_351, 0);
   });
 });

@@ -419,19 +419,22 @@ ${linhasInternas ? linhasInternas + "\n" : ""}${linhasExternas ? "REFERÊNCIA EX
  * Regra: alavanca é FLUXO FUTURO endereçável. Não entra o que (a) deriva de
  * variação patrimonial passada, nem (b) repete tema que o motor já mede.
  */
-const IA_VETADA: Array<{ re: RegExp; motivo: string }> = [
-  { re: /(ajuste|variação|queda|reducao|redução).{0,24}(do )?(patrim|pl)|dividendos e ajustes/i,
+/** `alvo: "titulo"` = padrao amplo demais para rodar sobre a memoria, que e prosa
+ *  diagnostica e cita contexto financeiro por construcao. */
+const IA_VETADA: Array<{ re: RegExp; motivo: string; alvo?: "titulo" }> = [
+  { re: /(ajuste|variação|queda|redu[cç][aã]o).{0,24}(do )?(patrim[oô]nio|PL)|dividendos e ajustes do PL/i,
     motivo: "deriva de variação patrimonial passada, não de fluxo futuro" },
   { re: /(suspens|congel|segurar|reter|disciplina).{0,30}(distribui|dividend|retirad|lucro)/i,
     motivo: "distribuição já ocorrida não é caixa preservável; e a linha de origem é o plug do FC" },
-  { re: /(custo|despesa|encargo)s? financeir|juros? (da d[ií]vida|banc)|spread banc/i,
-    motivo: "o motor já publica o custo da dívida vs referência de mercado (card determinístico)" },
+  { re: /(reduzir|reduc|reduç|baixar|cortar|migrar|trocar|realocar).{0,30}(custo|despesa|encargo)s? financeir|(custo|despesa)s? financeir.{0,20}(menor|reduz)/i,
+    motivo: "o motor já publica o custo da dívida vs referência de mercado (card determinístico)", alvo: "titulo" },
 ];
 
 /** true = a alavanca da IA pode entrar no placar. Loga o veto (não some calado). */
 export function alavancaDeIAPassa(a: { titulo?: unknown; memoria?: unknown }): boolean {
-  const texto = `${String(a?.titulo ?? "")} ${String(a?.memoria ?? "")}`;
-  const veto = IA_VETADA.find((v) => v.re.test(texto));
+  const titulo = String(a?.titulo ?? "");
+  const texto = `${titulo} ${String(a?.memoria ?? "")}`;
+  const veto = IA_VETADA.find((v) => v.re.test(v.alvo === "titulo" ? titulo : texto));
   if (veto) console.warn(`[valor-na-mesa] alavanca da IA VETADA ("${String(a?.titulo ?? "").slice(0, 60)}"): ${veto.motivo}`);
   return !veto;
 }

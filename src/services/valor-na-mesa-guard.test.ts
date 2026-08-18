@@ -35,4 +35,23 @@ describe("trava de natureza das alavancas de IA", () => {
       memoria: "Frete subiu de 4,15% para 5,05% da receita líquida entre 2025 e 05/2026",
     })).toBe(true);
   });
+  // FALSOS POSITIVOS apontados na revisão adversarial: `(patrim|pl)` sem fronteira
+  // casava du-PL-icatas, a-PL-icado, re-PL-anejamento; e o padrão de custo financeiro
+  // rodava sobre a MEMÓRIA, que é prosa diagnóstica e cita juros por construção.
+  it.each([
+    ["Redução do saldo de duplicatas a receber", "carteira vencida de R$ 3,1 mi sem cobrança ativa"],
+    ["Redução do desconto comercial aplicado ao canal atacado", "desconto médio de 4,2% sobre tabela"],
+    ["Redução de custo com replanejamento das rotas de frete", "frete subiu de 4,15% para 5,05% da receita"],
+    ["Renegociar o contrato de frete rodoviário", "hoje é bancado por capital de giro, com despesa financeira de 3% a.m."],
+    ["Recuperar créditos tributários de ICMS", "R$ 3,05 mi em tributos a recuperar parados há 3 exercícios"],
+    ["Capitalizar a empresa com aporte dos sócios", "reduz a dependência de dívida curta"],
+  ])("DEIXA PASSAR alavanca legítima: %s", (titulo, memoria) => {
+    expect(alavancaDeIAPassa({ titulo, memoria })).toBe(true);
+  });
+
+  it("continua vetando quando o gatilho está no lugar certo", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(alavancaDeIAPassa({ titulo: "Reduzir o custo financeiro migrando para custeio agrícola", memoria: "" })).toBe(false);
+    expect(alavancaDeIAPassa({ titulo: "Recompor capital", memoria: "a variação do patrimônio líquido no semestre" })).toBe(false);
+  });
 });

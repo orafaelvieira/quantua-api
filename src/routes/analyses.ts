@@ -8,7 +8,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, extrairTextoLayoutPDF, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { parseBalanceteTexto, pareceBalancete, type BalanceteParseado } from "../services/balancete-parser";
-import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal } from "../services/balancete-conversao";
+import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal, periodosQueAcumulam } from "../services/balancete-conversao";
 import { parseBalanceteTabular, pareceBalanceteTabular, ehArquivoTabular, csvParaMatriz, xlsxParaMatriz } from "../services/balancete-tabular";
 import { pdfEscaneado, ocrBalancete, ocrBalanceteVision, parseDaMatrizOcr, contarNaoFecham, avisoNaoFecham } from "../services/balancete-ocr";
 import { middlewareContextoIA, enriquecerContextoIA, resolverAutorIA, registrarReaproveitamentoIA, ETAPAS } from "../services/ai-usage";
@@ -2039,7 +2039,9 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       modeloVersaoBP: modeloVersoes.bp,
       modeloVersaoDRE: modeloVersoes.dre,
       dicionarioVersao,
-      fluxoCaixa: buildIndirectCashFlow(structuredBP, structuredDRE, allPeriodos, periodosYTDProc),
+      fluxoCaixa: buildIndirectCashFlow(structuredBP, structuredDRE, allPeriodos,
+        // NAO e' periodosYTDProc: encerramento usa MOVIMENTO e janeiro nao acumula.
+        periodosQueAcumulam({ dre: structuredDRE, balancetes, arvoresBalancete })),
       version: 2,
       // O OCR de balancete é IA e entra no custo da extração ([[registrar-custo-ia]]).
       custoExtracao: {
@@ -2766,7 +2768,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   // lucro do ano com variação de um mês e o plug do PL vira número fantasma.
   dados.fluxoCaixa = buildIndirectCashFlow(
     dados.bp ?? [], dados.dre ?? [], periodos,
-    arvoresBalanceteRefold.map((a) => a.periodo).filter((p): p is string => !!p),
+    periodosQueAcumulam({ dre: dados.dre ?? [], balancetes: (dados as any)?.balancetes, arvoresBalancete: arvoresBalanceteRefold }),
   ); // FC acompanha o refold (grátis)
   // Pontes acompanham o refold pelo MESMO motivo do FC: reclassificar conta
   // muda os números — a decomposição não pode ficar velha ao lado deles.
