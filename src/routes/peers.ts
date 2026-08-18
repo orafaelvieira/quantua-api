@@ -106,6 +106,17 @@ router.post("/cvm/verificar", async (_req: AuthRequest, res: Response): Promise<
       where: { tipo: "cvm_update", lida: false },
       orderBy: { createdAt: "desc" },
     });
+    // O AVISO PROMETE "a sincronizacao roda sozinha logo em seguida" — e ate
+    // 18/08/2026 isso so' era verdade no caminho do CRON. Quem clicava
+    // "Verificar agora" via o aviso nascer e NADA acontecer ate a segunda
+    // seguinte. Mesmas guardas do job: nao atropela processamento em curso nem
+    // o boot; nesses casos a fila fica pendente e o botao "Sincronizar" resolve.
+    if (novos.length > 0 && !getProgressoHistorico().emAndamento && !runtimeState.seedsRodando) {
+      console.log(`[peers/cvm/verificar] disparando a fila de pendentes (${novos.length} arquivo(s)) em background`);
+      void sincronizarPendentesCvm().catch((e) =>
+        console.error("[peers/cvm/verificar] fila de pendentes falhou:", e instanceof Error ? e.message : e),
+      );
+    }
     res.json({ ok: true, verificados: resultados.length - falharam.length, tentados: resultados.length, falharam, novos, avisos });
   } catch (e) {
     console.error("[peers/cvm/verificar] falhou:", e);
