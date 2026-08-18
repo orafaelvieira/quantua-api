@@ -633,7 +633,23 @@ PRINCÍPIOS (inegociáveis):
     swot: ai.swot ?? { forcas: [], fraquezas: [], oportunidades: [], riscos: [] },
     confianca: typeof ai.confianca === "number" ? ai.confianca : 60,
     destaques: Array.isArray(ai.destaques) ? ai.destaques : [],
-    opcoesEstrategicas: Array.isArray(ai.opcoesEstrategicas) ? ai.opcoesEstrategicas : [],
+    // OPÇÃO SEM PRIORIDADE DERRUBAVA O PDF INTEIRO (18/08/2026, caso Belagro).
+    // O array da IA entrava CRU: uma opção veio sem priority/horizon/effort e o
+    // gerador do relatório quebrou em `o.priority.toUpperCase()` — quarenta
+    // páginas perdidas por um campo. O tipo TypeScript não alcança JSON de
+    // resposta, e a rota que cria opção à mão já tinha a trava certa
+    // (routes/ibr.ts: `z.enum(["p0","p1","p2"]).default("p1")`) — só este
+    // caminho ficou sem. Mesma régua, mesmo default, e item sem título nem
+    // entra (é a régua que `revelacoes` já usa logo abaixo).
+    opcoesEstrategicas: Array.isArray(ai.opcoesEstrategicas)
+      ? ai.opcoesEstrategicas
+        .filter((o: any) => o && typeof o.title === "string" && o.title.trim())
+        .map((o: any) => ({
+          ...o,
+          priority: ["p0", "p1", "p2"].includes(o.priority) ? o.priority : "p1",
+          effort: ["low", "medium", "high"].includes(o.effort) ? o.effort : "medium",
+        }))
+      : [],
     estagioCicloVida: ai.estagioCicloVida && typeof ai.estagioCicloVida === "object" ? ai.estagioCicloVida : undefined,
     situacao: ai.situacao && typeof ai.situacao === "object" ? ai.situacao : undefined,
     saudeFinanceira: ai.saudeFinanceira && typeof ai.saudeFinanceira === "object" ? ai.saudeFinanceira : undefined,
