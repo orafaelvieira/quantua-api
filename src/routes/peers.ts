@@ -269,7 +269,25 @@ router.get("/cvm/empresas", async (req: AuthRequest, res: Response): Promise<voi
     orderBy: { denom: "asc" },
     ...(todas ? {} : { take: 20 }),
   });
-  res.json(empresas);
+  // COBERTURA POR EMPRESA (18/08/2026). Sem isso o seletor oferece ~700 empresas
+  // visualmente identicas e o analista so' descobre que a empresa nao tem dado
+  // DEPOIS de clicar. Pior: o §02 abria sempre na data mais recente da BASE, que
+  // quem parou de publicar (incorporada, capital fechado) nunca tem — e a tela
+  // respondia "Empresa/periodo nao encontrado" como se o usuario tivesse errado.
+  const faixas = empresas.length
+    ? await prisma.cvmPeriod.groupBy({
+      by: ["cnpj"],
+      where: { cnpj: { in: empresas.map((e) => e.cnpj) } },
+      _min: { dtFim: true },
+      _max: { dtFim: true },
+    })
+    : [];
+  const iso = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
+  const faixaPorCnpj = new Map(faixas.map((f) => [f.cnpj, f]));
+  res.json(empresas.map((e) => {
+    const f = faixaPorCnpj.get(e.cnpj);
+    return { ...e, primeiroPeriodo: iso(f?._min.dtFim), ultimoPeriodo: iso(f?._max.dtFim) };
+  }));
 });
 
 // GET /peers/cvm/matriz?cnpj=&visao= — matriz indicador × período de UMA empresa
@@ -336,7 +354,24 @@ router.get("/cvm/empresa", async (req: AuthRequest, res: Response): Promise<void
   const dtMin = new Date(Date.UTC(dt.getUTCFullYear() - 2, dt.getUTCMonth(), 1)); // folga p/ LTM
   const emp = (await carregaEmpresasDoBanco([cnpj], dtMin, dt)).get(cnpj);
   const per = emp?.periodos[dtFim];
-  if (!emp || !per) { res.status(404).json({ error: "Empresa/período não encontrado" }); return; }
+  if (!emp || !per) {
+    // ERRO SEM SAIDA E' DEFEITO. O seletor de periodo so' renderiza quando ha'
+    // detalhe carregado, entao o 404 mudo deixava o analista preso: nenhuma acao
+    // na tela mudava o resultado. Devolver o que EXISTE transforma o beco sem
+    // saida numa escolha — e separa as duas causas, que sao bem diferentes.
+    const disp = await prisma.cvmPeriod.findMany({
+      where: { cnpj }, distinct: ["dtFim"], select: { dtFim: true }, orderBy: { dtFim: "desc" },
+    });
+    const periodosDisponiveis = disp.map((p) => p.dtFim.toISOString().slice(0, 10));
+    const br = (d: string) => d.split("-").reverse().join("/");
+    res.status(404).json({
+      error: periodosDisponiveis.length === 0
+        ? "Esta empresa consta no cadastro da CVM, mas não tem demonstrações na base (não publica ITR/DFP no período coberto)."
+        : `Esta empresa não tem ${br(dtFim)}. O período mais recente dela é ${br(periodosDisponiveis[0])} — escolha ao lado.`,
+      periodosDisponiveis,
+    });
+    return;
+  }
 
   const dre = visao === "ANO" ? per.dreYtd : visao === "TRI" ? dreTrimestre(emp, dtFim) : dreLtm(emp, dtFim);
   // Rótulo fiel à CVM: a 3.01 é receita LÍQUIDA (a CVM não publica bruta) — internamente
