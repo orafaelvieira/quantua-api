@@ -247,10 +247,38 @@ export async function baixarCvmZipParaDisco(url: string): Promise<{ caminho: str
 }
 
 /** HEAD na CVM — o cron compara ETag/Last-Modified com o CvmSyncState para avisar. */
+/**
+ * TENTA DE NOVO ANTES DE DESISTIR (18/08/2026, caso DFP 2025 + ITR 2024).
+ *
+ * A checagem roda UMA vez por semana. Sem repetição, uma resposta ruim de um
+ * segundo custava SETE DIAS de cegueira: os dois arquivos ficaram marcados
+ * "não verificado" desde 10/08 porque falharam no instante em que o job de
+ * 17/08 os consultou — os outros 36 do mesmo lote passaram. Testado da minha
+ * máquina no dia seguinte: os quatro respondem 200, então a falha foi
+ * passageira (throttle ou instabilidade do lado da CVM).
+ *
+ * Três tentativas com espera crescente. O custo é de segundos num job semanal;
+ * o benefício é não trocar uma semana de vigilância por um soluço de rede.
+ */
+const ESPERA_MS = [1_000, 3_000];
+
 export async function checarCvmAtualizacao(url: string): Promise<{ etag: string | null; lastModified: string | null } | null> {
-  const res = await fetch(url, { method: "HEAD" });
-  if (!res.ok) return null;
-  return { etag: res.headers.get("etag"), lastModified: res.headers.get("last-modified") };
+  let ultimo: unknown = null;
+  for (let tentativa = 0; tentativa <= ESPERA_MS.length; tentativa++) {
+    try {
+      const res = await fetch(url, { method: "HEAD" });
+      if (res.ok) return { etag: res.headers.get("etag"), lastModified: res.headers.get("last-modified") };
+      ultimo = `HTTP ${res.status}`;
+    } catch (e) {
+      ultimo = e instanceof Error ? e.message : String(e);
+    }
+    if (tentativa < ESPERA_MS.length) {
+      console.warn(`[cvm] consulta de versão falhou (${ultimo}) — tentativa ${tentativa + 2} de ${ESPERA_MS.length + 1}: ${url}`);
+      await new Promise((r) => setTimeout(r, ESPERA_MS[tentativa]));
+    }
+  }
+  console.warn(`[cvm] consulta de versão desistiu após ${ESPERA_MS.length + 1} tentativas (${ultimo}): ${url}`);
+  return null;
 }
 
 /** Persiste o resultado do parse em CvmCompany/CvmPeriod (upsert idempotente). */
