@@ -238,8 +238,17 @@ router.get("/cvm/estudo", async (req: AuthRequest, res: Response): Promise<void>
   const valores = linhas.map((l) => l.valor as number).sort((a, b) => a - b);
   const q = (p: number) => valores.length ? valores[Math.min(valores.length - 1, Math.floor(p * (valores.length - 1)))] : null;
   linhas.sort((a, b) => (ordem === "desc" ? (b.valor as number) - (a.valor as number) : (a.valor as number) - (b.valor as number)));
+  // UNIDADE DECLARADA, NAO ADIVINHADA (18/08/2026). A tela formatava o valor
+  // deduzindo a unidade do NOME do indicador, e errava: "Margem EBITDA" casava com
+  // a regra de R$ (termina em EBITDA), "ROE (Retorno sobre Patrimonio Liquido)" e
+  // "Imobilizacao do Patrimonio Liquido" casavam com "Patrimonio Liquido", e
+  // "Endividamento de Curto Prazo" casava com "Prazo" e saia em dias. Resultado:
+  // ROE de 21,6% exibido como "R$ 0M". A unidade sempre esteve declarada no
+  // INDICADORES_TEMPLATE — faltava mandar para a tela.
+  const tipoDado = INDICADORES_TEMPLATE.find((t) => t.nome === nome)?.tipoDado ?? null;
   res.json({
     n: valores.length,
+    tipoDado,
     distribuicao: { p25: q(0.25), p50: q(0.5), p75: q(0.75), min: valores[0] ?? null, max: valores[valores.length - 1] ?? null },
     ranking: linhas.slice(0, limite).map((l, i) => ({
       posicao: i + 1, empresa: l.company.pregao ?? l.company.denom, ticker: l.company.ticker,
