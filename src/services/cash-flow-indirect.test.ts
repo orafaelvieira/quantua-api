@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { buildIndirectCashFlow, bucketDaConta } from "./cash-flow-indirect";
 import type { BPLineItem, DRELineItem } from "../types/financial";
+import type { FluxoCaixaIndireto } from "./cash-flow-indirect";
 
 // BP sintético FECHADO (AT=PT nos dois períodos) — variações conhecidas:
 //   Caixa            100 → 260   (ΔCaixa = +160 — o que a prova precisa bater)
@@ -192,5 +193,87 @@ describe("buildIndirectCashFlow", () => {
     // total do FCF inalterado: +50 (empréstimos) + 20 (aporte) − 40 (dividendos) = 30
     expect(fc.totais.fcf["2023"]).toBeCloseTo(30, 2);
     expect(fc.prova[0].fecha).toBe(true);
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BALANCETE MENSAL — a entrada POBRE que a suíte não tinha ([[teste-com-entrada-pobre]]).
+// Série real da Belagro (11/2025 → 12/2025), onde o defeito apareceu: a DRE de
+// balancete é ACUMULADA no ano e o BP é saldo na data. Pareando o lucro do ANO
+// com a variação de UM MÊS, o plug "Dividendos e ajustes do PL" publicava
+// −R$ 15.308.773 onde a saída real foi −R$ 5.639.748. O excesso (R$ 9.669.025)
+// era, ao centavo, o lucro acumulado de 11/2025 — assinatura da dupla contagem.
+// O total fechava assim mesmo: o mesmo lucro entra no FCO e sai no plug do FCF.
+//
+// Fixture FECHADA (AT=PT nos dois períodos):
+//   Caixa            5.336.133 →   997.963   (ΔCaixa = −4.338.170, o alvo da prova)
+//   Contas a Receber 99.550.000 → 67.750.000
+//   Fornecedores     75.120.000 → 42.880.000
+//   Empréstimos CP    4.810.076 →  9.766.328 (linha de fechamento)
+//   PL               24.956.057 → 16.101.635 (ΔPL = −8.854.422)
+const bpYTD = (classificacao: string, conta: string, nivel: number, v0: number, v1: number): BPLineItem =>
+  ({ classificacao, conta, nivel, editado: false, valores: { "11/2025": v0, "12/2025": v1 } });
+
+const BP_BALANCETE: BPLineItem[] = [
+  bpYTD("AT", "Ativo Total", 0, 104_886_133, 68_747_963),
+  bpYTD("AC", "Ativo Circulante", 1, 104_886_133, 68_747_963),
+  bpYTD("AF", "Caixa e Equivalentes de Caixa", 2, 5_336_133, 997_963),
+  bpYTD("AO", "Contas a Receber - CP", 2, 99_550_000, 67_750_000),
+  bpYTD("PT", "Passivo Total", 0, 104_886_133, 68_747_963),
+  bpYTD("PC", "Passivo Circulante", 1, 79_930_076, 52_646_328),
+  bpYTD("PO", "Fornecedores - CP", 2, 75_120_000, 42_880_000),
+  bpYTD("PF", "Empréstimos e Financiamentos - CP", 2, 4_810_076, 9_766_328),
+  bpYTD("PL", "Patrimônio Líquido", 1, 24_956_057, 16_101_635),
+  bpYTD("PL", "Capital Social", 2, 2_600_000, 2_600_000),
+  bpYTD("PL", "Lucros/Prejuízos Acumulados", 2, 11_510_000, 5_870_252),
+  bpYTD("PL", "Resultado do Exercício", 2, 10_846_057, 7_631_383),
+];
+// DRE ACUMULADA no ano: 11/2025 cobre jan–nov, 12/2025 cobre jan–dez.
+const DRE_BALANCETE: DRELineItem[] = [
+  { conta: "Lucro Líquido", subtotal: false, editado: false, valores: { "11/2025": 9_669_025, "12/2025": 6_454_351 } },
+];
+const YTD = ["11/2025", "12/2025"];
+const DEZ = "12/2025";
+const val = (fc: FluxoCaixaIndireto, nome: string): number =>
+  [...fc.fco, ...(fc.capitalGiro?.linhas ?? []), ...fc.fci, ...fc.fcf]
+    .find((l) => l.nome.startsWith(nome))?.valores[DEZ] ?? 0;
+
+describe("buildIndirectCashFlow · balancete com DRE acumulada no ano", () => {
+  it("usa o resultado do MÊS (YTD − YTD anterior), não a coluna acumulada", () => {
+    const fc = buildIndirectCashFlow(BP_BALANCETE, DRE_BALANCETE, YTD, YTD)!;
+    expect(val(fc, "Lucro Líquido")).toBeCloseTo(6_454_351 - 9_669_025, 0); // −3.214.674
+  });
+
+  it("o plug do PL é a saída REAL de dezembro, e bate com ΔLucros Acumulados no BP", () => {
+    const fc = buildIndirectCashFlow(BP_BALANCETE, DRE_BALANCETE, YTD, YTD)!;
+    const plug = val(fc, "Dividendos e ajustes do PL");
+    expect(plug).toBeCloseTo(-5_639_748, 0);
+    expect(plug).toBeCloseTo(5_870_252 - 11_510_000, 0); // prova independente
+  });
+
+  it("sem a lista de acumulados o defeito reaparece — e o excesso é o lucro do mês anterior", () => {
+    const semYTD = buildIndirectCashFlow(BP_BALANCETE, DRE_BALANCETE, YTD)!;
+    const plug = [...semYTD.fcf].find((l) => l.nome.startsWith("Dividendos e ajustes do PL"))!.valores[DEZ];
+    expect(plug).toBeCloseTo(-15_308_773, 0);
+    expect(plug - -5_639_748).toBeCloseTo(-9_669_025, 0); // = Lucro Líquido YTD de 11/2025
+  });
+
+  it("a prova de fechamento bate com o ΔCaixa — e batia ANTES também (por isso não via o erro)", () => {
+    const deltaCaixa = 997_963 - 5_336_133;
+    for (const fc of [
+      buildIndirectCashFlow(BP_BALANCETE, DRE_BALANCETE, YTD, YTD)!,
+      buildIndirectCashFlow(BP_BALANCETE, DRE_BALANCETE, YTD)!,
+    ]) {
+      expect(fc.totais.geracaoTotal[DEZ]).toBeCloseTo(deltaCaixa, 0);
+      expect(fc.prova.find((p) => p.periodo === DEZ)?.fecha).toBe(true);
+    }
+  });
+
+  it("virada de exercício NÃO subtrai: o YTD de janeiro já é o próprio mês", () => {
+    const bp = BP_BALANCETE.map((l) => ({ ...l, valores: { "12/2025": l.valores["11/2025"], "01/2026": l.valores[DEZ] } }));
+    const dre = [{ conta: "Lucro Líquido", subtotal: false, editado: false, valores: { "12/2025": 9_669_025, "01/2026": 6_454_351 } }];
+    const fc = buildIndirectCashFlow(bp, dre as DRELineItem[], ["12/2025", "01/2026"], ["12/2025", "01/2026"])!;
+    expect(fc.fco.find((l) => l.nome.startsWith("Lucro Líquido"))!.valores["01/2026"]).toBeCloseTo(6_454_351, 0);
   });
 });

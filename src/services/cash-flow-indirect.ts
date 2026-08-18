@@ -113,8 +113,18 @@ const TOL_FECHA = 1; // R$1 — mesma régua do AT=PT
 const ordPeriodo = (p: string): number => {
   const m = p.match(/(\d{2})\/(\d{2})\/(\d{4})/);
   if (m) return Number(`${m[3]}${m[2]}${m[1]}`);
+  // "MM/AAAA" (coluna de balancete): sem este caso, TODOS os meses do mesmo ano
+  // empatavam em AAAA0000 e o pareamento dependia da ordem de entrada.
+  const mm = p.match(/^\s*(\d{2})\/(\d{4})\s*$/);
+  if (mm) return Number(`${mm[2]}${mm[1]}31`);
   const y = p.match(/\d{4}/);
   return y ? Number(`${y[0]}0000`) : 0;
+};
+
+/** Exercício do período — dois períodos do MESMO ano têm DRE acumulada comparável. */
+const anoPeriodo = (p: string): number => {
+  const m = p.match(/(\d{4})\s*$/) ?? p.match(/\d{4}/);
+  return m ? Number(m[0]) : 0;
 };
 
 /**
@@ -125,11 +135,22 @@ export function buildIndirectCashFlow(
   bp: BPLineItem[],
   dre: DRELineItem[],
   periodosBrutos: string[],
+  /**
+   * Períodos de BALANCETE, cuja DRE vem ACUMULADA no ano (mesma lista que
+   * `buildIndicators` já recebe). Sem isto, o lucro ACUMULADO entrava no FCO
+   * contra uma variação MENSAL de balanço e a diferença caía no plug
+   * "Dividendos e ajustes do PL": em 12/2025 o plug publicava −R$ 15,31 mi
+   * quando a saída real foi −R$ 5,64 mi (o excesso era, ao real, o lucro
+   * acumulado do mês anterior). O total fechava assim mesmo — o mesmo lucro
+   * entra no FCO e sai no plug do FCF —, então a prova de fechamento não vê.
+   */
+  periodosYTD?: string[],
 ): FluxoCaixaIndireto | null {
   if (!periodosBrutos || periodosBrutos.length < 2) return null;
   const periodos = [...periodosBrutos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
 
   const avisos: string[] = [];
+  const ytd = new Set(periodosYTD ?? []);
   const bpVal = (conta: string, p: string): number => bp.find((l) => l.conta === conta)?.valores[p] ?? 0;
   const dreVal = (conta: string, p: string): number => dre.find((l) => l.conta === conta)?.valores[p] ?? 0;
 
@@ -155,9 +176,17 @@ export function buildIndirectCashFlow(
     const p1 = periodos[i];
     colunas.push(p1);
 
-    const lucro = dreVal("Lucro Líquido", p1);
-    const da = dreVal("Depreciação e Amortização", p1);     // armazenada NEGATIVA
-    const eqP = dreVal("Equivalência Patrimonial", p1);      // sinal real (lucro + / prejuízo −)
+    // DRE do PERÍODO, não da coluna: quando p0 e p1 são balancetes acumulados do
+    // MESMO exercício, o valor do intervalo é YTD(p1) − YTD(p0). Fora disso (par
+    // anual, ou virada de exercício em que YTD(p1) já é o próprio intervalo) a
+    // coluna vale como está.
+    const mesmoAcumulado = ytd.has(p1) && ytd.has(p0) && anoPeriodo(p1) === anoPeriodo(p0);
+    const dreDoIntervalo = (conta: string): number =>
+      mesmoAcumulado ? dreVal(conta, p1) - dreVal(conta, p0) : dreVal(conta, p1);
+
+    const lucro = dreDoIntervalo("Lucro Líquido");
+    const da = dreDoIntervalo("Depreciação e Amortização");  // armazenada NEGATIVA
+    const eqP = dreDoIntervalo("Equivalência Patrimonial");  // sinal real (lucro + / prejuízo −)
 
     // ── FCO: lucro + não-caixa ──
     push(fcoMap, "Lucro Líquido do período", p1, lucro);

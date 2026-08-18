@@ -8,6 +8,7 @@ import { avaliarBaseDoRetorno } from "./base-do-retorno";
 import type { BPLineItem, DRELineItem } from "../types/financial";
 import { INDICADORES_TEMPLATE } from "./financial-templates";
 import { calcularValorCanonico, type AlavancaValor, type ValorCanonico } from "./valor-na-mesa";
+import { diasYTD } from "./indicator-calculator";
 import { calcularContaRegressiva } from "./conta-regressiva";
 
 // tipoDado por nome de indicador (template) — formata os números do prompt na unidade
@@ -400,6 +401,41 @@ ${linhasInternas ? linhasInternas + "\n" : ""}${linhasExternas ? "REFERÊNCIA EX
  * default sonnet) e devolve o custo da chamada. `peer` injeta o Benchmark Setorial (pares B3)
  * pra tornar o semáforo RELATIVO ao setor.
  */
+/**
+ * TRAVA DE NATUREZA das alavancas de IA (18/08/2026, caso Belagro).
+ *
+ * O único filtro era de MAGNITUDE (valor > 0 e <= 5× o canônico), e por ele
+ * passaram duas alavancas que o apêndice do próprio relatório desmente:
+ *
+ *  · R$ 15,3 mi de "suspensão de distribuição de lucro" — era o PLUG da linha
+ *    "Dividendos e ajustes do PL" do fluxo de caixa, que somava lucro acumulado
+ *    do ano com variação mensal de balanço. A saída real foi R$ 5,64 mi, e ela
+ *    ocorreu OITO MESES antes da data do relatório: não é caixa preservável.
+ *  · R$ 3,5 mi de "redução do custo financeiro" — sobre uma despesa financeira
+ *    BRUTA de período parcial, num negócio de barter cujo resultado financeiro
+ *    LÍQUIDO do período foi −R$ 767 mil (e positivo no último mês). O motor já
+ *    publica o número determinístico desse tema no card de custo da dívida.
+ *
+ * Regra: alavanca é FLUXO FUTURO endereçável. Não entra o que (a) deriva de
+ * variação patrimonial passada, nem (b) repete tema que o motor já mede.
+ */
+const IA_VETADA: Array<{ re: RegExp; motivo: string }> = [
+  { re: /(ajuste|variação|queda|reducao|redução).{0,24}(do )?(patrim|pl)|dividendos e ajustes/i,
+    motivo: "deriva de variação patrimonial passada, não de fluxo futuro" },
+  { re: /(suspens|congel|segurar|reter|disciplina).{0,30}(distribui|dividend|retirad|lucro)/i,
+    motivo: "distribuição já ocorrida não é caixa preservável; e a linha de origem é o plug do FC" },
+  { re: /(custo|despesa|encargo)s? financeir|juros? (da d[ií]vida|banc)|spread banc/i,
+    motivo: "o motor já publica o custo da dívida vs referência de mercado (card determinístico)" },
+];
+
+/** true = a alavanca da IA pode entrar no placar. Loga o veto (não some calado). */
+export function alavancaDeIAPassa(a: { titulo?: unknown; memoria?: unknown }): boolean {
+  const texto = `${String(a?.titulo ?? "")} ${String(a?.memoria ?? "")}`;
+  const veto = IA_VETADA.find((v) => v.re.test(texto));
+  if (veto) console.warn(`[valor-na-mesa] alavanca da IA VETADA ("${String(a?.titulo ?? "").slice(0, 60)}"): ${veto.motivo}`);
+  return !veto;
+}
+
 export async function generateAnalysis(
   indicadores: IndicadorLite[],
   periodosBrutos: string[],
@@ -413,6 +449,10 @@ export async function generateAnalysis(
   fluxoCaixa?: FluxoCaixaLite | null,
   dores?: DorDeclarada[] | null,
   bp?: Array<{ conta: string; valores: Record<string, number> }> | null,
+  /** Colunas de BALANCETE (DRE acumulada no ano) — dá a régua de dias às alavancas
+   *  e à conta regressiva. Sem ela, `/365` num período de 150 dias subestima a
+   *  venda diária em 2,43× e infla o fôlego de caixa na mesma proporção. */
+  periodosYTD?: string[],
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
   // Ordem CRONOLÓGICA uma vez, para TODO o prompt (séries de indicadores, bloco da DRE,
   // KPIs, estágio) — dados.periodos pode vir na ordem dos documentos (ex.: 2022, 2020, 2021).
@@ -435,6 +475,7 @@ export async function generateAnalysis(
   const canonico: ValorCanonico | null = calcularValorCanonico(
     indicadores, periodos, peer?.rows ?? [], dre ?? null,
     { segmento: peer?.segment ?? null, periodo: peer?.periodo ?? null },
+    periodosYTD,
   );
   const canonicoBlock = canonico && canonico.alavancas.length > 0
     ? `\nVALOR NA MESA — ALAVANCAS CANÔNICAS JÁ CALCULADAS PELO MOTOR (fatos; NÃO re-some, NÃO altere, NÃO repita nas adicionais):\n${canonico.alavancas.map((a) => `- [${a.tipo}] ${a.titulo}: R$ ${a.valor.toLocaleString("pt-BR")} — ${a.memoria}`).join("\n")}\nSubtotal canônico: caixa liberável R$ ${canonico.caixaLiberavel.toLocaleString("pt-BR")} · margem recuperável/ano R$ ${canonico.margemRecuperavelAno.toLocaleString("pt-BR")}.`
@@ -447,6 +488,8 @@ export async function generateAnalysis(
     ? calcularContaRegressiva(
         bp, dre as Array<{ conta: string; valores: Record<string, number> }>, ultimoPeriodo,
         fluxoCaixa?.totais?.fco?.[ultimoPeriodo] ?? null,
+        // dias-base do período: balancete acumulado NÃO cobre 365 dias.
+        (periodosYTD ?? []).includes(ultimoPeriodo) ? diasYTD(ultimoPeriodo) : 365,
       )
     : null;
   const regressivaBlock = contaRegressiva
@@ -524,7 +567,7 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
       "perguntaAmanha": "<a pergunta que o dono deve fazer à equipe amanhã de manhã>" }
   ],
   ${canonico && canonico.alavancas.length > 0
-    ? `"alavancasAdicionais": [ { "titulo": "<alavanca ESPECÍFICA que o motor não calcula (ex.: disciplina de distribuição, ativo ocioso, custo financeiro) — NUNCA repita as canônicas (prazos vs mediana, gap de margem vs mediana)>", "tipo": "caixa|margem", "valor": <R$>, "memoria": "<a conta explicada em prosa, citando os números-fonte>" } ],
+    ? `"alavancasAdicionais": [ { "titulo": "<alavanca ESPECÍFICA que o motor não calcula (ex.: ativo ocioso, contrato a renegociar, linha de produto deficitária). PROIBIDO: qualquer alavanca derivada de variação de patrimônio líquido ou da linha \"Dividendos e ajustes do PL\" (é saldo passado, não caixa futuro), e qualquer alavanca sobre custo/despesa financeira (o motor já mede isso no card de custo da dívida) — NUNCA repita as canônicas (prazos vs mediana, gap de margem vs mediana)>", "tipo": "caixa|margem", "valor": <R$>, "memoria": "<a conta explicada em prosa, citando os números-fonte>" } ],
   "valorNaMesaLeitura": "<1-2 frases: o número-manchete (canônicas + suas adicionais) e de onde vem; ordem de grandeza a validar>",`
     : `"valorNaMesa": { "total": <R$>, "caixaLiberavel": <R$ de caixa que pode ser liberado (giro/ativos)>, "margemRecuperavel": <R$ ANUAIS de resultado recuperável (custo/preço/mix)>, "leitura": "<1-2 frases: o número-manchete e de onde vem; deixe claro que é ordem de grandeza a validar>" },`}
   "protecoes": [ { "oQueProteger": "<força que SUSTENTA o resultado atual>", "ameaca": "<o que pode destruí-la>", "acaoDefensiva": "<como blindar, concreto>" } ],
@@ -660,6 +703,7 @@ PRINCÍPIOS (inegociáveis):
         // MOTOR manda: canônicas são imutáveis; a IA só adiciona (com sanidade).
         const adicionais: AlavancaValor[] = (Array.isArray(ai.alavancasAdicionais) ? ai.alavancasAdicionais : [])
           .filter((a: any) => a && typeof a.titulo === "string" && typeof a.valor === "number" && a.valor > 0 && a.valor <= 5 * (canonico.total + 1_000_000))
+          .filter((a: any) => alavancaDeIAPassa(a))
           .slice(0, 5)
           .map((a: any): AlavancaValor => ({
             origem: "analise",

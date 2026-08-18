@@ -749,7 +749,12 @@ async function montarBaseContabilSemCache(
   // Caixa"): o MESMO serviço do IBR, sobre o BP/DRE dobrados acima. Null com
   // menos de 2 períodos — sem variação não há método indireto.
   const fc = periodos.length >= 2
-    ? buildIndirectCashFlow(bp as unknown as BPLineItem[], dre as unknown as DRELineItem[], periodos)
+    ? buildIndirectCashFlow(
+        bp as unknown as BPLineItem[], dre as unknown as DRELineItem[], periodos,
+        // Balancete traz DRE ACUMULADA no ano: sem esta lista o FC pareia lucro
+        // do ano com variação de um mês e o plug do PL inventa distribuição.
+        arvoresBalancete.map((a) => a.periodo).filter(Boolean),
+      )
     : null;
   if (periodos.length === 1) avisos.push("Fluxo de Caixa precisa de pelo menos 2 períodos lidos (método indireto compara balanços).");
 

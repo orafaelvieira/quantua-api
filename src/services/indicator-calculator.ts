@@ -329,10 +329,14 @@ function computeIndicator(
   }
 }
 
-/** Dias-base de um período YTD (balancete: DRE ACUMULADA jan→mês): mês × 30; dezembro = ano cheio. */
+/** Dias-base de um período YTD (balancete: DRE ACUMULADA jan→mês): mês × 30; dezembro = ano cheio.
+ *  Aceita "DD/MM/AAAA" e "MM/AAAA" — o rótulo curto existe nas colunas de balancete e,
+ *  sem este caso, caía no default de dezembro (365) devolvendo ano cheio para um mês
+ *  de maio: prazos e alavancas saíam 2,4× errados sem nenhum sinal. */
 export function diasYTD(periodo: string): number {
-  const m = periodo.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-  const mes = m ? parseInt(m[2]) : 12;
+  const dmy = periodo.match(/\d{2}\/(\d{2})\/\d{4}/);
+  const my = dmy ? null : periodo.match(/^\s*(\d{2})\/\d{4}\s*$/);
+  const mes = dmy ? parseInt(dmy[1]) : my ? parseInt(my[1]) : 12;
   return mes === 12 ? 365 : mes * 30;
 }
 

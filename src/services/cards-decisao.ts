@@ -714,7 +714,10 @@ function cardCustoDivida(
     linhas.push({ rotulo: "Alavancagem da empresa", valor: `${mult(alavancagem)} EBITDA`, bruto: alavancagem });
   }
   if (cobertura !== null) {
-    linhas.push({ rotulo: "Cobertura de juros (EBIT ÷ juros)", valor: mult(cobertura), bruto: cobertura });
+    // O motor calcula EBITDA ÷ despesa financeira (indicator-calculator). O rótulo dizia
+    // EBIT: para a Belagro, -4,42/7,25 = -0,61 contra o -0,57 publicado, e a memória de
+    // cálculo do IBR citava o EBIT e concluía o número do EBITDA — conta impossível impressa.
+    linhas.push({ rotulo: "Cobertura de juros (EBITDA ÷ despesa financeira)", valor: mult(cobertura), bruto: cobertura });
   }
 
   const difPP = Math.abs(diferenca * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });

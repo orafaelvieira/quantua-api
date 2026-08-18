@@ -1045,6 +1045,10 @@ async function runAnalysisBackground(
       dados?.fluxoCaixa ?? null, // estágio Dickinson pelos sinais de FCO/FCI/FCF (quando a prova fecha)
       Array.isArray(analysis.dores) ? (analysis.dores as never[]) : null, // fonte [5]: confronto declarado×observado
       dados?.bp ?? null, // caixa do BP → conta regressiva determinística (dias de caixa)
+      // Colunas de balancete: DRE acumulada no ano. Dá a régua de dias às alavancas
+      // do valor na mesa e à conta regressiva (sem ela, /365 num período de 150 dias).
+      (Array.isArray(dados?.arvoresBalancete) ? dados.arvoresBalancete : [])
+        .map((a: { periodo?: string }) => a?.periodo).filter((x: unknown): x is string => typeof x === "string"),
     );
     const resultado = {
       ...analise.result,
@@ -2035,7 +2039,7 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       modeloVersaoBP: modeloVersoes.bp,
       modeloVersaoDRE: modeloVersoes.dre,
       dicionarioVersao,
-      fluxoCaixa: buildIndirectCashFlow(structuredBP, structuredDRE, allPeriodos),
+      fluxoCaixa: buildIndirectCashFlow(structuredBP, structuredDRE, allPeriodos, periodosYTDProc),
       version: 2,
       // O OCR de balancete é IA e entra no custo da extração ([[registrar-custo-ia]]).
       custoExtracao: {
@@ -2758,7 +2762,12 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   dados.naoMapeados = naoMapeados;
   // FC continua visível mesmo sem validação completa: é SUPERFÍCIE DE AUDITORIA
   // (tem prova de fechamento própria) e ajuda a diagnosticar as pendências.
-  dados.fluxoCaixa = buildIndirectCashFlow(dados.bp ?? [], dados.dre ?? [], periodos); // FC acompanha o refold (grátis)
+  // periodosYTD: colunas de balancete têm DRE acumulada — sem elas o FC soma
+  // lucro do ano com variação de um mês e o plug do PL vira número fantasma.
+  dados.fluxoCaixa = buildIndirectCashFlow(
+    dados.bp ?? [], dados.dre ?? [], periodos,
+    arvoresBalanceteRefold.map((a) => a.periodo).filter((p): p is string => !!p),
+  ); // FC acompanha o refold (grátis)
   // Pontes acompanham o refold pelo MESMO motivo do FC: reclassificar conta
   // muda os números — a decomposição não pode ficar velha ao lado deles.
   {

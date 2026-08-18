@@ -20,6 +20,7 @@
  * regenerações fica confinada ao estrato da IA — e visível como tal.
  */
 import type { PeerComparisonRow } from "./peer-benchmark";
+import { diasYTD, diasDoPeriodo } from "./indicator-calculator";
 
 export interface AlavancaValor {
   origem: "motor" | "analise";
@@ -70,10 +71,25 @@ export function calcularValorCanonico(
   peerRows: PeerComparisonRow[],
   dre: Array<{ conta: string; valores: Record<string, number> }> | null | undefined,
   base: { segmento: string | null; periodo: string | null },
+  /**
+   * Períodos de BALANCETE (DRE acumulada no ano) — a MESMA lista que
+   * `buildIndicators` recebe. A alavanca tem de sair da MESMA régua de dias que
+   * produziu o prazo que a disparou: o PMR de 130 dias da Belagro foi medido
+   * sobre 150 dias (YTD de 5 meses), enquanto a venda diária saía de `/365`.
+   * O descasamento de 2,4333× publicava R$ 87,3 mi onde a própria régua do
+   * relatório dá R$ 212,4 mi — e não reconciliava com o saldo do balanço.
+   */
+  periodosYTD?: string[],
 ): ValorCanonico | null {
   if (!peerRows?.length || !indicadores?.length || !periodos?.length) return null;
   const ord = [...periodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
   const ult = ord[ord.length - 1];
+  const ytd = new Set(periodosYTD ?? []);
+  // Mesma regra do indicator-calculator: balancete usa a base da SUA periodicidade.
+  const diasBase = ytd.has(ult) ? diasYTD(ult) : diasDoPeriodo(ult, ord.filter((x) => !ytd.has(x) || x === ult));
+  // Fator de anualização das alavancas de FLUXO (margem): num período parcial o
+  // ganho medido cobre só `diasBase` dias, e o texto promete "por ano".
+  const anualiza = 365 / (diasBase || 365);
   const val = (nome: string): number | null => {
     const v = indicadores.find((i) => i.nome === nome)?.valores?.[ult];
     return typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -85,11 +101,11 @@ export function calcularValorCanonico(
 
   const receita = val("Receita Líquida");
   if (receita == null || receita <= 0) return null;
-  const receitaDia = receita / 365;
+  const receitaDia = receita / diasBase;
   // Custo diário de mercadoria (base do estoque e das compras): Custo Operacional da
   // DRE do último período. Sem ele, as alavancas de estoque/fornecedores não disparam.
   const custoOp = dre?.find((l) => l.conta === "Custo Operacional")?.valores?.[ult];
-  const custoDia = typeof custoOp === "number" && custoOp !== 0 ? Math.abs(custoOp) / 365 : null;
+  const custoDia = typeof custoOp === "number" && custoOp !== 0 ? Math.abs(custoOp) / diasBase : null;
 
   const alavancas: AlavancaValor[] = [];
   const dias = (n: number) => Math.round(n).toLocaleString("pt-BR");
@@ -138,11 +154,11 @@ export function calcularValorCanonico(
     const mg = val("Margem EBITDA"), p50 = mediana("Margem EBITDA");
     if (mg != null && p50 != null && p50 - mg >= MIN_GAP_MARGEM) {
       const gap = p50 - mg;
-      const valor = Math.round(gap * receita);
+      const valor = Math.round(gap * receita * anualiza);
       if (valor >= MIN_VALOR) alavancas.push({
         origem: "motor", tipo: "margem", valor,
         titulo: "Levar a margem operacional à mediana do setor",
-        memoria: `A margem operacional é de ${(mg * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% contra ${(p50 * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% na mediana dos concorrentes. Fechar essa diferença sobre a receita de ${reais(receita)} recupera cerca de ${reais(valor)} de resultado por ano — direcional, a validar na árvore de custos.`,
+        memoria: `A margem EBITDA é de ${(mg * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% contra ${(p50 * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% na mediana dos concorrentes. Fechar essa diferença sobre a receita de ${reais(receita)} (base de ${diasBase} dias) recupera cerca de ${reais(valor)} de resultado por ano — direcional, a validar na árvore de custos.`,
       });
     }
   }
