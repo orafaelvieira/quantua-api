@@ -279,6 +279,59 @@ Equipe Quantua`;
   return sendSafe({ to: v.to, subject, html, text });
 }
 
+/**
+ * ALERTA DA BASE CVM (18/08/2026, pedido do dono ao ver DFP 2025 e ITR 2024
+ * parados desde 10/08: "seria bom quando ocorrer este tipo de problema enviar
+ * email").
+ *
+ * O sistema JÁ sabia — grava o motivo em `verificacaoErro` — mas ninguém era
+ * avisado: o problema só aparecia para quem abrisse a tela de pares. Uma base
+ * que para de ser verificada não avisa sozinha; envelhece em silêncio e o
+ * benchmark do IBR segue publicando como se estivesse em dia.
+ */
+export interface CvmCheagemFalhouVars {
+  to: string;
+  /** Arquivos que não puderam ser verificados, com a causa já saneada. */
+  falhas: Array<{ arquivo: string; motivo: string; desde: Date | null }>;
+  paresUrl: string;
+}
+
+export async function sendCvmChecagemFalhouEmail(v: CvmCheagemFalhouVars): Promise<{ ok: boolean; error?: string }> {
+  const n = v.falhas.length;
+  const dia = (d: Date | null) => (d ? d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }) : "nunca");
+  const subject = `[Base CVM] ${n} arquivo${n === 1 ? "" : "s"} sem checagem válida`;
+  const linhas = v.falhas
+    .map((f) => `- ${f.arquivo.toUpperCase().replace("_", " ")}: ${f.motivo} (última checagem válida: ${dia(f.desde)})`)
+    .join("\n");
+  const text = `A checagem semanal da base CVM não conseguiu confirmar ${n} arquivo${n === 1 ? "" : "s"}:
+
+${linhas}
+
+Enquanto isso, o benchmark setorial do IBR segue publicando com a versão que já está na base — que pode estar velha. O selo na tela marca "não verificado".
+
+Abrir a base de pares:
+${v.paresUrl}
+
+Equipe Quantua`;
+  const itens = v.falhas
+    .map((f) => `<li style="margin-bottom:6px"><strong>${f.arquivo.toUpperCase().replace("_", " ")}</strong> — ${f.motivo}<br><span style="color:#6b7280;font-size:12px">última checagem válida: ${dia(f.desde)}</span></li>`)
+    .join("");
+  const body =
+    renderHeading(`A base CVM não pôde ser verificada em ${n} arquivo${n === 1 ? "" : "s"}.`) +
+    renderLede(
+      `A checagem semanal falhou nos arquivos abaixo. O benchmark setorial continua publicando com a versão que já está na base — <strong>que pode estar desatualizada</strong>; o selo na tela marca "não verificado".`,
+    ) +
+    `<ul style="font-size:14px;line-height:1.6;padding-left:18px;margin:0 0 18px">${itens}</ul>` +
+    renderButton(v.paresUrl, "Abrir base de pares →");
+  const html = renderShell({
+    eyebrow: "Base CVM",
+    body,
+    accent: C.amber,
+    footer: `Alerta automático · checagem semanal · ${DEFAULT_FOOTER}`,
+  });
+  return sendSafe({ to: v.to, subject, html, text });
+}
+
 export interface TeamInviteVars {
   to: string;
   workspaceName: string;

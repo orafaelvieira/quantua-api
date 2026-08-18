@@ -11,6 +11,12 @@
 import { withJobLock } from "./lock";
 import { checarAtualizacoesCvm, sincronizarPendentesCvm, getProgressoHistorico } from "../services/cvm-sync";
 import { runtimeState } from "../services/runtime-state";
+import { prisma } from "../db/client";
+import { env } from "../config/env";
+import { sendCvmChecagemFalhouEmail } from "../services/email";
+
+/** Destino do alerta da base de pares (pedido do dono, 18/08/2026). */
+const ALERTA_BASE_CVM = "emerson@valoo.com.br";
 
 export async function runCheckCvmUpdates(): Promise<void> {
   await withJobLock("check-cvm-updates", async (ctx) => {
@@ -26,7 +32,32 @@ export async function runCheckCvmUpdates(): Promise<void> {
         ? `[check-cvm-updates] versão nova na CVM: ${novos.join(", ")} — aviso criado no Inbox`
         : `[check-cvm-updates] sem novidades (${resultados.length - falharam.length} de ${resultados.length} verificados)`,
     );
-    if (falharam.length) console.warn(`[check-cvm-updates] ${falharam.length} arquivo(s) não puderam ser verificados: ${falharam.join(", ")}`);
+    if (falharam.length) {
+      console.warn(`[check-cvm-updates] ${falharam.length} arquivo(s) não puderam ser verificados: ${falharam.join(", ")}`);
+      // AVISAR QUEM PODE AGIR (18/08/2026, pedido do dono ao ver DFP 2025 e ITR
+      // 2024 parados desde 10/08). O motivo já era gravado em `verificacaoErro` e
+      // o selo já ficava vermelho — mas só para quem abrisse a tela de pares.
+      // Base que para de ser verificada envelhece em silêncio enquanto o
+      // benchmark do IBR segue publicando. Em try próprio: falha de e-mail não
+      // pode derrubar o job nem impedir a fila de pendentes.
+      try {
+        const estados = await prisma.cvmSyncState.findMany({
+          where: { arquivo: { in: falharam } },
+          select: { arquivo: true, verificacaoErro: true, verificadoEm: true },
+        });
+        await sendCvmChecagemFalhouEmail({
+          to: ALERTA_BASE_CVM,
+          falhas: estados.map((e) => ({
+            arquivo: e.arquivo,
+            motivo: e.verificacaoErro ?? "a consulta de versão à CVM falhou",
+            desde: e.verificadoEm ?? null,
+          })),
+          paresUrl: `${env.frontendUrl}/admin/pares`,
+        });
+      } catch (e) {
+        console.warn("[check-cvm-updates] alerta por e-mail não pôde ser enviado:", e instanceof Error ? e.message : e);
+      }
+    }
     if (novos.length === 0) return;
     // Não atropela um processamento em curso nem o boot (seeds disputando CPU/RAM):
     // os avisos ficam pendentes e a próxima checagem — ou o boot — pega a fila.
