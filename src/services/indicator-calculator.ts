@@ -369,6 +369,53 @@ export function calculateIndicators(
     rlPor[p] = typeof v === "number" ? v : null;
   }
 
+  /**
+   * RETORNOS ANUALIZADOS, SOBRE BASE MÉDIA (18/08/2026, decisão do dono).
+   *
+   * ROE e ROA eram `lucro ÷ denominador` crus. Num balancete de maio isso é
+   * CINCO MESES de lucro sobre o patrimônio — um número que não compara com
+   * nada: nem com o ano anterior, nem com os pares da B3, que entram em LTM.
+   *
+   * Duas correções, e as duas seguem convenção de mercado:
+   *   1. ANUALIZA o numerador (× 365 ÷ dias do período). Exercício completo tem
+   *      fator 1, então TODO indicador anual continua idêntico — só período
+   *      parcial muda, que é exatamente onde estava errado.
+   *   2. Denominador MÉDIO entre o período anterior e o atual. Patrimônio é
+   *      estoque: quando ele muda muito dentro do período, o saldo final mente.
+   *      Caso real: a Belagro distribuiu R$ 6 mi de lucros em dez/25 e o PL caiu
+   *      de ~14,5 mi para ~8,5 mi — dividir o lucro do ano pelo PL do fim infla
+   *      o retorno porque o denominador encolheu DEPOIS de o lucro ser gerado.
+   *      Sem período anterior na série, usa o próprio (não há o que mediar).
+   */
+  const lucroPor: Record<string, number | null> = {};
+  const plPor: Record<string, number | null> = {};
+  const ativoPor: Record<string, number | null> = {};
+  for (const p of periodos) {
+    const n = (x: number | string | null): number | null => (typeof x === "number" ? x : null);
+    lucroPor[p] = n(computeIndicator("Lucro Líquido", bp, dre, p, {}));
+    plPor[p] = n(computeIndicator("Patrimônio Líquido", bp, dre, p, {}));
+    // "Ativo Total" NÃO é um indicador do template — é linha do BP. Buscá-lo
+    // por computeIndicator devolvia null e MATAVA o ROA (a identidade DuPont
+    // "Margem Líquida × Giro do Ativo = ROA" quebrou na suíte e denunciou).
+    ativoPor[p] = bpVal(bp, "Ativo Total", p);
+  }
+  const RETORNOS: Record<string, Record<string, number | null>> = {
+    "ROE (Retorno sobre Patrimônio Líquido)": plPor,
+    "ROA (Retorno sobre Ativos)": ativoPor,
+  };
+  const retornoDe = (nome: string, periodo: string): number | null => {
+    const base = RETORNOS[nome];
+    if (!base) return null;
+    const idx = periodosOrd.indexOf(periodo);
+    const antP = idx > 0 ? periodosOrd[idx - 1] : null;
+    const atual = base[periodo], ant = antP ? base[antP] : null;
+    const den = atual != null && ant != null ? (atual + ant) / 2 : atual;
+    const lucro = lucroPor[periodo];
+    if (lucro == null || !ehDenominadorValido(den) || den <= 0) return null;
+    const dias = diasPorPeriodo[periodo] || 365;
+    return (lucro * (365 / dias)) / den;
+  };
+
   return INDICADORES_TEMPLATE.map(template => {
     const valores: Record<string, number | string | null> = {};
     const status: Record<string, StatusLevel> = {};
@@ -384,6 +431,8 @@ export function calculateIndicators(
         // Base do YoY precisa ser receita DE VERDADE: coluna sem movimento
         // (resíduo ~1e-9) não pode virar "crescimento de 4e17%".
         val = cur != null && ehDenominadorValido(antV) ? (cur - antV) / Math.abs(antV) : null;
+      } else if (template.nome in RETORNOS) {
+        val = retornoDe(template.nome, periodo);
       } else {
         val = computeIndicator(template.nome, bp, dre, periodo, computed, diasPorPeriodo[periodo], extras?.custoCapital);
       }
