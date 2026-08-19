@@ -1,0 +1,162 @@
+/**
+ * BANCADA BELAGRO — a prova end-to-end que virou teste.
+ *
+ * Nasceu de um script de auditoria que rodou por ~37 minutos e achou a raiz de
+ * quatro defeitos. Como TESTE ela roda em milissegundos e nunca mais deixa
+ * nenhum deles voltar — que é a diferença entre auditar e ter bancada.
+ *
+ * A série é a real do IBR da Belagro (trading de grãos, safra março-julho):
+ * exercícios 2024 e 2025 fechados + 2026 em balancete mensal acumulado. É o
+ * formato que o acervo de clientes vai ter, então serve de canário para o
+ * caminho inteiro: acumulação, fluxo de caixa, prazos, alavancas e a régua de
+ * comparação anual.
+ *
+ * Cada número aqui reconcilia contra um documento. Se um falhar, o relatório
+ * publica número errado — não é teste de implementação, é teste de verdade.
+ */
+import { describe, it, expect } from "vitest";
+import type { BPLineItem, DRELineItem } from "../types/financial";
+import { buildIndirectCashFlow } from "./cash-flow-indirect";
+import { periodosQueAcumulam, periodosDeExercicioFechado } from "./balancete-conversao";
+import { medirProporcionalidade } from "./proporcionalidade";
+import { calcularValorCanonico } from "./valor-na-mesa";
+import { calculateIndicators } from "./indicator-calculator";
+import type { PeerComparisonRow } from "./peer-benchmark";
+
+const P = ["2024", "30/11/2025", "31/12/2025", "31/01/2026", "28/02/2026", "31/03/2026", "30/04/2026", "31/05/2026"];
+const v = (...x: number[]) => Object.fromEntries(P.map((p, i) => [p, x[i]]));
+const bpL = (conta: string, classificacao: string, nivel: number, ...x: number[]): BPLineItem =>
+  ({ conta, classificacao, nivel, editado: false, valores: v(...x) } as BPLineItem);
+
+const BP: BPLineItem[] = [
+  bpL("Ativo Total", "AT", 0, 75_810_000, 161_370_000, 121_200_000, 127_630_000, 152_770_000, 257_920_000, 387_800_000, 444_510_000),
+  bpL("Ativo Circulante", "AC", 1, 55_740_000, 134_720_000, 94_800_000, 101_300_000, 125_760_000, 227_450_000, 356_690_000, 413_250_000),
+  bpL("Caixa e Equivalentes de Caixa", "AF", 2, 2_102_807, 5_336_133, 997_963, 1_580_489, 1_002_489, 13_551_466, 17_188_501, 14_803_975),
+  bpL("Contas a Receber - CP", "AO", 2, 37_800_000, 99_550_000, 67_750_000, 71_100_000, 86_240_000, 140_600_000, 254_470_000, 285_010_000),
+  bpL("Passivo Total", "PT", 0, 75_810_000, 161_370_000, 121_200_000, 127_630_000, 152_770_000, 257_920_000, 387_800_000, 444_510_000),
+  bpL("Passivo Circulante", "PC", 1, 55_470_000, 125_070_000, 100_120_000, 105_230_000, 130_060_000, 243_140_000, 369_580_000, 427_290_000),
+  bpL("Fornecedores - CP", "PO", 2, 19_390_000, 75_120_000, 42_880_000, 44_980_000, 60_040_000, 166_340_000, 266_740_000, 322_280_000),
+  bpL("Empréstimos e Financiamentos - CP", "PF", 2, 27_920_000, 49_090_000, 56_390_000, 56_750_000, 62_960_000, 63_030_000, 62_780_000, 65_010_000),
+  bpL("Empréstimos e Financiamentos - LP", "PF", 2, 3_280_000, 8_200_000, 3_870_000, 3_870_000, 3_870_000, 3_870_000, 3_870_000, 3_870_000),
+  bpL("Patrimônio Líquido", "PL", 1, 14_468_543, 24_956_057, 16_101_635, 17_420_548, 17_730_314, 9_810_000, 13_250_000, 12_238_818),
+  bpL("Capital Social", "PL", 2, 2_600_000, 2_600_000, 2_600_000, 2_600_000, 2_600_000, 2_600_000, 2_600_000, 2_600_000),
+  bpL("Lucros/Prejuízos Acumulados", "PL", 2, 9_060_000, 11_510_000, 5_870_000, 13_500_000, 13_560_000, 13_560_000, 13_560_000, 13_560_000),
+  bpL("Resultado do Exercício", "PL", 2, 2_808_543, 10_846_057, 7_631_635, 1_320_548, 1_570_314, -6_350_000, -2_910_000, -3_921_182),
+];
+// Linhas de fecho DERIVADAS — sem elas o ativo não soma as folhas e a identidade
+// do FC não pode valer. Agregado ao lado do próprio componente conta em dobro:
+// foi o erro que travou a montagem desta bancada três vezes seguidas.
+const g = (c: string) => BP.find((l) => l.conta === c)!.valores;
+const resid = (a: string, ...b: string[]) =>
+  Object.fromEntries(P.map((p) => [p, g(a)[p] - b.reduce((s, x) => s + g(x)[p], 0)]));
+BP.push({ conta: "Ativo Não Circulante", classificacao: "ANC", nivel: 2, editado: false,
+  valores: resid("Ativo Total", "Ativo Circulante") } as BPLineItem);
+BP.push({ conta: "Outros Ativos Circulantes", classificacao: "AO", nivel: 2, editado: false,
+  valores: resid("Ativo Circulante", "Caixa e Equivalentes de Caixa", "Contas a Receber - CP") } as BPLineItem);
+BP.push({ conta: "Outras Obrigações - CP", classificacao: "PO", nivel: 2, editado: false,
+  valores: resid("Passivo Circulante", "Fornecedores - CP", "Empréstimos e Financiamentos - CP") } as BPLineItem);
+BP.push({ conta: "Outras Obrigações - LP", classificacao: "PNC", nivel: 2, editado: false,
+  valores: Object.fromEntries(P.map((p) => [p,
+    g("Passivo Total")[p] - g("Passivo Circulante")[p] - g("Patrimônio Líquido")[p] - g("Empréstimos e Financiamentos - LP")[p]])) } as BPLineItem);
+
+const dreL = (conta: string, ...x: number[]): DRELineItem => ({ conta, subtotal: false, editado: false, valores: v(...x) });
+const DRE: DRELineItem[] = [
+  dreL("Receita Líquida", 592_042_364, 732_757_417, 741_125_792, 3_122_111, 22_188_167, 88_866_310, 228_957_693, 328_504_142),
+  dreL("Custo Operacional", -547_420_000, -678_140_000, -685_050_000, -2_840_000, -18_370_000, -87_230_000, -212_550_000, -306_710_000),
+  dreL("EBITDA", 15_440_000, 14_640_000, 13_800_000, -1_040_000, 315_000, -7_790_000, -1_450_000, -4_120_000),
+  dreL("Despesas Financeiras", -3_650_000, -6_600_000, -8_520_000, -4_410_000, -5_150_000, -5_960_000, -6_710_000, -7_250_000),
+  dreL("Lucro Líquido", 11_581_723, 9_669_025, 6_454_351, 1_156_428, 1_573_345, -6_349_796, -2_909_696, -3_918_151),
+];
+// 31/12/2025 é o FECHAMENTO do exercício: janela declarada de 01/01 a 31/12.
+const BALS = P.filter((p) => /^\d{2}\//.test(p))
+  .map((p) => (p === "31/12/2025" ? { periodo: p, periodoInicio: "01/01/2025" } : { periodo: p }));
+const ACUM = periodosQueAcumulam({ dre: DRE, balancetes: BALS });
+const FECH = periodosDeExercicioFechado({ periodos: P, balancetes: BALS });
+const ULT = "31/05/2026";
+
+describe("bancada Belagro · as duas listas", () => {
+  it("31/12 é ACUMULADO e FECHADO ao mesmo tempo — elas se sobrepõem de propósito", () => {
+    expect(ACUM).toContain("31/12/2025");
+    expect(FECH).toEqual(["2024", "31/12/2025"]);
+  });
+
+  it("janeiro acumula — sem ele, fevereiro herda o fantasma", () => {
+    expect(ACUM).toContain("31/01/2026");
+  });
+});
+
+describe("bancada Belagro · fluxo de caixa", () => {
+  const fc = buildIndirectCashFlow(BP, DRE, P, ACUM)!;
+  const plug = (p: string) => fc.fcf.find((l) => l.nome.startsWith("Dividendos e ajustes"))?.valores[p] ?? 0;
+
+  it("dezembro/2025 é a saída REAL, e bate com ΔLucros Acumulados no balanço", () => {
+    expect(plug("31/12/2025")).toBeCloseTo(-5_639_748, 0);
+    expect(plug("31/12/2025")).toBeCloseTo(5_870_000 - 11_510_000, -3);
+  });
+
+  it("fevereiro/2026 dá −107.151, não −1.263.579", () => {
+    expect(plug("28/02/2026")).toBeCloseTo(-107_151, -1);
+  });
+
+  it("abril e maio/2026 ficam em ~zero (eram +6,35 mi e +2,91 mi)", () => {
+    expect(Math.abs(plug("30/04/2026"))).toBeLessThan(5_000);
+    expect(Math.abs(plug("31/05/2026"))).toBeLessThan(5_000);
+  });
+
+  it("a prova de fechamento bate em TODAS as colunas", () => {
+    expect(fc.prova.filter((x) => x.fecha).length).toBe(fc.prova.length);
+  });
+});
+
+describe("bancada Belagro · indicadores e alavancas", () => {
+  const inds = calculateIndicators(BP, DRE, P, undefined, undefined, ACUM);
+  const val = (n: string) => inds.find((i) => i.nome === n)?.valores[ULT];
+  const row = (indicador: string, p50: number, higherIsBetter: boolean): PeerComparisonRow =>
+    ({ indicador, valor: 0, p25: 0, p50, p75: 0, percentil: 50, level: "setor", segment: "Agropecuária", count: 6, higherIsBetter });
+  const vc = calcularValorCanonico(inds as never, P,
+    [row("Prazo Médio Contas a Receber", 33, false), row("Margem EBITDA", 0.0696, true)],
+    DRE as never, { segmento: null, periodo: null }, ACUM, FECH)!;
+  const alav = (t: string) => vc.alavancas.find((a) => a.titulo.startsWith(t))!;
+
+  it("PMR de 130 dias — base de 150, a mesma que dispara a alavanca", () => {
+    expect(val("Prazo Médio Contas a Receber")).toBe(130);
+  });
+
+  it("Dívida Líquida/EBITDA é N/M com EBITDA negativo, nunca um múltiplo", () => {
+    expect(val("Dívida Líquida/EBITDA")).toBe("N/M");
+  });
+
+  it("alavanca de recebíveis RECONCILIA com o saldo do balanço", () => {
+    const receitaDia = 328_504_142 / 150;
+    const peloBalanco = 285_010_000 - 33 * receitaDia;
+    expect(Math.abs(alav("Receber").valor - peloBalanco) / peloBalanco).toBeLessThan(0.003);
+    expect(alav("Receber").valor).toBeCloseTo(212_432_678, -3); // e não 87,3 mi
+  });
+
+  it("alavanca de margem usa o exercício FECHADO de 2025 — nem 2024, nem extrapolação", () => {
+    expect(alav("Levar a margem").valor).toBeCloseTo(60_877_332, -3);
+    expect(alav("Levar a margem").memoria).toContain("741,1");
+  });
+});
+
+describe("bancada Belagro · proporcionalidade", () => {
+  const pr = medirProporcionalidade(DRE as never, P, ACUM, FECH)!;
+  const ritmo = (c: string) => pr.linhas.find((l) => l.conta === c)!.ritmo;
+
+  it("compara contra 31/12/2025, não contra 2024", () => {
+    expect(pr.periodoFechado).toBe("31/12/2025");
+  });
+
+  it("receita e custo estão NO ritmo — a margem negativa não é atraso de safra", () => {
+    expect(ritmo("Receita Líquida")).toBeCloseTo(1.06, 2);
+    expect(ritmo("Custo Operacional")).toBeCloseTo(1.07, 2);
+    expect(pr.desviantes).not.toContain("Receita Líquida");
+  });
+
+  it("EBITDA e despesa financeira desviam — é aí que a trava vale", () => {
+    expect(ritmo("EBITDA")).toBeCloseTo(-0.72, 2);
+    expect(ritmo("Despesas Financeiras")).toBeCloseTo(2.04, 2);
+    expect(pr.desviantes).toContain("EBITDA");
+    expect(pr.desviantes).toContain("Despesas Financeiras");
+  });
+});
