@@ -456,6 +456,8 @@ export async function generateAnalysis(
    *  e à conta regressiva. Sem ela, `/365` num período de 150 dias subestima a
    *  venda diária em 2,43× e infla o fôlego de caixa na mesma proporção. */
   periodosYTD?: string[],
+  /** Teste de proporcionalidade da janela YTD — trava veredicto de fluxo. */
+  proporcionalidade?: { temDesvio: boolean; desviantes: string[]; leitura: string } | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
   // Ordem CRONOLÓGICA uma vez, para TODO o prompt (séries de indicadores, bloco da DRE,
   // KPIs, estágio) — dados.periodos pode vir na ordem dos documentos (ex.: 2022, 2020, 2021).
@@ -495,6 +497,16 @@ export async function generateAnalysis(
         (periodosYTD ?? []).includes(ultimoPeriodo) ? diasYTD(ultimoPeriodo) : 365,
       )
     : null;
+  // PROPORCIONALIDADE DA JANELA — trava de veredicto. O acumulado do ano corrente
+  // é comparado ao último exercício FECHADO linha a linha; a trava vale para as
+  // linhas que DESVIAM, não para a janela inteira. Na Belagro receita e custo
+  // estão no ritmo e o desvio está em EBITDA e despesa financeira — medir
+  // concentração de receita apontava o lado errado.
+  const propBlock = proporcionalidade?.temDesvio
+    ? `
+PROPORCIONALIDADE DA JANELA (medida pelo MOTOR contra o último exercício fechado — FATO): ${proporcionalidade.leitura}
+REGRA OBRIGATÓRIA: para as linhas FORA DO RITMO (${proporcionalidade.desviantes.join(", ")}) e para todo indicador derivado delas, NÃO afirme deterioração, prejuízo ou incapacidade apoiado SOMENTE na coluna acumulada: cite o valor do exercício fechado ao lado e diga que a causa (sazonalidade × deterioração) não é determinável com esta base. Para as linhas NO RITMO e para indicadores de BALANÇO (endividamento, liquidez, patrimônio, estrutura de dívida), DIAGNOSTIQUE NORMALMENTE — são comparações válidas e o relatório perde valor se você se calar sobre elas.`
+    : "";
   const regressivaBlock = contaRegressiva
     ? `\nCONTA REGRESSIVA DE CAIXA (calculada pelo MOTOR — use como VERDADE, NÃO recalcule): ${contaRegressiva.leitura}`
     : "";
@@ -526,7 +538,7 @@ Você recebe VÁRIAS fontes. USE TODAS e CRUZE-AS — o valor está em conectar 
 
 [1] INDICADORES JÁ CALCULADOS E AUDITADOS (determinísticos — NÃO recalcule, apenas INTERPRETE):
 ${det.tabela || "(indicadores indisponíveis)"}
-${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${doresBlock}${estagioBlock}${regressivaBlock}${baseRetornoBlock}${canonicoBlock}
+${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${doresBlock}${estagioBlock}${propBlock}${regressivaBlock}${baseRetornoBlock}${canonicoBlock}
 
 IMPORTANTE — olhe o HISTÓRICO: leia SEMPRE a evolução multi-ano (tendência entre os períodos), nunca um ano isolado. A força de um IBR está na trajetória.
 

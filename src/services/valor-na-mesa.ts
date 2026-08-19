@@ -87,9 +87,6 @@ export function calcularValorCanonico(
   const ytd = new Set(periodosYTD ?? []);
   // Mesma regra do indicator-calculator: balancete usa a base da SUA periodicidade.
   const diasBase = ytd.has(ult) ? diasYTD(ult) : diasDoPeriodo(ult, ord.filter((x) => !ytd.has(x) || x === ult));
-  // Fator de anualização das alavancas de FLUXO (margem): num período parcial o
-  // ganho medido cobre só `diasBase` dias, e o texto promete "por ano".
-  const anualiza = 365 / (diasBase || 365);
   const val = (nome: string): number | null => {
     const v = indicadores.find((i) => i.nome === nome)?.valores?.[ult];
     return typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -101,6 +98,20 @@ export function calcularValorCanonico(
 
   const receita = val("Receita Líquida");
   if (receita == null || receita <= 0) return null;
+  // BASE ANUAL da alavanca de margem. Anualizar a receita parcial por 365/dias
+  // pressupõe distribuição UNIFORME — premissa falsa em negócio sazonal: na
+  // Belagro, 73% da receita do YTD está em dois dos cinco meses, então os meses
+  // restantes não repetem o ritmo. Quando existe exercício FECHADO na série, ele
+  // é a base honesta; só na falta dele se recorre à extrapolação (declarada).
+  const anual = (() => {
+    for (let i = ord.length - 1; i >= 0; i--) {
+      const p = ord[i];
+      if (ytd.has(p)) continue;                       // coluna parcial não serve
+      const v = indicadores.find((x) => x.nome === "Receita Líquida")?.valores?.[p];
+      if (typeof v === "number" && Number.isFinite(v) && v > 0) return { receita: v, periodo: p, extrapolada: false };
+    }
+    return { receita: receita * (365 / (diasBase || 365)), periodo: ult, extrapolada: true };
+  })();
   const receitaDia = receita / diasBase;
   // Custo diário de mercadoria (base do estoque e das compras): Custo Operacional da
   // DRE do último período. Sem ele, as alavancas de estoque/fornecedores não disparam.
@@ -154,11 +165,11 @@ export function calcularValorCanonico(
     const mg = val("Margem EBITDA"), p50 = mediana("Margem EBITDA");
     if (mg != null && p50 != null && p50 - mg >= MIN_GAP_MARGEM) {
       const gap = p50 - mg;
-      const valor = Math.round(gap * receita * anualiza);
+      const valor = Math.round(gap * anual.receita);
       if (valor >= MIN_VALOR) alavancas.push({
         origem: "motor", tipo: "margem", valor,
         titulo: "Levar a margem operacional à mediana do setor",
-        memoria: `A margem EBITDA é de ${(mg * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% contra ${(p50 * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% na mediana dos concorrentes. Fechar essa diferença ${anualiza > 1 ? `sobre a receita anualizada de ${reais(receita * anualiza)} (${reais(receita)} medidos em ${diasBase} dias)` : `sobre a receita de ${reais(receita)}`} recupera cerca de ${reais(valor)} de resultado por ano — direcional, a validar na árvore de custos.`,
+        memoria: `A margem EBITDA é de ${(mg * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% contra ${(p50 * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% na mediana dos concorrentes. Fechar essa diferença sobre a receita de ${reais(anual.receita)}${anual.extrapolada ? ` (extrapolada dos ${reais(receita)} medidos em ${diasBase} dias — não há exercício fechado na série)` : ` do exercício fechado em ${anual.periodo}`} recupera cerca de ${reais(valor)} de resultado por ano — direcional, a validar na árvore de custos.`,
       });
     }
   }

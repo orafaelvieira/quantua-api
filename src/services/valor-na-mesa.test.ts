@@ -119,10 +119,20 @@ describe("valor-na-mesa — período acumulado (balancete)", () => {
     expect(a.memoria).toContain("R$ 2,2 milhões"); // e não "R$ 900 mil"
   });
 
-  it("a alavanca de margem é ANUALIZADA quando o período é parcial", () => {
-    const r = calcularValorCanonico(YTD_INDS, YTD_P, YTD_ROWS, [], BASE, ["31/05/2026"])!;
+  it("a alavanca de margem usa a receita do EXERCÍCIO FECHADO, não a extrapolada", () => {
+    const inds = YTD_INDS.map((i) => i.nome === "Receita Líquida"
+      ? { ...i, valores: { "31/12/2025": 741_125_792, "31/05/2026": 328_504_142 } } : i);
+    const r = calcularValorCanonico(inds, YTD_P, YTD_ROWS, [], BASE, ["31/05/2026"])!;
     const gap = 0.0696 - -0.0125;
-    expect(pega(r, "Levar a margem").valor).toBeCloseTo(Math.round(gap * 328_504_142 * (365 / 150)), -2);
+    // 741,1 mi (fechamento) e NÃO 328,50 × 365/150 = 799,3 mi — extrapolar
+    // pressupõe distribuição uniforme, falsa em negócio sazonal.
+    expect(pega(r, "Levar a margem").valor).toBeCloseTo(Math.round(gap * 741_125_792), -2);
+    expect(pega(r, "Levar a margem").memoria).toContain("exercício fechado");
+  });
+
+  it("sem exercício fechado na série, extrapola e DECLARA que extrapolou", () => {
+    const r = calcularValorCanonico(YTD_INDS, ["31/05/2026"], YTD_ROWS, [], BASE, ["31/05/2026"])!;
+    expect(pega(r, "Levar a margem").memoria).toContain("extrapolada");
   });
 
   it("o publicado (R$ 87,3 mi) era receita/365 — a régua nova é a do prazo", () => {

@@ -9,6 +9,7 @@ import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../s
 import { parseDocument, dadosExtraidosToRaw, extrairTextoLayoutPDF, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { parseBalanceteTexto, pareceBalancete, type BalanceteParseado } from "../services/balancete-parser";
 import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal, periodosQueAcumulam } from "../services/balancete-conversao";
+import { medirProporcionalidade } from "../services/proporcionalidade";
 import { parseBalanceteTabular, pareceBalanceteTabular, ehArquivoTabular, csvParaMatriz, xlsxParaMatriz } from "../services/balancete-tabular";
 import { pdfEscaneado, ocrBalancete, ocrBalanceteVision, parseDaMatrizOcr, contarNaoFecham, avisoNaoFecham } from "../services/balancete-ocr";
 import { middlewareContextoIA, enriquecerContextoIA, resolverAutorIA, registrarReaproveitamentoIA, ETAPAS } from "../services/ai-usage";
@@ -1049,6 +1050,12 @@ async function runAnalysisBackground(
       // do valor na mesa e à conta regressiva (sem ela, /365 num período de 150 dias).
       (Array.isArray(dados?.arvoresBalancete) ? dados.arvoresBalancete : [])
         .map((a: { periodo?: string }) => a?.periodo).filter((x: unknown): x is string => typeof x === "string"),
+      // CALCULADA NO CONSUMO, nao lida do persistido: o PUT da DRE altera as linhas
+      // sem recalcular, e a medida velha entrava no prompt carimbada como FATO.
+      // Tambem cobre IBR gravado antes desta versao, que cairia em null calado.
+      medirProporcionalidade(dados?.dre ?? [], periodos,
+        periodosQueAcumulam({ dre: dados?.dre ?? [], balancetes: dados?.balancetes, arvoresBalancete: dados?.arvoresBalancete }),
+        Array.isArray(dados?.balancetes) ? dados.balancetes : null),
     );
     const resultado = {
       ...analise.result,
@@ -2042,6 +2049,10 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       fluxoCaixa: buildIndirectCashFlow(structuredBP, structuredDRE, allPeriodos,
         // NAO e' periodosYTDProc: encerramento usa MOVIMENTO e janeiro nao acumula.
         periodosQueAcumulam({ dre: structuredDRE, balancetes, arvoresBalancete })),
+      // A janela YTD esta' no ritmo do ultimo exercicio fechado, LINHA A LINHA?
+      // E' o que trava veredicto de fluxo — e nomeia QUAL linha desvia.
+      proporcionalidade: medirProporcionalidade(structuredDRE, allPeriodos,
+        periodosQueAcumulam({ dre: structuredDRE, balancetes, arvoresBalancete }), balancetes),
       version: 2,
       // O OCR de balancete é IA e entra no custo da extração ([[registrar-custo-ia]]).
       custoExtracao: {
@@ -2770,6 +2781,9 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
     dados.bp ?? [], dados.dre ?? [], periodos,
     periodosQueAcumulam({ dre: dados.dre ?? [], balancetes: (dados as any)?.balancetes, arvoresBalancete: arvoresBalanceteRefold }),
   ); // FC acompanha o refold (grátis)
+  (dados as any).proporcionalidade = medirProporcionalidade(dados.dre ?? [], periodos,
+    periodosQueAcumulam({ dre: dados.dre ?? [], balancetes: (dados as any)?.balancetes, arvoresBalancete: arvoresBalanceteRefold }),
+    Array.isArray((dados as any)?.balancetes) ? (dados as any).balancetes : null);
   // Pontes acompanham o refold pelo MESMO motivo do FC: reclassificar conta
   // muda os números — a decomposição não pode ficar velha ao lado deles.
   {

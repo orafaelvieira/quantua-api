@@ -460,7 +460,13 @@ export function periodosQueAcumulam(dados: {
     if (p && !bals.some((b) => String(b?.periodo ?? "") === p)) bals.push({ periodo: p });
   }
   const dre = Array.isArray(dados?.dre) ? dados.dre : [];
-  const temValor = (p: string) => dre.some((l) => typeof l?.valores?.[p] === "number");
+  // MATERIAL, nao apenas presente: `0` e' number e passava na guarda, entao a
+  // exclusao de "DRE nao publicada" nunca disparava — coluna recusada entrava
+  // como acumulada e o FC subtraia 0 menos o YTD anterior (prejuizo fabricado).
+  const temValor = (p: string) => dre.some((l) => {
+    const v = l?.valores?.[p];
+    return typeof v === "number" && Number.isFinite(v) && Math.abs(v) >= 0.005;
+  });
   const out: string[] = [];
   for (const b of bals) {
     const p = String(b?.periodo ?? "");

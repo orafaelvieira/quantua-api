@@ -37,3 +37,20 @@ describe("periodosQueAcumulam", () => {
     expect(periodosQueAcumulam({ dre, balancetes: [{ periodo: "2024" }] })).toEqual([]);
   });
 });
+
+// Achado da revisão adversarial: `0` é number e derrotava a guarda de "DRE não
+// publicada" — a coluna recusada entrava como acumulada e o FC subtraía 0 menos
+// o YTD anterior, fabricando prejuízo do tamanho do ano. Bug que chegou a produção.
+describe("periodosQueAcumulam · DRE recusada grava ZERO nos subtotais", () => {
+  it("coluna com subtotais zerados não conta como DRE publicada", () => {
+    const dre = [{ conta: "Lucro Líquido", valores: { "30/11/2025": 9_669_025, "31/12/2025": 0 } }];
+    expect(periodosQueAcumulam({ dre, balancetes: [{ periodo: "30/11/2025" }, { periodo: "31/12/2025" }] }))
+      .toEqual(["30/11/2025"]);
+  });
+
+  it("valor material negativo continua valendo — prejuízo é resultado, não ausência", () => {
+    const dre = [{ conta: "Lucro Líquido", valores: { "30/11/2025": 9_669_025, "31/12/2025": -3_214_674 } }];
+    expect(periodosQueAcumulam({ dre, balancetes: [{ periodo: "30/11/2025" }, { periodo: "31/12/2025" }] }))
+      .toEqual(["30/11/2025", "31/12/2025"]);
+  });
+});
