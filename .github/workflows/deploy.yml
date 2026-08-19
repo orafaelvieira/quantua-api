@@ -75,6 +75,14 @@ jobs:
           # comando ("Cannot update environment variable ... different type").
           # Duas fases: 1) desfaz o mapeamento (vira no-op com "|| true" quando
           # já não existe); 2) o deploy define a env var declarada.
+          #
+          # DELIMITADOR CUSTOMIZADO "^@^" (19/08/2026): `--update-env-vars` separa
+          # pares por VÍRGULA por padrão, e passamos a injetar BUILD_SHA/BUILD_TIME
+          # junto da chave. O prefixo ^@^ troca o separador para "@" — nem a chave
+          # da Anthropic (sk-ant-…, base64url) nem o SHA nem o timestamp ISO contêm
+          # "@", então nenhum valor pode partir o argumento ao meio.
+          # As aspas em volta do argumento inteiro são obrigatórias: sem elas, um
+          # espaço em qualquer valor faria o shell dividir o parâmetro.
           gcloud run services update quantua-api \
             --region=southamerica-east1 \
             --remove-secrets=ANTHROPIC_API_KEY || true
@@ -84,4 +92,4 @@ jobs:
             --timeout=1800 \
             --min-instances=1 \
             --max-instances=1 \
-            --update-env-vars=ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+            --update-env-vars="^@^ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY@BUILD_SHA=${{ github.sha }}@BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)"

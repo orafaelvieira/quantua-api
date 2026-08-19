@@ -81,7 +81,21 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 // Marcador de build/deploy — PÚBLICO, pra verificar deploy sem painel DO nem login.
 // `build` é bumpado a cada deploy relevante; os contadores de pares confirmam que o
 // reimport rodou (ex.: pmPagamentoLines > 0 prova que o xlsx novo entrou).
-const BUILD_VERSION = "2026-08-18.v222.unidade-declarada";
+/**
+ * MARCADOR DE BUILD — derivado do deploy, não escrito à mão.
+ *
+ * Era uma string literal bumpada num commit `chore(deploy)` à parte, e por isso
+ * vivia defasada: em 19/08/2026 o repo dizia "v154" (21/07) enquanto produção
+ * respondia "v222" (18/08), e nenhum dos dois correspondia ao código que estava
+ * rodando. Um marcador que mente é pior que marcador nenhum — quem confere um
+ * deploy por ele recebe falso negativo e vai caçar bug que não existe.
+ *
+ * Agora vem do commit, injetado pelo workflow no Cloud Run. Sem as env vars
+ * (desenvolvimento local) o valor diz isso em vez de fingir uma versão.
+ */
+const BUILD_VERSION = process.env.BUILD_SHA
+  ? `${(process.env.BUILD_TIME ?? "").slice(0, 10) || "?"}.${process.env.BUILD_SHA.slice(0, 7)}`
+  : "local (sem deploy)";
 
 // Sonda de diagnóstico dos restarts: health-check/deploy manda SIGTERM (dá tempo de
 // anotar no snapshot); OOM manda SIGKILL (não aparece). A anotação só ocorre com o
