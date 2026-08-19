@@ -138,6 +138,14 @@ describe("ehNomeDeApuracao — régua conservadora", () => {
     "Resultado Operacional do Exercício", // palavra própria no meio: é subtotal, não apuração
     "RESULTADO ACUMULADO",
     "Resultado Bruto",
+    // TERCEIRO SETOR (19/08/2026, caso Instituto AOCP). A tentação, ao ampliar
+    // o vocabulário do P4, é ampliar TAMBÉM esta régua — e aí a raiz "SUPERÁVIT
+    // / DÉFICIT DO EXERCÍCIO" vira grupo de apuração, sai da DRE e a
+    // demonstração inteira DESAPARECE (todas as folhas têm saldo 0,00 no
+    // encerramento, então `temEconomiaPropria` não a salva). O vocabulário novo
+    // vale só dentro do P4.
+    "SUPERÁVIT / DÉFICIT DO EXERCÍCIO",
+    "Superávit (Déficit) Acumulado",
   ])("NÃO confunde %s", (n) => expect(ehNomeDeApuracao(n)).toBe(false));
 });
 
@@ -159,6 +167,44 @@ describe("P4 — DRE do exercício encerrado só é verde se reconciliar com o P
     const p4 = ler(inflado).provas.dreEncerrada;
     expect(p4?.ok).toBe(false);
     expect(p4?.gap).toBeGreaterThan(p4!.limite);
+  });
+
+  /**
+   * NÃO-MEDIDO REPROVA (19/08/2026, caso Instituto AOCP). Os três testes abaixo
+   * falhavam antes do conserto: a prova aprovava por LISTA VAZIA de âncoras, e
+   * era exatamente nessa condição que a DRE invertida de R$ −84.234.066,99 foi
+   * publicada com selo verde.
+   */
+  it("PL do TERCEIRO SETOR é âncora válida: Superávit/Déficit Acumulado", () => {
+    const terceiroSetor: L[] = ENCERRADO.map((l) =>
+      l[0] === "02.3.4.01" ? (["02.3.4.01", "Superávit (Déficit) Acumulado", l[2], l[3], l[4], l[5]] as L) : l,
+    );
+    const p4 = ler(terceiroSetor).provas.dreEncerrada;
+    expect(p4?.verificavel).toBe(true);
+    expect(p4?.ancora).toBe("Superávit (Déficit) Acumulado");
+    expect(p4?.declaradoPL).toBeCloseTo(300, 2);
+    expect(p4?.ok).toBe(true);
+  });
+
+  it("SEM âncora de resultado no PL a prova é NÃO-VERIFICÁVEL e REPROVA", () => {
+    const semAncora: L[] = ENCERRADO.map((l) =>
+      l[0]?.startsWith("02.3.4") ? ([l[0], "Conta Patrimonial", l[2], l[3], l[4], l[5]] as L) : l,
+    );
+    const p4 = ler(semAncora).provas.dreEncerrada;
+    expect(p4).toBeDefined();
+    expect(p4?.verificavel).toBe(false);
+    expect(p4?.ancora).toBeNull();
+    expect(p4?.ok).toBe(false); // ← era `true` por curto-circuito de lista vazia
+  });
+
+  it("encerramento SEM saldo anterior ainda produz a prova, e ela reprova", () => {
+    // Antes o P4 nem existia (`temSaldosAnteriores` barrava a criação), e o
+    // consumidor lia ausência como aprovação.
+    const semAnterior: L[] = ENCERRADO.map((l) => [l[0], l[1], "0.00", l[3], l[4], l[5]] as L);
+    const p4 = ler(semAnterior).provas.dreEncerrada;
+    expect(p4).toBeDefined();
+    expect(p4?.verificavel).toBe(false);
+    expect(p4?.ok).toBe(false);
   });
 
   it("balancete CORRENTE (não encerrado) não recebe a prova P4 — a DRE vem do saldo", () => {

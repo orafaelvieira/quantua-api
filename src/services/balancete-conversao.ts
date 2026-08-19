@@ -15,10 +15,14 @@
  *     credora: atual = anterior + C − D (com o sinal do saldo invertendo a
  *     natureza efetiva: devedora com saldo negativo está credora);
  *  2. sufixo D/C declarado na coluna de saldo;
- *  3. HERANÇA da convenção de impressão do pai × sinal do saldo — cobre as
+ *  3. NOME DA PRÓPRIA CONTA (`naturezaPeloNome`) — SÓ na conta ENCERRADA
+ *     (saldo zerado nos dois retratos E débito == crédito) e SÓ dentro de grupo
+ *     de resultado: é o único estado em que os degraus 1, 2 e 4 são todos
+ *     cegos por construção (caso Instituto AOCP, 19/08/2026);
+ *  4. HERANÇA da convenção de impressão do pai × sinal do saldo — cobre as
  *     contas SEM movimento no período (Belagro: "Descontos Obtidos" +54.131,14
  *     no grupo credor; "(-) ICMS sobre compras" −577.416,75 no grupo devedor);
- *  4. direção do movimento; 5. nome.
+ *  5. direção do movimento.
  *
  * HIERARQUIA por PREFIXO da classificação (não por contagem de segmentos) —
  * cobre o Protheus, onde "1.1.11 CAIXA" é FILHO de "1.1.1 DISPONIVEL" — com
@@ -80,9 +84,28 @@ export interface ProvasBalancete {
    * fato — e não pode receber selo verde ("verde só com prova").
    *
    * Só existe quando `exercicioEncerrado` (no balancete corrente a DRE vem do
-   * SALDO das contas de resultado, que é prova direta).
+   * SALDO das contas de resultado, que é prova direta) — e aí existe SEMPRE,
+   * inclusive quando não há o que medir.
+   *
+   * NÃO-MEDIDO REPROVA (19/08/2026, caso Instituto AOCP). Antes, `ok` nascia
+   * `true` quando a lista de âncoras do PL saía vazia — e saiu vazia justamente
+   * no documento em que a DRE estava inteira invertida, porque o filtro não
+   * conhecia o vocabulário do terceiro setor ("Superávit (Deficit) Acumulado").
+   * O gap de R$ 84.234.066,99 contra um limite de R$ 5.000 foi APROVADO por
+   * lista vazia, e a trava que existia para bloquear a publicação nunca
+   * disparou. `verificavel` separa "medi e passou" de "não tinha o que medir",
+   * e só o primeiro é verde — a mesma régua que o P0 já usa.
+   *
+   * `ancora` traz o nome da conta do PL contra a qual a DRE foi conferida: sem
+   * ele, uma mudança de veredito no A/B do corpus não tem como ser explicada.
+   *
+   * `sinalUnico` é o arame de tropeço: DRE de exercício encerrado com duas ou
+   * mais seções, TODAS do mesmo sinal, e ao menos uma que se diz receita. Não
+   * existe demonstração assim — é leitura que não separou receita de gasto.
+   * Só REPROVA, nunca aprova (a exigência de uma seção-receita é o que impede o
+   * falso alarme na entidade pré-operacional, que só tem despesa).
    */
-  dreEncerrada?: { derivado: number; declaradoPL: number; gap: number; limite: number; ok: boolean };
+  dreEncerrada?: { derivado: number; declaradoPL: number; gap: number; limite: number; verificavel: boolean; ancora: string | null; sinalUnico: boolean; ok: boolean };
   /**
    * P5 — O QUE O DOCUMENTO REDECLARA NO RODAPÉ (17/08/2026, caso Belagro).
    *
@@ -214,6 +237,87 @@ export function convencaoImpressao(l: LinhaBalancete): "D" | "C" | null {
 
 const opor = (n: "D" | "C"): "D" | "C" => (n === "D" ? "C" : "D");
 
+// ── natureza pelo NOME da própria conta (degrau 3) ───────────────────────────
+
+/**
+ * NATUREZA PELO VOCABULÁRIO DA PRÓPRIA CONTA (19/08/2026 — caso Instituto AOCP).
+ *
+ * Existe para UM estado, e só para ele: a conta ENCERRADA. No balancete de
+ * encerramento a apuração zera as contas de resultado, e a linha chega com
+ * saldo anterior 0,00, saldo atual 0,00 e débito == crédito. Nesse estado os
+ * outros degraus são cegos POR CONSTRUÇÃO — a equação do documento não decide
+ * (movimento líquido zero), não há sufixo D/C (o saldo é zero) e a direção do
+ * movimento não existe (as duas colunas são iguais). Sobrava a herança, que no
+ * IAOCP desceu "D" da raiz "SUPERÁVIT / DÉFICIT DO EXERCÍCIO" até as folhas e
+ * publicou a receita de R$ 44.233.132,32 como −44.233.132,32, com a DRE inteira
+ * negativa (soma −84.234.066,99 = a própria coluna de débito da raiz).
+ *
+ * Três famílias, e a ordem importa:
+ *
+ *  · REDUTORA vence sempre — "DEDUÇÃO DA RECEITA BRUTA" tem a palavra RECEITA e
+ *    é conta devedora. Sem esta precedência o ISSQN de R$ 1.326.898,10 entra
+ *    somando (erro medido de R$ 2.653.796,20 no resultado do IAOCP);
+ *  · CONTRADIÇÃO = MUDO. "Recuperação de Despesas" e "Sobras de Gastos com
+ *    Concursos" falam as duas línguas: quem decide é o pai, que acerta. Chutar
+ *    aqui seria pior que deferir.
+ *
+ * PROIBIDOS no léxico, de propósito: LUCRO (aparece em "Contribuição Social
+ * sobre o Lucro Líquido", que é despesa), RESULTADO ("Resultado de Equivalência
+ * Patrimonial" é conta legítima dos dois lados) e DOAÇÃO ("Doações a APAE" é
+ * despesa; "Doações Recebidas" é receita).
+ *
+ * null = o nome não fala. Não é "indefinido por preguiça": é a resposta certa
+ * para a maioria das contas, e o degrau seguinte assume.
+ */
+/**
+ * CONSTRUÇÃO DE INCIDÊNCIA — apagada do nome ANTES de consultar as famílias
+ * (revisão adversarial, 19/08/2026). "<algo> sobre receita/vendas/faturamento/
+ * serviços" descreve a BASE DE CÁLCULO, não a natureza: "ICMS sobre vendas",
+ * "PIS SOBRE RECEITA", "COFINS S/ FATURAMENTO" e "Comissões sobre vendas" são
+ * saída, e a família RECEITA os capturava pela palavra da base.
+ *
+ * Medido no corpus: 21 nomes distintos, 86 linhas. No "SABRINA - Balancete
+ * 2020" a seção "DEDUÇÕES DA RECEITA BRUTA" ia de −16.242,87 (certo) para
+ * −2.575,97, erro de 13.666,90 — MENOR que o limite do P4 do próprio documento
+ * (18.721,98), ou seja, a prova não pegaria.
+ *
+ * APAGAR é melhor que marcar como gasto: numa corretora "Comissões sobre
+ * vendas" É receita. Sem a base no nome, a conta fica MUDA e quem decide é o
+ * pai — o mesmo princípio da contradição.
+ */
+const RE_INCIDENCIA = /\b(SOBRE|S\.?\/)\s*(AS?|OS?)?\s*(RECEITAS?|VENDAS?|FATURAMENTO|SERVICOS?)\b/g;
+
+const LEX_REDUTORA =
+  /^\(?\s*-|\bDEDUC(AO|OES)\b|\bABATIMENTO|\bDEVOLUC|\bCANCELAMENTO|\bCANCELAD|\bDESCONTOS?\s+CONCEDIDOS?\b|\bNAO\s+GANHOS?\b|\bIMPOSTOS?\s+(S\/?|SOBRE\s+|INCIDENTES?\s+)/;
+// \bNAO GANHOS\b entrou na REDUTORA em vez de tirar \bGANHOS?\b da receita
+// (19/08/2026): "PRÊMIOS NÃO GANHOS" é constituição de PPNG — dedução de
+// prêmio — mas tirar GANHOS deixava "PRÊMIOS GANHOS" (R$ 271.461.440,53 na
+// seguradora do corpus) MUDO, herdando débito e entrando NEGATIVO. Trocar uma
+// família grande de receita por duas linhas ambíguas seria péssimo negócio.
+const LEX_RECEITA =
+  /\bRECEITAS?\b|\bRENDIMENTOS?\b|\bRENDTO|\bFATURAMENTO\b|\bVENDAS?\b|\bSOBRAS?\b|\bRECUPERAC|\bSUBVENC|\bDESCONTOS?\s+OBTIDOS?\b|\bGANHOS?\b|\bREVERS(AO|OES)\b|\bSUPERAVITS?\b/;
+const LEX_GASTO =
+  /\bDESPESAS?\b|\bCUSTOS?\b|\bGASTOS?\b|\bPERDAS?\b|\bIMPOSTOS?\b|\bTRIBUTOS?\b|\bTRIBUTARI|\bPROVIS(AO|OES)\b|\bENCARGOS?\b|\bDEFICITS?\b/;
+
+export function naturezaPeloNome(nome: string): "D" | "C" | null {
+  const n = normalizar(nome).replace(RE_INCIDENCIA, " ");
+  if (LEX_REDUTORA.test(n)) return "D";
+  const receita = LEX_RECEITA.test(n);
+  const gasto = LEX_GASTO.test(n);
+  if (receita && gasto) return null; // contradição: o pai decide
+  if (receita) return "C";
+  if (gasto) return "D";
+  return null;
+}
+
+/**
+ * A IMPRESSÃO DIGITAL DA CONTA ENCERRADA: zerada nos dois retratos E com as
+ * duas colunas de movimento iguais. É o gate do degrau 3 — as contas de herança
+ * documentadas no cabeçalho (Belagro, saldo ≠ 0) não passam por aqui.
+ */
+const contaEncerrada = (l: LinhaBalancete): boolean =>
+  Math.abs(l.saldoAtual) <= TOLERANCIA && Math.abs(l.saldoAnterior) <= TOLERANCIA && l.debito === l.credito;
+
 // ── árvore com naturezas resolvidas ──────────────────────────────────────────
 
 export interface No { linha: LinhaBalancete; filhos: No[] }
@@ -294,12 +398,21 @@ export function prepararArvore(b: BalanceteParseado): ArvoreBalancete {
   const naturezas = new Map<LinhaBalancete, "D" | "C">();
   const naturezasAnterior = new Map<LinhaBalancete, "D" | "C">();
 
-  const resolver = (l: LinhaBalancete, herdada: "D" | "C", campo: "saldoAtual" | "saldoAnterior"): { natureza: "D" | "C"; convencao: "D" | "C" } => {
+  const resolver = (l: LinhaBalancete, herdada: "D" | "C", campo: "saldoAtual" | "saldoAnterior", permiteNome: boolean): { natureza: "D" | "C"; convencao: "D" | "C" } => {
     const saldo = l[campo];
     const sufixo = campo === "saldoAtual" ? l.naturezaAtual : l.naturezaAnterior;
     const eq = convencaoImpressao(l);
     if (eq) return { natureza: saldo < 0 ? opor(eq) : eq, convencao: eq };
     if (sufixo) return { natureza: sufixo, convencao: saldo < 0 ? opor(sufixo) : sufixo };
+    // NOME DA PRÓPRIA CONTA, só na conta ENCERRADA (ver `naturezaPeloNome`).
+    // Devolver `convencao: porNome` — e não a herdada — é o que faz o nó RESETAR
+    // a própria subárvore: sem isso, "RECEITAS FINANCEIRAS" (R$ 359.540,90 no
+    // IAOCP) continuaria entrando com a convenção devedora do avô "DESPESAS C/
+    // ATIVIDADE FIM", e as folhas dela junto.
+    if (permiteNome && contaEncerrada(l)) {
+      const porNome = naturezaPeloNome(l.nome);
+      if (porNome) return { natureza: porNome, convencao: porNome };
+    }
     // herança da convenção de impressão do pai × sinal do saldo
     const saldoRef = Math.abs(saldo) > TOLERANCIA ? saldo : (campo === "saldoAtual" ? l.saldoAnterior : l.saldoAtual);
     if (Math.abs(saldoRef) > TOLERANCIA || l.debito === l.credito) {
@@ -309,11 +422,44 @@ export function prepararArvore(b: BalanceteParseado): ArvoreBalancete {
     return { natureza: l.credito > l.debito ? "C" : "D", convencao: herdada };
   };
 
-  const atribuir = (no: No, herdada: "D" | "C"): void => {
-    const atual = resolver(no.linha, herdada, "saldoAtual");
+  /**
+   * SUBÁRVORE INTEIRAMENTE ENCERRADA — trava PREVENTIVA (19/08/2026).
+   *
+   * O degrau do nome RESETA a convenção da subárvore. Num documento CORRENTE
+   * pode existir nó sintético zerado com D == C (conta de trânsito, grupo
+   * aberto e fechado no período) cujos FILHOS têm saldo — e ali o reset viraria
+   * o sinal de contas que nada tinham de ambíguo. Exigir que TODA a subárvore
+   * esteja encerrada resolve sem caso especial: no balancete de encerramento é
+   * sempre verdade (a apuração zerou tudo), e no corrente o nó de trânsito é
+   * barrado porque seus filhos têm saldo.
+   *
+   * HONESTIDADE SOBRE A MEDIÇÃO: no acervo de hoje esta trava não muda um
+   * número — nenhum documento corrente do corpus tem nó de resultado nesse
+   * estado. Ela entrou por prevenção, e o teste que a cobre é sintético ("nó
+   * zerado com D == C mas FILHOS COM SALDO", em bancada-iaocp.test.ts). Uma
+   * versão anterior deste comentário citava 13 linhas do OCEANDROP: aquilo era
+   * fantasma do comparador do A/B, que chaveava seção por NOME num documento
+   * com 17 nomes repetidos. Diferença posicional real: zero.
+   */
+  const subarvoreEncerrada = new Map<No, boolean>();
+  const marcarEncerrada = (no: No): boolean => {
+    // Sem `every`: ele CURTO-CIRCUITA no primeiro filho falso e os irmãos
+    // seguintes ficariam de fora do mapa — a regra passaria a depender da ordem
+    // de impressão do documento.
+    let filhosEncerrados = true;
+    for (const f of no.filhos) if (!marcarEncerrada(f)) filhosEncerrados = false;
+    const v = contaEncerrada(no.linha) && filhosEncerrados;
+    subarvoreEncerrada.set(no, v);
+    return v;
+  };
+  for (const g of grupos) marcarEncerrada(g.no);
+
+  const atribuir = (no: No, herdada: "D" | "C", permiteNome: boolean): void => {
+    const nome = permiteNome && subarvoreEncerrada.get(no) === true;
+    const atual = resolver(no.linha, herdada, "saldoAtual", nome);
     naturezas.set(no.linha, atual.natureza);
-    naturezasAnterior.set(no.linha, resolver(no.linha, herdada, "saldoAnterior").natureza);
-    for (const f of no.filhos) atribuir(f, atual.convencao);
+    naturezasAnterior.set(no.linha, resolver(no.linha, herdada, "saldoAnterior", nome).natureza);
+    for (const f of no.filhos) atribuir(f, atual.convencao, permiteNome);
   };
   for (const g of grupos) {
     const n = normalizar(g.no.linha.nome);
@@ -321,7 +467,12 @@ export function prepararArvore(b: BalanceteParseado): ArvoreBalancete {
       g.tipo === "ativo" ? "D" :
       g.tipo === "passivo" ? "C" :
       /RECEITA|RENDIMENTO|FATURAMENTO/.test(n) ? "C" : "D";
-    atribuir(g.no, semente);
+    // O degrau do NOME vale só em grupo de RESULTADO. No balanço a semente
+    // (ativo D · passivo/PL C) é confiável e o nome não acrescenta — mas um nó
+    // sintético zerado com D == C cujo nome fala ("Receitas Antecipadas" no
+    // passivo, "Adiantamentos" no ativo) resetaria a convenção de FILHOS COM
+    // SALDO e viraria uma subárvore inteira em silêncio. Risco sem ganho.
+    atribuir(g.no, semente, g.tipo === "resultado");
   }
 
   // saldo real assinado (devedor positivo) — base da identidade pai = Σ filhos
@@ -979,27 +1130,114 @@ export function converterBalancete(b: BalanceteParseado): ConversaoBalancete {
     // Distribuição de lucro no ano mexe nessas contas sem passar pela DRE — daí
     // o limite generoso (10% da receita): a prova existe para pegar DIVERGÊNCIA
     // GROSSA (caso Belagro 2023: derivado −85,9 mi × PL +1,3 mi), não ruído.
-    if (exercicioEncerrado && temSaldosAnteriores(b.linhas)) {
+    if (exercicioEncerrado) {
       const derivado = arred(secoes.reduce((s, x) => s + x.valor, 0));
-      const contasResultadoPL = [...ativos, ...passivos, ...patrimonios]
-        .flatMap((g) => folhasDe(g.no))
-        .filter((l) => {
-          const n = normalizar(l.nome);
-          return ehNomeDeApuracao(n) || /\bLUCROS?\b.*\bACUMULADOS?\b|\bPREJUIZOS?\b.*\bACUMULADOS?\b|\bRESULTADO\b.*\bACUMULADO\b/.test(n);
-        });
+      // A varredura fica nos grupos do BALANÇO de propósito. Um grupo tipado
+      // `apuracao` casa o filtro pelo nome, mas é contra-lançamento: saldo zero
+      // nos dois retratos, variação zero. Incluí-lo não daria âncora — daria
+      // uma âncora FALSA de R$ 0,00, que é exatamente o que esta prova passou a
+      // recusar.
+      const contasResultadoPL = temSaldosAnteriores(b.linhas)
+        ? [...ativos, ...passivos, ...patrimonios]
+          .flatMap((g) => folhasDe(g.no))
+          .filter((l) => {
+            const n = normalizar(l.nome);
+            // SÓ CONTA DE ESTOQUE (…ACUMULAD…). SUPERÁVIT/DÉFICIT/SOBRAS é o
+            // vocabulário do TERCEIRO SETOR e da cooperativa para a mesma conta
+            // (Instituto AOCP: "Superávit (Deficit) Acumulado", 2.627.046,22C →
+            // 10.196.736,09C, variação 7.569.689,87).
+            //
+            // A CONTA "DO EXERCÍCIO" FICA DE FORA, e isso é decisão, não
+            // esquecimento (revisão adversarial, 19/08/2026). Ela chegou a
+            // entrar no filtro e foi RETIRADA: as duas famílias medem coisas
+            // diferentes — a de estoque pela VARIAÇÃO, a do exercício pelo
+            // SALDO — e somar as duas fabrica número que não existe no
+            // documento. No "SABRINA - Balancete 2021" o PL declara
+            // 120.382,45 em "LUCRO DO EXERCICIO" (exatamente o derivado), e a
+            // soma das três folhas casadas dava 60.382,45: a distribuição de
+            // lucro de R$ 60.000,00 virava "gap" e bloqueava um exercício que
+            // reconcilia ao centavo. Pior, o erro é simétrico — DRE errada
+            // justamente pelo valor distribuído marcaria gap zero.
+            //
+            // O desenho certo, para quando isto voltar (backlog): havendo folha
+            // FAMÍLIA + (DO|DE) EXERCÍCIO/PERÍODO que não seja ACUMUL nem
+            // destinação (`ehNomeDeDestinacao`) nem de exercício ANTERIOR, usar
+            // SÓ ELA e pelo saldoAtual — a régua que a perna de encerramento já
+            // usa mais abaixo — e nunca misturar com a soma de variações. Exige
+            // distinguir a conta que ZERA e recarrega a cada ano da que
+            // ACUMULA, que é o que falta medir.
+            return ehNomeDeApuracao(n)
+              || /\b(LUCROS?|PREJUIZOS?|RESULTADOS?|SUPERAVITS?|DEFICITS?|SOBRAS?)\b.*\bACUMULAD/.test(n);
+          })
+        : [];
       // Lucro no PL é CREDOR: usa a régua patrimonial do lado passivo, para o
       // lucro sair positivo e o prejuízo negativo.
       const declaradoPL = arred(contasResultadoPL.reduce(
         (s, l) => s + (assinadoBP(l, false, "saldoAtual") - assinadoBP(l, false, "saldoAnterior")), 0));
       const receita = arred(secoes.filter((x) => x.valor > 0).reduce((s, x) => s + x.valor, 0));
       const gap = Math.abs(arred(derivado - declaradoPL));
-      const limite = Math.max(5_000, receita * 0.1);
-      const ok = contasResultadoPL.length === 0 ? true : gap <= limite;
-      provas.dreEncerrada = { derivado, declaradoPL, gap, limite, ok };
-      if (!ok) {
+      // A FAIXA NÃO PODE SER CALIBRADA SÓ PELO NÚMERO AUDITADO (revisão
+      // adversarial, 19/08/2026). `receita × 10%` vem da DRE DERIVADA — e a
+      // transferência interna que esta prova existe para pegar infla a receita
+      // e, com ela, o próprio teto: na Belagro acumulado 2023 a tolerância
+      // ficava 13,6× maior que o resultado declarado pelo PL. Amarrar também na
+      // ÂNCORA (25% do que o PL registra) faz a régua depender do documento, não
+      // do número em julgamento. O piso de 5.000 continua para não reprovar
+      // empresa pequena por ruído de arredondamento.
+      const limite = Math.max(5_000, Math.min(receita * 0.1, Math.abs(declaradoPL) * 0.25));
+      // ÂNCORA QUE NÃO SE MOVEU NÃO É ÂNCORA (revisão adversarial, 19/08/2026).
+      // `length > 0` pergunta se a CONTA existe, não se ela MEDIU alguma coisa.
+      // Com o PL registrando o ano noutra conta (ou com o lucro integralmente
+      // distribuído), `declaradoPL` sai 0,00 e o P4 degenerava em "a DRE cabe
+      // em 10% da receita?" — comparando a demonstração contra zero e dando
+      // selo verde. Medido: 3 dos balancetes de encerramento do corpus têm
+      // TODAS as âncoras casadas com variação zero. `Number.isFinite` mata
+      // junto o `R$ NaN` que a Cervejaria Maniacs imprimia no aviso.
+      const verificavel = contasResultadoPL.length > 0
+        && Number.isFinite(declaradoPL) && Math.abs(declaradoPL) > TOLERANCIA;
+      // Nomeia TODAS as contas que entraram na soma: nomear só a primeira
+      // atribuía o total a uma conta que podia nem ter se movido.
+      const ancora = verificavel
+        ? contasResultadoPL
+          .filter((l) => Math.abs(assinadoBP(l, false, "saldoAtual") - assinadoBP(l, false, "saldoAnterior")) > TOLERANCIA)
+          .map((l) => l.nome).join(" + ") || contasResultadoPL[0].nome
+        : null;
+      const comValor = secoes.filter((x) => Math.abs(x.valor) > TOLERANCIA);
+      const sinalUnico = comValor.length >= 2
+        && new Set(comValor.map((x) => Math.sign(x.valor))).size === 1
+        && comValor.some((x) => naturezaPeloNome(x.nome) === "C");
+      const ok = verificavel && !sinalUnico && gap <= limite;
+      provas.dreEncerrada = { derivado, declaradoPL, gap, limite, verificavel, ancora, sinalUnico, ok };
+      if (sinalUnico) {
         avisos.push(
-          `Balancete de ENCERRAMENTO: as contas de resultado estão zeradas e a DRE foi derivada do movimento — ela dá ${fmt(derivado)}, mas o resultado que o próprio PL registra no ano é ${fmt(declaradoPL)} (diferença de ${fmt(gap)}). ` +
+          `Balancete de ENCERRAMENTO: as ${comValor.length} seções da DRE saíram TODAS com o mesmo sinal (soma ${fmt(derivado)}), sendo que ao menos uma delas se declara receita. ` +
+          `Não existe demonstração assim — a leitura não separou receita de gasto nas contas zeradas pelo encerramento. Esta DRE não é fato e não foi publicada.`,
+        );
+      } else if (!verificavel) {
+        avisos.push(
+          `Balancete de ENCERRAMENTO: as contas de resultado estão zeradas e a DRE foi derivada do movimento (${fmt(derivado)}), mas o documento NÃO oferece âncora para conferir — ` +
+          `${!temSaldosAnteriores(b.linhas)
+            ? "não há coluna de saldo anterior"
+            : contasResultadoPL.length === 0
+              ? "nenhuma conta de resultado acumulado foi encontrada no PL"
+              : !Number.isFinite(declaradoPL)
+                ? `a conta "${contasResultadoPL[0].nome}" tem saldo ilegível na leitura`
+                : `a conta "${contasResultadoPL[0].nome}" existe mas NÃO se moveu no ano (variação zero), então não há o que conferir`}. ` +
+          `Prova ausente não é prova: esta DRE não recebeu selo e não foi publicada. Para preencher o exercício, suba a demonstração oficial ou um balancete de dezembro ANTES do encerramento.`,
+        );
+      } else if (!ok) {
+        avisos.push(
+          `Balancete de ENCERRAMENTO: as contas de resultado estão zeradas e a DRE foi derivada do movimento — ela dá ${fmt(derivado)}, mas o resultado que o próprio PL registra no ano é ${fmt(declaradoPL)} em "${ancora}" (diferença de ${fmt(gap)}). ` +
           `Transferência interna entre contas de resultado infla os dois lados: confira a DRE deste exercício contra a demonstração oficial antes de usar os números.`,
+        );
+      } else if (gap > TOLERANCIA) {
+        // VERDE NÃO É MUDO (revisão adversarial, 19/08/2026). Passar dentro da
+        // faixa não é "bater": o IAOCP publica com R$ 846.810,30 de diferença
+        // contra o próprio PL e o analista nunca via esse número. Contar o que
+        // foi medido é regra da casa — inclusive quando o veredito é passar.
+        avisos.push(
+          `Balancete de ENCERRAMENTO conferido: a DRE derivada do movimento (${fmt(derivado)}) fica ${fmt(gap)} ${derivado < declaradoPL ? "ABAIXO" : "ACIMA"} do resultado que o PL registra no ano (${fmt(declaradoPL)} em "${ancora}") — dentro da faixa de ${fmt(arred(limite))}, então foi publicada. ` +
+          `A diferença é normal quando há uso do resultado fora da DRE; se for material para a sua análise, confira contra a demonstração oficial do exercício.`,
         );
       }
     }

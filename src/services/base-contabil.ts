@@ -48,7 +48,7 @@ const fmtBRL = (v: number): string => {
  * invalida tudo que estava guardado — é como um conserto chega a quem já
  * tinha o número velho na tela.
  */
-export const VERSAO_BASE = 1;
+export const VERSAO_BASE = 2;
 
 /** Insumos + impressão digital deles. Separado da montagem de propósito: a
  *  marca é BARATA (ids/hashes/agregados) e serve para o cache decidir se
@@ -328,6 +328,28 @@ async function montarBaseContabilSemCache(
   const periodos: string[] = [];
   /** Períodos de balancete que publicaram DRE — um encerramento reprovado no P4 fica fora. */
   const periodosComDRE: string[] = [];
+  /**
+   * BACKLOG DECLARADO (19/08/2026) — A DRE OFICIAL AINDA NÃO GANHA DA DERIVADA.
+   *
+   * Quando um balancete de ENCERRAMENTO publica a DRE (derivada do movimento,
+   * heurística) e o analista sobe depois a demonstração oficial do MESMO
+   * exercício, a oficial é recusada com "já coberto por outra fonte de DRE" —
+   * documento pior trancando a porta do melhor.
+   *
+   * A substituição chegou a ser escrita e foi RETIRADA na revisão adversarial,
+   * porque introduzia defeito maior do que consertava: a limpeza da coluna
+   * derivada roda ANTES do veredito de integridade da oficial, então (a) uma
+   * oficial REPROVADA expulsava a coluna que passou no P4, e (b) uma oficial de
+   * coluna VAZIA zerava o exercício inteiro com selo verde em todos os
+   * documentos. Medido com harness sobre montarBaseContabil.
+   *
+   * O desenho certo, para quando isto voltar: dobrar a oficial PRIMEIRO, exigir
+   * que o fold tenha matéria (≥1 linha com valor) E que o documento não esteja
+   * reprovado, e só então apagar a derivada — junto com as pendências e a prova
+   * (`naoMapeados`, `alertasComposicao`, `provasPorPeriodo[p].dreEncerrada`)
+   * daquele fold, senão o balancete fica barrado no IBR por contas de uma
+   * coluna que a base jogou fora.
+   */
   const origemPorPeriodo: Record<string, string> = {};
   /** Como rotular cada coluna: "mes" → 05/2026 · "exercicio" → 2026. */
   const tipoPorPeriodo: Record<string, "mes" | "exercicio"> = {};
@@ -396,17 +418,53 @@ async function montarBaseContabilSemCache(
        * Suprimir sem prova é proibido; aqui a prova de que o número não é fato
        * é o próprio P4, medido contra o PL do documento.
        */
-      const dreReprovada = !!(p4 && !p4.ok);
-      if (dreReprovada && p4) {
+      /**
+       * P4 AUSENTE TAMBÉM REPROVA (19/08/2026, caso Instituto AOCP). `!!(p4 &&
+       * !p4.ok)` deixava passar o documento em que a prova NEM RODOU — leitura
+       * de motor anterior, ou encerramento sem o que medir. Ausência de prova
+       * virava aprovação exatamente onde a prova mais importa. A pergunta certa
+       * é sobre o EXERCÍCIO ENCERRADO: se está encerrado, ou a DRE reconcilia
+       * com o PL, ou não é publicada.
+       */
+      const encerrado = conv.provas.exercicioEncerrado === true;
+      const dreReprovada = encerrado && !(p4?.ok === true);
+      /**
+       * VERDE NÃO É MUDO, E TEM DE CHEGAR NA TELA (19/08/2026). O aviso do P4
+       * aprovado nasce em `converterBalancete`, mas `conv.avisos` só era
+       * gravado em `balancetes[].avisos` — campo que nenhuma rota lê. O número
+       * que o analista precisa ver (no IAOCP, R$ 846.810,30 de diferença contra
+       * o próprio PL num documento PUBLICADO) morria ali. Os irmãos deste aviso
+       * chegam porque o bloco abaixo os REESCREVE; o caso verde não tinha par.
+       */
+      if (encerrado && p4?.ok === true && p4.gap > 0.05) {
         avisos.push(
-          `${f.nome}: balancete de ENCERRAMENTO — a DRE derivada do movimento (${fmtBRL(p4.derivado)}) não reconcilia com o resultado que o próprio PL registra no ano (${fmtBRL(p4.declaradoPL)}). ` +
-          `Transferência interna entre contas de resultado infla os dois lados, então esta DRE NÃO foi publicada: o documento entrou só com o balanço patrimonial (que fecha) e a coluna de resultado deste exercício segue em aberto. ` +
-          `Para preenchê-la, suba a demonstração oficial do exercício ou um balancete de dezembro ANTES do encerramento.`,
+          `${f.nome}: balancete de ENCERRAMENTO conferido e publicado — a DRE derivada do movimento (${fmtBRL(p4.derivado)}) fica ${fmtBRL(p4.gap)} ${p4.derivado < p4.declaradoPL ? "abaixo" : "acima"} do resultado que o próprio PL registra no ano (${fmtBRL(p4.declaradoPL)}${p4.ancora ? ` em "${p4.ancora}"` : ""}). ` +
+          `Está dentro da faixa aceita, então entrou na base; se a diferença for material para a sua análise, confira contra a demonstração oficial do exercício.`,
+        );
+      }
+      if (dreReprovada) {
+        const naoMedido = !p4 || p4.verificavel !== true;
+        avisos.push(
+          p4?.sinalUnico
+            ? `${f.nome}: balancete de ENCERRAMENTO — a DRE saiu com TODAS as seções do mesmo sinal (soma ${fmtBRL(p4.derivado)}), incluindo as que se declaram receita. ` +
+              `A leitura não separou receita de gasto nas contas zeradas pelo encerramento, então esta DRE NÃO foi publicada: o documento entrou só com o balanço patrimonial. ` +
+              `Para preencher o exercício, suba a demonstração oficial ou um balancete de dezembro ANTES do encerramento.`
+            : naoMedido
+              ? `${f.nome}: balancete de ENCERRAMENTO — a DRE foi derivada do movimento${p4 ? ` (${fmtBRL(p4.derivado)})` : ""}, mas não há âncora utilizável para conferi-la${p4?.ancora === null && (p4?.declaradoPL ?? 0) === 0 ? " (a conta de resultado do PL não se moveu no ano, ou não existe)" : ""}. ` +
+                `Prova ausente não é prova: esta DRE NÃO foi publicada — o documento entrou só com o balanço patrimonial (que fecha) e a coluna de resultado deste exercício segue em aberto. ` +
+                `Para preenchê-la, suba a demonstração oficial do exercício ou um balancete de dezembro ANTES do encerramento.`
+              : `${f.nome}: balancete de ENCERRAMENTO — a DRE derivada do movimento (${fmtBRL(p4!.derivado)}) não reconcilia com o resultado que o próprio PL registra no ano (${fmtBRL(p4!.declaradoPL)}${p4!.ancora ? ` em "${p4!.ancora}"` : ""}). ` +
+                `Transferência interna entre contas de resultado infla os dois lados, então esta DRE NÃO foi publicada: o documento entrou só com o balanço patrimonial (que fecha) e a coluna de resultado deste exercício segue em aberto. ` +
+                `Para preenchê-la, suba a demonstração oficial do exercício ou um balancete de dezembro ANTES do encerramento.`,
         );
         const linha = relatorio.find((r) => r.documentId === f.id);
         if (linha) {
           linha.fechamentoOk = false;
-          linha.erro = `DRE do encerramento não reconcilia com o PL (${fmtBRL(p4.derivado)} × ${fmtBRL(p4.declaradoPL)}) — não publicada`;
+          linha.erro = p4?.sinalUnico
+            ? `DRE do encerramento saiu inteira com um sinal só (${fmtBRL(p4.derivado)}) — não publicada`
+            : naoMedido
+              ? `DRE do encerramento sem âncora no PL para conferir — não publicada`
+              : `DRE do encerramento não reconcilia com o PL (${fmtBRL(p4!.derivado)} × ${fmtBRL(p4!.declaradoPL)}) — não publicada`;
         }
       }
       // P5 (17/08/2026, caso Belagro 12/2025): o RESUMO do rodapé é o número que
