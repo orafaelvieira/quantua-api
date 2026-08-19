@@ -497,9 +497,19 @@ export function periodosQueAcumulam(dados: {
  * acusava receita e custo de fora do ritmo quando estavam no ritmo, e derrubava
  * a base da alavanca de margem de R$ 741,1 mi para R$ 592,0 mi.
  *
- * Regra: rótulo anual ("2024") sempre; coluna de 31/12 quando não vier de
- * balancete, ou vier de balancete cuja janela declarada começa em 01/01. Nunca
- * se INFERE "fechado" por ausência em outra lista.
+ * Regra: rótulo anual ("2024") sempre; coluna de 31/12 SALVO prova em contrário.
+ *
+ * A prova em contrário é `periodoInicio` declarado e diferente de 01/01 — um
+ * balancete "01/12 a 31/12" é um MÊS e viraria denominador anual (medido: ritmo
+ * de 11,61× contra 0,97×). Mas EXIGIR a prova positiva era pior: `periodoInicio`
+ * nem sempre é persistido (as árvores de balancete não o carregam), e sem ele o
+ * sistema perdia a referência anual inteira e caía calado na extrapolação —
+ * publicando "não há exercício fechado na série" para uma empresa com dois
+ * exercícios fechados na base. Errar aceitando um dezembro-de-um-mês custa uma
+ * comparação torta; errar recusando custa a comparação inteira.
+ *
+ * Nunca se INFERE "fechado" por ausência em outra lista: 31/12 é acumulado E
+ * fechado, e a inferência derrubava a régua para o exercício anterior.
  */
 export function periodosDeExercicioFechado(dados: {
   periodos?: string[];
@@ -518,9 +528,9 @@ export function periodosDeExercicioFechado(dados: {
     const m = String(p).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     if (!m) return /^\s*\d{4}\s*$/.test(String(p)); // rótulo anual puro
     if (Number(m[2]) !== 12) return false;            // só dezembro fecha o ano
-    const b = doBalancete.get(String(p));
-    if (!b) return true;                              // demonstrativo, não balancete
-    return /^01\/01\//.test(String(b?.periodoInicio ?? ""));
+    const inicio = String(doBalancete.get(String(p))?.periodoInicio ?? "");
+    if (!inicio) return true;                         // sem janela declarada: 31/12 é o exercício
+    return /^01\/01\//.test(inicio);                  // declarada: só vale se cobre o ano
   });
 }
 

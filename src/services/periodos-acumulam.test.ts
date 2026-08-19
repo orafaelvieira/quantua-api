@@ -76,11 +76,26 @@ describe("periodosDeExercicioFechado", () => {
     expect(periodosDeExercicioFechado({ periodos: per })).toEqual(["2024", "31/12/2025"]);
   });
 
-  it("31/12 de BALANCETE só fecha se a janela declarada começa em 01/01", () => {
+  it("31/12 de BALANCETE fecha SALVO prova em contrário na janela declarada", () => {
     const jan = [{ periodo: "31/12/2025", periodoInicio: "01/01/2025" }];
     const dez = [{ periodo: "31/12/2025", periodoInicio: "01/12/2025" }];
     expect(periodosDeExercicioFechado({ periodos: per, balancetes: jan })).toContain("31/12/2025");
     expect(periodosDeExercicioFechado({ periodos: per, balancetes: dez })).not.toContain("31/12/2025");
+  });
+
+  // Exigir a prova POSITIVA custou a referência anual inteira em produção: as
+  // árvores de balancete não carregam periodoInicio, e o IBR saiu dizendo "não há
+  // exercício fechado na série" para uma empresa com dois exercícios na base.
+  it("sem janela declarada, 31/12 vale como exercício — recusar custa mais que aceitar", () => {
+    const semInicio = [{ periodo: "31/12/2025" }];
+    expect(periodosDeExercicioFechado({ periodos: per, arvoresBalancete: semInicio })).toContain("31/12/2025");
+  });
+
+  it("série toda em balancete, sem metadado, ainda encontra os fechamentos", () => {
+    const p2 = ["31/12/2024", "30/11/2025", "31/12/2025", "31/05/2026"];
+    const bals = p2.map((periodo) => ({ periodo }));
+    expect(periodosDeExercicioFechado({ periodos: p2, arvoresBalancete: bals }))
+      .toEqual(["31/12/2024", "31/12/2025"]);
   });
 
   it("mês parcial nunca fecha exercício — nem janeiro, nem novembro, nem maio", () => {
