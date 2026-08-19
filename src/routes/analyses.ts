@@ -2487,6 +2487,12 @@ router.put("/:id/dados-estruturados/dre", async (req: AuthRequest, res: Response
 
   const dados = (analysis.dadosEstruturados as any) || { bp: [], dre: [], indicadores: [], periodos: [], version: 1 };
   dados.dre = req.body.linhas;
+  // A PROPORCIONALIDADE ACOMPANHA A EDIÇÃO. Ela sai da DRE, então editar uma
+  // linha aqui e deixar a medida velha gravada faz o relatório publicar, como
+  // FATO do motor, uma comparação que já não corresponde aos números da tela.
+  dados.proporcionalidade = medirProporcionalidade(dados.dre ?? [], dados.periodos ?? [],
+    periodosQueAcumulam({ dre: dados.dre ?? [], balancetes: dados?.balancetes, arvoresBalancete: dados?.arvoresBalancete }),
+    periodosDeExercicioFechado({ periodos: dados.periodos ?? [], balancetes: dados?.balancetes, arvoresBalancete: dados?.arvoresBalancete }));
 
   await prisma.analysis.update({
     where: { id },

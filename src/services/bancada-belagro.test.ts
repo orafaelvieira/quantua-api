@@ -165,3 +165,30 @@ describe("bancada Belagro · proporcionalidade", () => {
     expect(pr.leitura).not.toMatch(/FORA do ritmo|fora da faixa/i);
   });
 });
+
+// O bloco impresso pelo motor precisa ter TODOS os campos que o PDF desenha —
+// se um sumir, o quadro sai vazio no relatório e ninguém percebe até o cliente.
+describe("bancada Belagro · o que o PDF imprime", () => {
+  const pr = medirProporcionalidade(DRE as never, P, ACUM, FECH)!;
+
+  it("entrega os campos que o quadro do PDF consome", () => {
+    expect(pr.meses).toBe(5);
+    expect(pr.fracaoCalendario).toBeCloseTo(5 / 12, 4);
+    expect(pr.periodoFechado.slice(-4)).toBe("2025");
+    expect(pr.linhas.length).toBeGreaterThanOrEqual(4);
+    for (const l of pr.linhas) {
+      expect(typeof l.conta).toBe("string");
+      expect(Number.isFinite(l.ytd)).toBe(true);
+      expect(Number.isFinite(l.fechado)).toBe(true);
+      expect(Number.isFinite(l.razao)).toBe(true);
+      expect(Number.isFinite(l.ritmo)).toBe(true);
+    }
+  });
+
+  it("a linha que o relatório precisava e não tinha: EBITDA contra o exercício fechado", () => {
+    const e = pr.linhas.find((l) => l.conta === "EBITDA")!;
+    expect(e.ytd).toBe(-4_120_000);
+    expect(e.fechado).toBe(13_800_000);   // o 1,62x de cobertura vem daqui
+    expect(e.razao).toBeCloseTo(-0.299, 3);
+  });
+});
