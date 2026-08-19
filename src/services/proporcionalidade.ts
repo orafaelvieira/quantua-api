@@ -73,10 +73,11 @@ export function medirProporcionalidade(
   dre: Array<{ conta: string; valores?: Record<string, number> }> | null | undefined,
   periodos: string[] | null | undefined,
   periodosYTD: string[] | null | undefined,
-  /** Balancetes lidos — dá a JANELA declarada de cada coluna mensal. Sem isso um
-   *  balancete de DEZEMBRO encerrado (janela 01/12–31/12, um mês) passa por
-   *  "exercício fechado" e vira denominador anual: medido, 11,61× contra 0,97×. */
-  balancetes?: Array<{ periodo?: string; periodoInicio?: string; provas?: { exercicioEncerrado?: boolean } }> | null,
+  /** Colunas que cobrem o EXERCÍCIO INTEIRO (`periodosDeExercicioFechado`).
+   *  NUNCA se infere isto pela ausência em `periodosYTD`: 31/12 é acumulado E
+   *  fechado ao mesmo tempo, e a inferência derrubava a comparação para o ano
+   *  anterior — na Belagro, contra 2024 em vez de 2025. */
+  periodosFechados?: string[] | null,
 ): Proporcionalidade | null {
   if (!Array.isArray(dre) || !dre.length || !Array.isArray(periodos) || !periodos.length) return null;
   const ytdSet = new Set(periodosYTD ?? []);
@@ -90,21 +91,12 @@ export function medirProporcionalidade(
 
   // Último EXERCÍCIO FECHADO anterior ao ano corrente.
   const anoCorrente = anoDe(ytdP);
-  const bals = Array.isArray(balancetes) ? balancetes : [];
-  const doBalancete = new Map(bals.filter((b) => b?.periodo).map((b) => [String(b.periodo), b]));
-  /** Coluna cobre o EXERCÍCIO inteiro? Documento anual sempre; balancete só se a
-   *  janela declarada começa em 01/01. Sem `periodoInicio` não se presume o ano. */
-  const cobreExercicio = (p: string): boolean => {
-    const b = doBalancete.get(p);
-    if (!b) return true;                                  // não veio de balancete
-    return /^01\/01\//.test(String(b.periodoInicio ?? ""));
-  };
+  const fechadosSet = new Set(periodosFechados ?? []);
   const fechados = periodos
-    .filter((p) => !ytdSet.has(p) && (!ehMensal(p) || mesDe(p) === 12))
-    .filter((p) => anoDe(p) < anoCorrente && cobreExercicio(p))
-    // Desempate EXPLÍCITO: com "2025" e "31/12/2025" na série, o ano vence — não
-    // se apoia na estabilidade do sort, que entregava a coluna de um mês.
-    .sort((a, b) => anoDe(a) - anoDe(b) || (doBalancete.has(a) ? 0 : 1) - (doBalancete.has(b) ? 0 : 1));
+    .filter((p) => fechadosSet.has(p) && anoDe(p) < anoCorrente)
+    // Desempate EXPLÍCITO: com "2025" e "31/12/2025" na série, o rótulo ANUAL
+    // vence — não se apoia na estabilidade do sort.
+    .sort((a, b) => anoDe(a) - anoDe(b) || (ehMensal(a) ? 0 : 1) - (ehMensal(b) ? 0 : 1));
   const fechadoP = fechados.at(-1);
   if (!fechadoP) return null;
   // DISTÂNCIA: base velha demais deixa de ser referência do mesmo negócio.

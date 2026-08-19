@@ -456,6 +456,8 @@ export async function generateAnalysis(
    *  e à conta regressiva. Sem ela, `/365` num período de 150 dias subestima a
    *  venda diária em 2,43× e infla o fôlego de caixa na mesma proporção. */
   periodosYTD?: string[],
+  /** Colunas que cobrem o exercício inteiro — base anual das alavancas. */
+  periodosFechados?: string[],
   /** Teste de proporcionalidade da janela YTD — trava veredicto de fluxo. */
   proporcionalidade?: { temDesvio: boolean; desviantes: string[]; leitura: string } | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
@@ -480,7 +482,7 @@ export async function generateAnalysis(
   const canonico: ValorCanonico | null = calcularValorCanonico(
     indicadores, periodos, peer?.rows ?? [], dre ?? null,
     { segmento: peer?.segment ?? null, periodo: peer?.periodo ?? null },
-    periodosYTD,
+    periodosYTD, periodosFechados,
   );
   const canonicoBlock = canonico && canonico.alavancas.length > 0
     ? `\nVALOR NA MESA — ALAVANCAS CANÔNICAS JÁ CALCULADAS PELO MOTOR (fatos; NÃO re-some, NÃO altere, NÃO repita nas adicionais):\n${canonico.alavancas.map((a) => `- [${a.tipo}] ${a.titulo}: R$ ${a.valor.toLocaleString("pt-BR")} — ${a.memoria}`).join("\n")}\nSubtotal canônico: caixa liberável R$ ${canonico.caixaLiberavel.toLocaleString("pt-BR")} · margem recuperável/ano R$ ${canonico.margemRecuperavelAno.toLocaleString("pt-BR")}.`

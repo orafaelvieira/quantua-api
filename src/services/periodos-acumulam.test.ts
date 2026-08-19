@@ -17,8 +17,15 @@ describe("periodosQueAcumulam", () => {
     expect(r).not.toContain("31/12/2025"); // subtrair aqui daria −R$ 3,2 mi de prejuízo inventado
   });
 
-  it("janeiro não acumula — YTD é o próprio mês", () => {
-    expect(periodosQueAcumulam({ dre, balancetes: [{ periodo: "31/01/2026" }] })).toEqual([]);
+  // REGRA INVERTIDA em 18/08 e o motivo importa: janeiro ACUMULA (YTD jan = jan).
+  // Excluí-lo não desligava a subtração de janeiro — desligava a de FEVEREIRO, que
+  // perdia o par e usava o YTD de 2 meses como resultado do mês. O plug de
+  // fevereiro saía −R$ 1.263.579 onde o certo é −R$ 107.151, e o excesso era, ao
+  // centavo, o lucro YTD de janeiro. Consertar dezembro e excluir janeiro apenas
+  // mudou o defeito de mês. A virada de exercício é barrada pela guarda de mesmo
+  // ano no consumidor, não por esta lista.
+  it("janeiro ENTRA — é acumulado, e sem ele fevereiro herda o fantasma", () => {
+    expect(periodosQueAcumulam({ dre, balancetes: [{ periodo: "31/01/2026" }] })).toEqual(["31/01/2026"]);
   });
 
   it("coluna sem DRE publicada fica de fora — 0 menos o YTD anterior viraria o ano inteiro", () => {
@@ -52,5 +59,48 @@ describe("periodosQueAcumulam · DRE recusada grava ZERO nos subtotais", () => {
     const dre = [{ conta: "Lucro Líquido", valores: { "30/11/2025": 9_669_025, "31/12/2025": -3_214_674 } }];
     expect(periodosQueAcumulam({ dre, balancetes: [{ periodo: "30/11/2025" }, { periodo: "31/12/2025" }] }))
       .toEqual(["30/11/2025", "31/12/2025"]);
+  });
+});
+
+// ── periodosDeExercicioFechado: a OUTRA pergunta ──
+// 31/12 é acumulado E fechado ao mesmo tempo. Inferir "fechado" pela ausência na
+// lista de acumulados derrubava a comparação para o exercício anterior: na
+// Belagro, contra 2024 em vez de 2025 — receita e custo acusados de fora do ritmo
+// quando estavam no ritmo, e a base da alavanca caindo de 741,1 para 592,0 mi.
+import { periodosDeExercicioFechado } from "./balancete-conversao";
+
+describe("periodosDeExercicioFechado", () => {
+  const per = ["2024", "30/11/2025", "31/12/2025", "31/05/2026"];
+
+  it("31/12 vindo de DEMONSTRATIVO (não balancete) fecha o exercício", () => {
+    expect(periodosDeExercicioFechado({ periodos: per })).toEqual(["2024", "31/12/2025"]);
+  });
+
+  it("31/12 de BALANCETE só fecha se a janela declarada começa em 01/01", () => {
+    const jan = [{ periodo: "31/12/2025", periodoInicio: "01/01/2025" }];
+    const dez = [{ periodo: "31/12/2025", periodoInicio: "01/12/2025" }];
+    expect(periodosDeExercicioFechado({ periodos: per, balancetes: jan })).toContain("31/12/2025");
+    expect(periodosDeExercicioFechado({ periodos: per, balancetes: dez })).not.toContain("31/12/2025");
+  });
+
+  it("mês parcial nunca fecha exercício — nem janeiro, nem novembro, nem maio", () => {
+    const r = periodosDeExercicioFechado({ periodos: ["31/01/2026", "30/11/2025", "31/05/2026"] });
+    expect(r).toEqual([]);
+  });
+
+  it("as duas listas SE SOBREPÕEM em 31/12 — de propósito", () => {
+    const dre = [{ conta: "Lucro Líquido", valores: { "30/11/2025": 9_669_025, "31/12/2025": 6_454_351 } }];
+    const bals = [{ periodo: "30/11/2025" }, { periodo: "31/12/2025" }];
+    expect(periodosQueAcumulam({ dre, balancetes: bals })).toContain("31/12/2025");
+    expect(periodosDeExercicioFechado({ periodos: ["31/12/2025"] })).toContain("31/12/2025");
+  });
+});
+
+// JANEIRO agora acumula — excluí-lo movia o defeito para fevereiro.
+describe("periodosQueAcumulam · janeiro", () => {
+  it("janeiro entra na lista (YTD jan = jan, e sem ele fevereiro quebra)", () => {
+    const dre = [{ conta: "Lucro Líquido", valores: { "31/01/2026": 1_156_428, "28/02/2026": 1_573_345 } }];
+    const bals = [{ periodo: "31/01/2026" }, { periodo: "28/02/2026" }];
+    expect(periodosQueAcumulam({ dre, balancetes: bals })).toEqual(["31/01/2026", "28/02/2026"]);
   });
 });

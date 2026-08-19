@@ -80,6 +80,11 @@ export function calcularValorCanonico(
    * relatório dá R$ 212,4 mi — e não reconciliava com o saldo do balanço.
    */
   periodosYTD?: string[],
+  /** Colunas que cobrem o EXERCÍCIO INTEIRO — base anual da alavanca de margem.
+   *  Inferir "fechado" pela ausência em `periodosYTD` derrubava a base para 2024
+   *  (R$ 592,0 mi) quando o fechamento certo era 2025 (R$ 741,1 mi), e podia até
+   *  eleger um balancete de JANEIRO a "exercício fechado". */
+  periodosFechados?: string[],
 ): ValorCanonico | null {
   if (!peerRows?.length || !indicadores?.length || !periodos?.length) return null;
   const ord = [...periodos].sort((a, b) => ordPeriodo(a) - ordPeriodo(b));
@@ -103,10 +108,11 @@ export function calcularValorCanonico(
   // Belagro, 73% da receita do YTD está em dois dos cinco meses, então os meses
   // restantes não repetem o ritmo. Quando existe exercício FECHADO na série, ele
   // é a base honesta; só na falta dele se recorre à extrapolação (declarada).
+  const fechados = new Set(periodosFechados ?? []);
   const anual = (() => {
     for (let i = ord.length - 1; i >= 0; i--) {
       const p = ord[i];
-      if (ytd.has(p)) continue;                       // coluna parcial não serve
+      if (!fechados.has(p)) continue;                 // prova POSITIVA de exercício
       const v = indicadores.find((x) => x.nome === "Receita Líquida")?.valores?.[p];
       if (typeof v === "number" && Number.isFinite(v) && v > 0) return { receita: v, periodo: p, extrapolada: false };
     }

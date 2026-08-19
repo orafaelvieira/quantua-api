@@ -473,11 +473,55 @@ export function periodosQueAcumulam(dados: {
     const m = p.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
     if (!m || b?.erro) continue;
     if (b?.provas?.exercicioEncerrado === true) continue; // movimento, não YTD
-    if (Number(m[2]) <= 1) continue;                      // janeiro: YTD = mês
+    // JANEIRO ENTRA. Ele acumula (YTD jan = jan) e excluí-lo movia o defeito de
+    // mês em vez de matá-lo: sem janeiro na lista, FEVEREIRO perdia o par
+    // `mesmoAcumulado` e o FC usava o YTD de 2 meses como resultado do mês —
+    // plug de −R$ 1.263.579 onde o certo é −R$ 107.151, e o excesso era, ao
+    // centavo, o lucro YTD de janeiro. A virada de exercício já é barrada pela
+    // guarda de mesmo ano no consumidor, não por esta lista.
     if (!temValor(p)) continue;                           // DRE não publicada
     out.push(p);
   }
   return out;
+}
+
+/**
+ * Períodos que cobrem o EXERCÍCIO INTEIRO (01/01 a 31/12) — a base de comparação
+ * anual. Pergunta DIFERENTE de `periodosQueAcumulam`, e é por isso que existe.
+ *
+ * O erro que motivou (18/08/2026): `proporcionalidade` e `valor-na-mesa`
+ * procuravam o exercício fechado pela AUSÊNCIA na lista de acumulados. Só que
+ * 31/12 é as duas coisas ao mesmo tempo — acumulado (é o YTD de 12 meses) E
+ * fechado. Estar na primeira lista o eliminava da segunda, e a comparação caía
+ * para o exercício ANTERIOR: na Belagro, contra 2024 em vez de 2025, o que
+ * acusava receita e custo de fora do ritmo quando estavam no ritmo, e derrubava
+ * a base da alavanca de margem de R$ 741,1 mi para R$ 592,0 mi.
+ *
+ * Regra: rótulo anual ("2024") sempre; coluna de 31/12 quando não vier de
+ * balancete, ou vier de balancete cuja janela declarada começa em 01/01. Nunca
+ * se INFERE "fechado" por ausência em outra lista.
+ */
+export function periodosDeExercicioFechado(dados: {
+  periodos?: string[];
+  balancetes?: unknown;
+  arvoresBalancete?: unknown;
+}): string[] {
+  const periodos = Array.isArray(dados?.periodos) ? dados.periodos : [];
+  const bals = Array.isArray(dados?.balancetes) ? (dados.balancetes as Array<Record<string, any>>) : [];
+  const arvores = Array.isArray(dados?.arvoresBalancete) ? (dados.arvoresBalancete as Array<Record<string, any>>) : [];
+  const doBalancete = new Map<string, Record<string, any>>();
+  for (const b of [...bals, ...arvores]) {
+    const p = String(b?.periodo ?? "");
+    if (p && !doBalancete.has(p)) doBalancete.set(p, b);
+  }
+  return periodos.filter((p) => {
+    const m = String(p).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return /^\s*\d{4}\s*$/.test(String(p)); // rótulo anual puro
+    if (Number(m[2]) !== 12) return false;            // só dezembro fecha o ano
+    const b = doBalancete.get(String(p));
+    if (!b) return true;                              // demonstrativo, não balancete
+    return /^01\/01\//.test(String(b?.periodoInicio ?? ""));
+  });
 }
 
 export function derivarDREMensal(dados: {

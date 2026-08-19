@@ -122,7 +122,7 @@ describe("valor-na-mesa — período acumulado (balancete)", () => {
   it("a alavanca de margem usa a receita do EXERCÍCIO FECHADO, não a extrapolada", () => {
     const inds = YTD_INDS.map((i) => i.nome === "Receita Líquida"
       ? { ...i, valores: { "31/12/2025": 741_125_792, "31/05/2026": 328_504_142 } } : i);
-    const r = calcularValorCanonico(inds, YTD_P, YTD_ROWS, [], BASE, ["31/05/2026"])!;
+    const r = calcularValorCanonico(inds, YTD_P, YTD_ROWS, [], BASE, ["31/05/2026"], ["31/12/2025"])!;
     const gap = 0.0696 - -0.0125;
     // 741,1 mi (fechamento) e NÃO 328,50 × 365/150 = 799,3 mi — extrapolar
     // pressupõe distribuição uniforme, falsa em negócio sazonal.
@@ -131,7 +131,7 @@ describe("valor-na-mesa — período acumulado (balancete)", () => {
   });
 
   it("sem exercício fechado na série, extrapola e DECLARA que extrapolou", () => {
-    const r = calcularValorCanonico(YTD_INDS, ["31/05/2026"], YTD_ROWS, [], BASE, ["31/05/2026"])!;
+    const r = calcularValorCanonico(YTD_INDS, ["31/05/2026"], YTD_ROWS, [], BASE, ["31/05/2026"], [])!;
     expect(pega(r, "Levar a margem").memoria).toContain("extrapolada");
   });
 
@@ -142,7 +142,16 @@ describe("valor-na-mesa — período acumulado (balancete)", () => {
   });
 
   it("período ANUAL continua com base 365 — nada muda para quem já estava certo", () => {
-    const r = calcularValorCanonico(INDS, PERIODOS, ROWS, DRE, BASE, [])!;
+    const r = calcularValorCanonico(INDS, PERIODOS, ROWS, DRE, BASE, [], PERIODOS)!;
     expect(r).toEqual(calcularValorCanonico(INDS, PERIODOS, ROWS, DRE, BASE)!);
+  });
+
+  it("balancete de JANEIRO nunca vira 'exercício fechado' — exige prova positiva", () => {
+    const inds = YTD_INDS.map((i) => i.nome === "Receita Líquida"
+      ? { ...i, valores: { "31/01/2026": 3_122_111, "31/05/2026": 328_504_142 } } : i);
+    // sem lista de fechados, extrapola e DECLARA — nunca elege janeiro
+    const r = calcularValorCanonico(inds, ["31/01/2026", "31/05/2026"], YTD_ROWS, [], BASE, ["31/05/2026"], [])!;
+    expect(pega(r, "Levar a margem").memoria).toContain("extrapolada");
+    expect(pega(r, "Levar a margem").memoria).not.toContain("31/01/2026");
   });
 });

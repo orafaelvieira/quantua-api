@@ -8,7 +8,7 @@ import { requireAuth, AuthRequest } from "../middleware/auth";
 import { downloadFile, uploadFile, deleteFile, getSignedDownloadUrl } from "../services/storage";
 import { parseDocument, dadosExtraidosToRaw, extrairTextoLayoutPDF, type ExtractedRow, type ParsedDocument } from "../services/parser";
 import { parseBalanceteTexto, pareceBalancete, type BalanceteParseado } from "../services/balancete-parser";
-import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal, periodosQueAcumulam } from "../services/balancete-conversao";
+import { converterBalancete, mesclarArvoresBalancete, derivarDREMensal, periodosQueAcumulam, periodosDeExercicioFechado } from "../services/balancete-conversao";
 import { medirProporcionalidade } from "../services/proporcionalidade";
 import { parseBalanceteTabular, pareceBalanceteTabular, ehArquivoTabular, csvParaMatriz, xlsxParaMatriz } from "../services/balancete-tabular";
 import { pdfEscaneado, ocrBalancete, ocrBalanceteVision, parseDaMatrizOcr, contarNaoFecham, avisoNaoFecham } from "../services/balancete-ocr";
@@ -1050,12 +1050,13 @@ async function runAnalysisBackground(
       // do valor na mesa e à conta regressiva (sem ela, /365 num período de 150 dias).
       (Array.isArray(dados?.arvoresBalancete) ? dados.arvoresBalancete : [])
         .map((a: { periodo?: string }) => a?.periodo).filter((x: unknown): x is string => typeof x === "string"),
+      periodosDeExercicioFechado({ periodos, balancetes: dados?.balancetes, arvoresBalancete: dados?.arvoresBalancete }),
       // CALCULADA NO CONSUMO, nao lida do persistido: o PUT da DRE altera as linhas
       // sem recalcular, e a medida velha entrava no prompt carimbada como FATO.
       // Tambem cobre IBR gravado antes desta versao, que cairia em null calado.
       medirProporcionalidade(dados?.dre ?? [], periodos,
         periodosQueAcumulam({ dre: dados?.dre ?? [], balancetes: dados?.balancetes, arvoresBalancete: dados?.arvoresBalancete }),
-        Array.isArray(dados?.balancetes) ? dados.balancetes : null),
+        periodosDeExercicioFechado({ periodos, balancetes: dados?.balancetes, arvoresBalancete: dados?.arvoresBalancete })),
     );
     const resultado = {
       ...analise.result,
@@ -2052,7 +2053,8 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
       // A janela YTD esta' no ritmo do ultimo exercicio fechado, LINHA A LINHA?
       // E' o que trava veredicto de fluxo — e nomeia QUAL linha desvia.
       proporcionalidade: medirProporcionalidade(structuredDRE, allPeriodos,
-        periodosQueAcumulam({ dre: structuredDRE, balancetes, arvoresBalancete }), balancetes),
+        periodosQueAcumulam({ dre: structuredDRE, balancetes, arvoresBalancete }),
+        periodosDeExercicioFechado({ periodos: allPeriodos, balancetes, arvoresBalancete })),
       version: 2,
       // O OCR de balancete é IA e entra no custo da extração ([[registrar-custo-ia]]).
       custoExtracao: {
@@ -2783,7 +2785,7 @@ router.post("/:id/refold", async (req: AuthRequest, res: Response): Promise<void
   ); // FC acompanha o refold (grátis)
   (dados as any).proporcionalidade = medirProporcionalidade(dados.dre ?? [], periodos,
     periodosQueAcumulam({ dre: dados.dre ?? [], balancetes: (dados as any)?.balancetes, arvoresBalancete: arvoresBalanceteRefold }),
-    Array.isArray((dados as any)?.balancetes) ? (dados as any).balancetes : null);
+    periodosDeExercicioFechado({ periodos, balancetes: (dados as any)?.balancetes, arvoresBalancete: arvoresBalanceteRefold }));
   // Pontes acompanham o refold pelo MESMO motivo do FC: reclassificar conta
   // muda os números — a decomposição não pode ficar velha ao lado deles.
   {
