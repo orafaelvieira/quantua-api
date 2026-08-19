@@ -270,7 +270,16 @@ function computeIndicator(
     case "Endividamento de Curto Prazo": return div(passivoCirculante, passivoTotal);
     case "Patrimônio Líquido": return patrimonioLiquido;
     case "Capital Terceiros s/ PL": return div(capitalTerceiros, patrimonioLiquido);
-    case "Dívida Líquida/EBITDA": return div(dividaLiquida, ebitda);
+    case "Dívida Líquida/EBITDA":
+      // N/M COM EBITDA <= 0. O múltiplo responde "quantos anos de geração pagam a
+      // dívida", e a pergunta não existe quando não há geração. Pior que ilegível,
+      // o sinal INVERTIA a leitura: a Belagro publicava −13,12 e o cartão de pares
+      // a classificava em P0 na régua "menor = melhor" — ou seja, a MENOS
+      // alavancada do grupo, com dívida líquida de R$ 54,1 mi e EBITDA negativo.
+      // String tira do percentil (Number.isFinite falha), do semáforo e dos cards
+      // (num() devolve null), e o formatador a imprime como está. EBITDA ausente
+      // continua null: "não medido" e "não mensurável" são coisas diferentes.
+      return !Number.isFinite(ebitda) ? null : ebitda > 0 ? div(dividaLiquida, ebitda) : "N/M";
     case "Índice de Cobertura de Juros":
       return div(ebitda, Math.abs(despesasFinanceiras));
     case "Despesa Financeira / Rec. Líquida":
