@@ -62,12 +62,16 @@ export interface CardDecisao {
    * a tela desenha `antes [campo] depois`. Fora da tela — no PDF, no Excel — vira
    * frase normal, porque premissa escondida transforma número em chute.
    */
-  edicao?: { chave: "mesesCaixaMinimo"; valor: number; antes: string; depois: string };
+  edicao?: { chave: "mesesCaixaMinimo" | "limiteAlavancagem"; valor: number; antes: string; depois: string };
 }
 
 export interface PremissasDecisao {
   /** Meses de desembolso operacional que a empresa quer manter em caixa. */
   mesesCaixaMinimo?: number;
+  /** Teto de Dívida Líquida/EBITDA que a empresa adota. Sem covenant no IBR, a
+   *  régua era 3,0x fixo — número do mercado, não desta empresa. Editável pelo
+   *  mesmo caminho da reserva mínima (pedido do dono, 19/08/2026). */
+  limiteAlavancagem?: number;
 }
 
 export const MESES_CAIXA_MINIMO_PADRAO = 3;
@@ -324,7 +328,15 @@ function cardDistribuicao(
         valor: dividaCP > 0 ? `-${brl(dividaCP)}` : brl(0),
         bruto: -dividaCP,
       },
-      { rotulo: "Distribuição segura", valor: brl(sobra), bruto: sobra, destaque: true },
+      // DISTRIBUIÇÃO NÃO É NEGATIVA (pedido do dono, 19/08/2026). A conta fecha
+      // em -R$ 241,70 mi e o cliente lia "distribuição segura: menos R$ 241,7
+      // milhões", que não quer dizer nada — ninguém distribui valor negativo. O
+      // que o número mede quando é negativo é o DÉFICIT até a linha de
+      // segurança, e é isso que a linha passa a dizer.
+      sobra > 0
+        ? { rotulo: "Distribuição segura", valor: brl(sobra), bruto: sobra, destaque: true }
+        : { rotulo: "Capacidade de distribuição", valor: brl(0), bruto: 0, destaque: true },
+      ...(sobra > 0 ? [] : [{ rotulo: "Déficit até a linha de segurança", valor: brl(-sobra), bruto: sobra }]),
     ],
     edicao: {
       chave: "mesesCaixaMinimo",
@@ -474,6 +486,17 @@ function cardCovenants(dados: DadosParaCards, p: string, covenants: CovenantPara
 
 /** Limite da casa quando o IBR não tem covenant de alavancagem. NÃO é regra de
  *  banco: é a régua de mercado mais comum em crédito PJ, e o card diz isso. */
+/**
+ * Rótulo que declara a JANELA da coluna. Balancete traz DRE acumulada no ano, e
+ * "EBITDA (05/2026)" fazia o leitor entender MAIO quando o número cobre
+ * janeiro a maio. Coluna anual não ganha sufixo — não há o que esclarecer.
+ */
+function rotuloAcumulado(p: string, rot: (x: string) => string): string {
+  const m = p.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const mes = m ? Number(m[2]) : 0;
+  return mes >= 1 && mes <= 11 ? `${rot(p)} · acum. ${mes} ${mes === 1 ? "mês" : "meses"}` : rot(p);
+}
+
 export const LIMITE_ALAVANCAGEM_PADRAO = 3.0;
 
 /**
@@ -501,6 +524,7 @@ function cardHeadroomCaptacao(
   dias: number,
   covenants: CovenantParaCard[],
   rot: (p: string) => string,
+  premissas: PremissasDecisao = {},
 ): CardDecisao | null {
   const ebitda = ebitdaDoPeriodo(dados, p);
   if (ebitda === null) return null; // sem EBITDA não há régua — e não se inventa uma
@@ -511,7 +535,7 @@ function cardHeadroomCaptacao(
     .filter((c) => nomeIndicadorDoCovenant(c.metric) === NOME_ALAVANCAGEM.toLowerCase())
     .filter((c) => (c.operator === "<=" || c.operator === "<") && Number.isFinite(c.threshold) && c.threshold > 0)
     .sort((a, b) => a.threshold - b.threshold)[0];
-  const limite = doContrato?.threshold ?? LIMITE_ALAVANCAGEM_PADRAO;
+  const limite = doContrato?.threshold ?? premissas.limiteAlavancagem ?? LIMITE_ALAVANCAGEM_PADRAO;
 
   const dividaLiquida = ind(dados, "Dívida Líquida", p)
     ?? (dividaBruta(dados, p) - val(dados.bp ?? [], "Caixa e Equivalentes de Caixa", p));
@@ -525,7 +549,9 @@ function cardHeadroomCaptacao(
     : "premissa desta análise";
 
   const linhas: LinhaCard[] = [
-    { rotulo: `EBITDA (${rot(p)})`, valor: brl(ebitda), bruto: ebitda },
+    // O rótulo dizia só "EBITDA (05/2026)" e o leitor entendia MAIO. A coluna de
+    // balancete é ACUMULADA no ano, então o número cobre janeiro a maio.
+    { rotulo: `EBITDA (${rotuloAcumulado(p, rot)})`, valor: brl(ebitda), bruto: ebitda },
     { rotulo: `Limite de alavancagem (${origemLimite})`, valor: `${mult(limite)} EBITDA`, bruto: limite },
     { rotulo: "Teto de dívida líquida no limite", valor: brl(teto), bruto: teto },
     {
@@ -549,7 +575,7 @@ function cardHeadroomCaptacao(
       premissas: [
         doContrato
           ? `Limite de ${mult(limite)} vem do covenant "${doContrato.name}" deste IBR.`
-          : `Sem covenant de ${NOME_ALAVANCAGEM} neste IBR: a régua de ${mult(LIMITE_ALAVANCAGEM_PADRAO)} é premissa desta análise, não uma exigência de banco.`,
+          : `Sem covenant de ${NOME_ALAVANCAGEM} neste IBR: a régua de ${mult(limite)} é premissa desta análise, não uma exigência de banco.`,
         "Com EBITDA negativo ou zero a capacidade de tomar dívida não se calcula por múltiplo — ela depende de garantia e de projeção, que não estão nesta base.",
         ...(parcial ? [`O período cobre ${dias} dias, não um ano: o EBITDA aqui é o acumulado desses meses.`] : []),
       ],
@@ -568,20 +594,34 @@ function cardHeadroomCaptacao(
   const folgaRelativa = dividaLiquida > 0 ? headroom / dividaLiquida : null;
   const apertado = folgaRelativa !== null && folgaRelativa < 0.25;
   const statusBase: StatusCard = headroom < 0 ? "critico" : apertado ? "atencao" : "ok";
-  const status = pior(statusBase, indStatus(dados, NOME_ALAVANCAGEM, p));
+  const status = pior(pior(statusBase, indStatus(dados, NOME_ALAVANCAGEM, p)), indStatus(dados, "Capital Terceiros s/ PL", p));
 
   // Múltiplo NEGATIVO não é leitura de alavancagem — é o efeito aritmético de ter
   // mais caixa que dívida, e "-0,18x EBITDA" na tela só confunde quem decide. O
   // ponto de partida já diz que há caixa líquido.
   const alavTxt = alavancagem !== null && alavancagem > 0 ? ` A alavancagem atual é ${mult(alavancagem)} EBITDA.` : "";
+
+  // ALAVANCAGEM PATRIMONIAL (pedido do dono, 19/08/2026). O teto por EBITDA
+  // responde "o resultado paga?"; capital de terceiros sobre PL responde "quem
+  // absorve a perda se não pagar?". São perguntas diferentes, e um teto de
+  // EBITDA confortável numa empresa com PL fino continua sendo dívida sem
+  // colchão. Entra como FATO e pelo semáforo que o motor já calibra na aba
+  // Indicadores — nenhum limiar novo é inventado aqui.
+  const alavPL = ind(dados, "Capital Terceiros s/ PL", p);
+  if (alavPL !== null && alavPL > 0) {
+    linhas.push({ rotulo: "Capital de terceiros sobre o patrimônio", valor: `${mult(alavPL)} o PL`, bruto: alavPL });
+  }
+  const alavPLTxt = alavPL !== null && alavPL > 0
+    ? ` Para cada R$ 1,00 dos sócios já há ${mult(alavPL).replace("x", "")} de terceiros — o teto por EBITDA diz se o resultado paga, não quem absorve a perda se ele não pagar.`
+    : "";
   const pontoPartida = dividaLiquida >= 0
     ? `partindo de uma dívida líquida de ${brl(dividaLiquida)}`
     : `partindo de um caixa líquido de ${brl(-dividaLiquida)} (hoje há mais caixa do que dívida)`;
   const resposta = headroom < 0
     ? `Não há espaço para dívida nova: a empresa já está ${brl(-headroom)} acima do teto de ${mult(limite)} EBITDA (${brl(teto)}).${alavTxt} O caminho aqui é amortizar ou renegociar o limite, não captar.`
     : apertado
-      ? `Sobram ${brl(headroom)} de espaço até o teto de ${mult(limite)} EBITDA — pouco perto da dívida líquida atual de ${brl(dividaLiquida)}.${alavTxt} Um trimestre fraco de EBITDA consome esse espaço sem a empresa tomar um centavo a mais.`
-      : `A empresa aguenta até ${brl(headroom)} de dívida nova antes de encostar no teto de ${mult(limite)} EBITDA (${brl(teto)}), ${pontoPartida}.${alavTxt}`;
+      ? `Sobram ${brl(headroom)} de espaço até o teto de ${mult(limite)} EBITDA — pouco perto da dívida líquida atual de ${brl(dividaLiquida)}.${alavTxt}${alavPLTxt} Um trimestre fraco de EBITDA consome esse espaço sem a empresa tomar um centavo a mais.`
+      : `A empresa aguenta até ${brl(headroom)} de dívida nova antes de encostar no teto de ${mult(limite)} EBITDA (${brl(teto)}), ${pontoPartida}.${alavTxt}${alavPLTxt}`;
 
   return {
     id: "headroom-captacao",
@@ -593,7 +633,7 @@ function cardHeadroomCaptacao(
     premissas: [
       doContrato
         ? `Limite de ${mult(limite)} vem do covenant "${doContrato.name}" deste IBR — se o contrato mudar, o cadastro de covenants é o lugar de corrigir.`
-        : `Sem covenant de ${NOME_ALAVANCAGEM} neste IBR: a régua de ${mult(LIMITE_ALAVANCAGEM_PADRAO)} é premissa desta análise, não uma exigência do banco desta empresa. Cadastre o covenant real para o número valer como compromisso.`,
+        : `Sem covenant de ${NOME_ALAVANCAGEM} neste IBR: a régua de ${mult(limite)} é premissa desta análise, não uma exigência do banco desta empresa. Cadastre o covenant real para o número valer como compromisso.`,
       "Dívida líquida = empréstimos e financiamentos (curto e longo prazo) + passivos com partes relacionadas − caixa e equivalentes, a mesma definição da aba Indicadores.",
       "A base contábil não traz cronograma de amortização: o número é um TETO DE SALDO, não uma janela de captação por vencimento — dívida que vence no mês que vem não abre espaço aqui.",
       "Capacidade de tomar não é conveniência de tomar: o teto diz até onde o múltiplo aguenta, não se o projeto paga o juro nem se o banco aprova.",
@@ -601,6 +641,17 @@ function cardHeadroomCaptacao(
         ? [`O período cobre ${dias} dias, não um ano, e o EBITDA NÃO foi anualizado (mesma base do indicador ${NOME_ALAVANCAGEM}): contra um limite anual, o teto sai subestimado.`]
         : []),
     ],
+    // O TETO DE EBITDA NÃO É A ÚNICA RÉGUA (pedido do dono, 19/08/2026). Sem
+    // covenant, quem escolhe o limite é o dono — o 3,0x era número de mercado,
+    // não desta empresa. O controle é o mesmo da reserva mínima.
+    ...(doContrato ? {} : {
+      edicao: {
+        chave: "limiteAlavancagem" as const,
+        valor: limite,
+        antes: "Teto de alavancagem =",
+        depois: `× EBITDA (sem covenant cadastrado, é premissa desta análise)`,
+      },
+    }),
   };
 }
 
@@ -852,7 +903,7 @@ function cardCrescerSemCaptar(
   const financiado = crescimentoReal !== null && crescimentoReal > sgr + 0.02;
 
   const statusBase: StatusCard = financiado || distribuiQuaseTudo ? "atencao" : "ok";
-  const status = pior(statusBase, indStatus(dados, NOME_ALAVANCAGEM, p));
+  const status = pior(pior(statusBase, indStatus(dados, NOME_ALAVANCAGEM, p)), indStatus(dados, "Capital Terceiros s/ PL", p));
 
   const linhas: LinhaCard[] = [
     { rotulo: `ROE (${rot(p)})`, valor: roeInflado ? "não comparável — patrimônio residual" : pct(roe), bruto: roeInflado ? null : roe },
@@ -953,8 +1004,8 @@ function cardReinvestimento(dados: DadosParaCards, rot: (p: string) => string): 
   const todosAbaixo = abaixoDeUm === comparaveis;
   const status: StatusCard = todosAbaixo && comparaveis >= 2 ? "atencao" : "ok";
   const resposta = todosAbaixo
-    ? `A empresa investe menos do que consome os próprios ativos em ${comparaveis === 1 ? "o período" : `todos os ${comparaveis} períodos`} — a capacidade produtiva está encolhendo no papel.`
-    : `Reinvestimento acima da depreciação em ${comparaveis - abaixoDeUm} de ${comparaveis} período(s) — a base de ativos se mantém.`;
+    ? `A empresa está investindo MENOS do que os próprios ativos se desgastam: em ${comparaveis === 1 ? "o período analisado" : `todos os ${comparaveis} períodos analisados`}, o que entrou em máquinas, veículos e instalações ficou abaixo da depreciação. Mantido esse ritmo, a capacidade de produzir encolhe — primeiro no papel, depois na operação.`
+    : `A empresa investe MAIS do que os próprios ativos se desgastam: em ${comparaveis - abaixoDeUm} de ${comparaveis} período(s), o que entrou em máquinas, veículos e instalações superou a depreciação. A base produtiva está sendo reposta, e não consumida.`;
 
   return {
     id: "reinvestimento",
@@ -962,7 +1013,12 @@ function cardReinvestimento(dados: DadosParaCards, rot: (p: string) => string): 
     pergunta: "Estou repondo o que gasto dos meus ativos?",
     status,
     resposta,
-    linhas,
+    // SEM a lista período a período (pedido do dono, 19/08/2026). Sete linhas de
+    // "3,77x (investiu R$ 2,27 mi · depreciou R$ 602 mil)" ocupavam meia página
+    // para dizer o que a resposta já diz numa frase — e o múltiplo isolado por
+    // período é ruidoso, porque capex é lumpy: um caminhão comprado num mês
+    // desloca o índice sem significar mudança de política de investimento.
+    linhas: [],
     premissas: [
       "Capex estimado pelo fluxo de caixa indireto (variação do imobilizado/intangível + depreciação do período).",
       "Abaixo de 1,0x por vários anos indica sucateamento — a menos que a operação esteja migrando para ativos de terceiros (aluguel, serviços).",
@@ -1131,13 +1187,25 @@ export function montarCardsDecisao(
   const cards = [
     cardDistribuicao(dados, p, dias, premissas),
     cardCovenants(dados, p, opts?.covenants ?? []),
-    cardHeadroomCaptacao(dados, p, dias, opts?.covenants ?? [], rot),
-    typeof custoRef === "number" && Number.isFinite(custoRef) && custoRef > 0
-      ? cardCustoDivida(dados, p, dias, custoRef, rot, periodoAnterior)
-      : null,
+    cardHeadroomCaptacao(dados, p, dias, opts?.covenants ?? [], rot, premissas),
+    // REMOVIDOS a pedido do dono (19/08/2026):
+    //
+    // · "O que a empresa paga de juros está acima ou abaixo do mercado?"
+    //   (cardCustoDivida) — a referência é a média NACIONAL de crédito PJ do
+    //   Banco Central, que não conhece porte, garantia, relacionamento nem ramo
+    //   desta empresa. Comparar a taxa de um cliente com ela e chamar de
+    //   "acima do mercado" afirma mais do que o dado sustenta.
+    //
+    // · "O lucro que aparece na DRE virou dinheiro no banco?"
+    //   (cardQualidadeLucro) — a mesma pergunta é respondida melhor, e com
+    //   decomposição auditável, pela ponte do EBITDA ao caixa (págs. 10-11).
+    //   Dois lugares dizendo a mesma coisa com réguas diferentes é onde nasce
+    //   contradição dentro do relatório.
+    //
+    // As funções seguem no arquivo, sem chamador, porque o cálculo está correto
+    // e a decisão foi editorial — se voltarem, voltam sem reescrita.
     cardCrescerSemCaptar(dados, p, dias, rot),
     cardReinvestimento(dados, rot),
-    cardQualidadeLucro(dados, rot),
     cardSensibilidade(dados, p, dias),
   ].filter((c): c is CardDecisao => c !== null);
 

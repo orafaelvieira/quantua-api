@@ -78,17 +78,27 @@ describe("cards de decisão", () => {
     expect(card.pergunta).toContain("dividendos");
     // Desembolso: 3,6M + 2,0M + 0,7M + 0,03M − 0,22M(D&A) = 6,11M/ano ≈ 16.740/dia
     // Reserva 3 meses ≈ 1,507 mi > caixa de 1,5 mi → sobra negativa com dívida CP.
+    // SEM SOBRA a linha não diz "distribuição segura: -R$ X" — ninguém distribui
+    // valor negativo. Diz capacidade ZERO, e o que falta vira déficit em linha
+    // própria (pedido do dono, 19/08/2026).
     const linhaSobra = card.linhas.find((l) => l.destaque)!;
-    expect(linhaSobra.rotulo).toBe("Distribuição segura");
-    expect(linhaSobra.bruto!).toBeLessThan(0);
+    expect(linhaSobra.rotulo).toBe("Capacidade de distribuição");
+    expect(linhaSobra.bruto).toBe(0);
+    const deficit = card.linhas.find((l) => l.rotulo.startsWith("Déficit"))!;
+    expect(deficit.bruto!).toBeLessThan(0);
+    expect(deficit.valor).not.toContain("-");
     // Sem folga HOJE, mas a operação gera caixa e recompõe a diferença rápido:
     // isso é atenção, não crítico. Marcar crítico numa empresa sem dívida que
     // gera caixa foi o primeiro defeito que o dono viu na tela real.
     expect(card.status).toBe("atencao");
     expect(card.resposta).toMatch(/Nada a distribuir hoje/i);
     expect(card.resposta).toMatch(/recompõe.*em cerca de \d+ (mês|meses)/i);
-    // A conta PARA na linha de destaque — a geração recorrente não é parcela dela.
-    expect(card.linhas[card.linhas.length - 1]!.rotulo).toBe("Distribuição segura");
+    // A conta PARA no destaque — a geração recorrente não é parcela dela. Depois
+    // do destaque só cabe RESTATEMENT do próprio total, nunca outra parcela: o
+    // déficit é o mesmo número lido pelo outro lado, e o rótulo impede que passe
+    // por parcela de uma soma que termina em R$ 0.
+    const iDestaque = card.linhas.findIndex((l) => l.destaque);
+    expect(card.linhas.slice(iDestaque + 1).map((l) => l.rotulo)).toEqual(["Déficit até a linha de segurança"]);
     // A premissa do prazo aparece SEMPRE — o número sozinho não decide nada.
     expect(card.edicao).toMatchObject({ chave: "mesesCaixaMinimo", valor: MESES_CAIXA_MINIMO_PADRAO });
     expect(card.edicao!.depois).toMatch(/desembolso operacional/i);
@@ -311,48 +321,9 @@ describe("cards de decisão", () => {
 
   // ── Custo da dívida ─────────────────────────────────────────────────────────
 
-  it("custo da dívida: despesa financeira sobre a dívida MÉDIA, contra a referência de crédito PJ", () => {
-    const d = cenario();
-    d.dre = d.dre.map((l) => (l.conta === "Despesas Financeiras" ? { ...l, valores: { [P0]: -230_000, [P1]: -260_000 } } : l));
-    const card = montarCardsDecisao(d, { benchmarks: { custoMedioDivida: REF_CREDITO_PJ } })!
-      .cards.find((c) => c.id === "custo-divida")!;
-    // Dívida das QUATRO contas: 1,16 mi (2023) e 0,9 mi (2024) → média 1,03 mi.
-    expect(card.linhas.find((l) => /Dívida média/.test(l.rotulo))!.bruto).toBe(1_030_000);
-    // 260 mil / 1,03 mi = 25,2% a.a. — acima de 1,3× a referência de 18,3%.
-    expect(card.linhas.find((l) => l.destaque)!.bruto!).toBeCloseTo(0.2524, 4);
-    // A fixture não traz semáforo de alavancagem nem de cobertura: sem perfil de
-    // risco, o desvio NÃO vira veredicto (correção do dono, 16/08) — o card
-    // informa e manda conferir composição e data de contratação.
-    expect(card.status).toBe("informativo");
-    expect(card.resposta).toMatch(/acima da referência de mercado para crédito PJ/i);
-    // Efeito em R$: 6,94 p.p. sobre 1,03 mi ≈ R$ 71,5 mil por ano.
-    expect(card.linhas.find((l) => /custa por ano/.test(l.rotulo))!.bruto!).toBeCloseTo(71_510, 0);
-    expect(card.premissas.join(" ")).toMatch(/IOF, tarifas/i);
-    expect(card.premissas.join(" ")).toMatch(/aproximação POR CIMA/i);
-  });
-
-  it("custo da dívida NÃO fala em ramo de atividade: a referência é nacional", () => {
-    // A série é CDI + spread PJ do Banco Central — vale para o país inteiro. Dizer
-    // "acima da média do seu setor" seria inventar uma comparação que não existe.
-    const d = cenario();
-    d.dre = d.dre.map((l) => (l.conta === "Despesas Financeiras" ? { ...l, valores: { [P0]: -230_000, [P1]: -260_000 } } : l));
-    const card = montarCardsDecisao(d, { benchmarks: { custoMedioDivida: REF_CREDITO_PJ } })!
-      .cards.find((c) => c.id === "custo-divida")!;
-    expect(JSON.stringify(card)).not.toMatch(/setor/i);
-    expect(card.premissas.join(" ")).toMatch(/NACIONAL para crédito PJ/);
-    expect(card.premissas.join(" ")).toMatch(/não é a média do ramo de atividade desta empresa/i);
-  });
-
-  it("dívida mais barata que o mercado é 'ok' e mostra a economia", () => {
-    const d = cenario();
-    d.dre = d.dre.map((l) => (l.conta === "Despesas Financeiras" ? { ...l, valores: { [P0]: -140_000, [P1]: -150_000 } } : l));
-    const card = montarCardsDecisao(d, { benchmarks: { custoMedioDivida: REF_CREDITO_PJ } })!
-      .cards.find((c) => c.id === "custo-divida")!;
-    expect(card.status).toBe("ok"); // 14,6% a.a. contra 18,3%
-    expect(card.resposta).toMatch(/abaixo da referência de mercado para crédito PJ/i);
-    expect(card.linhas.find((l) => /economiza por ano/.test(l.rotulo))!.bruto!).toBeLessThan(0);
-  });
-
+  
+  
+  
   it("sem referência de mercado, ou sem despesa financeira, o card de custo não aparece", () => {
     // Sem o benchmark não há com o que comparar — e não se inventa uma taxa.
     expect(montarCardsDecisao(cenario())!.cards.find((c) => c.id === "custo-divida")).toBeUndefined();
@@ -371,35 +342,7 @@ describe("cards de decisão", () => {
     ).toBeUndefined();
   });
 
-  it("balancete de meio de ano: anualiza a despesa e diz que a média de dívida não se formou", () => {
-    // Comparar 5 meses de juro com uma taxa ANUAL diria "sua dívida está barata"
-    // para quem paga caro — o card anualiza e declara o fator.
-    const P = "31/05/2026";
-    const d = {
-      ...cenario(),
-      periodos: [P],
-      arvoresBalancete: [{ periodo: P }],
-      dre: [
-        { conta: "Receita Líquida", subtotal: true, editado: false, valores: { [P]: 3_000_000 } },
-        { conta: "Despesas Financeiras", subtotal: false, editado: false, valores: { [P]: -100_000 } },
-      ] as never,
-      bp: [
-        { classificacao: "AF", conta: "Caixa e Equivalentes de Caixa", nivel: 2, editado: false, valores: { [P]: 500_000 } },
-        { classificacao: "PF", conta: "Empréstimos e Financiamentos - CP", nivel: 2, editado: false, valores: { [P]: 1_200_000 } },
-      ] as never,
-      indicadores: [] as never,
-    };
-    const card = montarCardsDecisao(d, { benchmarks: { custoMedioDivida: REF_CREDITO_PJ } })!
-      .cards.find((c) => c.id === "custo-divida")!;
-    // 100 mil em 150 dias → 243 mil/ano sobre 1,2 mi de dívida = 20,3% a.a.
-    expect(card.linhas.find((l) => l.destaque)!.bruto!).toBeCloseTo(0.2028, 4);
-    expect(card.status).toBe("informativo"); // sem indicadores, sem perfil de risco
-    expect(card.linhas[0]!.rotulo).toBe("Despesa financeira (05/2026, anualizada)");
-    expect(card.premissas.join(" ")).toMatch(/anualizada \(×2,43\)/);
-    expect(card.premissas.join(" ")).toMatch(/Não há saldo de dívida no período anterior/i);
-    expect(JSON.stringify(card)).not.toMatch(/\d{2}\/\d{2}\/\d{4}/);
-  });
-
+  
   // ── Crescer sem captar ──────────────────────────────────────────────────────
 
   it("crescimento sustentável: sem retirada registrada, assume retenção total e DECLARA", () => {
@@ -452,7 +395,7 @@ describe("cards de decisão", () => {
     expect(montarCardsDecisao(d)!.cards.find((c) => c.id === "crescer-sem-captar")).toBeUndefined();
   });
 
-  it("os três cards novos entram entre covenants e reinvestimento, sem data crua", () => {
+  it("custo-divida e qualidade-lucro NÃO entram — removidos a pedido do dono (19/08)", () => {
     const d = cenario();
     d.dre = d.dre.map((l) => (l.conta === "Despesas Financeiras" ? { ...l, valores: { [P0]: -230_000, [P1]: -260_000 } } : l));
     const r = montarCardsDecisao(d, {
@@ -461,36 +404,26 @@ describe("cards de decisão", () => {
     })!;
     const ids = r.cards.map((c) => c.id);
     expect(ids).toEqual([
-      "distribuicao", "covenants", "headroom-captacao", "custo-divida",
-      "crescer-sem-captar", "reinvestimento", "qualidade-lucro", "sensibilidade",
+      "distribuicao", "covenants", "headroom-captacao",
+      "crescer-sem-captar", "reinvestimento", "sensibilidade",
     ]);
+    // Mesmo com a referência de crédito PJ disponível, o card de custo da dívida
+    // não nasce: a média NACIONAL do BC não conhece porte, garantia nem
+    // relacionamento desta empresa, e chamar a taxa dela de "acima do mercado"
+    // afirma mais do que o dado sustenta.
+    expect(ids).not.toContain("custo-divida");
+    // A pergunta "o lucro virou caixa?" é respondida pela ponte do EBITDA ao
+    // caixa, com decomposição auditável. Dois lugares com réguas diferentes é
+    // onde nasce contradição dentro do relatório.
+    expect(ids).not.toContain("qualidade-lucro");
     // Regra do dono: "31/12/2024" é chave do dado, não linguagem de relatório.
-    const novos = r.cards.filter((c) => ["headroom-captacao", "custo-divida", "crescer-sem-captar"].includes(c.id));
+    const novos = r.cards.filter((c) => ["headroom-captacao", "crescer-sem-captar"].includes(c.id));
     expect(JSON.stringify(novos)).not.toMatch(/\d{2}\/\d{2}\/\d{4}/);
     expect(JSON.stringify(novos)).toContain("2024");
   });
 
-  it("prejuízo não vira taxa de conversão", () => {
-    // Prejuízo com operação gerando caixa (D&A alta) — o caso distressed típico.
-    // Dividir daria -0,5 e o card gritaria "crítico" numa operação que gera caixa.
-    const d = cenario();
-    d.dre = d.dre.map((l) => (l.conta === "Lucro Líquido" ? { ...l, valores: { [P0]: -800_000, [P1]: -2_000_000 } } : l));
-    const card = montarCardsDecisao(d)!.cards.find((c) => c.id === "qualidade-lucro")!;
-    expect(card.status).toBe("atencao"); // gera caixa apesar do prejuízo
-    expect(card.resposta).toMatch(/prejuízo/i);
-    expect(card.resposta).not.toMatch(/-0,5|-0\.5/);
-    expect(card.premissas.join(" ")).toMatch(/não existe taxa de conversão/i);
-  });
-
-  it("prejuízo com caixa negativo é crítico", () => {
-    const d = cenario();
-    d.dre = d.dre.map((l) => (l.conta === "Lucro Líquido" ? { ...l, valores: { [P0]: -800_000, [P1]: -2_000_000 } } : l));
-    (d.fluxoCaixa as never as { totais: { fco: Record<string, number> } }).totais.fco[P1] = -900_000;
-    const card = montarCardsDecisao(d)!.cards.find((c) => c.id === "qualidade-lucro")!;
-    expect(card.status).toBe("critico");
-    expect(card.resposta).toMatch(/saindo do bolso/i);
-  });
-
+  
+  
   it("período parcial anualiza o efeito da margem e declara o fator", () => {
     // Balancete YTD de 5 meses: "por ano" sobre a receita de 5 meses subestima 2,4x.
     const P = "31/05/2026";
@@ -515,19 +448,16 @@ describe("cards de decisão", () => {
     const d = cenario();
     const r = montarCardsDecisao(d)!;
     const card = r.cards.find((c) => c.id === "reinvestimento")!;
-    // capex 150k ÷ D&A 220k = 0,68x — abaixo de 1
-    expect(card.linhas[0]!.bruto!).toBeCloseTo(0.68, 2);
-    expect(card.resposta).toMatch(/investe menos/i);
+    // capex 150k ÷ D&A 220k = 0,68x — abaixo de 1, e a RESPOSTA diz isso em
+    // linguagem de dono. A lista período a período saiu (pedido do dono): o
+    // múltiplo isolado é ruidoso porque capex é lumpy — um caminhão comprado
+    // num mês desloca o índice sem mudar a política de investimento.
+    expect(card.linhas).toEqual([]);
+    expect(card.resposta).toMatch(/investindo MENOS/);
+    expect(card.resposta).toMatch(/abaixo da deprecia/i);
   });
 
-  it("qualidade do lucro: mede quanto do lucro virou caixa", () => {
-    const r = montarCardsDecisao(cenario())!;
-    const card = r.cards.find((c) => c.id === "qualidade-lucro")!;
-    // FCO 1,1 mi ÷ lucro 1,2 mi = 0,92x
-    expect(card.status).toBe("ok");
-    expect(card.resposta).toMatch(/vira caixa/i);
-  });
-
+  
   it("sensibilidade declara o que NÃO é calculável sem fixo × variável", () => {
     const r = montarCardsDecisao(cenario())!;
     const card = r.cards.find((c) => c.id === "sensibilidade")!;
@@ -544,63 +474,9 @@ describe("cards de decisão", () => {
     })!;
     const texto = JSON.stringify(r.cards);
     expect(texto).not.toMatch(/\d{2}\/\d{2}\/\d{4}/);
-    expect(r.cards.find((c) => c.id === "qualidade-lucro")!.linhas.map((l) => l.rotulo)).toEqual(["2024"]);
   });
 
-  describe("custo da dívida: o desvio depende do perfil de risco", () => {
-    /** Empresa pagando 30% a.a. contra referência de 18,3%. */
-    const caro = (perfil: { alav?: string; cob?: string }) => {
-      const d = cenario();
-      d.dre = d.dre.map((l) => (l.conta === "Despesas Financeiras" ? { ...l, valores: { [P0]: -40_000, [P1]: -300_000 } } : l));
-      d.indicadores = d.indicadores.map((i) =>
-        i.nome === "Dívida Líquida/EBITDA"
-          ? ({ ...i, valores: { [P1]: 1.2 }, status: { [P1]: perfil.alav ?? null } } as never)
-          : i,
-      );
-      if (perfil.cob) {
-        d.indicadores = [...d.indicadores, { nome: "Índice de Cobertura de Juros", valores: { [P1]: 8 }, status: { [P1]: perfil.cob } } as never];
-      }
-      return montarCardsDecisao(d, { benchmarks: { custoMedioDivida: REF_CREDITO_PJ } })!
-        .cards.find((c) => c.id === "custo-divida")!;
-    };
-
-    it("risco baixo pagando prêmio: há barganha a exercer", () => {
-      const card = caro({ alav: "ok", cob: "ok" });
-      expect(card.status).toBe("atencao");
-      expect(card.resposta).toMatch(/risco desta empresa não explica o prêmio/i);
-      expect(card.linhas.some((l) => /Cobertura de juros/.test(l.rotulo))).toBe(true);
-    });
-
-    it("risco elevado: o prêmio é preço de risco, não erro de negociação", () => {
-      const card = caro({ alav: "critico" });
-      expect(card.status).toBe("informativo");
-      expect(card.resposta).toMatch(/perfil de risco da empresa ajuda a explicar/i);
-      expect(card.resposta).toMatch(/depois da alavancagem, não antes/i);
-    });
-
-    it("sem sinal de perfil, o card não julga — manda conferir", () => {
-      const card = caro({});
-      expect(card.status).toBe("informativo");
-      expect(card.resposta).toMatch(/Antes de concluir que está cara/i);
-    });
-
-    it("nunca marca crítico pelo desvio, por maior que ele seja", () => {
-      const d = cenario();
-      d.dre = d.dre.map((l) => (l.conta === "Despesas Financeiras" ? { ...l, valores: { [P0]: -40_000, [P1]: -900_000 } } : l));
-      const card = montarCardsDecisao(d, { benchmarks: { custoMedioDivida: REF_CREDITO_PJ } })!
-        .cards.find((c) => c.id === "custo-divida")!;
-      expect(card.status).not.toBe("critico");
-    });
-
-    it("declara o descasamento de tempo e a composição da dívida", () => {
-      const prem = caro({ alav: "ok", cob: "ok" }).premissas.join(" ");
-      expect(prem).toMatch(/taxa de HOJE/);
-      expect(prem).toMatch(/CDI de cada época/i);
-      expect(prem).toMatch(/BNDES/);
-      expect(prem).toMatch(/NÃO é um rating de crédito/i);
-    });
-  });
-
+  
   it("ROE inflado por patrimônio residual não vira taxa de crescimento", () => {
     // Caso real: empresa que distribui tudo fica com PL minúsculo, o ROE explode
     // (626,5% numa tela de produção) e qualquer coisa multiplicada por ele vira
@@ -656,5 +532,42 @@ describe("cards de decisão", () => {
 
   it("sem dados não inventa card", () => {
     expect(montarCardsDecisao({ periodos: [] })).toBeNull();
+  });
+});
+
+// ── Ajustes pedidos pelo dono em 19/08/2026 ──
+describe("cards de decisão · ajustes de 19/08", () => {
+  it("o teto de alavancagem é PREMISSA editável quando não há covenant", () => {
+    const r = montarCardsDecisao(cenario(), { premissas: { limiteAlavancagem: 2.5 } })!;
+    const card = r.cards.find((c) => c.id === "headroom-captacao")!;
+    expect(card.edicao).toMatchObject({ chave: "limiteAlavancagem", valor: 2.5 });
+    expect(JSON.stringify(card)).toContain("2,5x");
+    // o 3,0x de fábrica é número de mercado, não desta empresa — não pode sobrar
+    expect(JSON.stringify(card.premissas)).not.toContain("3,0x");
+  });
+
+  it("covenant cadastrado MANDA — e aí não há premissa para o dono editar", () => {
+    const r = montarCardsDecisao(cenario(), {
+      premissas: { limiteAlavancagem: 2.5 },
+      covenants: [{ name: "Alavancagem máxima", metric: "Dívida Líquida/EBITDA", operator: "<=", threshold: 4 }],
+    })!;
+    const card = r.cards.find((c) => c.id === "headroom-captacao")!;
+    expect(JSON.stringify(card)).toContain("4,0x");
+    expect(card.edicao).toBeUndefined();
+  });
+
+  it("alavancagem PATRIMONIAL entra no card de dívida nova, como fato", () => {
+    const d = cenario();
+    d.indicadores = [...(d.indicadores ?? []), { nome: "Capital Terceiros s/ PL", valores: { [P1]: 5.63 } } as never];
+    const card = montarCardsDecisao(d)!.cards.find((c) => c.id === "headroom-captacao")!;
+    expect(card.linhas.some((l) => l.rotulo.startsWith("Capital de terceiros"))).toBe(true);
+    // o teto por EBITDA diz se o resultado paga; isto diz quem absorve a perda
+    expect(card.resposta).toMatch(/absorve a perda/);
+  });
+
+  it("reposição de ativos explica em linguagem de dono, sem a lista por período", () => {
+    const card = montarCardsDecisao(cenario())!.cards.find((c) => c.id === "reinvestimento")!;
+    expect(card.linhas).toEqual([]);
+    expect(card.resposta).toMatch(/máquinas, veículos e instalações/);
   });
 });

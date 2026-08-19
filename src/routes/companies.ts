@@ -122,6 +122,10 @@ const companySchema = z.object({
   // Teto de 24 meses: acima disso não é reserva, é decisão de investimento.
   premissasDecisao: z.object({
     mesesCaixaMinimo: z.number().finite().min(0).max(24).optional(),
+    // Teto de Dívida Líquida/EBITDA. Sem covenant cadastrado a régua era 3,0x
+    // fixo — número de mercado, não desta empresa. Teto de 10x: acima disso o
+    // múltiplo deixa de ser régua de crédito e vira outra conversa.
+    limiteAlavancagem: z.number().finite().min(0.5).max(10).optional(),
   }).optional(),
 });
 
