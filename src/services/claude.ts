@@ -459,7 +459,7 @@ export async function generateAnalysis(
   /** Colunas que cobrem o exercício inteiro — base anual das alavancas. */
   periodosFechados?: string[],
   /** Teste de proporcionalidade da janela YTD — trava veredicto de fluxo. */
-  proporcionalidade?: { temDesvio: boolean; desviantes: string[]; leitura: string } | null,
+  proporcionalidade?: { leitura: string } | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
   // Ordem CRONOLÓGICA uma vez, para TODO o prompt (séries de indicadores, bloco da DRE,
   // KPIs, estágio) — dados.periodos pode vir na ordem dos documentos (ex.: 2022, 2020, 2021).
@@ -504,10 +504,14 @@ export async function generateAnalysis(
   // linhas que DESVIAM, não para a janela inteira. Na Belagro receita e custo
   // estão no ritmo e o desvio está em EBITDA e despesa financeira — medir
   // concentração de receita apontava o lado errado.
-  const propBlock = proporcionalidade?.temDesvio
+  // REGRA INCONDICIONAL. Antes ela só valia para as linhas que o motor tivesse
+  // classificado como "fora da faixa" — e a faixa era um limiar inventado. Sem
+  // limiar, a condição que justifica a regra (a janela é PARCIAL) é sempre
+  // verdadeira quando há proporcionalidade medida, então a regra vale sempre.
+  const propBlock = proporcionalidade
     ? `
 PROPORCIONALIDADE DA JANELA (medida pelo MOTOR contra o último exercício fechado — FATO): ${proporcionalidade.leitura}
-REGRA OBRIGATÓRIA: para as linhas FORA DO RITMO (${proporcionalidade.desviantes.join(", ")}) e para todo indicador derivado delas, NÃO afirme deterioração, prejuízo ou incapacidade apoiado SOMENTE na coluna acumulada: cite o valor do exercício fechado ao lado e diga que a causa (sazonalidade × deterioração) não é determinável com esta base. Para as linhas NO RITMO e para indicadores de BALANÇO (endividamento, liquidez, patrimônio, estrutura de dívida), DIAGNOSTIQUE NORMALMENTE — são comparações válidas e o relatório perde valor se você se calar sobre elas.`
+REGRA OBRIGATÓRIA: ao afirmar QUALQUER coisa sobre margem, EBITDA, cobertura de juros, prazos médios, ciclo ou resultado, cite ao lado o valor do exercício fechado e diga que a janela é parcial. NÃO conclua deterioração, prejuízo ou incapacidade a partir da coluna acumulada sozinha — a causa (sazonalidade × deterioração) não é determinável com esta base. Indicadores de BALANÇO (endividamento, liquidez, patrimônio, estrutura de dívida) comparam saldo com saldo: DIAGNOSTIQUE-OS NORMALMENTE, o relatório perde valor se você se calar sobre eles.`
     : "";
   const regressivaBlock = contaRegressiva
     ? `\nCONTA REGRESSIVA DE CAIXA (calculada pelo MOTOR — use como VERDADE, NÃO recalcule): ${contaRegressiva.leitura}`

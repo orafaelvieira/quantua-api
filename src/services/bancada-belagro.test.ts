@@ -147,16 +147,21 @@ describe("bancada Belagro · proporcionalidade", () => {
     expect(pr.periodoFechado).toBe("31/12/2025");
   });
 
-  it("receita e custo estão NO ritmo — a margem negativa não é atraso de safra", () => {
+  it("receita e custo perto do proporcional — a margem negativa não é atraso de safra", () => {
     expect(ritmo("Receita Líquida")).toBeCloseTo(1.06, 2);
     expect(ritmo("Custo Operacional")).toBeCloseTo(1.07, 2);
-    expect(pr.desviantes).not.toContain("Receita Líquida");
   });
 
-  it("EBITDA e despesa financeira desviam — é aí que a trava vale", () => {
+  it("EBITDA e despesa financeira longe do proporcional — o motor NOMEIA, não julga", () => {
     expect(ritmo("EBITDA")).toBeCloseTo(-0.72, 2);
     expect(ritmo("Despesas Financeiras")).toBeCloseTo(2.04, 2);
-    expect(pr.desviantes).toContain("EBITDA");
-    expect(pr.desviantes).toContain("Despesas Financeiras");
+  });
+
+  // A leitura tem de entregar FATO, nunca sentença: nenhum limiar foi medido,
+  // então nada de "fora da faixa" / "acima do aceitável".
+  it("a leitura publica os dois fatos e recusa classificar", () => {
+    expect(pr.leitura).toContain("41,7% do calendário");
+    expect(pr.leitura).toContain("não classifica desvio como grande ou pequeno");
+    expect(pr.leitura).not.toMatch(/FORA do ritmo|fora da faixa/i);
   });
 });

@@ -15,21 +15,35 @@
  * marcava a empresa como "janela não proporcional". O desvio real está no
  * RESULTADO e na DESPESA FINANCEIRA, e só o teste linha a linha o encontra.
  *
- * O que este teste NÃO faz: separar sazonalidade de deterioração. Ele NOMEIA a
- * linha que desvia e o tamanho do desvio; a causa exige o mesmo mês do ano
- * anterior, que a base não tem. Por isso a saída trava o veredicto em vez de
- * emitir um.
+ * O que este teste NÃO faz: separar sazonalidade de deterioração, nem julgar se
+ * um desvio é grande. Ele publica DOIS FATOS por linha — quanto do exercício
+ * fechado a janela já realizou e quanto do calendário já passou — e a razão
+ * entre eles. A causa exige o mesmo mês do ano anterior, que a base não tem, e
+ * o tamanho aceitável dependeria de um limiar que ninguém mediu. Quem lê julga.
  */
 
 /** Linhas testadas — a espinha da DRE, do topo ao resultado. */
 const LINHAS = ["Receita Líquida", "Custo Operacional", "EBITDA", "Despesas Financeiras", "Lucro Líquido"] as const;
 
-/** Fora desta faixa a linha não está no ritmo do exercício fechado. */
-const FAIXA: [number, number] = [0.85, 1.15];
+/**
+ * SEM LIMIAR, DE PROPÓSITO (19/08/2026, decisão do dono: "não podemos inventar
+ * números").
+ *
+ * A versão anterior classificava a linha como dentro ou fora de uma faixa de
+ * ±15%. Esses 15% eram invenção minha: não vinham de documento nenhum, não se
+ * ajustavam ao ponto do ano (com 1 mês fechado a janela é 1/12 do exercício e um
+ * contrato grande move o ritmo em 30% sem nada de errado) e, numa carteira
+ * sazonal, acenderiam quase sempre — aviso que sempre acende vira ruído.
+ *
+ * Agora não há classificação. O motor publica DOIS FATOS medidos por linha —
+ * quanto do exercício fechado a janela já realizou, e quanto do calendário já
+ * passou — e a razão entre eles. Quem lê julga. É estritamente mais honesto e
+ * elimina o único número inventado que havia aqui.
+ *
+ * O que sobra abaixo não é afirmação sobre o negócio, é higiene numérica.
+ */
 /** Denominador irrelevante: fechamento perto de zero não é base de razão. */
 const MIN_BASE = 1_000;
-/** Exercício fechado mais antigo que isso não é referência do mesmo negócio. */
-const MAX_ANOS = 2;
 
 export interface LinhaProporcional {
   conta: string;
@@ -41,7 +55,6 @@ export interface LinhaProporcional {
   razao: number;
   /** razao ÷ fração de calendário decorrida. 1,0 = exatamente no ritmo. */
   ritmo: number;
-  desvia: boolean;
 }
 
 export interface Proporcionalidade {
@@ -52,10 +65,6 @@ export interface Proporcionalidade {
   /** meses ÷ 12. */
   fracaoCalendario: number;
   linhas: LinhaProporcional[];
-  /** Contas fora da faixa — onde o veredicto de fluxo fica travado. */
-  desviantes: string[];
-  /** true = ao menos uma linha fora do ritmo. */
-  temDesvio: boolean;
   leitura: string;
 }
 
@@ -99,8 +108,10 @@ export function medirProporcionalidade(
     .sort((a, b) => anoDe(a) - anoDe(b) || (ehMensal(a) ? 0 : 1) - (ehMensal(b) ? 0 : 1));
   const fechadoP = fechados.at(-1);
   if (!fechadoP) return null;
-  // DISTÂNCIA: base velha demais deixa de ser referência do mesmo negócio.
-  if (anoCorrente - anoDe(fechadoP) > MAX_ANOS) return null;
+  // SEM CORTE POR IDADE. Um corte silencioso já custou caro hoje (exigir
+  // `periodoInicio` apagou a régua inteira). A referência vai SEMPRE nomeada na
+  // leitura — "exercício fechado de 2019" se avisa sozinho, e mostrar com
+  // ressalva é melhor que recusar em silêncio.
 
   const fracao = meses / 12;
   const val = (conta: string, p: string): number | null => {
@@ -124,21 +135,20 @@ export function medirProporcionalidade(
     if (a === null || b === null || Math.abs(b) < MIN_BASE || Math.abs(a) < 0.005) continue;
     const razao = a / b;
     const ritmo = razao / fracao;
-    linhas.push({ conta, ytd: a, fechado: b, razao, ritmo, desvia: ritmo < FAIXA[0] || ritmo > FAIXA[1] });
+    linhas.push({ conta, ytd: a, fechado: b, razao, ritmo });
   }
   if (!linhas.length) return null;
 
-  const desviantes = linhas.filter((l) => l.desvia).map((l) => l.conta);
-  const temDesvio = desviantes.length > 0;
+  const pct = (v: number) => `${(v * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`;
   const x = (v: number) => `${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}×`;
-  const noRitmo = linhas.filter((l) => !l.desvia).map((l) => l.conta);
 
-  const leitura = temDesvio
-    ? `Comparado ao exercício fechado de ${rot(fechadoP, true)}, o acumulado de ${meses} meses de ${anoCorrente} realizou ${(fracao * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% do calendário. ` +
-      (noRitmo.length ? `No ritmo: ${noRitmo.join(", ")}. ` : "") +
-      `FORA do ritmo: ${linhas.filter((l) => l.desvia).map((l) => `${l.conta} a ${x(l.ritmo)} do proporcional`).join("; ")}. ` +
-      `O desvio está nessas linhas, não na janela inteira — e este teste NÃO distingue sazonalidade de deterioração, porque isso exigiria o mesmo mês do exercício anterior, que não está na base.`
-    : `Comparado ao exercício fechado de ${rot(fechadoP, true)}, todas as linhas testadas do acumulado de ${meses} meses estão no ritmo do calendário decorrido (${(fracao * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%). A janela é aproximadamente proporcional ao exercício.`;
+  // FATOS, sem veredicto: as duas porcentagens medidas e a razão entre elas.
+  const leitura =
+    `Comparado ao exercício fechado de ${rot(fechadoP, true)}: o acumulado de ${meses} meses de ${anoCorrente} cobre ` +
+    `${pct(fracao)} do calendário, e cada linha da DRE já realizou — ` +
+    linhas.map((l) => `${l.conta} ${pct(l.razao)} (${x(l.ritmo)} do proporcional)`).join("; ") + ". " +
+    `Este teste NÃO distingue sazonalidade de deterioração: isso exigiria o mesmo mês do exercício anterior, que não está na base. ` +
+    `Também não classifica desvio como grande ou pequeno — não há limiar medido para isso.`
 
-  return { periodoYTD: ytdP, periodoFechado: fechadoP, meses, fracaoCalendario: fracao, linhas, desviantes, temDesvio, leitura };
+  return { periodoYTD: ytdP, periodoFechado: fechadoP, meses, fracaoCalendario: fracao, linhas, leitura };
 }

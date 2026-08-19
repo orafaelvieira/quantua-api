@@ -22,21 +22,30 @@ describe("medirProporcionalidade", () => {
     const r = medirProporcionalidade(BELAGRO, PER, YTD, FECH)!;
     const por = Object.fromEntries(r.linhas.map((l) => [l.conta, l]));
     expect(por["Receita Líquida"].ritmo).toBeCloseTo(1.06, 2);
-    expect(por["Receita Líquida"].desvia).toBe(false);
     expect(por["Custo Operacional"].ritmo).toBeCloseTo(1.07, 2);
-    expect(por["Custo Operacional"].desvia).toBe(false);
     expect(por["EBITDA"].ritmo).toBeCloseTo(-0.72, 2);
-    expect(por["EBITDA"].desvia).toBe(true);
     // a despesa financeira roda ao DOBRO do ritmo — o achado mais duro do teste
     expect(por["Despesas Financeiras"].ritmo).toBeCloseTo(2.04, 2);
-    expect(por["Despesas Financeiras"].desvia).toBe(true);
   });
 
-  it("a leitura nomeia a linha e recusa o veredicto de causa", () => {
+  it("a leitura publica os DOIS fatos por linha e recusa julgar", () => {
     const r = medirProporcionalidade(BELAGRO, PER, YTD, FECH)!;
-    expect(r.desviantes).toEqual(["EBITDA", "Despesas Financeiras", "Lucro Líquido"]);
-    expect(r.leitura).toContain("No ritmo: Receita Líquida, Custo Operacional");
+    // quanto do calendário passou e quanto cada linha realizou — nada além disso
+    expect(r.leitura).toContain("41,7% do calendário");
+    expect(r.leitura).toContain("Receita Líquida 44,3% (1,06× do proporcional)");
     expect(r.leitura).toContain("NÃO distingue sazonalidade de deterioração");
+    expect(r.leitura).toContain("não classifica desvio como grande ou pequeno");
+  });
+
+  // Sem limiar não há "dentro" nem "fora": a saída é a mesma em qualquer empresa,
+  // muda só o número. É o que faz a régua servir para todos os segmentos sem que
+  // ninguém precise declarar nada sobre o negócio.
+  it("negócio uniforme e negócio sazonal produzem a MESMA forma de saída", () => {
+    const uniforme = dre({ "Receita Líquida": { "31/12/2025": 1_200_000, "31/05/2026": 500_000 } });
+    const r = medirProporcionalidade(uniforme, ["31/12/2025", "31/05/2026"], ["31/05/2026"], ["31/12/2025"])!;
+    expect(r.leitura).toContain("41,7% do calendário");
+    expect(r.leitura).toContain("não classifica desvio como grande ou pequeno");
+    expect(r.linhas[0].ritmo).toBeCloseTo(1.0, 1); // 41,7% de 1,2 mi ≈ 500 mil
   });
 
   it("compara contra o fechamento mais recente, não contra o mais antigo", () => {
@@ -53,8 +62,7 @@ describe("medirProporcionalidade", () => {
     });
     d[0].valores["31/12/2025"] = 1_200_000;
     const r = medirProporcionalidade(d, ["31/12/2025", "31/05/2026"], ["31/05/2026"], ["31/12/2025"])!;
-    expect(r.temDesvio).toBe(false);
-    expect(r.leitura).toContain("aproximadamente proporcional");
+    expect(r.leitura).toContain("41,7% do calendário");
   });
 
   it("sem exercício fechado anterior não há medida", () => {
@@ -107,9 +115,13 @@ describe("medirProporcionalidade · bordas que a revisão encontrou", () => {
     expect(medirProporcionalidade(d, ["31/12/2025", "31/05/2026"], ["31/05/2026"], ["31/12/2025"])!.periodoFechado).toBe("31/12/2025");
   });
 
-  it("fechamento velho demais não é referência do mesmo negócio", () => {
+  // Corte silencioso por idade foi REMOVIDO: recusar em silêncio já custou a régua
+  // inteira uma vez hoje. A referência vai nomeada e se avisa sozinha.
+  it("fechamento antigo NÃO é recusado — é nomeado, e o leitor julga", () => {
     const d = dre({ "Receita Líquida": { "2019": 100_000_000, "31/05/2026": 328_504_142 } });
-    expect(medirProporcionalidade(d, ["2019", "31/05/2026"], ["31/05/2026"], ["2019"])).toBeNull();
+    const r = medirProporcionalidade(d, ["2019", "31/05/2026"], ["31/05/2026"], ["2019"])!;
+    expect(r.periodoFechado).toBe("2019");
+    expect(r.leitura).toContain("exercício fechado de 2019");
   });
 
   it("o rótulo do fechamento é o EXERCÍCIO, nunca um mês", () => {
