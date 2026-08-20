@@ -709,6 +709,17 @@ export function paresComparaveis(dados: DadosParaPontes): ParComparacao[] {
   // `saltaPeriodos` marca quando há períodos entre os dois: a variação é ponto a
   // ponto, não tendência, e a tela precisa poder dizer isso.
   const serie = dados.serie ?? null;
+  // NAO OFERECER O QUE O MOTOR VAI RECUSAR. O par mes a mes so' vira ponte se os
+  // DOIS lados tiverem o mes isolado (`dreDaRegua`); sem isso `buildPontesVariacao`
+  // devolve `bloqueio` e o bloco inteiro some da tela. O seletor listava esses
+  // pares assim mesmo, e escolher um deles apagava os quatro graficos.
+  const mensalPares = derivarDREMensal({
+    dre: dados.dre ?? [],
+    balancetes: dados.balancetes,
+    arvoresBalancete: dados.arvoresBalancete,
+  });
+  const temMesIsolado = (p: string): boolean => !!mensalPares?.periodos?.[p]?.mesIsolado;
+
   for (let i = 0; i < periodos.length; i++) {
     for (let j = i + 1; j < periodos.length; j++) {
       const de = periodos[i]!;
@@ -731,6 +742,7 @@ export function paresComparaveis(dados: DadosParaPontes): ParComparacao[] {
 
       if (a.ano === b.ano && b.mes === a.mes + 1) {
         // MoM: mês contra o mês anterior, pela DRE do mês.
+        if (!temMesIsolado(de) || !temMesIsolado(ate)) continue;
         out.push({ de, ate, regua: "mes", mesesJanela: 1, saltaPeriodos: false, rotuloDe: rotuloPeriodoSrv(de, true), rotuloAte: rotuloPeriodoSrv(ate, true) });
       } else if (a.mes === b.mes && a.ano < b.ano) {
         // Mesmo mês de anos diferentes: YTD × YTD (janela igual em meses).

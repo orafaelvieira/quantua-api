@@ -147,3 +147,58 @@ describe("buildPontesVariacao com régua", () => {
     expect(p.bloqueio).toMatch(/não é comparável/i);
   });
 });
+
+/**
+ * O SELETOR NAO OFERECE O QUE O MOTOR RECUSA (dono, 20/08/2026: "quando
+ * seleciono o intervalo os graficos somem").
+ *
+ * `paresComparaveis` listava TODO par de meses consecutivos, mas a ponte mes a
+ * mes so' se materializa quando os DOIS lados tem o mes isolado. Escolher um par
+ * impossivel devolvia `bloqueio` e apagava os quatro graficos do bloco. Pior no
+ * caso mais comum: JANEIRO. A coluna de janeiro JA' e' o mes (YTD = mes), mas ela
+ * nao era registrada em `derivarDREMensal`, entao "01/2026 -> 02/2026" era
+ * oferecido e recusado.
+ */
+describe("todo par oferecido tem de virar ponte", () => {
+  const bal = (periodo: string) => ({ periodo, provas: {} });
+  const dreL = (conta: string, subtotal: boolean, v: Record<string, number>): DRELineItem => ({ conta, subtotal, editado: false, valores: v });
+
+  const D25 = "31/12/2025", J26 = "31/01/2026", F26 = "28/02/2026";
+  function serieComJaneiro() {
+    const dre: DRELineItem[] = [
+      dreL("Receita Bruta", false, { [D25]: 1200, [J26]: 100, [F26]: 250 }),
+      dreL("Receita Líquida", true, { [D25]: 1100, [J26]: 90, [F26]: 230 }),
+      dreL("Custo Operacional", false, { [D25]: -700, [J26]: -60, [F26]: -150 }),
+      dreL("EBITDA", true, { [D25]: 400, [J26]: 30, [F26]: 80 }),
+      dreL("Lucro Líquido", true, { [D25]: 300, [J26]: 20, [F26]: 55 }),
+    ];
+    const periodos = [D25, J26, F26];
+    const arvoresBalancete = periodos.map((periodo) => ({ periodo }));
+    return { dre, periodos, arvoresBalancete, balancetes: periodos.map(bal) };
+  }
+
+  it("janeiro entra: o par 01/2026 -> 02/2026 e' oferecido", () => {
+    const pares = paresComparaveis(serieComJaneiro());
+    expect(pares.some((p) => p.de === J26 && p.ate === F26 && p.regua === "mes")).toBe(true);
+  });
+
+  it("e escolher esse par NAO bloqueia", () => {
+    const p = buildPontesVariacao(serieComJaneiro(), { par: { de: J26, ate: F26 } })!;
+    expect(p.bloqueio).toBeNull();
+    expect(p.regua).toBe("mes");
+    // EBITDA do mes: janeiro 30 (a coluna JA' e' o mes), fevereiro 80 - 30 = 50.
+    expect(p.ponteEbitda?.inicial).toBeCloseTo(30, 6);
+    expect(p.ponteEbitda?.final).toBeCloseTo(50, 6);
+  });
+
+  it("INVARIANTE: nenhum par da lista devolve bloqueio", () => {
+    for (const d of [serieComJaneiro(), cenarioMensal()]) {
+      const pares = paresComparaveis(d);
+      expect(pares.length).toBeGreaterThan(0);
+      for (const par of pares) {
+        const p = buildPontesVariacao(d, { par: { de: par.de, ate: par.ate } })!;
+        expect(p.bloqueio, `par ${par.rotuloDe} -> ${par.rotuloAte} (${par.regua}) foi oferecido e recusado`).toBeNull();
+      }
+    }
+  });
+});

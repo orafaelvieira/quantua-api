@@ -673,8 +673,13 @@ describe("derivarDREMensal", () => {
 
   it("identifica os períodos acumulados e deriva o MÊS = YTD N − YTD N−1", () => {
     const d = derivarDREMensal(dados)!;
-    // janeiro (01/01 a 31/01) NÃO acumula — nem aparece
-    expect(d.periodos["31/01/2026"]).toBeUndefined();
+    // JANEIRO É O PRÓPRIO MÊS (01/01 a 31/01): nada a derivar, e por isso ele
+    // sai marcado como isolado COM o valor da coluna. Antes ele simplesmente
+    // não era registrado, e quem consome não distinguia "esta coluna já é o
+    // mês" de "não dá para isolar" — todo par mês a mês COMEÇANDO em janeiro
+    // era recusado pelo motor depois de o seletor tê-lo oferecido.
+    expect(d.periodos["31/01/2026"]).toEqual({ desde: "01/01/2026", mesIsolado: true });
+    expect(d.valores["Receita Bruta"]["31/01/2026"]).toBe(100);
     expect(d.periodos["28/02/2026"]).toEqual({ desde: "01/01/2026", mesIsolado: true, anterior: "31/01/2026" });
     expect(d.valores["Receita Bruta"]["28/02/2026"]).toBe(150); // 250 − 100
     expect(d.valores["Receita Bruta"]["31/03/2026"]).toBe(200); // 450 − 250
@@ -709,7 +714,7 @@ describe("derivarDREMensal", () => {
       balancetes: [bal("31/01/2026", "01/01/2026"), bal("28/02/2026", "01/02/2026"), bal("31/03/2026", "01/03/2026")],
       dre: [{ conta: "Receita Bruta", valores: { "31/01/2026": 100, "28/02/2026": 250, "31/03/2026": 450 } }],
     })!;
-    expect(d.periodos["31/01/2026"]).toBeUndefined(); // janeiro: YTD = mês
+    expect(d.periodos["31/01/2026"]).toEqual({ desde: "01/01/2026", mesIsolado: true }); // janeiro: YTD = mês
     expect(d.periodos["28/02/2026"]).toEqual({ desde: "01/01/2026", mesIsolado: true, anterior: "31/01/2026" });
     expect(d.valores["Receita Bruta"]["31/03/2026"]).toBe(200);
   });
@@ -727,7 +732,8 @@ describe("derivarDREMensal", () => {
     })!;
     expect(d.periodos["28/02/2026"]).toEqual({ desde: "01/01/2026", mesIsolado: true, anterior: "31/01/2026" });
     expect(d.valores["Receita Bruta"]["28/02/2026"]).toBe(150);
-    expect(d.periodos["31/01/2026"]).toBeUndefined(); // janeiro segue sendo o próprio mês
+    expect(d.periodos["31/01/2026"]).toEqual({ desde: "01/01/2026", mesIsolado: true }); // janeiro É o próprio mês
+    expect(d.valores["Receita Bruta"]["31/01/2026"]).toBe(100);
   });
 });
 
@@ -766,7 +772,24 @@ describe("regressões caçadas na revisão da sessão", () => {
       ],
       dre: [{ conta: "Receita Bruta", valores: { "30/11/2026": 11000, "31/12/2026": 1000 } }],
     }) ?? { periodos: {}, valores: {} };
-    // dezembro NÃO entra como acumulado → nada é derivado (o documento já é do mês)
+    // A janela declarada é 01/12 a 31/12: um mês só, então o valor da coluna JÁ
+    // é o do mês e entra como está. O que NUNCA pode voltar é a subtração
+    // (1.000 − 11.000 = −10.000), que era a regressão de origem — por isso o
+    // teste trava o VALOR, prova mais forte do que "não foi populado".
+    expect(d.periodos["31/12/2026"]).toEqual({ desde: "01/12/2026", mesIsolado: true });
+    expect(d.valores["Receita Bruta"]?.["31/12/2026"]).toBe(1000);
+    expect(d.valores["Receita Bruta"]?.["31/12/2026"]).not.toBe(-10000);
+  });
+
+  it("encerramento ANUAL (01/01 a 31/12) não vira mês isolado — a janela tem doze meses", () => {
+    const d = derivarDREMensal({
+      balancetes: [
+        bal("30/11/2026"),
+        bal("31/12/2026", { periodoInicio: "01/01/2026", provas: { exercicioEncerrado: true } }),
+      ],
+      dre: [{ conta: "Receita Bruta", valores: { "30/11/2026": 11000, "31/12/2026": 12000 } }],
+    }) ?? { periodos: {}, valores: {} };
+    // O critério é a JANELA, não o mês do fechamento: 01/01→31/12 são doze meses.
     expect(d.periodos["31/12/2026"]).toBeUndefined();
     expect(d.valores["Receita Bruta"]?.["31/12/2026"]).toBeUndefined();
   });

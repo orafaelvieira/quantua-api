@@ -765,6 +765,31 @@ export function derivarDREMensal(dados: {
       (out.valores[linha.conta] ??= {})[periodo] = mes;
     }
   }
+  // JANELA DE UM MES JA' E' O MES — nao ha o que derivar. O comentario la' em
+  // cima ja' dizia isso de janeiro ("YTD = mes"), mas janeiro nunca era
+  // REGISTRADO em `out.periodos`: quem consome nao conseguia distinguir "esta
+  // coluna JA' e' o mes" de "nao da' para isolar este mes". Consequencia vista
+  // na tela (dono, 20/08/2026): o seletor oferecia "01/2026 -> 02/2026" e o
+  // motor respondia "falta o mes anterior na serie para isolar o resultado do
+  // mes" — e o bloco inteiro de pontes sumia.
+  // Vale para os dois casos de `acumula: false` cuja janela cobre um mes so':
+  // janeiro de uma serie acumulada (01/01 a 31/01) e balancete de encerramento
+  // que declara janela mensal (01/12 a 31/12). Encerramento ANUAL (01/01 a
+  // 31/12) tem janela de doze meses e continua de fora, como deve.
+  for (const [periodo, info] of mesesBalancete) {
+    if (out.periodos[periodo]) continue;
+    const umMesSo =
+      info.inicio.getDate() === 1 &&
+      info.inicio.getMonth() === info.fim.getMonth() &&
+      info.inicio.getFullYear() === info.fim.getFullYear();
+    if (!umMesSo) continue;
+    out.periodos[periodo] = { desde: info.desde, mesIsolado: true };
+    for (const linha of dre) {
+      const v = linha?.valores?.[periodo];
+      if (typeof v === "number") (out.valores[linha.conta] ??= {})[periodo] = v;
+    }
+  }
+
   return Object.keys(out.periodos).length ? out : null;
 }
 
