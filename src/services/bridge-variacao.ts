@@ -114,6 +114,9 @@ export interface DupontRoe {
     giro: [number, number];
     alavancagem: [number, number];
   };
+  /** Meses cobertos pelo NUMERADOR (lucro/receita). Menor que 12 = ROE e giro do
+   *  período, não do exercício — quem exibe precisa dizer isso. */
+  janelaMeses?: number;
   /** false quando o resíduo passa de 20% do Δ ou o PL não sustenta a leitura. */
   conclusiva: boolean;
   nota: string | null;
@@ -519,7 +522,7 @@ function ponteNcgDe(
 
 // ── DuPont do ROE: margem × giro × alavancagem (sequencial exata) ─────────────
 
-function dupontDe(bp: BPLineItem[], dre: DRELineItem[], de: string, ate: string): DupontRoe | null {
+function dupontDe(bp: BPLineItem[], dre: DRELineItem[], de: string, ate: string, mesesJanela: number): DupontRoe | null {
   const comp = (p: string): { m: number; g: number; a: number } | null => {
     const ll = dreVal(dre, "Lucro Líquido", p);
     const rl = dreVal(dre, "Receita Líquida", p);
@@ -579,6 +582,13 @@ function dupontDe(bp: BPLineItem[], dre: DRELineItem[], de: string, ate: string)
     roeFinal: r6(roe1),
     efeitos: { margem: r6(efMargem), giro: r6(efGiro), alavancagem: r6(efAlav), residuo: r6(residuo) },
     componentes: { margem: [r6(c0.m), r6(c1.m)], giro: [r6(c0.g), r6(c1.g)], alavancagem: [r6(c0.a), r6(c1.a)] },
+    // JANELA DO NUMERADOR. ROE e giro sao RAZAO DE FLUXO SOBRE ESTOQUE: num par
+    // mes a mes o lucro e a receita sao de UM mes e o PL/Ativo sao saldo de data.
+    // O motor publicava "ROE 26%" para abril com o mesmo rotulo do ROE anual da
+    // pagina anterior — para um credor isso le como ~312% ao ano. Nao se
+    // anualiza aqui (anualizar mes de empresa sazonal inventa outra mentira):
+    // declara-se a janela e quem exibe avisa.
+    janelaMeses: mesesJanela,
     conclusiva,
     nota: conclusiva ? null : "Resíduo de interação acima de 20% do Δ — decomposição não conclusiva.",
   };
@@ -834,6 +844,6 @@ export function buildPontesVariacao(
     ponteLucro: ponteResultadoDe(dre, "Lucro Líquido", de, ate),
     hierarquiaCaixa: fc ? hierarquiaCaixaDe(dre, fc, ate, opts?.regimeCadastro ?? null, ytd, escolhido.regua === "mes") : null,
     ponteNcg: ponteNcgDe(bp, dre, de, ate, diasPorPeriodo),
-    dupont: dupontDe(bp, dre, de, ate),
+    dupont: dupontDe(bp, dre, de, ate, escolhido.mesesJanela),
   };
 }
