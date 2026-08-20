@@ -51,7 +51,15 @@ export async function medirExtracaoDesatualizada(
         const nomePorId: Record<string, string> = {};
         for (const d of agora.docs) nomePorId[d.id] = d.nome;
         for (const d of analysis.documents) if (d.fixadoDeId) nomePorId[d.fixadoDeId] ??= d.nome;
-        motivos.push(...diferencasDaMarca(dados.marcaBase, agora.marca, nomePorId).slice(0, 6));
+        // A DIFERENÇA DE STRING É PRÉ-FILTRO BARATO; QUEM DECIDE É A SEMÂNTICA.
+        // Marca é impressão digital e muda por motivo que não é mudança de
+        // insumo (ordem de linha do Postgres, formato). Acender o alarme só
+        // porque o texto diferiu produz aviso sem causa — o analista abre a
+        // Data room, não acha nada, e aprende a ignorar o aviso. Aviso que se
+        // ensina a ignorar não protege ninguém no dia em que estiver certo.
+        const causas = diferencasDaMarca(dados.marcaBase, agora.marca, nomePorId);
+        if (causas.length === 0) return { desatualizada: false, motivos };
+        motivos.push(...causas.slice(0, 6));
         return { desatualizada: true, motivos };
       }
     } catch {

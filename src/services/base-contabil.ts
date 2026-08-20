@@ -92,7 +92,15 @@ export async function insumosDaBase(companyId: string, scopeUserIds: string[], d
   const marca = JSON.stringify([
     VERSAO_BASE,
     documentIds && documentIds.length ? [...documentIds].sort() : null,
-    docs.map((d) => [d.id, d.hash, d.status, d.leituraPorta?.hashArquivo ?? null, d.leituraPorta?.criadoEm ?? null]),
+    // ORDENADO POR ID, sempre. `buscarDocs` ordena por `createdAt`, e documentos
+    // subidos no MESMO lote compartilham o timestamp — o empate é decidido pela
+    // ordem física do heap do Postgres, que muda a cada UPDATE de linha. Sem esta
+    // canonicalização a marca mudava sozinha e o IBR acusava "extração
+    // desatualizada" sem nenhum insumo ter mudado. Mesma armadilha já anotada
+    // acima para o dicionário.
+    [...docs]
+      .sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
+      .map((d) => [d.id, d.hash, d.status, d.leituraPorta?.hashArquivo ?? null, d.leituraPorta?.criadoEm ?? null]),
     dictAgg._count._all, dictAgg._max.updatedAt,
     versoesAtivas,
   ]);
@@ -149,7 +157,16 @@ export function diferencasDaMarca(
   }
   if (JSON.stringify(a.modelos) !== JSON.stringify(b.modelos)) fora.push("o modelo padrão de BP/DRE mudou de versão depois desta extração");
   if (JSON.stringify(a.selecao) !== JSON.stringify(b.selecao)) fora.push("a seleção de documentos deste IBR mudou depois da extração");
-  return fora.length ? fora : ["algum insumo da base mudou depois desta extração"];
+  // VERSÃO DO FORMATO é motivo legítimo e não era comparada: as duas marcas
+  // parseavam, todas as checagens passavam e a diferença caía no genérico.
+  if (a.versao !== b.versao) fora.push("o motor da base contábil mudou de versão depois desta extração — reprocesse para alinhar");
+
+  // LISTA VAZIA É RESPOSTA: as marcas diferem como STRING, mas nenhuma diferença
+  // de conteúdo foi encontrada. Antes isto virava "algum insumo da base mudou",
+  // um alarme sem causa que o analista não conseguia conferir — e que ele
+  // reportou em 19/08/2026 com a base intacta. Quem manda agora é esta função,
+  // não a comparação de texto: sem diferença nomeável, não há desatualização.
+  return fora;
 }
 
 export type BaseContabil = Awaited<ReturnType<typeof montarBaseContabilSemCache>>;
