@@ -60,6 +60,8 @@ export interface DegrauCaixa {
 export interface HierarquiaCaixa {
   /** Coluna do FC (período final da variação). */
   periodo: string;
+  /** Coluna anterior quando o intervalo foi desacumulado; null quando a coluna vale como esta'. */
+  intervaloDe?: string | null;
   degraus: DegrauCaixa[];
   /** Conciliação com o FCO do método indireto (mesma identidade, arrumação nova). */
   provaFco: ProvaPonte;
@@ -70,6 +72,15 @@ export interface HierarquiaCaixa {
   premissas: {
     /** |IR e CSLL| ÷ Resultado Antes do IR (DRE, competência) — contexto, não re-taxação. */
     aliquotaEfetiva: number | null;
+    /** Mesma razão com a equivalência patrimonial FORA da base — a carga que
+     *  sobra quando se tira do denominador o que não é tributável. */
+    aliquotaExEquiv?: number | null;
+    irPeriodo?: number;
+    lairPeriodo?: number;
+    equivPatrimonial?: number;
+    /** Alíquota nominal do regime (0,34 no Lucro Real); null quando não há
+     *  nominal comparável ao LAIR (ex.: Presumido tem base própria). */
+    nominalRegime?: number | null;
     regimeCadastro: string | null;
     nota: string;
   };
@@ -110,8 +121,12 @@ export interface DupontRoe {
 
 export interface PontesVariacao {
   calculadoEm: string;
-  /** Par decomposto (anterior → atual). null + bloqueio quando não comparável. */
-  par: { de: string; ate: string } | null;
+  /** Par decomposto (anterior → atual). null + bloqueio quando não comparável.
+   *  `rotuloDe`/`rotuloAte` viajam JUNTO do par: o cabeçalho do relatório dizia
+   *  "2024 → 12/2025" enquanto o aviso, na MESMA frase, dizia "12/2024 → 12/2025".
+   *  Dois rotuladores para um par só sempre divergem — agora há um. Opcionais
+   *  porque análises gravadas antes deste campo não os têm (a tela cai no seu). */
+  par: { de: string; ate: string; rotuloDe?: string; rotuloAte?: string; mesesJanela?: number } | null;
   /** Régua do par exibido — o que está sendo comparado com o quê. */
   regua: ReguaComparacao | null;
   /** Todos os pares que o analista pode escolher (o seletor da tela). */
@@ -294,7 +309,11 @@ function hierarquiaCaixaDe(
   dre: DRELineItem[],
   fc: FluxoCaixaIndireto,
   col: string,
-  regimeCadastro: string | null
+  regimeCadastro: string | null,
+  ytd: Set<string>,
+  /** true quando a regua e' "mes": `dreDaRegua` JA' substituiu os valores desta
+   *  coluna pelo mes isolado, e desacumular de novo subtrairia duas vezes. */
+  dreJaMensal: boolean
 ): HierarquiaCaixa | null {
   const provaCol = fc.prova?.find((p) => p.periodo === col);
   if (!provaCol?.fecha) return null;
@@ -303,19 +322,34 @@ function hierarquiaCaixaDe(
   const fcf = fc.totais?.fcf?.[col];
   if (typeof fco !== "number" || typeof fci !== "number" || typeof fcf !== "number") return null;
 
-  const ebitda = dreVal(dre, "EBITDA", col);
-  const ir = dreVal(dre, "IR e CSLL", col); // negativo por convenção
-  const rf = dreVal(dre, "Resultado Financeiro", col);
-  const rno = dreVal(dre, "Resultado Não Operacional", col);
+  // JANELA. O FCO desta coluna e o caixa do INTERVALO entre a coluna anterior e
+  // esta (cash-flow-indirect.ts:183-185 desacumula quando as duas sao balancete
+  // do mesmo exercicio). A DRE, lida crua, e o ACUMULADO NO ANO. Misturar as
+  // duas publicava EBITDA de doze meses ao lado de FCO de um mes, e o degrau do
+  // giro (que e' derivado por diferenca) virava um PLUG que engolia os outros
+  // onze — com a prova fechando assim mesmo, porque ela so' testa a cascata da
+  // DRE, nunca a janela. Na Belagro isso imprimiu conversao de caixa "-6%":
+  // -809 mil de dezembro dividido por 13,80 mi do ano inteiro.
+  const iCol = fc.colunas.indexOf(col);
+  const colAnterior = iCol > 0 ? fc.colunas[iCol - 1]! : null;
+  const desacumula = !dreJaMensal && !!colAnterior && ytd.has(col) && ytd.has(colAnterior)
+    && mesAno(col)?.ano === mesAno(colAnterior)?.ano && mesAno(col)?.ano !== undefined;
+  const dreJanela = (conta: string): number =>
+    desacumula ? dreVal(dre, conta, col) - dreVal(dre, conta, colAnterior!) : dreVal(dre, conta, col);
+
+  const ebitda = dreJanela("EBITDA");
+  const ir = dreJanela("IR e CSLL"); // negativo por convenção
+  const rf = dreJanela("Resultado Financeiro");
+  const rno = dreJanela("Resultado Não Operacional");
   // DEGRAU DO GIRO = TODA a variação operacional do FCO, não só o sub-bloco
   // `capitalGiro`: o FC joga em `fco` também os Δ de tributos a recuperar,
   // obrigações trabalhistas/tributárias etc. Deriva-se da identidade do próprio
   // FC (FCO = LL − D&A − EqPat + Δgiro), então a prova abaixo verifica a
   // CASCATA DA DRE (LL = EBITDA + D&A + EqPat + RF + RNO + IR) — e falha de
   // verdade quando um subtotal extraído não bate com seus componentes.
-  const lucro = dreVal(dre, "Lucro Líquido", col);
-  const da = dreVal(dre, "Depreciação e Amortização", col);
-  const eqP = dreVal(dre, "Equivalência Patrimonial", col);
+  const lucro = dreJanela("Lucro Líquido");
+  const da = dreJanela("Depreciação e Amortização");
+  const eqP = dreJanela("Equivalência Patrimonial");
   const giro = fco - lucro + da + eqP;
   const giroCapitalDeGiro = fc.capitalGiro?.total?.[col] ?? null; // sub-bloco, quando existe
   const fcoRecomposto = ebitda + ir + rf + rno + giro;
@@ -339,29 +373,57 @@ function hierarquiaCaixaDe(
     { nome: "Variação do caixa no período", tipo: "nivel", valor: round2(deltaCaixa) },
   ];
 
-  // Alíquota efetiva (contexto): |IR| / LAIR quando o LAIR é positivo.
-  const lair = dreVal(dre, "Resultado Antes do IR e CSLL", col);
-  const aliquotaEfetiva = lair > 0 && ir !== 0 ? round2((Math.abs(ir) / lair) * 100) / 100 : null;
+  // CARGA TRIBUTÁRIA CONTÁBIL = despesa de IR ÷ LAIR (a ETR do CPC 32/IAS 12).
+  // Dois cuidados que faltavam:
+  // 1. SINAL. `ir` é negativo por convenção (despesa). Com `Math.abs`, um CRÉDITO
+  //    de imposto (reversão, IR diferido ativo — `ir > 0`) virava alíquota
+  //    POSITIVA: a empresa GANHOU imposto e o relatório afirmava que pagou 15%.
+  // 2. BASE. A equivalência patrimonial entra no LAIR pela cascata da DRE
+  //    (account-mapper: EBIT = EBITDA + D&A + EqPat) e NÃO é base tributável
+  //    (DL 1.598/77 art. 23, red. Lei 12.973/2014 — RIR/2018 art. 426). Dentro do denominador ela infla ou desinfla a
+  //    razão sem que nada de tributário tenha mudado — e é o que separa os 43%
+  //    publicados dos 34% nominais do Lucro Real. A norma exige a RECONCILIAÇÃO
+  //    com o nominal ao lado; publicar só a razão é dizer meia verdade.
+  const lair = dreJanela("Resultado Antes do IR e CSLL");
+  const aliquotaEfetiva = lair > 0 && ir < 0 ? round2((-ir / lair) * 100) / 100 : null;
+  const baseExEquiv = lair - eqP;
+  const aliquotaExEquiv = baseExEquiv > 0 && ir < 0 ? round2((-ir / baseExEquiv) * 100) / 100 : null;
+  // Nominal só do que dá para afirmar: Lucro Real é 25% IRPJ + 9% CSLL. Presumido
+  // tem base própria (não é sobre o LAIR), então não há nominal comparável aqui.
+  const nominalRegime = /real/i.test(regimeCadastro ?? "") ? 0.34 : null;
 
-  // Taxa de conversão de caixa por coluna PROVADA do FC (série completa).
-  const taxaConversao = fc.colunas
-    .filter((c) => fc.prova?.find((p) => p.periodo === c)?.fecha)
-    .map((c) => {
-      const e = dreVal(dre, "EBITDA", c);
-      const f = fc.totais?.fco?.[c] ?? 0;
-      return { periodo: c, ebitda: round2(e), fco: round2(f), taxa: e > 0 ? round2((f / e) * 100) / 100 : null };
-    });
+  // CONVERSAO DE CAIXA SO' DO PERIODO DA ANALISE (dono, 20/08/2026). A serie
+  // inteira saia' na linha — sete colunas, quatro sem valor e uma com "-1871%" —
+  // e cada coluna tinha uma janela diferente da outra (a de novembro cobre onze
+  // meses, a de dezembro cobre um): numeros lado a lado que nao se comparam.
+  // Agora e' um numero so', da MESMA janela da hierarquia acima dele.
+  const taxaConversao = [{
+    periodo: col,
+    ebitda: round2(ebitda),
+    fco: round2(fco),
+    taxa: ebitda > 0 ? round2((fco / ebitda) * 100) / 100 : null,
+  }];
 
   return {
     periodo: col,
+    /** Coluna a partir da qual o intervalo e' medido (null = a coluna vale como
+     *  esta'). O relatorio declara o intervalo em vez de deixar subentendido. */
+    intervaloDe: desacumula ? colAnterior : null,
     degraus,
     provaFco: prova(round2(fcoRecomposto), round2(fco)),
     provaDeltaCaixa: prova(round2(fco + fci + fcf), round2(deltaCaixa)),
     taxaConversao,
     premissas: {
       aliquotaEfetiva,
+      aliquotaExEquiv,
+      irPeriodo: round2(ir),
+      lairPeriodo: round2(lair),
+      equivPatrimonial: round2(eqP),
+      nominalRegime,
       regimeCadastro,
-      nota: "IR pela DRE (competência, não o efetivamente pago); capex estimado por ΔImobilizado/Intangível + D&A; alíquota efetiva = IR ÷ LAIR do período.",
+      // A fórmula saiu daqui: ela já aparece ao lado do próprio número na tela e
+      // no PDF. Sobrou o que é premissa de verdade.
+      nota: "IR pela DRE (competência, não o efetivamente pago); capex estimado por ΔImobilizado/Intangível + D&A.",
     },
   };
 }
@@ -506,12 +568,17 @@ function dupontDe(bp: BPLineItem[], dre: DRELineItem[], de: string, ate: string)
   const deltaRoe = roe1 - roe0;
   const conclusiva = deltaRoe === 0 ? true : Math.abs(residuo) <= Math.abs(deltaRoe) * 0.2;
 
-  const r4 = (v: number): number => Math.round(v * 10000) / 10000;
+  // PRECISÃO: com 4 casas na RAZÃO, um ROE de 80,0476% virava 0,8005 e a tela
+  // imprimia "80,1%" — meio ponto inventado no arredondamento. Pior na margem:
+  // 0,0196 tem 2 dígitos significativos, e quem multiplicasse os fatores da
+  // tabela não voltava ao ROE publicado (80,20% contra 80,05%). 6 casas na razão
+  // = 4 casas no percentual, que é o que a tela mostra.
+  const r6 = (v: number): number => Math.round(v * 1e6) / 1e6;
   return {
-    roeInicial: r4(roe0),
-    roeFinal: r4(roe1),
-    efeitos: { margem: r4(efMargem), giro: r4(efGiro), alavancagem: r4(efAlav), residuo: r4(residuo) },
-    componentes: { margem: [r4(c0.m), r4(c1.m)], giro: [r4(c0.g), r4(c1.g)], alavancagem: [r4(c0.a), r4(c1.a)] },
+    roeInicial: r6(roe0),
+    roeFinal: r6(roe1),
+    efeitos: { margem: r6(efMargem), giro: r6(efGiro), alavancagem: r6(efAlav), residuo: r6(residuo) },
+    componentes: { margem: [r6(c0.m), r6(c1.m)], giro: [r6(c0.g), r6(c1.g)], alavancagem: [r6(c0.a), r6(c1.a)] },
     conclusiva,
     nota: conclusiva ? null : "Resíduo de interação acima de 20% do Δ — decomposição não conclusiva.",
   };
@@ -738,24 +805,34 @@ export function buildPontesVariacao(
   //    ponto a ponto e não descreve o caminho entre eles;
   // 2. o par não alcança o fim da série (só quando o analista NÃO pediu o par —
   //    pedido explícito não precisa se justificar).
-  const ehMes = escolhido.regua !== "exercicio";
+  // SO' A REGUA "mes" TEM VALOR DE MES. A regua "ano-a-ano" compara YTD x YTD com
+  // janela igual (`mesesJanela`); quando ela fecha em dezembro, os dois lados sao
+  // o EXERCICIO INTEIRO — e o rotulo tem de dizer "2024 → 2025". Com o teste
+  // anterior (`!== "exercicio"`) o par ano-a-ano caia no formato de mes e o
+  // relatorio publicava "12/2024 → 12/2025", que o leitor entende como dezembro
+  // contra dezembro: parecia comparar o ano cheio com um mes. O NUMERO sempre
+  // esteve certo (janela de 12 meses dos dois lados); mentia o rotulo.
+  // Em YTD parcial (ex.: maio) `rotuloPeriodoSrv` ja' devolve "05/2025" sozinho.
+  const ehMes = escolhido.regua === "mes";
   const rDe = rotuloPeriodoSrv(de, ehMes);
   const rAte = rotuloPeriodoSrv(ate, ehMes);
   const avisoPar = escolhido.saltaPeriodos
     ? `Comparação ponto a ponto entre ${rDe} e ${rAte}: há período(s) entre os dois que não entram nesta conta — a variação mostra a diferença entre os dois retratos, não o caminho percorrido.`
     : !opts?.par && ate !== ultimo
-      ? `Decomposição do par ${rDe} → ${rAte}: o período mais recente (${rotuloPeriodoSrv(ultimo, !!ytd.has(ultimo))}) não entra nesta comparação — só se compara janela igual com janela igual.`
+      ? (disponiveis.some((x) => x.ate === ultimo)
+          ? `O período mais recente (${rotuloPeriodoSrv(ultimo)}) fica de fora DESTE par: não há na série um período de mesma janela do ano anterior para compará-lo, e a comparação de 12 meses contra 12 meses é mais informativa que a de um mês. Há pares terminando em ${rotuloPeriodoSrv(ultimo)} no seletor.`
+          : `O período mais recente (${rotuloPeriodoSrv(ultimo)}) fica de fora: não há na série outro período de janela igual para compará-lo.`)
       : null;
 
   const fc = dados.fluxoCaixa ?? null;
   return {
     ...base,
-    par: { de, ate },
+    par: { de, ate, rotuloDe: rDe, rotuloAte: rAte, mesesJanela: escolhido.mesesJanela },
     regua: escolhido.regua,
     avisoPar,
     ponteEbitda: ponteResultadoDe(dre, "EBITDA", de, ate),
     ponteLucro: ponteResultadoDe(dre, "Lucro Líquido", de, ate),
-    hierarquiaCaixa: fc ? hierarquiaCaixaDe(dre, fc, ate, opts?.regimeCadastro ?? null) : null,
+    hierarquiaCaixa: fc ? hierarquiaCaixaDe(dre, fc, ate, opts?.regimeCadastro ?? null, ytd, escolhido.regua === "mes") : null,
     ponteNcg: ponteNcgDe(bp, dre, de, ate, diasPorPeriodo),
     dupont: dupontDe(bp, dre, de, ate),
   };

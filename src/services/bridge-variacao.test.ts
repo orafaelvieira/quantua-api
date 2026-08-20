@@ -231,7 +231,7 @@ describe("buildPontesVariacao — guardas de período", () => {
     };
     const pontes = buildPontesVariacao(comMes)!;
     // O último par (ano cheio → YTD de 5 meses) é descartado; vale 2024 → 2025.
-    expect(pontes.par).toEqual({ de: P0, ate: P1 });
+    expect(pontes.par).toMatchObject({ de: P0, ate: P1 }); // o par carrega tambem os rotulos prontos
     // O aviso NOMEIA o período que ficou de fora — em rótulo de leitura
     // (05/2026), nunca na data de fechamento (regra de período do dono).
     expect(pontes.avisoPar).toMatch(/05\/2026/);
@@ -241,7 +241,7 @@ describe("buildPontesVariacao — guardas de período", () => {
 
   it("par no fim da série (janelas iguais) não gera aviso de recuo", () => {
     const pontes = buildPontesVariacao({ bp, dre, periodos, fluxoCaixa: null })!;
-    expect(pontes.par).toEqual({ de: P0, ate: P1 });
+    expect(pontes.par).toMatchObject({ de: P0, ate: P1 }); // o par carrega tambem os rotulos prontos
     expect(pontes.avisoPar).toBeNull();
   });
 });

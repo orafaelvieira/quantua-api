@@ -90,7 +90,7 @@ describe("paresComparaveis — o que pode ser comparado com o quê", () => {
       dreL("EBITDA", true, { "31/12/2022": 200, "31/12/2023": 300, [A2024]: 480 }),
     ];
     const p = buildPontesVariacao({ dre, periodos })!;
-    expect(p.par).toEqual({ de: "31/12/2023", ate: A2024 });
+    expect(p.par).toMatchObject({ de: "31/12/2023", ate: A2024 });
   });
 
   it("lacuna de DADOS continua bloqueando, mesmo com par distante", () => {
