@@ -84,50 +84,88 @@ function serieBalancete() {
   return { bp, dre, periodos, arvoresBalancete, balancetes: arvoresBalancete, fluxoCaixa };
 }
 
-describe("hierarquia do caixa — a DRE tem de cobrir a mesma janela que o FCO", () => {
+describe("hierarquia do caixa — mesma janela das pontes", () => {
   it("o par escolhido é ano-a-ano entre os dois dezembros", () => {
     const p = buildPontesVariacao(serieBalancete(), { regimeCadastro: "Lucro Real" })!;
     expect(p.regua).toBe("ano-a-ano");
     expect(p.par?.ate).toBe(D25);
   });
 
-  it("o FCO desta coluna é o intervalo (dezembro), não o acumulado do ano", () => {
+  it("cada COLUNA do FC vale um intervalo: dezembro sozinho move o caixa em 20", () => {
     const d = serieBalancete();
     expect(d.fluxoCaixa).not.toBeNull();
-    // Caixa foi de 100 para 120 no intervalo: o FC mede o movimento, não o saldo.
     expect(d.fluxoCaixa!.prova.find((x) => x.periodo === D25)!.deltaObservado).toBeCloseTo(20, 6);
+    // A coluna de novembro cobre os onze meses anteriores: caixa parado em 100.
+    expect(d.fluxoCaixa!.prova.find((x) => x.periodo === N25)!.deltaObservado).toBeCloseTo(0, 6);
   });
 
-  it("O DEFEITO: o EBITDA da hierarquia é o do INTERVALO (30), não o do ano (330)", () => {
+  it("a hierarquia SOMA as colunas do exercício, então o EBITDA é o do ano (330)", () => {
     const p = buildPontesVariacao(serieBalancete(), { regimeCadastro: "Lucro Real" })!;
     const h = p.hierarquiaCaixa!;
-    expect(h.intervaloDe).toBe(N25);
     expect(h.degraus[0]!.nome).toContain("EBITDA");
-    expect(h.degraus[0]!.valor).toBeCloseTo(30, 6);
+    expect(h.degraus[0]!.valor).toBeCloseTo(330, 6);
   });
 
-  it("o degrau do giro deixa de ser um plug que engole onze meses", () => {
+  it("O QUE O DEFEITO ESCONDIA: o giro é o movimento REAL do ano, não um plug", () => {
     const p = buildPontesVariacao(serieBalancete(), { regimeCadastro: "Lucro Real" })!;
     const h = p.hierarquiaCaixa!;
-    const giro = h.degraus.find((g) => g.nome.toLowerCase().includes("capital de giro") && g.tipo !== "nivel")!;
-    // Movimento real do giro em dezembro: clientes +10 (consome) e fornecedores
-    // +10 (libera) → 0. Com a janela misturada isso vinha em centenas.
-    expect(Math.abs(giro.valor)).toBeLessThan(20);
+    const giro = h.degraus.find((g) => g.nome.includes("capital de giro e demais"))!;
+    // Movimento de 2025 conferido A MAO no BP: clientes 200→270 (-70, consome),
+    // estoques 150→180 (-30), fornecedores 120→160 (+40) = -60.
+    // Com a janela misturada (FCO de dezembro contra DRE do ano) isto dava 220.
+    expect(giro.valor).toBeCloseTo(-60, 6);
     expect(h.provaFco.fecha).toBe(true);
     expect(h.provaDeltaCaixa.fecha).toBe(true);
+  });
+
+  it("o FCO da hierarquia é a soma das colunas do exercício", () => {
+    const d = serieBalancete();
+    const p = buildPontesVariacao(d, { regimeCadastro: "Lucro Real" })!;
+    const somaCols = (d.fluxoCaixa!.totais.fco[N25] ?? 0) + (d.fluxoCaixa!.totais.fco[D25] ?? 0);
+    const fco = p.hierarquiaCaixa!.degraus.find((g) => g.nome.includes("FCO"))!;
+    expect(fco.valor).toBeCloseTo(somaCols, 6);
+  });
+
+  it("a variação do caixa é a do exercício inteiro (100 → 120)", () => {
+    const p = buildPontesVariacao(serieBalancete(), { regimeCadastro: "Lucro Real" })!;
+    const dc = p.hierarquiaCaixa!.degraus[p.hierarquiaCaixa!.degraus.length - 1]!;
+    expect(dc.nome).toContain("Variação do caixa");
+    expect(dc.valor).toBeCloseTo(20, 6);
+  });
+
+  it("o capital de giro sai em TRÊS linhas, não numa soma só", () => {
+    const p = buildPontesVariacao(serieBalancete(), { regimeCadastro: "Lucro Real" })!;
+    const sub = p.hierarquiaCaixa!.degraus.filter((g) => g.informativo);
+    const nomes = sub.map((g) => g.nome).join(" | ");
+    expect(nomes).toContain("Contas a Receber");
+    expect(nomes).toContain("Estoques");
+    expect(nomes).toContain("Fornecedores");
+    // Clientes e estoques CONSOMEM caixa; fornecedor FINANCIA.
+    expect(sub.find((g) => g.nome.includes("Contas a Receber"))!.valor).toBeCloseTo(-70, 6);
+    expect(sub.find((g) => g.nome.includes("Estoques"))!.valor).toBeCloseTo(-30, 6);
+    expect(sub.find((g) => g.nome.includes("Fornecedores"))!.valor).toBeCloseTo(40, 6);
+  });
+
+  it("nenhuma coluna somada pode ter prova aberta (verde só com prova)", () => {
+    const d = serieBalancete();
+    // Quebra o BP de novembro: a coluna deixa de fechar e a hierarquia inteira cai.
+    const bp = d.bp.map((l) => (l.conta === "Caixa e Equivalentes de Caixa" ? { ...l, valores: { ...l.valores, [N25]: 137 } } : l));
+    const fluxoCaixa = buildIndirectCashFlow(bp, d.dre, d.periodos, d.periodos);
+    const p = buildPontesVariacao({ ...d, bp, fluxoCaixa }, { regimeCadastro: "Lucro Real" })!;
+    expect(p.hierarquiaCaixa).toBeNull();
   });
 });
 
 describe("carga tributária — janela, sinal e base", () => {
-  it("o LAIR é o do intervalo (20), não o acumulado do ano (245)", () => {
+  it("o LAIR é o do exercício, igual ao das pontes", () => {
     const p = buildPontesVariacao(serieBalancete(), { regimeCadastro: "Lucro Real" })!;
-    expect(p.hierarquiaCaixa!.premissas.lairPeriodo).toBeCloseTo(20, 6);
-    expect(p.hierarquiaCaixa!.premissas.irPeriodo).toBeCloseTo(-5, 6);
+    expect(p.hierarquiaCaixa!.premissas.lairPeriodo).toBeCloseTo(245, 6);
+    expect(p.hierarquiaCaixa!.premissas.irPeriodo).toBeCloseTo(-55, 6);
   });
 
-  it("a carga do período sai da mesma janela: 5 ÷ 20 = 25%", () => {
+  it("a carga sai da mesma janela: 55 ÷ 245 = 22,45%", () => {
     const p = buildPontesVariacao(serieBalancete(), { regimeCadastro: "Lucro Real" })!;
-    expect(p.hierarquiaCaixa!.premissas.aliquotaEfetiva).toBeCloseTo(0.25, 4);
+    expect(p.hierarquiaCaixa!.premissas.aliquotaEfetiva).toBeCloseTo(0.2245, 4);
   });
 
   it("o nominal só existe quando há nominal comparável ao LAIR", () => {
@@ -142,11 +180,11 @@ describe("carga tributária — janela, sinal e base", () => {
 
   it("CRÉDITO de imposto não vira alíquota positiva", () => {
     const d = serieBalancete();
-    // Reversão de IR em dezembro: IR YTD passa de −50 para −45 (crédito de +5 no
-    // intervalo). Com `Math.abs` isso publicava "25%" para quem GANHOU imposto.
-    const dre = d.dre.map((l) => (l.conta === "IR e CSLL" ? { ...l, valores: { ...l.valores, [D25]: -45 } } : l));
+    // IR do exercício POSITIVO (reversão / IR diferido ativo). Com `Math.abs`
+    // isso publicava alíquota positiva para quem GANHOU imposto.
+    const dre = d.dre.map((l) => (l.conta === "IR e CSLL" ? { ...l, valores: { ...l.valores, [D25]: 15 } } : l));
     const p = buildPontesVariacao({ ...d, dre }, { regimeCadastro: "Lucro Real" })!;
-    expect(p.hierarquiaCaixa!.premissas.irPeriodo).toBeCloseTo(5, 6);
+    expect(p.hierarquiaCaixa!.premissas.irPeriodo).toBeCloseTo(15, 6);
     expect(p.hierarquiaCaixa!.premissas.aliquotaEfetiva).toBeNull();
   });
 });
@@ -163,7 +201,7 @@ describe("conversão de caixa — só o período da análise", () => {
     const p = buildPontesVariacao(serieBalancete(), { regimeCadastro: "Lucro Real" })!;
     const t = p.hierarquiaCaixa!.taxaConversao[0]!;
     const h = p.hierarquiaCaixa!;
-    expect(t.ebitda).toBeCloseTo(30, 6);            // dezembro, não 330 do ano
+    expect(t.ebitda).toBeCloseTo(330, 6);   // o ano, igual ao degrau de cima
     expect(t.fco).toBeCloseTo(h.degraus.find((g) => g.nome.includes("FCO"))!.valor, 6);
     expect(t.taxa).toBeCloseTo(t.fco / t.ebitda, 4);
   });

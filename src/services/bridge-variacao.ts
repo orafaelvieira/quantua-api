@@ -318,27 +318,51 @@ function hierarquiaCaixaDe(
    *  coluna pelo mes isolado, e desacumular de novo subtrairia duas vezes. */
   dreJaMensal: boolean
 ): HierarquiaCaixa | null {
-  const provaCol = fc.prova?.find((p) => p.periodo === col);
-  if (!provaCol?.fecha) return null;
-  const fco = fc.totais?.fco?.[col];
-  const fci = fc.totais?.fci?.[col];
-  const fcf = fc.totais?.fcf?.[col];
-  if (typeof fco !== "number" || typeof fci !== "number" || typeof fcf !== "number") return null;
-
-  // JANELA. O FCO desta coluna e o caixa do INTERVALO entre a coluna anterior e
-  // esta (cash-flow-indirect.ts:183-185 desacumula quando as duas sao balancete
-  // do mesmo exercicio). A DRE, lida crua, e o ACUMULADO NO ANO. Misturar as
-  // duas publicava EBITDA de doze meses ao lado de FCO de um mes, e o degrau do
-  // giro (que e' derivado por diferenca) virava um PLUG que engolia os outros
-  // onze — com a prova fechando assim mesmo, porque ela so' testa a cascata da
-  // DRE, nunca a janela. Na Belagro isso imprimiu conversao de caixa "-6%":
-  // -809 mil de dezembro dividido por 13,80 mi do ano inteiro.
+  // JANELA IGUAL A' DAS PONTES (dono, 20/08/2026: "colocar no mesmo periodo das
+  // variacoes de EBITDA e Lucro Liquido"). Cada COLUNA do FC e' o movimento
+  // entre ela e a anterior; num balancete mensal, a coluna 31/12 vale UM MES.
+  // Lida contra a DRE da coluna — que e' o ACUMULADO DO ANO — isso publicava
+  // EBITDA de doze meses ao lado de FCO de um mes, e o degrau do giro (derivado
+  // por diferenca) virava o PLUG que engolia os outros onze. A prova fechava
+  // assim mesmo: ela testa a cascata da DRE, nunca a janela.
+  // Agora somam-se TODAS as colunas do exercicio de `col`, o que reconstroi
+  // exatamente o mesmo intervalo que a DRE acumulada ja' cobre — e a DRE volta a
+  // ser lida CRUA, sem subtracao nenhuma.
   const iCol = fc.colunas.indexOf(col);
-  const colAnterior = iCol > 0 ? fc.colunas[iCol - 1]! : null;
-  const desacumula = !dreJaMensal && !!colAnterior && ytd.has(col) && ytd.has(colAnterior)
-    && mesAno(col)?.ano === mesAno(colAnterior)?.ano && mesAno(col)?.ano !== undefined;
-  const dreJanela = (conta: string): number =>
-    desacumula ? dreVal(dre, conta, col) - dreVal(dre, conta, colAnterior!) : dreVal(dre, conta, col);
+  if (iCol < 0) return null;
+  const anoCol = mesAno(col)?.ano ?? null;
+  const agregaExercicio = !dreJaMensal && ytd.has(col) && anoCol !== null;
+  const colunasJanela = agregaExercicio
+    ? fc.colunas.filter((c, i) => i <= iCol && mesAno(c)?.ano === anoCol)
+    : [col];
+  if (colunasJanela.length === 0) return null;
+
+  // VERDE SO' COM PROVA: se QUALQUER coluna somada nao fecha, a soma nao vale.
+  const provas = colunasJanela.map((c) => fc.prova?.find((x) => x.periodo === c));
+  if (provas.some((pv) => !pv?.fecha)) return null;
+
+  const somaCol = (m: Record<string, number> | undefined): number | null => {
+    if (!m) return null;
+    let t = 0;
+    for (const c of colunasJanela) {
+      const v = m[c];
+      if (typeof v !== "number") return null;
+      t += v;
+    }
+    return t;
+  };
+  const fco = somaCol(fc.totais?.fco);
+  const fci = somaCol(fc.totais?.fci);
+  const fcf = somaCol(fc.totais?.fcf);
+  if (fco === null || fci === null || fcf === null) return null;
+
+  // A coluna ANTERIOR a' primeira somada e' o marco inicial do intervalo.
+  const iPrimeira = fc.colunas.indexOf(colunasJanela[0]!);
+  const intervaloDe = iPrimeira > 0 ? fc.colunas[iPrimeira - 1]! : null;
+
+  // A DRE ja' cobre a janela: acumulada no ano quando ha' agregacao, mes isolado
+  // quando a regua e' "mes", exercicio cheio quando a coluna e' anual.
+  const dreJanela = (conta: string): number => dreVal(dre, conta, col);
 
   const ebitda = dreJanela("EBITDA");
   const ir = dreJanela("IR e CSLL"); // negativo por convenção
@@ -354,11 +378,17 @@ function hierarquiaCaixaDe(
   const da = dreJanela("Depreciação e Amortização");
   const eqP = dreJanela("Equivalência Patrimonial");
   const giro = fco - lucro + da + eqP;
-  const giroCapitalDeGiro = fc.capitalGiro?.total?.[col] ?? null; // sub-bloco, quando existe
+  // AS TRES LINHAS, NAO A SOMA (dono, 20/08/2026). O leitor via "-R$ 627 mil"
+  // de capital de giro sem saber se foi cliente atrasando, estoque parado ou
+  // fornecedor apertando — que sao decisoes DIFERENTES.
+  const linhasGiro = (fc.capitalGiro?.linhas ?? [])
+    .map((l) => ({ nome: l.nome, valor: round2(colunasJanela.reduce((t, c) => t + (l.valores?.[c] ?? 0), 0)) }))
+    .filter((l) => Math.abs(l.valor) > 0.005);
+  const giroCapitalDeGiro = somaCol(fc.capitalGiro?.total); // sub-bloco, quando existe
   const fcoRecomposto = ebitda + ir + rf + rno + giro;
 
   const fcle = fco + fci;
-  const deltaCaixa = provaCol.deltaObservado;
+  const deltaCaixa = provas.reduce((t, pv) => t + (pv!.deltaObservado ?? 0), 0);
 
   const degraus: DegrauCaixa[] = [
     { nome: "EBITDA (DRE)", tipo: "nivel", valor: round2(ebitda) },
@@ -366,8 +396,9 @@ function hierarquiaCaixaDe(
     ...(Math.abs(rf) > 0.005 ? [{ nome: "Resultado financeiro (juros líquidos)", tipo: "delta" as const, valor: round2(rf) }] : []),
     ...(Math.abs(rno) > 0.005 ? [{ nome: "Resultado não operacional", tipo: "delta" as const, valor: round2(rno) }] : []),
     { nome: "Δ capital de giro e demais itens operacionais", tipo: "delta", valor: round2(giro) },
-    ...(giroCapitalDeGiro !== null && Math.abs(giroCapitalDeGiro) > 0.005
-      ? [{ nome: "dentro dele, capital de giro (clientes, estoques, fornecedores)", tipo: "delta" as const, valor: round2(giroCapitalDeGiro), informativo: true }]
+    ...linhasGiro.map((l) => ({ nome: l.nome, tipo: "delta" as const, valor: l.valor, informativo: true })),
+    ...(giroCapitalDeGiro !== null && Math.abs(giroCapitalDeGiro) > 0.005 && linhasGiro.length > 1
+      ? [{ nome: "subtotal do capital de giro", tipo: "delta" as const, valor: round2(giroCapitalDeGiro), informativo: true }]
       : []),
     { nome: "Caixa das operações (FCO)", tipo: "nivel", valor: round2(fco) },
     { nome: "Investimentos (capex e participações — FCI)", tipo: "delta", valor: round2(fci) },
@@ -409,9 +440,9 @@ function hierarquiaCaixaDe(
 
   return {
     periodo: col,
-    /** Coluna a partir da qual o intervalo e' medido (null = a coluna vale como
-     *  esta'). O relatorio declara o intervalo em vez de deixar subentendido. */
-    intervaloDe: desacumula ? colAnterior : null,
+    /** Marco inicial do intervalo somado (null quando nao ha' coluna anterior).
+     *  O relatorio declara o intervalo em vez de deixar subentendido. */
+    intervaloDe,
     degraus,
     provaFco: prova(round2(fcoRecomposto), round2(fco)),
     provaDeltaCaixa: prova(round2(fco + fci + fcf), round2(deltaCaixa)),
