@@ -666,6 +666,11 @@ export interface ParComparacao {
   mesesJanela: number;
   /** Há períodos ENTRE os dois: comparação ponto a ponto, não tendência. */
   saltaPeriodos: boolean;
+  /** Rótulos prontos. O SELETOR da tela rotulava cada opção por conta própria e
+   *  publicava "2024 → 12/2025" para dois exercícios cheios — o mesmo defeito
+   *  que o cabeçalho e o aviso já tinham. Um par, um rotulador. */
+  rotuloDe?: string;
+  rotuloAte?: string;
 }
 
 /**
@@ -719,17 +724,17 @@ export function paresComparaveis(dados: DadosParaPontes): ParComparacao[] {
       const mensais = ytd.has(de) && ytd.has(ate);
 
       if (anuais) {
-        out.push({ de, ate, regua: "exercicio", mesesJanela: 12, saltaPeriodos: salto > 0 });
+        out.push({ de, ate, regua: "exercicio", mesesJanela: 12, saltaPeriodos: salto > 0, rotuloDe: rotuloPeriodoSrv(de), rotuloAte: rotuloPeriodoSrv(ate) });
         continue;
       }
       if (!mensais) continue; // ano cheio × YTD parcial: nunca
 
       if (a.ano === b.ano && b.mes === a.mes + 1) {
         // MoM: mês contra o mês anterior, pela DRE do mês.
-        out.push({ de, ate, regua: "mes", mesesJanela: 1, saltaPeriodos: false });
+        out.push({ de, ate, regua: "mes", mesesJanela: 1, saltaPeriodos: false, rotuloDe: rotuloPeriodoSrv(de, true), rotuloAte: rotuloPeriodoSrv(ate, true) });
       } else if (a.mes === b.mes && a.ano < b.ano) {
         // Mesmo mês de anos diferentes: YTD × YTD (janela igual em meses).
-        out.push({ de, ate, regua: "ano-a-ano", mesesJanela: b.mes, saltaPeriodos: b.ano - a.ano > 1 });
+        out.push({ de, ate, regua: "ano-a-ano", mesesJanela: b.mes, saltaPeriodos: b.ano - a.ano > 1, rotuloDe: rotuloPeriodoSrv(de), rotuloAte: rotuloPeriodoSrv(ate) });
       }
       // Meses de meses diferentes que não são o mesmo mês (ex.: mar × ago) ficam
       // de fora: acumulados de janelas diferentes (3 meses × 8) não se comparam.
