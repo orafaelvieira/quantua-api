@@ -597,7 +597,7 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
   "parecerExecutivo": {
     "tese": "<VEREDICTO em no MÁXIMO 3 frases, conclusão primeiro: onde a empresa está, do que isso decorre e o que exige agora. Linguagem de quem decide, sem sigla não explicada. NÃO repita destaques nem o racional da situação.>",
     "numeros": [ { "indicador": "<NOME EXATO de um indicador da série acima, copiado caractere a caractere. NÃO escreva o valor: o sistema busca o número no motor. Nome que não existir na série é DESCARTADO.>", "leitura": "<1 frase: o que esse indicador significa para a decisão, com o de→para quando houver>" } ],
-    "decisoes": [ { "decisao": "<o que fazer, no imperativo>", "prazo": "0–30d|30–90d|90–180d", "valor": "<R$ em jogo, ou null>", "porque": "<1 frase com o número que justifica>" } ],
+    "decisoes": [ { "decisao": "<o que fazer, no imperativo>", "prazo": "0–30d|30–90d|90–180d", "valor": "<TEXTO (nunca numero cru): o R$ em jogo, ex.: \"R$ 1,2 mi\" — ou null>", "porque": "<1 frase com o número que justifica>" } ],
     "proteger": ["<o que não pode ser perdido — 1 linha cada>"]
   },
   "destaques": ["<insight 1>", "<insight 2>", "<insight 3>", "<insight 4>"],
@@ -776,7 +776,26 @@ PRINCÍPIOS (inegociáveis):
               return achado ? [{ indicador: achado.nome, leitura: n.leitura.trim() }] : [];
             })
           : undefined,
-        decisoes: lista<{ decisao: string; prazo: string; valor?: string | null; porque: string }>(p.decisoes, (d) => d?.decisao),
+        // NORMALIZA O TIPO, nao so' filtra. O MESMO prompt declara
+        // `alavancasAdicionais[].valor` como NUMERO e `decisoes[].valor` como
+        // STRING; o modelo confunde os dois e em 20/08/2026 devolveu
+        // `valor: 12700000` (number). Passou por aqui, foi gravado no banco e
+        // estourou o `.trim()` do PDF -- o relatorio INTEIRO deixou de ser
+        // gerado por causa de uma celula. O tipo persistido agora e' o tipo
+        // declarado, sempre.
+        decisoes: Array.isArray(p.decisoes)
+          ? p.decisoes.flatMap((d: any) => {
+              if (typeof d?.decisao !== "string" || !d.decisao.trim()) return [];
+              const txt = (x: unknown): string =>
+                typeof x === "string" ? x.trim() : typeof x === "number" && Number.isFinite(x) ? String(x) : "";
+              return [{
+                decisao: d.decisao.trim(),
+                prazo: txt(d.prazo),
+                valor: txt(d.valor) || null,
+                porque: txt(d.porque),
+              }];
+            })
+          : undefined,
         proteger: Array.isArray(p.proteger) ? p.proteger.filter((s: unknown) => typeof s === "string" && s.trim()) : undefined,
       };
     })(),
