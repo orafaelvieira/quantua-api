@@ -861,7 +861,7 @@ export function buildPontesVariacao(
     ? `Comparação ponto a ponto entre ${rDe} e ${rAte}: há período(s) entre os dois que não entram nesta conta — a variação mostra a diferença entre os dois retratos, não o caminho percorrido.`
     : !opts?.par && ate !== ultimo
       ? (disponiveis.some((x) => x.ate === ultimo)
-          ? `O período mais recente (${rotuloPeriodoSrv(ultimo)}) fica de fora DESTE par: não há na série um período de mesma janela do ano anterior para compará-lo, e a comparação de 12 meses contra 12 meses é mais informativa que a de um mês. Há pares terminando em ${rotuloPeriodoSrv(ultimo)} no seletor.`
+          ? `O período mais recente (${rotuloPeriodoSrv(ultimo)}) fica de fora DESTE par: não há na série um período de mesma janela do ano anterior para compará-lo, e a comparação de 12 meses contra 12 meses é mais informativa que a de um mês.`
           : `O período mais recente (${rotuloPeriodoSrv(ultimo)}) fica de fora: não há na série outro período de janela igual para compará-lo.`)
       : null;
 

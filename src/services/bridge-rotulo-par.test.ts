@@ -123,3 +123,40 @@ describe("controle — o que já estava certo continua certo", () => {
     expect(p.par?.rotuloAte).toBe("2024");
   });
 });
+
+describe("o que vai para o cliente não fala da cozinha", () => {
+  /**
+   * REGRA DO DONO (20/08/2026): "Não coloque frases no documento do cliente que
+   * sejam informação interna da Quantua." O aviso do par publicava "Há pares
+   * terminando em 05/2026 no seletor" — o seletor é da NOSSA tela, o cliente não
+   * tem seletor nenhum. Regra sem trava volta na próxima frase escrita com pressa.
+   */
+  const COZINHA = [/seletor/i, /na tela/i, /no sistema/i, /reprocess/i, /pipeline/i, /job/i, /fallback/i, /payload/i, /banco de dados/i, /PR/];
+
+  /** Série com um par MoM disponível na ponta (04→05/2026): é ESSE o caso em que
+   *  o motor tentava ser prestativo e citava o seletor. Sem 30/04/2026 na série
+   *  o ramo nunca roda e o teste passa sem testar nada. */
+  function comParNaPonta() {
+    const d = cenarioBelagro();
+    const A26 = "30/04/2026";
+    const dre = d.dre.map((l) => ({ ...l, valores: { ...l.valores, [A26]: (l.valores[M2026] ?? 0) * 0.8 } }));
+    const bp = d.bp.map((l) => ({ ...l, valores: { ...l.valores, [A26]: (l.valores[M2026] ?? 0) * 0.9 } }));
+    const periodos = [D2024, N2025, D2025, A26, M2026];
+    return { ...d, dre, bp, periodos, arvoresBalancete: periodos.map((periodo) => ({ periodo })) };
+  }
+
+  it("o aviso do par não menciona a ferramenta", () => {
+    const p = buildPontesVariacao(comParNaPonta())!;
+    // Guarda da guarda: se o aviso não sair, o teste não testou nada.
+    expect(p.avisoPar, "o aviso precisa existir para o teste valer").toBeTruthy();
+    expect(p.avisoPar).toContain("05/2026");
+    for (const re of COZINHA) expect(p.avisoPar!).not.toMatch(re);
+  });
+
+  it("nem o bloqueio, nem as notas das pontes", () => {
+    const p = buildPontesVariacao(cenarioBelagro())!;
+    const textos = [p.bloqueio, p.ponteNcg?.nota, p.dupont?.nota, p.hierarquiaCaixa?.premissas?.nota]
+      .filter((t): t is string => typeof t === "string");
+    for (const t of textos) for (const re of COZINHA) expect(t).not.toMatch(re);
+  });
+});
