@@ -70,28 +70,48 @@ describe("o fôlego de caixa depende da BASE DE DIAS, e ela precisa ser a certa"
 });
 
 describe("o que a conta regressiva publica", () => {
-  it("operação que GERA caixa não vira contagem regressiva", () => {
+  it("operação que GERA caixa: diz que gerou, sem contagem regressiva", () => {
     const r = calcularContaRegressiva(BP, DRE, P, 4_000_000, 150)!;
     expect(r.mesesAteZerar).toBeNull();
-    expect(r.leitura).toMatch(/a operação gera caixa/);
+    expect(r.leitura).toMatch(/a operação gerou caixa/);
     expect(r.leitura).not.toMatch(/se esgota/);
   });
 
-  it("operação que QUEIMA caixa conta os meses até zerar", () => {
+  it("UM RELÓGIO SÓ: o número dos meses fica no objeto, mas NÃO entra na leitura", () => {
+    // A leitura publicava "o caixa paga 7 dias" E "se esgota em cerca de 16
+    // meses" — duas perguntas diferentes na mesma caixa de texto; a IA repetia
+    // as duas e o relatório saía com "7 dias" no título e "17,5 meses" no corpo.
+    // "Isso destrói a credibilidade do diagnóstico" (dono, 21/08/2026).
     const r = calcularContaRegressiva(BP, DRE, P, -4_611_799, 150)!;
-    // queima mensal = 4.611.799 ÷ (150/30) = 922.360 → 14.803.975 / 922.360 ≈ 16,05
-    expect(r.mesesAteZerar!).toBeCloseTo(16.05, 2);
-    expect(r.leitura).toMatch(/se esgota em cerca de/);
+    expect(r.mesesAteZerar!, "o número continua calculado para quem o consome").toBeCloseTo(16.05, 2);
+    expect(r.leitura).not.toMatch(/se esgota|meses/);
+    expect(r.leitura).toMatch(/cobre 7 dias de desembolsos/);
+    expect(r.leitura, "declara o que o número É").toMatch(/caixa disponível dividido pelo gasto diário/);
+    expect(r.leitura, "e diz que a operação consumiu caixa").toMatch(/consumiu caixa/);
+  });
+
+  it("o status segue SÓ o relógio publicado", () => {
+    // Antes era OR dos dois relógios: um veredicto podia vir de um número que
+    // ninguém via. Caixa que cobre 20 dias com queima forte: antes "critico"
+    // pelos meses; agora "atencao" pelos dias, que é o que está escrito.
+    const bp20 = [linha("Caixa e Equivalentes de Caixa", DESEMBOLSO / 150 * 20)];
+    // queima mensal = 80 mi ÷ 5 = 16 mi; caixa ≈ 41,9 mi → 2,6 meses (< 3: "critico" na régua antiga)
+    const r = calcularContaRegressiva(bp20, DRE, P, -80_000_000, 150)!;
+    expect(r.diasDeCaixa!).toBeCloseTo(20, 6);
+    expect(r.mesesAteZerar!).toBeLessThan(3);
+    expect(r.status).toBe("atencao");
   });
 
   it("sem caixa no balanço não inventa número: devolve null", () => {
     expect(calcularContaRegressiva([], DRE, P, null, 150)).toBeNull();
   });
 
-  it("sem desembolso não há dias de caixa — e a frase não afirma fôlego", () => {
+  it("sem desembolso não há dias de caixa — e a frase não afirma fôlego nem começa com 'e'", () => {
     const r = calcularContaRegressiva(BP, [], P, -1_000_000, 150);
     expect(r?.diasDeCaixa ?? null).toBeNull();
-    expect(r?.leitura ?? "").not.toMatch(/paga \d+ dia/);
+    expect(r?.leitura ?? "").not.toMatch(/cobre \d+ dia/);
+    // Só sobrava a segunda parte, e ela abria o parágrafo com "e a operação…".
+    expect(r?.leitura ?? "").toMatch(/^A operação consumiu caixa/);
   });
 
   it("depreciação NÃO conta como desembolso (não sai do caixa)", () => {

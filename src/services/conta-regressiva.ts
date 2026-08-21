@@ -89,27 +89,42 @@ export function calcularContaRegressiva(
   const queima = fcoDoPeriodo != null && fcoDoPeriodo < 0 ? Math.abs(fcoDoPeriodo) : null;
   const mesesAteZerar = queima != null && queima > 0 ? caixa / (queima / (diasDoPeriodo / 30)) : null;
 
+  // UM RELÓGIO SÓ (dono, 21/08/2026, "ajustes relatório ibr4"). Esta função
+  // publicava DOIS: "o caixa paga 7 dias de operação" (caixa ÷ desembolso
+  // diário) e "se esgota em cerca de 16 meses" (caixa ÷ queima líquida mensal).
+  // São perguntas diferentes — quanto do gasto bruto o caixa cobre, e quanto
+  // tempo dura se a operação seguir devolvendo a maior parte do que gasta — e
+  // na mesma caixa de texto o leitor recebia "7 dias" no título e "17,5 meses"
+  // no corpo. Nas palavras do dono: "isso destrói a credibilidade do
+  // diagnóstico". O status também passa a seguir só o que é publicado; um
+  // veredicto apoiado num número que ninguém vê é selo sem prova.
+  //
+  // A métrica que fica é a dos DIAS, com a definição declarada no próprio texto.
+  // `mesesAteZerar` continua calculado para quem o consome como número (cards),
+  // mas não entra na leitura nem no prompt.
   const status: ContaRegressiva["status"] =
-    (diasDeCaixa != null && diasDeCaixa < 15) || (mesesAteZerar != null && mesesAteZerar < 3) ? "critico"
-    : (diasDeCaixa != null && diasDeCaixa < 45) || (mesesAteZerar != null && mesesAteZerar < 6) ? "atencao"
+    diasDeCaixa != null && diasDeCaixa < 15 ? "critico"
+    : diasDeCaixa != null && diasDeCaixa < 45 ? "atencao"
     : "ok";
 
   const partes: string[] = [];
   if (diasDeCaixa != null && desembolsoDiario != null) {
     partes.push(
-      `A empresa tem ${reais(caixa)} disponíveis e gasta cerca de ${reais(desembolsoDiario)} por dia para funcionar, ` +
-      `o que significa que o caixa de hoje paga ${dias(diasDeCaixa)} de operação`,
+      `A empresa tem ${reais(caixa)} disponíveis e desembolsa cerca de ${reais(desembolsoDiario)} por dia com custos e despesas: ` +
+      `o caixa de hoje cobre ${dias(diasDeCaixa)} de desembolsos da operação (é o caixa disponível dividido pelo gasto diário)`,
     );
   }
-  if (mesesAteZerar != null) {
-    partes.push(
-      `a operação está consumindo caixa em vez de gerar, e no ritmo atual o dinheiro disponível se esgota em cerca de ` +
-      `${mesesAteZerar < 1 ? "menos de um mês" : `${mesesAteZerar.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} meses`}`,
-    );
+  if (fcoDoPeriodo != null && fcoDoPeriodo < 0) {
+    partes.push(`a operação consumiu caixa no período, cerca de ${reais(fcoDoPeriodo)}, em vez de gerar`);
   } else if (fcoDoPeriodo != null && fcoDoPeriodo > 0) {
-    partes.push(`a operação gera caixa, cerca de ${reais(fcoDoPeriodo)} no período, o que dá fôlego para recompor a reserva`);
+    partes.push(`a operação gerou caixa no período, cerca de ${reais(fcoDoPeriodo)}, o que ajuda a recompor a reserva`);
   }
   if (partes.length === 0) return null;
+  // Sem as linhas de desembolso na DRE só sobra a segunda parte — e ela abria o
+  // parágrafo com "e a operação…". A emenda é feita aqui, não no texto.
+  const corpo = partes.length === 2
+    ? `${partes[0]}, e ${partes[1]}`
+    : partes[0]!.charAt(0).toUpperCase() + partes[0]!.slice(1);
 
   const fecho =
     status === "critico"
@@ -122,6 +137,6 @@ export function calcularContaRegressiva(
     periodo, caixa,
     desembolsoOperacionalAno: desembolsoAno, desembolsoDiario, diasDeCaixa,
     geracaoOperacional: fcoDoPeriodo, mesesAteZerar, status,
-    leitura: `${partes.join("; ")}.${fecho}`,
+    leitura: `${corpo}.${fecho}`,
   };
 }

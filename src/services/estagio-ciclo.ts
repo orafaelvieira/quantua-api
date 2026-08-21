@@ -227,15 +227,55 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
     // antigo, que abria com três índices seguidos e enterrava o significado.
     const num = (v: number, casas: number) => v.toLocaleString("pt-BR", { minimumFractionDigits: casas, maximumFractionDigits: casas });
     const operacaoVai = margemOp != null && margemOp > 0;
+
+    // A JANELA VAI DECLARADA (dono, 21/08/2026, "ajustes relatório ibr4"). O
+    // texto dizia "a operação está gastando mais do que fatura" como se fosse
+    // traço permanente — e três linhas abaixo o mesmo relatório lembrava que o
+    // exercício fechado anterior teve EBITDA positivo e lucro. Quando a última
+    // coluna é um acumulado parcial, a frase diz de que janela está falando;
+    // a causa (sazonalidade × deterioração) não é determinável com esta base,
+    // e cabe à leitura da situação cruzar com o exercício fechado.
+    // "31/05/2026" OU o rótulo curto "05/2026", que existe no acervo como chave
+    // de coluna de balancete (diasYTD e o fluxo de caixa já o aceitam). Sem
+    // isso o acumulado de junho num acervo de rótulo curto era lido como traço
+    // permanente — exatamente o que o dono apontou.
+    const mAno = (() => {
+      const longo = ult.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (longo) return { mes: longo[2]!, ano: longo[3]! };
+      const curto = ult.match(/^(\d{2})\/(\d{4})$/);
+      return curto ? { mes: curto[1]!, ano: curto[2]! } : null;
+    })();
+    const parcial = mAno !== null && Number(mAno.mes) < 12;
+    // Capitaliza a frase inteira: sem janela, a abertura é o começo do parágrafo
+    // e saía em minúscula ("a operação ainda não cobre…") em todo IBR cujo
+    // último período é exercício fechado — a maioria do acervo.
+    const cap = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
+    const janela = parcial ? `na janela de ${mAno!.ano} analisada (acumulado até ${mAno!.mes}/${mAno!.ano}), ` : "";
+
+    // O ESTÁGIO É CURTO (dono, 21/08/2026, "ajustes relatório ibr4": "uma frase
+    // curta explicando o estágio"). Fala da margem da janela e de mais nada —
+    // liquidez corrente e imediata têm UM dono, o cartão da situação, onde a IA
+    // as prova com a definição exata. Quando o motor as citava aqui e o prompt
+    // mandava a IA prová-las ali, o mesmo número saía nos dois cartões, com a
+    // mesma frase.
     const abertura = operacaoVai
-      ? `O negócio em si está saudável: de cada R$ 100 que a empresa fatura, sobram cerca de R$ ${num(margemOp * 100, 0)} depois de pagar os custos e as despesas do dia a dia. O problema não está em vender nem em produzir, está no dinheiro em conta.`
+      ? cap(`${janela}o negócio em si está saudável: de cada R$ 100 que a empresa fatura, sobram cerca de R$ ${num(margemOp * 100, 0)} depois de pagar os custos e as despesas do dia a dia. O problema não está em vender nem em produzir, está no dinheiro em conta.`)
       : margemOp != null
-      ? `A operação está gastando mais do que fatura: cada R$ 100 vendidos deixam um prejuízo de cerca de R$ ${num(Math.abs(margemOp) * 100, 0)} depois dos custos e despesas do dia a dia.`
-      : "A empresa está sem fôlego de caixa.";
-    const evidencia = liqCorr != null
-      ? ` Hoje, para cada R$ 1,00 de conta que vence nos próximos meses, a empresa tem R$ ${num(liqCorr, 2)} para cobrir${liqImed != null ? `, e do que está disponível na conta bancária sai apenas ${num(liqImed * 100, 1)}% desse valor` : ""}.`
-      : liqImed != null
-      ? ` O dinheiro disponível em conta cobre apenas ${num(liqImed * 100, 1)}% das contas que vencem nos próximos meses.`
+      ? cap(`${janela}a operação ainda não cobre integralmente os custos e as despesas: cada R$ 100 de receita deixam ${
+          Math.abs(margemOp) * 100 < 1 ? "menos de R$ 1" : `cerca de R$ ${num(Math.abs(margemOp) * 100, 0)}`
+        } de resultado operacional negativo (margem EBITDA de ${num(margemOp * 100, 1)}%).`)
+      : cap(`${janela}a empresa está sem fôlego de caixa.`);
+    const evidencia = "";
+    const implicacao = "";
+
+    // A RESSALVA DA JANELA só cita o que EXISTE na série: "exercício fechado
+    // anterior" quando há um (rótulo anual ou 31/12 antes desta coluna), e a
+    // sazonalidade como hipótese, não como fato do negócio que o motor não mediu.
+    const temFechado = ord.slice(0, -1).some((p) => /^\d{4}$/.test(p.trim()) || /^\d{2}\/12\/\d{4}$/.test(p.trim()) || /^12\/\d{4}$/.test(p.trim()));
+    const ressalvaJanela = parcial
+      ? temFechado
+        ? " Esse resultado é de uma janela parcial e deve ser lido junto com o exercício fechado anterior e com a sazonalidade, se o negócio a tiver, antes de ser tratado como traço permanente."
+        : " Esse resultado é de uma janela parcial e não deve ser tratado como traço permanente sem um exercício fechado para comparar."
       : "";
     // Quando foi o TRIO que disparou a classificação, o texto precisa dizer —
     // senão o dono lê "o negócio vai bem" sem saber qual sinal acendeu.
@@ -243,7 +283,9 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
       ? " Os indicadores de solidez financeira, que olham a estrutura e não só o mês, também estão no nível que pede atenção imediata."
       : "";
     const consequencia = operacaoVai
-      ? " Uma empresa pode dar lucro e ainda assim não ter dinheiro para pagar o que vence, e é exatamente isso que acontece aqui: o resultado existe, mas está preso em prazos, estoques ou já saiu em retiradas e dívidas. Enquanto o caixa não for recomposto, qualquer atraso de cliente vira problema de pagamento no mesmo mês."
+      ? " Uma empresa pode dar lucro e ainda assim não ter dinheiro para pagar o que vence, e é exatamente isso que acontece aqui: o resultado existe, mas está preso em prazos, estoques ou já saiu em retiradas e dívidas."
+      : parcial
+      ? ressalvaJanela
       : " Enquanto a operação não voltar a cobrir os próprios custos, o caixa continuará encolhendo mês a mês.";
     return com({
       // "PRESSÃO DE CAIXA", não "Dificuldade de caixa" (dono, 21/08/2026: o termo
@@ -252,7 +294,7 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
       // mesmos; muda a palavra que abre a conversa. Rótulos antigos gravados
       // ("Crise de caixa", "Dificuldade de caixa") seguem mapeados na matriz.
       estagio: "Pressão de caixa",
-      justificativa: `${abertura}${evidencia}${sinalEstrutural}${consequencia}`,
+      justificativa: `${abertura}${evidencia}${implicacao}${sinalEstrutural}${consequencia}`,
     });
   }
 
