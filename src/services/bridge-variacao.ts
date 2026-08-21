@@ -94,6 +94,8 @@ export interface EfeitoNcg {
 export interface PonteNcg {
   ncgInicial: number;
   ncgFinal: number;
+  /** Como a decomposição foi feita — o leitor perguntou e a resposta viaja junto. */
+  metodo?: string;
   efeitos: EfeitoNcg[];
   prova: ProvaPonte;
   /** Prazos SEM arredondar, para o rótulo ("PMR 56 → 60 dias"). */
@@ -501,9 +503,14 @@ function ponteNcgDe(
   let explicado = 0;
   const prazoDe = (saldo: number, base: number): number => (base > 0 ? saldo / base : 0);
 
+  // O ROTULO DIZ O QUE A LINHA E' (dono, 21/08/2026: "a coluna valor e' R$,
+  // dias????"). "Prazo de recebimento (PMR)" ao lado de "+20,44" fazia o leitor
+  // procurar dias numa coluna de reais. Agora cada linha se anuncia como EFEITO
+  // em dinheiro e carrega o prazo que o causou, entre parenteses.
+  const dias = (v: number): string => `${Math.round(v)}`;
   const componente = (
-    nomePrazo: string,
-    nomeVolume: string,
+    rotuloPrazo: string,
+    rotuloVolume: string,
     saldo0: number,
     saldo1: number,
     base0: number,
@@ -514,22 +521,26 @@ function ponteNcgDe(
     const p1 = prazoDe(saldo1, base1);
     const efPrazo = (p1 - p0) * base1 * sinal;
     const efVolume = p0 * (base1 - base0) * sinal;
-    if (Math.abs(efPrazo) > 0.005) efeitos.push({ nome: nomePrazo, valor: round2(efPrazo) });
-    if (Math.abs(efVolume) > 0.005) efeitos.push({ nome: nomeVolume, valor: round2(efVolume) });
+    if (Math.abs(efPrazo) > 0.005) {
+      efeitos.push({ nome: `${rotuloPrazo} (${dias(p0)} → ${dias(p1)} dias)`, valor: round2(efPrazo) });
+    }
+    if (Math.abs(efVolume) > 0.005) {
+      efeitos.push({ nome: rotuloVolume, valor: round2(efVolume) });
+    }
     explicado += efPrazo + efVolume;
     return [round2(p0 * 100) / 100, round2(p1 * 100) / 100];
   };
 
   const pmr = componente(
-    "Prazo de recebimento (PMR)", "Crescimento da receita sobre clientes",
+    "Efeito do prazo de recebimento", "Efeito do crescimento da receita sobre clientes",
     bpVal(bp, "Contas a Receber - CP", de), bpVal(bp, "Contas a Receber - CP", ate), rd0, rd1, 1
   );
   const pme = componente(
-    "Prazo de estoque (PME)", "Crescimento do custo sobre estoques",
+    "Efeito do prazo de estoque", "Efeito do crescimento do custo sobre estoques",
     bpVal(bp, "Estoques - CP", de), bpVal(bp, "Estoques - CP", ate), cd0, cd1, 1
   );
   const pmf = componente(
-    "Prazo de fornecedores (PMF)", "Crescimento do custo sobre fornecedores",
+    "Efeito do prazo de fornecedores", "Efeito do crescimento do custo sobre fornecedores",
     Math.abs(bpVal(bp, "Fornecedores - CP", de)), Math.abs(bpVal(bp, "Fornecedores - CP", ate)), cd0, cd1, -1
   );
 
@@ -543,6 +554,15 @@ function ponteNcgDe(
   return {
     ncgInicial: round2(ncg0),
     ncgFinal: round2(ncg1),
+    // COMO SE CALCULOU (dono, 21/08/2026: "nao entendi como se calculou esta
+    // ponte"). A conta e' a separacao exata de Δ(prazo × base diaria) em duas
+    // parcelas, sem residuo: Δprazo × base NOVA + prazo ANTIGO × Δbase.
+    metodo:
+      "Cada saldo do giro é prazo × base diária: clientes sobre a receita/dia, estoques e fornecedores sobre o custo/dia. " +
+      "A variação de cada um se separa em duas parcelas exatas — o EFEITO DO PRAZO (quantos dias mudaram, × a base diária atual) " +
+      "e o EFEITO DO CRESCIMENTO (o quanto a operação cresceu, × o prazo que já se praticava). " +
+      "Fornecedor entra com sinal invertido: alongar prazo de pagamento LIBERA caixa. " +
+      "O que não cabe em clientes, estoques e fornecedores fica em “Demais itens do giro”.",
     efeitos,
     prova: prova(round2(soma), round2(delta)),
     prazos: { pmr, pme, pmf },

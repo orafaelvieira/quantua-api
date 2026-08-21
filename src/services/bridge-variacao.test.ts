@@ -165,7 +165,14 @@ describe("buildPontesVariacao — NCG em dias e DuPont", () => {
     expect(n.ncgFinal).toBe(240);
     expect(n.prova.deltaObservado).toBe(60);
     expect(n.prova.fecha).toBe(true);
-    expect(n.efeitos.some((e) => e.nome.includes("PMR"))).toBe(true);
+    // O ROTULO DIZ QUE E' EFEITO EM R$ e carrega o prazo que o causou — antes
+    // era so' "Prazo de recebimento (PMR)" ao lado de um numero em reais, e o
+    // dono perguntou "a coluna valor e' R$ ou dias?".
+    const efPmr = n.efeitos.find((e) => e.nome.startsWith("Efeito do prazo de recebimento"));
+    expect(efPmr, "linha do efeito do prazo de recebimento").toBeTruthy();
+    expect(efPmr!.nome).toMatch(/\(\d+ → \d+ dias\)/);
+    // e o METODO viaja junto, porque a decomposicao nao e' obvia
+    expect(n.metodo).toContain("EFEITO DO PRAZO");
   });
 
   it("DuPont: decomposição sequencial exata (resíduo ~0) e conclusiva", () => {
