@@ -349,6 +349,26 @@ export function diasYTD(periodo: string): number {
   return mes === 12 ? 365 : mes * 30;
 }
 
+/**
+ * A RÉGUA DE DIAS DE UM PERÍODO — uma só, para todo o produto.
+ *
+ * Estava inline dentro do laço de `calculateIndicators` e foi RECOPIADA em cada
+ * consumidor. Uma das cópias (claude.ts) usava `ytd.has(p) ? diasYTD(p) : 365`,
+ * que só coincide quando a série é anual: num IBR com um único fechamento em
+ * 31/05/2026 que NÃO está registrado como balancete, o motor de indicadores
+ * publica o prazo sobre 150 dias e a cópia calculava sobre 365. O mesmo
+ * relatório trazia dois preços para o mesmo movimento — R$ 6,5 mi de um lado e
+ * R$ 17,4 mi do outro.
+ *
+ * Quem precisar da base de dias chama ISTO. Cópia nova é divergência futura.
+ */
+export function diasBaseDe(periodo: string, periodos: string[], periodosYTD?: string[]): number {
+  const ytd = new Set(periodosYTD ?? []);
+  return ytd.has(periodo)
+    ? diasYTD(periodo)
+    : diasDoPeriodo(periodo, periodos.filter((x) => !ytd.has(x) || x === periodo));
+}
+
 export function calculateIndicators(
   bp: BPLineItem[],
   dre: DRELineItem[],
@@ -374,7 +394,7 @@ export function calculateIndicators(
   // Períodos de balancete têm dias-base PRÓPRIOS (YTD): a mediana do espaçamento
   // da série mista anual+mensal daria 365 para um mês de maio (prazos médios ~2,4×
   // inflados). Cada período usa a base da SUA periodicidade.
-  for (const p of periodos) diasPorPeriodo[p] = extras?.diasPorPeriodo?.[p] ?? diasOverride ?? (ytd.has(p) ? diasYTD(p) : diasDoPeriodo(p, periodos.filter((x) => !ytd.has(x) || x === p)));
+  for (const p of periodos) diasPorPeriodo[p] = extras?.diasPorPeriodo?.[p] ?? diasOverride ?? diasBaseDe(p, periodos, periodosYTD);
   // Receita Líquida por período (base do Crescimento YoY)
   const rlPor: Record<string, number | null> = {};
   for (const p of periodos) {

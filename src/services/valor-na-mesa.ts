@@ -20,7 +20,7 @@
  * regenerações fica confinada ao estrato da IA — e visível como tal.
  */
 import type { PeerComparisonRow } from "./peer-benchmark";
-import { diasYTD, diasDoPeriodo } from "./indicator-calculator";
+import { diasBaseDe, diasYTD, diasDoPeriodo } from "./indicator-calculator";
 
 export interface AlavancaValor {
   origem: "motor" | "analise";
@@ -153,7 +153,7 @@ export function calcularValorCanonico(
   const ult = ord[ord.length - 1];
   const ytd = new Set(periodosYTD ?? []);
   // Mesma regra do indicator-calculator: balancete usa a base da SUA periodicidade.
-  const diasBase = ytd.has(ult) ? diasYTD(ult) : diasDoPeriodo(ult, ord.filter((x) => !ytd.has(x) || x === ult));
+  const diasBase = diasBaseDe(ult, ord, [...ytd]);
   const val = (nome: string): number | null => {
     const v = indicadores.find((i) => i.nome === nome)?.valores?.[ult];
     return typeof v === "number" && Number.isFinite(v) ? v : null;

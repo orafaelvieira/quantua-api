@@ -23,7 +23,7 @@
  */
 import type { BPLineItem, DRELineItem } from "../types/financial";
 import type { FluxoCaixaIndireto } from "./cash-flow-indirect";
-import { diasDoPeriodo, diasYTD } from "./indicator-calculator";
+import { diasBaseDe, diasDoPeriodo, diasYTD } from "./indicator-calculator";
 import { derivarDREMensal } from "./balancete-conversao";
 
 // ── Tipos persistidos em dadosEstruturados.pontes ──────────────────────────────
@@ -870,7 +870,7 @@ export function buildPontesVariacao(
   const ytd = new Set((dados.arvoresBalancete ?? []).map((a) => a?.periodo).filter(Boolean) as string[]);
   const diasPorPeriodo: Record<string, number> = {};
   for (const p of periodos) {
-    diasPorPeriodo[p] = ytd.has(p) ? diasYTD(p) : diasDoPeriodo(p, periodos.filter((x) => !ytd.has(x) || x === p));
+    diasPorPeriodo[p] = diasBaseDe(p, periodos, [...ytd]);
   }
 
   const disponiveis = paresComparaveis(dados);

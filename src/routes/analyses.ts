@@ -1011,6 +1011,15 @@ async function runAnalysisBackground(
     }
     if (materiais) console.log(`[generate] ${analysisId} materiais: ${materiais.blocos.length} resumos, $${(materiais.custo?.usd ?? 0).toFixed(4)}`);
 
+    // Input 5: OS COVENANTS DO IBR — o contrato do credor. É a única referência
+    // de prioridade que não é nossa, e até 21/08/2026 ela só existia nos cards
+    // (calculados na LEITURA da rota): a IA montava o plano priorizado sem nunca
+    // ter visto o limite que o banco cobra.
+    const covenantsIBR = await prisma.covenant.findMany({
+      where: { analysisId },
+      select: { name: true, metric: true, operator: true, threshold: true },
+    });
+
     // A CAMADA DE RACIOCÍNIO (diagnóstico IBR) roda em OPUS — é a joia da coroa e justifica o
     // custo maior. Web/materiais (resumo) ficam no modelo configurado (mais barato). As linhas
     // da DRE entram para a árvore de custos do pilar Operacional.
@@ -1046,10 +1055,16 @@ async function runAnalysisBackground(
       dados?.fluxoCaixa ?? null, // estágio Dickinson pelos sinais de FCO/FCI/FCF (quando a prova fecha)
       Array.isArray(analysis.dores) ? (analysis.dores as never[]) : null, // fonte [5]: confronto declarado×observado
       dados?.bp ?? null, // caixa do BP → conta regressiva determinística (dias de caixa)
-      // Colunas de balancete: DRE acumulada no ano. Dá a régua de dias às alavancas
-      // do valor na mesa e à conta regressiva (sem ela, /365 num período de 150 dias).
-      (Array.isArray(dados?.arvoresBalancete) ? dados.arvoresBalancete : [])
-        .map((a: { periodo?: string }) => a?.periodo).filter((x: unknown): x is string => typeof x === "string"),
+      // Colunas de DRE ACUMULADA no ano — a régua de dias das alavancas, da conta
+      // regressiva e da agenda de prioridade (sem ela, /365 num período de 150 dias).
+      //
+      // PELO DETECTOR CANÔNICO, não pela lista de árvores. Só `arvoresBalancete`
+      // deixava de fora o IBR gravado antes das árvores, que tem `balancetes` sem
+      // árvore: nesse acervo a lista saía VAZIA e a régua de dias caía na mediana
+      // do espaçamento — 30 dias para uma coluna de maio que acumula cinco meses.
+      // É a mesma função que a proporcionalidade usa duas linhas abaixo; duas
+      // listas diferentes de "o que acumula" no mesmo prompt é divergência à espera.
+      periodosBalanceteDe(dados),
       periodosDeExercicioFechado({ periodos, balancetes: dados?.balancetes, arvoresBalancete: dados?.arvoresBalancete }),
       // CALCULADA NO CONSUMO, nao lida do persistido: o PUT da DRE altera as linhas
       // sem recalcular, e a medida velha entrava no prompt carimbada como FATO.
@@ -1057,6 +1072,7 @@ async function runAnalysisBackground(
       medirProporcionalidade(dados?.dre ?? [], periodos,
         periodosQueAcumulam({ dre: dados?.dre ?? [], balancetes: dados?.balancetes, arvoresBalancete: dados?.arvoresBalancete }),
         periodosDeExercicioFechado({ periodos, balancetes: dados?.balancetes, arvoresBalancete: dados?.arvoresBalancete })),
+      covenantsIBR,
     );
     const resultado = {
       ...analise.result,
@@ -1197,9 +1213,22 @@ const anotarPeriodosSecundarios = (
 
 // Períodos vindos de BALANCETE no IBR (DRE acumulada YTD): base dos dias dos
 // prazos médios e da leitura mensal.
+/**
+ * COLUNAS DE DRE ACUMULADA — a lista que dá a base de dias aos indicadores.
+ *
+ * Era só `arvoresBalancete`, e isso deixava de fora o acervo gravado antes das
+ * árvores, que tem `balancetes` sem árvore. Nesse acervo a lista saía VAZIA e a
+ * base de dias caía na mediana do espaçamento da série: 30 dias para uma coluna
+ * de maio que acumula cinco meses — prazos médios e fôlego de caixa 5× fora.
+ *
+ * Passa a usar o DETECTOR CANÔNICO do produto, o mesmo da proporcionalidade e do
+ * prompt. Duas listas diferentes de "o que acumula" no mesmo IBR é a divergência
+ * que já publicou dois preços para o mesmo movimento — e o motor de indicadores
+ * e quem monta o relatório TÊM de ler a mesma.
+ */
 const periodosBalanceteDe = (dados: unknown): string[] => {
-  const arr = Array.isArray((dados as any)?.arvoresBalancete) ? (dados as any).arvoresBalancete : [];
-  return arr.map((b: any) => b?.periodo).filter((p: unknown): p is string => typeof p === "string" && p.length > 0);
+  const d = (dados ?? {}) as { dre?: never; balancetes?: unknown; arvoresBalancete?: unknown };
+  return periodosQueAcumulam({ dre: d.dre ?? [], balancetes: d.balancetes, arvoresBalancete: d.arvoresBalancete });
 };
 
 // Aplica as PROVAS DETERMINÍSTICAS dos balancetes à validação do modelo.
@@ -1955,7 +1984,10 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
 
     // DRE já normalizada/recalculada e validada na cascata (avalia) → só os indicadores.
     // Meses de balancete = DRE acumulada YTD → prazos médios com dias-base do mês.
-    const periodosYTDProc = arvoresBalancete.map((a) => a.periodo).filter(Boolean);
+    // MESMO detector do /refold e do relatório (`periodosBalanceteDe`): se o
+    // /process usar uma lista e o /refold outra, os prazos médios do mesmo IBR
+    // mudam sozinhos entre um reprocessamento e o outro.
+    const periodosYTDProc = periodosQueAcumulam({ dre: structuredDRE, arvoresBalancete });
     const indicadores = await buildIndicators(structuredBP, structuredDRE, allPeriodos, rowsIBRDe(analysis.indicadorConfig), periodosYTDProc);
     console.log(`[process] Validação: confiança=${validacao.confiancaGeral}%, equação=${validacao.equacaoPatrimonial}, alertas=${validacao.alertas.length}`);
     for (const alerta of validacao.alertas) {
