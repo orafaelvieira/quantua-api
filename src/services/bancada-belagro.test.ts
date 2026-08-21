@@ -133,6 +133,50 @@ describe("bancada Belagro · indicadores e alavancas", () => {
     expect(alav("Receber").valor).toBeCloseTo(212_432_678, -3); // e não 87,3 mi
   });
 
+  it("A PROSA SEGUE O MOTOR: a leitura cita os números do próprio cálculo", () => {
+    // O texto vinha da IA e discordava da manchete na MESMA caixa: título
+    // "R$ 284,30 mi", prosa "da ordem de R$ 273 milhões". Agora quem calcula
+    // escreve, e o teste trava o que o dono pediu: valor real, e clareza sobre
+    // COMO obtê-lo.
+    const l = vc.leitura;
+    expect(l, "o motor precisa escrever a leitura").toBeTruthy();
+
+    // 1. as DUAS naturezas ficam declaradas — somar liberação única com
+    //    resultado anual sem dizer isso é o que fazia o total parecer dinheiro
+    //    à vista.
+    expect(l).toMatch(/UMA VEZ/);
+    expect(l).toMatch(/A CADA ANO/);
+
+    // 2. COMO CHEGAR LÁ: a maior alavanca é nomeada no texto.
+    const maior = [...vc.alavancas].sort((a, b) => b.valor - a.valor)[0]!;
+    expect(l).toContain(maior.titulo);
+
+    // 3. e a referência é declarada como prática de mercado, não cenário ideal.
+    expect(l).toMatch(/mediana das empresas compar/);
+    expect(l).toMatch(/ordem de grandeza/);
+  });
+
+  it("a leitura NÃO inventa um total diferente do calculado", () => {
+    // Régua dura: todo valor em R$ citado na prosa tem de existir entre os
+    // números que o motor produziu (totais ou alavancas). Foi exatamente uma
+    // cifra órfã — "R$ 273 milhões" — que apareceu no relatório do cliente.
+    const conhecidos = new Set<number>([
+      Math.round(vc.total / 1e6),
+      Math.round(vc.caixaLiberavel / 1e6),
+      Math.round(vc.margemRecuperavelAno / 1e6),
+      ...vc.alavancas.map((a) => Math.round(a.valor / 1e6)),
+    ]);
+    const citados = [...vc.leitura.matchAll(/R\$ ([\d.,]+) (milh|mil)/g)].map((m) => {
+      const n = Number(m[1]!.replace(/\./g, "").replace(",", "."));
+      return m[2] === "milh" ? Math.round(n) : Math.round(n / 1000);
+    });
+    expect(citados.length, "a leitura precisa citar ao menos um valor").toBeGreaterThan(0);
+    for (const c of citados) {
+      const bate = [...conhecidos].some((k) => Math.abs(k - c) <= 1); // 1 mi de folga de arredondamento
+      expect(bate, `a prosa cita R$ ${c} mi, que não sai de nenhum número do motor`).toBe(true);
+    }
+  });
+
   it("alavanca de margem usa o exercício FECHADO de 2025 — nem 2024, nem extrapolação", () => {
     expect(alav("Levar a margem").valor).toBeCloseTo(60_877_332, -3);
     expect(alav("Levar a margem").memoria).toContain("741,1");

@@ -38,6 +38,68 @@ export interface ValorCanonico {
   total: number;
   alavancas: AlavancaValor[];
   base: { segmento: string | null; periodo: string | null };
+  /** A LEITURA ESCRITA PELO MOTOR, dos próprios números. */
+  leitura: string;
+}
+
+/**
+ * A PROSA SEGUE O MOTOR (dono, 21/08/2026: "o motor calcula, manda e a prosa
+ * segue o motor").
+ *
+ * A leitura vinha da IA (`ai.valorNaMesaLeitura`) enquanto a manchete vinha
+ * daqui — e as duas discordavam na mesma caixa: "R$ 284,30 mi" no título e
+ * "da ordem de R$ 273 milhões" no texto ao lado. Agora quem calcula escreve.
+ *
+ * A leitura também precisa dizer COMO se chega ao número ("o relatório traz
+ * clareza em como conseguir o valor sugerido"): cada alavanca vira uma ação
+ * concreta, com o quanto vale e o que tem de mudar para valer.
+ *
+ * E DECLARA A NATUREZA DE CADA PARCELA. Caixa liberável é liberação ÚNICA
+ * (dinheiro preso no giro que volta uma vez); margem recuperável é resultado
+ * POR ANO. Somar os dois num número só é útil como ordem de grandeza, mas o
+ * texto tem de dizer que são naturezas diferentes — senão o leitor lê o total
+ * como se fosse dinheiro anual, ou como se fosse tudo à vista.
+ */
+export function leituraDoValor(
+  caixaLiberavel: number,
+  margemRecuperavelAno: number,
+  alavancas: AlavancaValor[],
+  base: { segmento: string | null; periodo: string | null },
+): string {
+  if (alavancas.length === 0) return "";
+  const partes: string[] = [];
+
+  const temCaixa = caixaLiberavel > 0;
+  const temMargem = margemRecuperavelAno > 0;
+  if (temCaixa && temMargem) {
+    partes.push(
+      `São duas naturezas diferentes somadas: ${reais(caixaLiberavel)} de caixa que volta UMA VEZ, ` +
+      `hoje preso no ciclo, e ${reais(margemRecuperavelAno)} de resultado A CADA ANO.`,
+    );
+  } else if (temCaixa) {
+    partes.push(`${reais(caixaLiberavel)} de caixa preso no ciclo, que volta uma única vez ao ser liberado.`);
+  } else if (temMargem) {
+    partes.push(`${reais(margemRecuperavelAno)} de resultado recuperável a cada ano.`);
+  }
+
+  // COMO CHEGAR LÁ: as três maiores alavancas viram ação, na ordem do dinheiro.
+  const maiores = [...alavancas].sort((x, y) => y.valor - x.valor).slice(0, 3);
+  if (maiores.length > 0) {
+    const lista = maiores
+      .map((a) => `${a.titulo} (${reais(a.valor)}${a.tipo === "margem" ? "/ano" : ""})`)
+      .join("; ");
+    partes.push(`O que responde pela maior parte: ${lista}. Cada alavanca traz abaixo a conta que a sustenta.`);
+  }
+
+  const ref = base.segmento
+    ? `Os alvos vêm da mediana das empresas comparáveis de ${base.segmento}`
+    : "Os alvos vêm da mediana das empresas comparáveis";
+  partes.push(
+    `${ref}: é o que empresas do mesmo porte e setor já praticam, não um cenário ideal. ` +
+    `Ainda assim é ordem de grandeza para priorizar, não promessa — cada número precisa ser validado contra o contrato e a carteira antes de virar meta.`,
+  );
+
+  return partes.join(" ");
 }
 
 const MIN_DIAS = 3;        // gap menor que isso é ruído de medição, não alavanca
@@ -182,5 +244,12 @@ export function calcularValorCanonico(
 
   const caixaLiberavel = alavancas.filter((a) => a.tipo === "caixa").reduce((s, a) => s + a.valor, 0);
   const margemRecuperavelAno = alavancas.filter((a) => a.tipo === "margem").reduce((s, a) => s + a.valor, 0);
-  return { caixaLiberavel, margemRecuperavelAno, total: caixaLiberavel + margemRecuperavelAno, alavancas, base };
+  return {
+    caixaLiberavel,
+    margemRecuperavelAno,
+    total: caixaLiberavel + margemRecuperavelAno,
+    alavancas,
+    base,
+    leitura: leituraDoValor(caixaLiberavel, margemRecuperavelAno, alavancas, base),
+  };
 }

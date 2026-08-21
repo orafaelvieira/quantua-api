@@ -7,7 +7,7 @@ import { blocoIdentidade, type IdentidadeEmpresa } from "./web-research";
 import { avaliarBaseDoRetorno } from "./base-do-retorno";
 import type { BPLineItem, DRELineItem } from "../types/financial";
 import { INDICADORES_TEMPLATE } from "./financial-templates";
-import { calcularValorCanonico, type AlavancaValor, type ValorCanonico } from "./valor-na-mesa";
+import { leituraDoValor, calcularValorCanonico, type AlavancaValor, type ValorCanonico } from "./valor-na-mesa";
 import { diasYTD } from "./indicator-calculator";
 import { calcularContaRegressiva } from "./conta-regressiva";
 
@@ -46,7 +46,7 @@ export interface AnalysisResult {
   coberturaJuros?: number;
   dreData: Array<{ mes: string; receita: number; custos: number; bruto: number; operacional: number; liquido: number }>;
   semaforo: Array<{ area: string; status: "ok" | "atencao" | "critico"; descricao: string }>;
-  recomendacoes: Array<{ titulo: string; prioridade: "Alta" | "Média" | "Baixa"; impacto: string; esforco: string; horizonte: string; descricao: string }>;
+  recomendacoes: Array<{ titulo: string; prioridade: "Alta" | "Média" | "Baixa"; impacto: string; horizonte: string; descricao: string }>;
   swot: { forcas: string[]; fraquezas: string[]; oportunidades: string[]; riscos: string[] };
   confianca: number;
   destaques: string[];
@@ -58,7 +58,6 @@ export interface AnalysisResult {
     description: string;
     estimatedImpactBRL?: number;
     horizonMonths?: number;
-    effort: "low" | "medium" | "high";
     priority: "p0" | "p1" | "p2";
     /** Como a IA chegou no impacto em R$ (base de cálculo / premissa) — transparência. */
     impactoRacional?: string;
@@ -576,9 +575,9 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
     { "pillar": "strategic_repositioning|value_focused_business_model|operational_excellence|financial_restructuring",
       "title": "<movimento concreto>", "description": "<como executar + a LENTE do pilar aplicada, com número>",
       "estimatedImpactBRL": <impacto_em_reais_ou_omita>, "impactoRacional": "<como chegou nesse impacto: a base de cálculo/premissa, ex.: 'reduzir PMR de 155→75d × receita/365 ≈ R$X de caixa liberado'. Omita só se não houver impacto em R$>", "horizonMonths": <meses_ou_omita>,
-      "effort": "low|medium|high", "priority": "p0|p1|p2" }
+      "priority": "p0|p1|p2" }
   ],
-  "recomendacoes": [ { "titulo": "<qual OPÇÃO priorizar>", "prioridade": "Alta|Média|Baixa", "impacto": "Alto|Médio|Baixo", "esforco": "Alto|Médio|Baixo", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<por que primeiro e como sequenciar; referencia uma opção acima>" } ],
+  "recomendacoes": [ { "titulo": "<qual OPÇÃO priorizar>", "prioridade": "Alta|Média|Baixa", "impacto": "Alto|Médio|Baixo", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<por que primeiro e como sequenciar; referencia uma opção acima>" } ],
   "revelacoes": [
     { "titulo": "<a descoberta em 1 frase direta e forte — tom 'você não sabia disso'>",
       "dadoEscondido": "<o CRUZAMENTO que revela: quais números, de quais fontes, conectados>",
@@ -698,7 +697,7 @@ PRINCÍPIOS (inegociáveis):
     confianca: typeof ai.confianca === "number" ? ai.confianca : 60,
     destaques: Array.isArray(ai.destaques) ? ai.destaques : [],
     // OPÇÃO SEM PRIORIDADE DERRUBAVA O PDF INTEIRO (18/08/2026, caso Belagro).
-    // O array da IA entrava CRU: uma opção veio sem priority/horizon/effort e o
+    // O array da IA entrava CRU: uma opção veio sem priority/horizon e o
     // gerador do relatório quebrou em `o.priority.toUpperCase()` — quarenta
     // páginas perdidas por um campo. O tipo TypeScript não alcança JSON de
     // resposta, e a rota que cria opção à mão já tinha a trava certa
@@ -711,7 +710,6 @@ PRINCÍPIOS (inegociáveis):
         .map((o: any) => ({
           ...o,
           priority: ["p0", "p1", "p2"].includes(o.priority) ? o.priority : "p1",
-          effort: ["low", "medium", "high"].includes(o.effort) ? o.effort : "medium",
         }))
       : [],
     estagioCicloVida: ai.estagioCicloVida && typeof ai.estagioCicloVida === "object" ? ai.estagioCicloVida : undefined,
@@ -739,9 +737,17 @@ PRINCÍPIOS (inegociáveis):
           total: canonico.total + caixaAdd + margemAdd,
           caixaLiberavel: canonico.caixaLiberavel + caixaAdd,
           margemRecuperavel: canonico.margemRecuperavelAno + margemAdd,
-          leitura: typeof ai.valorNaMesaLeitura === "string" && ai.valorNaMesaLeitura.trim()
-            ? ai.valorNaMesaLeitura.trim()
-            : `Valor endereçável calculado dos gaps vs os pares do setor${adicionais.length ? " somado às alavancas específicas identificadas na análise" : ""} — ordem de grandeza a validar.`,
+          // A PROSA SEGUE O MOTOR (dono, 21/08/2026). `ai.valorNaMesaLeitura`
+          // escrevia um total próprio ao lado do total calculado aqui — a caixa
+          // publicava "R$ 284,30 mi" no título e "da ordem de R$ 273 milhões"
+          // no texto. Quando há base canônica, quem calcula escreve; a IA segue
+          // contribuindo com as ALAVANCAS adicionais, que entram na conta.
+          leitura: leituraDoValor(
+            canonico.caixaLiberavel + caixaAdd,
+            canonico.margemRecuperavelAno + margemAdd,
+            [...canonico.alavancas, ...adicionais],
+            canonico.base,
+          ),
           alavancas: [...canonico.alavancas, ...adicionais],
           base: canonico.base,
         };
