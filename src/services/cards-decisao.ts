@@ -24,7 +24,7 @@
 import type { BPLineItem, DRELineItem } from "../types/financial";
 import type { FluxoCaixaIndireto } from "./cash-flow-indirect";
 import { calcularContaRegressiva } from "./conta-regressiva";
-import { diasDoPeriodo, diasYTD } from "./indicator-calculator";
+import { diasBaseDe, diasDoPeriodo, diasYTD } from "./indicator-calculator";
 import { rotuloPeriodoSrv } from "./bridge-variacao";
 
 export type StatusCard = "ok" | "atencao" | "critico" | "informativo";
@@ -394,7 +394,7 @@ const ALIAS_METRICA: Record<string, string> = {
  * daqui tem que sair do mesmo covenant — duas telas do mesmo IBR discordando
  * sobre qual é o limite do banco é pior que não ter o card.
  */
-function nomeIndicadorDoCovenant(metric: string): string {
+export function nomeIndicadorDoCovenant(metric: string): string {
   const alvo = (metric ?? "").toLowerCase().trim();
   return ALIAS_METRICA[alvo.replace(/[^a-z]/g, "")] ?? alvo;
 }
@@ -1167,9 +1167,12 @@ export function montarCardsDecisao(
     return key(a) - key(b);
   };
   const p = opts?.periodo && periodos.includes(opts.periodo) ? opts.periodo : [...periodos].sort(ordenar).pop()!;
-  // Dias-base correto por período: balancete YTD usa mês×30 — assumir 365 num
-  // acumulado de 5 meses infla prazos e desembolso em ~2,4x.
-  const dias = ytd.has(p) ? diasYTD(p) : diasDoPeriodo(p, periodos.filter((x) => !ytd.has(x) || x === p));
+  // Dias-base correto por período, PELA RÉGUA ÚNICA do motor de indicadores:
+  // balancete acumulado usa mês×30, e assumir 365 num acumulado de 5 meses infla
+  // prazos e desembolso em ~2,4×. Esta era a quarta cópia da mesma expressão no
+  // repositório — a que divergiu (claude.ts) publicou dois preços para o mesmo
+  // movimento no mesmo relatório.
+  const dias = diasBaseDe(p, periodos, [...ytd]);
   const premissas = opts?.premissas ?? {};
   // RÓTULO, não chave: "2024" e "05/2026" — nunca "31/12/2024" na cara do leitor
   // (regra do dono). Balancete ACUMULADO que fecha em dezembro É o exercício e se

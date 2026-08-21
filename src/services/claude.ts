@@ -8,7 +8,14 @@ import { avaliarBaseDoRetorno } from "./base-do-retorno";
 import type { BPLineItem, DRELineItem } from "../types/financial";
 import { INDICADORES_TEMPLATE } from "./financial-templates";
 import { leituraDoValor, calcularValorCanonico, type AlavancaValor, type ValorCanonico } from "./valor-na-mesa";
-import { diasYTD } from "./indicator-calculator";
+import { diasBaseDe } from "./indicator-calculator";
+// UM RESOLVER SÓ para o metric do covenant: o card de covenants, o card de
+// headroom e agora a agenda de prioridade têm de apontar para o MESMO indicador.
+import { nomeIndicadorDoCovenant } from "./cards-decisao";
+import {
+  type AgendaPrioridade, type CovenantParaPrioridade,
+  agendaParaPrompt, montarAgenda,
+} from "./prioridade-motor";
 import { calcularContaRegressiva } from "./conta-regressiva";
 
 // tipoDado por nome de indicador (template) — formata os números do prompt na unidade
@@ -46,7 +53,21 @@ export interface AnalysisResult {
   coberturaJuros?: number;
   dreData: Array<{ mes: string; receita: number; custos: number; bruto: number; operacional: number; liquido: number }>;
   semaforo: Array<{ area: string; status: "ok" | "atencao" | "critico"; descricao: string }>;
-  recomendacoes: Array<{ titulo: string; prioridade: "Alta" | "Média" | "Baixa"; horizonte: string; descricao: string }>;
+  /** PRIORIDADE DECIDIDA PELO MOTOR (21/08/2026). `prioridade` e `base` NÃO vêm
+   *  da IA: são copiadas do sinal da agenda que a recomendação declarou atacar
+   *  (`sinalId`). `prioridade: null` = a agenda não discriminou; a tabela publica
+   *  "Sequência sugerida (sem prioridade medida)" em vez de rótulo. */
+  recomendacoes: Array<{
+    titulo: string;
+    prioridade: "Alta" | "Média" | null;
+    horizonte: string;
+    descricao: string;
+    sinalId?: string;
+    /** Como a prioridade foi medida — vai impressa ao lado dela. */
+    base?: string;
+  }>;
+  /** A agenda que ordenou o plano (o motor manda, a IA acompanha). */
+  agendaPrioridade?: AgendaPrioridade | null;
   swot: { forcas: string[]; fraquezas: string[]; oportunidades: string[]; riscos: string[] };
   confianca: number;
   destaques: string[];
@@ -438,6 +459,70 @@ export function alavancaDeIAPassa(a: { titulo?: unknown; memoria?: unknown }): b
   return !veto;
 }
 
+/**
+ * O PLANO PRIORIZADO, MONTADO PELO MOTOR.
+ *
+ * A IA escreve o TEXTO de cada ação e declara qual sinal da agenda ela ataca.
+ * A prioridade e a ordem vêm do sinal — nunca do JSON dela.
+ *
+ * Três regras que a versão anterior não tinha e custaram caro:
+ *
+ *  1. NADA DE VALOR PADRÃO. O array entrava cru (`Array.isArray(ai.recomendacoes)
+ *     ? ai.recomendacoes : []`) e a coluna "Prioridade" publicava o que viesse —
+ *     inclusive string vazia, que o badge da tela pintava de cinza sem erro. Aqui
+ *     um sinalId fora da lista NÃO vira "Média" nem "p1": vira ausência declarada.
+ *     Defaultar prioridade é inventar urgência.
+ *  2. O TEXTO NÃO SE PERDE. Uma recomendação sem vínculo continua no relatório,
+ *     no fim e sem rótulo — descartar prosa útil seria pior que não ordená-la.
+ *  3. UM SINAL, UMA AÇÃO. Duas recomendações no mesmo sinalId empatariam a ordem
+ *     e o desempate viraria arbitrário; a segunda perde o vínculo.
+ */
+export function recomendacoesDoMotor(
+  bruto: unknown, agenda: AgendaPrioridade | null,
+): AnalysisResult["recomendacoes"] {
+  if (!Array.isArray(bruto)) return [];
+  const porId = new Map((agenda?.sinais ?? []).map((s) => [s.id, s]));
+  const ordem = new Map((agenda?.sinais ?? []).map((s, i) => [s.id, i]));
+  const usados = new Set<string>();
+
+  const itens = bruto
+    .filter((r: any) => r && typeof r.titulo === "string" && r.titulo.trim())
+    .map((r: any) => {
+      const id = typeof r.sinalId === "string" ? r.sinalId.trim() : "";
+      const sinal = id && !usados.has(id) ? porId.get(id) : undefined;
+      if (sinal) usados.add(id);
+      if (!sinal) {
+        if (id && !porId.has(id)) console.warn(`[prioridade] sinalId fora da agenda, sem prioridade: "${id.slice(0, 60)}"`);
+        // SEM SENTINELA DE TEXTO. `base: "sem prioridade medida"` era uma string
+        // que o consumidor não distinguia de uma referência real, e a tela
+        // publicava "Prioridade medida contra sem prioridade medida." em toda
+        // recomendação sem vínculo — que é o caminho normal, não o excepcional.
+        // Ausência se representa com ausência.
+        return {
+          titulo: String(r.titulo).trim(),
+          prioridade: null,
+          horizonte: typeof r.horizonte === "string" ? r.horizonte : "",
+          descricao: typeof r.descricao === "string" ? r.descricao : "",
+          ordem: Number.MAX_SAFE_INTEGER,
+        };
+      }
+      return {
+        titulo: String(r.titulo).trim(),
+        // A agenda que não separou os sinais entre si não publica rótulo: seria a
+        // ordem do alfabeto com selo de método.
+        prioridade: agenda?.discriminou ? sinal.rotulo : null,
+        horizonte: typeof r.horizonte === "string" ? r.horizonte : "",
+        descricao: typeof r.descricao === "string" ? r.descricao : "",
+        sinalId: sinal.id,
+        base: sinal.referenciaQueOrdena.rotulo,
+        ordem: ordem.get(sinal.id) ?? Number.MAX_SAFE_INTEGER,
+      };
+    })
+    .sort((x, y) => x.ordem - y.ordem);
+
+  return itens.map(({ ordem: _o, ...r }) => r);
+}
+
 export async function generateAnalysis(
   indicadores: IndicadorLite[],
   periodosBrutos: string[],
@@ -459,6 +544,10 @@ export async function generateAnalysis(
   periodosFechados?: string[],
   /** Teste de proporcionalidade da janela YTD — trava veredicto de fluxo. */
   proporcionalidade?: { leitura: string } | null,
+  /** COVENANTS do IBR — a única referência de prioridade que não é nossa: quem a
+   *  escreveu foi o credor. Ficavam só nos cards, calculados na LEITURA da rota,
+   *  e a IA montava o plano priorizado sem nunca ver o contrato. */
+  covenants?: CovenantParaPrioridade[] | null,
 ): Promise<{ result: AnalysisResult; custo: CustoIA }> {
   // Ordem CRONOLÓGICA uma vez, para TODO o prompt (séries de indicadores, bloco da DRE,
   // KPIs, estágio) — dados.periodos pode vir na ordem dos documentos (ex.: 2022, 2020, 2021).
@@ -494,10 +583,30 @@ export async function generateAnalysis(
     ? calcularContaRegressiva(
         bp, dre as Array<{ conta: string; valores: Record<string, number> }>, ultimoPeriodo,
         fluxoCaixa?.totais?.fco?.[ultimoPeriodo] ?? null,
-        // dias-base do período: balancete acumulado NÃO cobre 365 dias.
-        (periodosYTD ?? []).includes(ultimoPeriodo) ? diasYTD(ultimoPeriodo) : 365,
+        // dias-base do período: A MESMA RÉGUA DO MOTOR DE INDICADORES. Aqui havia
+        // `: diasBaseDe(ultimoPeriodo, periodos, periodosYTD)` cru, que erra sempre que a série é sub-anual sem estar
+        // registrada como balancete — o fôlego de caixa saía inflado na mesma
+        // proporção do denominador.
+        365,
       )
     : null;
+  // PRIORIDADE PELO MOTOR — a ordem do plano priorizado sai DAQUI, não da IA.
+  // O motor decide e manda a agenda pronta; a IA redige cada item. É o que
+  // sobrevive a um credor perguntando "por que isto está em primeiro?".
+  const agenda = bp && dre && ultimoPeriodo
+    ? montarAgenda({
+        indicadores, periodos, periodo: ultimoPeriodo,
+        bp: bp as never, dre: dre as never,
+        periodosYTD: periodosYTD ?? [],
+        pares: peer?.rows ?? null,
+        paresSegmento: peer?.segment ?? null,
+        paresPeriodo: peer?.periodo ?? null,
+        covenants: covenants ?? null,
+        resolverMetricaCovenant: nomeIndicadorDoCovenant,
+      })
+    : null;
+  const agendaBlock = agenda ? agendaParaPrompt(agenda) : "";
+
   // PROPORCIONALIDADE DA JANELA — trava de veredicto. O acumulado do ano corrente
   // é comparado ao último exercício FECHADO linha a linha; a trava vale para as
   // linhas que DESVIAM, não para a janela inteira. Na Belagro receita e custo
@@ -543,7 +652,7 @@ Você recebe VÁRIAS fontes. USE TODAS e CRUZE-AS — o valor está em conectar 
 
 [1] INDICADORES JÁ CALCULADOS E AUDITADOS (determinísticos — NÃO recalcule, apenas INTERPRETE):
 ${det.tabela || "(indicadores indisponíveis)"}
-${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${doresBlock}${estagioBlock}${propBlock}${regressivaBlock}${baseRetornoBlock}${canonicoBlock}
+${dreBlock}${fcBlock}${peerBlock}${webBlock}${materiaisBlock}${doresBlock}${estagioBlock}${propBlock}${regressivaBlock}${baseRetornoBlock}${canonicoBlock}${agendaBlock}
 
 IMPORTANTE — olhe o HISTÓRICO: leia SEMPRE a evolução multi-ano (tendência entre os períodos), nunca um ano isolado. A força de um IBR está na trajetória.
 
@@ -577,7 +686,7 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
       "estimatedImpactBRL": <impacto_em_reais_ou_omita>, "impactoRacional": "<como chegou nesse impacto: a base de cálculo/premissa, ex.: 'reduzir PMR de 155→75d × receita/365 ≈ R$X de caixa liberado'. Omita só se não houver impacto em R$>", "horizonMonths": <meses_ou_omita>,
       "priority": "p0|p1|p2" }
   ],
-  "recomendacoes": [ { "titulo": "<qual OPÇÃO priorizar>", "prioridade": "Alta|Média|Baixa", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<por que primeiro e como sequenciar; referencia uma opção acima>" } ],
+  "recomendacoes": [ { "titulo": "<qual OPÇÃO priorizar>", "sinalId": "<o sinalId EXATO da AGENDA DO MOTOR que esta ação ataca; sem agenda, omita>", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<por que primeiro e como sequenciar; referencia uma opção acima>" } ],
   "revelacoes": [
     { "titulo": "<a descoberta em 1 frase direta e forte — tom 'você não sabia disso'>",
       "dadoEscondido": "<o CRUZAMENTO que revela: quais números, de quais fontes, conectados>",
@@ -610,7 +719,7 @@ PAPÉIS DAS SEÇÕES (NÃO haja overlap — cada uma responde a uma pergunta dif
 - estagioCicloVida + situacao + saudeFinanceira + fatoresChave + semaforo = o DIAGNÓSTICO ("onde a empresa está e por quê"). O semaforo é o placar por área; os fatoresChave são as hipóteses de causa. NÃO repita os números do semáforo dentro do swot.
 - swot = POSIÇÃO ESTRATÉGICA/COMPETITIVA ("como se posiciona no mercado"). Use Porter, pares e contexto (web/materiais). NÃO re-liste índices financeiros aqui — força/fraqueza aqui é de mercado, modelo, marca, capacidade, dependência, canal.
 - opcoesEstrategicas = o LEQUE de movimentos possíveis por pilar ("o que dá para fazer").
-- recomendacoes = o PLANO PRIORIZADO ("por onde começar"): escolha e SEQUENCIE as melhores opcoesEstrategicas em horizontes (0–30d/30–90d/90–180d). NÃO invente ações novas fora das opções — priorize e ordene as que você propôs.
+- recomendacoes = o PLANO PRIORIZADO ("por onde começar"): escreva uma ação para cada item da AGENDA DO MOTOR, NA ORDEM EM QUE ELA VEM, declarando o sinalId. A ORDEM E A PRIORIDADE JÁ ESTÃO DECIDIDAS pelo motor — você não as escolhe, não as reordena e não as inventa; você redige o que fazer, com o número da agenda dentro do texto. Se a agenda vier vazia, escreva o plano derivado das opcoesEstrategicas e OMITA sinalId. NÃO invente ações fora das opções.
 - revelacoes = "O QUE VOCÊ NÃO SABIA" — a seção que faz o dono falar "uau". Só entra o que passa no TESTE DO DONO (etapa 6). É diferente de destaques (resumo) e de fatoresChave (hipóteses de causa): revelação é DESCOBERTA quantificada em caixa. Uma revelação pode alimentar uma opção estratégica — mas aqui o papel é REVELAR, não recomendar.
 - valorNaMesa/alavancasAdicionais = o PLACAR: quando o motor entregou as ALAVANCAS CANÔNICAS (bloco acima), elas JÁ ESTÃO CONTADAS — você só ADICIONA alavancas específicas que o motor não calcula, cada uma com memória em prosa; NUNCA repita prazos-vs-mediana ou gap-de-margem-vs-mediana. Sem o bloco canônico, monte o placar completo você mesmo. SEM DUPLA CONTAGEM; ordem de grandeza, não promessa.
 - protecoes = O QUE NÃO PODE QUEBRAR: 2-3 forças que sustentam o resultado atual e como blindá-las (pessoa-chave, contrato, canal, licença, cliente-âncora). Em empresa saudável esta seção é TÃO importante quanto as opções — manter o que funciona também é resultado.
@@ -632,7 +741,7 @@ PRINCÍPIOS (inegociáveis):
 - SEM ENFILEIRAR ÍNDICE: no máximo dois indicadores por parágrafo, cada um com o significado colado nele. Se precisar de mais para provar o ponto, escolha os dois que mais explicam e descarte o resto — o cartão é leitura, não painel.
 - TOM: RECOMENDAÇÃO, NÃO SENTENÇA (inegociável). Quem lê construiu esta empresa; palavra dura soa como ofensa e trava a conversa que o relatório quer abrir. Seja FRANCO com o fato e RESPEITOSO com a pessoa: os números e a gravidade permanecem exatamente os mesmos, muda o vocabulário. Escreva "dificuldade de caixa" e não "crise"; "retração" e não "declínio"; "a estrutura não se sustenta no ritmo atual" e não "a empresa vai quebrar"; "risco elevado" e não "insolvência iminente"; "atenção elevada" e não "zona de perigo"; "vale rever" e não "está errado"; "a decisão ainda é da empresa" e não "antes que seja tarde". PROIBIDO julgar a gestão ("má gestão", "descontrole", "irresponsável", "amadorismo") — descreva o EFEITO no número, nunca a qualidade de quem decidiu. Nada de dramatização ("sangria", "colapso", "beira do abismo", "situação insustentável"). Suavizar o FATO continua proibido: se o caixa paga 6 dias de operação, diga os 6 dias.
 - O RELÓGIO (quando houver o bloco CONTA REGRESSIVA DE CAIXA): comece a saudeFinanceira.leitura pelo TEMPO, não pelo índice. "O caixa de hoje paga X dias de operação" diz mais ao dono do que qualquer índice de liquidez. Use os números do bloco como estão, sem recalcular.
-- O CUSTO DE NÃO FAZER NADA: em recomendacoes.descricao das ações de prioridade Alta, feche com a consequência de adiar, em dinheiro ou em tempo, ancorada em número já existente ("cada mês sem renegociar esse prazo mantém cerca de R$ X parados no estoque"; "adiar um trimestre consome metade do fôlego de caixa restante"). Sem número disponível, descreva a consequência concreta, nunca uma frase genérica de urgência.
+- O CUSTO DE NÃO FAZER NADA: em recomendacoes.descricao das ações do TOPO da agenda, feche com a consequência de adiar, em dinheiro ou em tempo, ancorada em número já existente ("cada mês sem renegociar esse prazo mantém cerca de R$ X parados no estoque"; "adiar um trimestre consome metade do fôlego de caixa restante"). Sem número disponível, descreva a consequência concreta, nunca uma frase genérica de urgência.
 - ESTA SEMANA, NESTA ORDEM: as recomendacoes de horizonte "0–30d" começam por uma ação que cabe nos PRÓXIMOS SETE DIAS e que dependa só da empresa (ligar para o banco, listar os dez maiores clientes em atraso, suspender uma retirada, renegociar um contrato). Escreva o primeiro passo como se fosse item de agenda de segunda-feira, com quem faz e o que traz de volta.
 - COMPARAÇÃO QUE O DONO ENTENDE: ao usar os pares, traduza percentil em gente, não em estatística. Em vez de "percentil 22 em prazo médio de recebimento", escreva "sete de cada dez empresas parecidas recebem dos clientes em cerca de 45 dias, esta recebe em 155". Diga também o que a diferença vale em dinheiro quando for calculável.
 - O QUE ESTÁ FUNCIONANDO: relatório só de problema paralisa. Garanta que protecoes nomeie de 2 a 3 forças REAIS e concretas que sustentam o resultado (margem, cliente-âncora, produto, equipe, canal), com o número que as comprova, e que ao menos um dos destaques seja um ponto positivo quando existir. Em empresa sob pressão isso é ainda mais importante: é o ativo com que ela vai virar o jogo.
@@ -692,7 +801,8 @@ PRINCÍPIOS (inegociáveis):
     coberturaJuros: det.coberturaJuros,
     dreData: [],
     semaforo: Array.isArray(ai.semaforo) ? ai.semaforo : [],
-    recomendacoes: Array.isArray(ai.recomendacoes) ? ai.recomendacoes : [],
+    recomendacoes: recomendacoesDoMotor(ai.recomendacoes, agenda),
+    agendaPrioridade: agenda,
     swot: ai.swot ?? { forcas: [], fraquezas: [], oportunidades: [], riscos: [] },
     confianca: typeof ai.confianca === "number" ? ai.confianca : 60,
     destaques: Array.isArray(ai.destaques) ? ai.destaques : [],

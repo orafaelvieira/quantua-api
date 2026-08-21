@@ -163,15 +163,64 @@ const recomendacaoSchema = z.object({
   horizonte: z.string().optional().nullable(),
   valorEstimado: z.number().finite().optional().nullable(),
 }).passthrough(); // campos futuros do JSON livre sobrevivem à edição
+
+/** Campos que SÓ o motor escreve — a edição do analista não os alcança. */
+const CAMPOS_DO_MOTOR = ["prioridade", "base", "sinalId"] as const;
+
+/**
+ * A AUTORIDADE DO MOTOR NA FRONTEIRA DE ESCRITA (21/08/2026).
+ *
+ * A tela edita "valor estimado"; `prioridade`, `base` e `sinalId` são calculados
+ * na geração. Vêm do que já está gravado, NUNCA do corpo da requisição — sem
+ * isto, o `.passthrough()` do schema deixaria qualquer cliente gravar prioridade
+ * "Alta" com uma base inventada, e o relatório publicaria o rótulo como medido.
+ *
+ * A POSIÇÃO É A CHAVE, não o título. A primeira versão casava por título e
+ * corrompia um caso real: o plano deduplica por sinalId, não por texto, então
+ * duas ações podem se chamar "Reduzir estoque" — uma vinda do prazo de estoque,
+ * outra do covenant. Salvar o valor estimado copiava a base da PRIMEIRA para as
+ * duas, e o relatório publicava a referência de um sinal ao lado da ação de
+ * outro. A tela manda a lista inteira, na ordem, então a posição casa sempre.
+ *
+ * Quando os tamanhos divergem (alguém editou por fora), casa por título — e SÓ
+ * quando aquele título é único dos dois lados. Sem correspondência segura, a
+ * linha fica SEM os campos do motor: perder o rótulo é recuperável, publicar o
+ * rótulo errado não.
+ */
+export function preservarCamposDoMotor(
+  enviadas: Array<Record<string, unknown>>, gravadas: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const mesmoTamanho = enviadas.length === gravadas.length;
+  const conta = (lista: Array<Record<string, unknown>>, t: unknown): number =>
+    lista.filter((x) => typeof x?.titulo === "string" && x.titulo === t).length;
+  return enviadas.map((r, i) => {
+    const saida = { ...r };
+    for (const k of CAMPOS_DO_MOTOR) delete saida[k];
+    const antes = mesmoTamanho
+      ? gravadas[i]
+      : conta(enviadas, r.titulo) === 1 && conta(gravadas, r.titulo) === 1
+        ? gravadas.find((a) => typeof a?.titulo === "string" && a.titulo === r.titulo)
+        : undefined;
+    if (antes) for (const k of CAMPOS_DO_MOTOR) if (antes[k] !== undefined) saida[k] = antes[k];
+    return saida;
+  });
+}
+
 router.put("/:id/recomendacoes", async (req: AuthRequest, res: Response): Promise<void> => {
   const analysis = await loadAnalysis(req);
   if (!analysis) { res.status(404).json({ error: "Análise não encontrada" }); return; }
   const parsed = z.array(recomendacaoSchema).safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.flatten() }); return; }
   const clean = parsed.data.filter((r) => r.titulo.trim().length > 0);
+
   const resultado = (analysis.resultado as Record<string, unknown> | null) ?? {};
-  await prisma.analysis.update({ where: { id: analysis.id }, data: { resultado: { ...resultado, recomendacoes: clean } as object } });
-  res.json(clean);
+  const anteriores = Array.isArray((resultado as { recomendacoes?: unknown }).recomendacoes)
+    ? ((resultado as { recomendacoes: Array<Record<string, unknown>> }).recomendacoes)
+    : [];
+  const preservado = preservarCamposDoMotor(clean as Array<Record<string, unknown>>, anteriores);
+
+  await prisma.analysis.update({ where: { id: analysis.id }, data: { resultado: { ...resultado, recomendacoes: preservado } as object } });
+  res.json(preservado);
 });
 
 router.get("/:id/options", async (req: AuthRequest, res: Response): Promise<void> => {

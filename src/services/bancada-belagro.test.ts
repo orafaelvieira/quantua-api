@@ -22,6 +22,7 @@ import { medirProporcionalidade } from "./proporcionalidade";
 import { calcularValorCanonico } from "./valor-na-mesa";
 import { calculateIndicators } from "./indicator-calculator";
 import type { PeerComparisonRow } from "./peer-benchmark";
+import { agendaParaPrompt, montarAgenda } from "./prioridade-motor";
 
 const P = ["2024", "30/11/2025", "31/12/2025", "31/01/2026", "28/02/2026", "31/03/2026", "30/04/2026", "31/05/2026"];
 const v = (...x: number[]) => Object.fromEntries(P.map((p, i) => [p, x[i]]));
@@ -234,5 +235,96 @@ describe("bancada Belagro · o que o PDF imprime", () => {
     expect(e.ytd).toBe(-4_120_000);
     expect(e.fechado).toBe(13_800_000);   // o 1,62x de cobertura vem daqui
     expect(e.razao).toBeCloseTo(-0.299, 3);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRIORIDADE PELO MOTOR — a ordem do plano priorizado, sobre a série real
+// ═══════════════════════════════════════════════════════════════════════════
+describe("bancada Belagro · a prioridade que o motor manda", () => {
+  const inds = calculateIndicators(BP, DRE, P, undefined, undefined, ACUM).map((i) => ({
+    nome: i.nome, valores: i.valores as Record<string, number | string | null>, tipoDado: i.tipoDado,
+  }));
+  const agendaDe = (covenants: Array<{ name: string; metric: string; operator: string; threshold: number }> = []) =>
+    montarAgenda({
+      indicadores: inds, periodos: P, periodo: ULT, bp: BP, dre: DRE,
+      periodosYTD: ACUM, diasDoPeriodo: 150, covenants,
+    });
+
+  it("a ordem NÃO é o alfabeto — e é isso que autoriza publicar rótulo", () => {
+    // O desenho anterior, medido nesta mesma série, entregava C, E, E, I, L, L,
+    // L, L: todos os critérios empatavam e sobrava o desempate por nome. Um plano
+    // de credor ordenado de A a Z, com selo de método, é pior que assumir opinião.
+    const a = agendaDe();
+    const publicada = a.sinais.map((s) => s.nome);
+    const alfabetica = [...publicada].sort((x, y) => x.localeCompare(y, "pt-BR"));
+    expect(publicada.join(" | ")).not.toEqual(alfabetica.join(" | "));
+    expect(a.discriminou).toBe(true);
+  });
+
+  it("os preços saem em reais do próprio balanço e são todos distintos", () => {
+    const a = agendaDe();
+    const precos = a.sinais.map((s) => s.precoBRL);
+    expect(precos.every((x) => x !== null)).toBe(true);
+    expect(new Set(precos.map((x) => Math.round(x!))).size).toBe(precos.length);
+    // Reconciliam contra o balanço de 31/05/2026 vs 30/04/2026:
+    const porNome = Object.fromEntries(a.sinais.map((s) => [s.nome, Math.round(s.precoBRL!)]));
+    expect(porNome["Capital Terceiros s/ PL"]).toBe(7_316_436);  // CT 68,88 mi → 5,03 × PL 12,24 mi
+    expect(porNome["Liquidez Imediata"]).toBe(5_068_514);        // caixa 14,80 mi → 4,65% de PC 427,29 mi
+    expect(porNome["Endividamento de Curto Prazo"]).toBe(3_664_405);
+    expect(porNome["Endividamento Geral"]).toBe(3_053_114);
+  });
+
+  it("o mais caro vem primeiro, dentro do mesmo nível de prova", () => {
+    const a = agendaDe();
+    for (let i = 1; i < a.sinais.length; i++) {
+      expect(a.sinais[i - 1]!.precoBRL!, `${a.sinais[i - 1]!.nome} antes de ${a.sinais[i]!.nome}`)
+        .toBeGreaterThan(a.sinais[i]!.precoBRL!);
+    }
+  });
+
+  it("SEM PARES, nenhuma linha vira 'Alta' — duas fontes é que fazem Alta", () => {
+    expect(agendaDe().sinais.filter((s) => s.rotulo === "Alta")).toEqual([]);
+  });
+
+  it("o covenant sobre EBITDA NÃO some no distress — ele lidera a agenda", () => {
+    // Belagro em 31/05/2026 tem EBITDA de −R$ 4,12 mi, então Dívida
+    // Líquida/EBITDA vale a STRING "N/M" e o card de decisão publicava "nenhum
+    // covenant pôde ser verificado". Silêncio, sobre o contrato que o credor
+    // escreveu, na empresa que ele mais cobra.
+    const a = agendaDe([{ name: "Alavancagem", metric: "Dívida Líquida/EBITDA", operator: "<=", threshold: 3 }]);
+    expect(a.sinais[0]!.nivelProva).toBe("contratual");
+    expect(a.sinais[0]!.veredictoContrato).toBe("nao-atendivel");
+    expect(a.sinais[0]!.rotulo).toBe("Alta");
+    expect(a.sinais[0]!.memoria).toMatch(/não há geração operacional/);
+  });
+
+  it("declara que os indicadores de RESULTADO ficaram fora, e por quê", () => {
+    // 31/05/2026 é acumulado de 5 meses e a série não tem 31/05/2025: margens,
+    // prazos e cobertura não têm janela comparável. Omitir é certo; omitir CALADO
+    // faz o leitor concluir que a margem não é problema.
+    const texto = agendaDe().lacunas.join(" ");
+    expect(texto).toMatch(/Margem EBITDA/);
+    expect(texto).toMatch(/05\/2026 cobre parte do ano/);
+    // E NUNCA a data de fechamento crua num texto que o cliente lê (regra do
+    // dono, 14/08/2026: mm/aaaa ou o ano).
+    expect(texto, "data de fechamento crua vazou para o documento").not.toMatch(/\d{2}\/\d{2}\/\d{4}/);
+    expect(texto).toMatch(/empresas comparáveis/);
+    expect(texto).toMatch(/covenant cadastrado/);
+  });
+
+  it("nenhuma linha publica data de fechamento crua na base da prioridade", () => {
+    for (const s of agendaDe().sinais) {
+      expect(s.referenciaQueOrdena.rotulo, `${s.nome}: data crua na base`).not.toMatch(/\d{2}\/\d{2}\/\d{4}/);
+      expect(s.referenciaQueOrdena.rotulo).toMatch(/04\/2026/);
+    }
+  });
+
+  it("a agenda que vai para a IA é lista FECHADA e já ordenada", () => {
+    const a = agendaDe();
+    const txt = agendaParaPrompt(a);
+    expect(txt).toMatch(/NÃO reordene/);
+    expect(txt).toMatch(/DESCARTADO/);
+    a.sinais.forEach((s) => expect(txt).toContain(`sinalId="${s.id}"`));
   });
 });
