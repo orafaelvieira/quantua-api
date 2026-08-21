@@ -179,18 +179,17 @@ export const INDICADORES_TEMPLATE: Array<{
   { tipo: "Indicadores de Endividamento", nome: "Despesa Financeira / Rec. Líquida", formula: "Despesas Financeiras / Receita Líquida", tipoDado: "%" },
   { tipo: "Indicadores de Endividamento", nome: "Imobilização do Patrimônio Líquido", formula: "(Imobilizado + Investimentos + Intangível) / Patrimônio Líquido — acima de 100% o PL não cobre o ativo fixo (capital de giro próprio negativo)", tipoDado: "%" },
 
-  // ATENCAO: ROE e ROA NAO sao o produto das linhas acima. Eles saem de
-  // `retornoDe` (indicator-calculator.ts:419): lucro ANUALIZADO sobre base MEDIA
-  // com o periodo anterior, enquanto Margem, Giro e Alavancagem sao pontuais e
-  // nao anualizados. Medido na Belagro em 31/12/2025: o produto das tres da
-  // 40,09% e a linha ROE publica 34,78%. A formula impressa dizia "DuPont: ROA x
-  // Alavancagem" ao lado do numero — texto falso num relatorio de credor. Ate'
-  // que as duas reguas sejam unificadas, a formula descreve o que E' calculado.
+  // CASCATA DuPont VERDADEIRA (unificada em 21/08/2026, decisão do dono):
+  // Margem × Giro = ROA; ROA × Alavancagem = ROE — agora as CINCO linhas saem
+  // da mesma régua (fluxo anualizado, bases médias com o período anterior), e a
+  // multiplicação fecha de verdade. Há teste de identidade multi-período em
+  // roe-mesma-regua.test.ts; o da fixture de um período (indicator-config) é
+  // cego para regressão de régua — ali média=pontual e fator=1.
   { tipo: "Indicadores de Rentabilidade", nome: "Margem Líquida", formula: "Lucro Líquido / Receita Líquida", tipoDado: "%" },
-  { tipo: "Indicadores de Rentabilidade", nome: "Giro do Ativo", formula: "Receita Líquida / Ativo Total", tipoDado: "Índice" },
-  { tipo: "Indicadores de Rentabilidade", nome: "ROA (Retorno sobre Ativos)", formula: "Lucro Líquido anualizado / Ativo Total médio (período e anterior)", tipoDado: "%" },
-  { tipo: "Indicadores de Rentabilidade", nome: "Alavancagem", formula: "Passivo Total / Patrimônio Líquido", tipoDado: "Índice" },
-  { tipo: "Indicadores de Rentabilidade", nome: "ROE (Retorno sobre Patrimônio Líquido)", formula: "Lucro Líquido anualizado / Patrimônio Líquido médio (período e anterior)", tipoDado: "%" },
+  { tipo: "Indicadores de Rentabilidade", nome: "Giro do Ativo", formula: "Receita Líquida anualizada / Ativo Total médio (período e anterior)", tipoDado: "Índice" },
+  { tipo: "Indicadores de Rentabilidade", nome: "ROA (Retorno sobre Ativos)", formula: "DuPont: Margem Líquida × Giro do Ativo (= Lucro Líquido anualizado / Ativo Total médio)", tipoDado: "%" },
+  { tipo: "Indicadores de Rentabilidade", nome: "Alavancagem", formula: "Ativo Total médio / Patrimônio Líquido médio (período e anterior)", tipoDado: "Índice" },
+  { tipo: "Indicadores de Rentabilidade", nome: "ROE (Retorno sobre Patrimônio Líquido)", formula: "DuPont: ROA × Alavancagem (= Lucro Líquido anualizado / Patrimônio Líquido médio)", tipoDado: "%" },
   { tipo: "Indicadores de Rentabilidade", nome: "ROIC (Retorno sobre Capital Investido)", formula: "NOPAT / (Patrimônio Líquido + Capital de Terceiros + Partes Relacionadas)", tipoDado: "%" },
   { tipo: "Indicadores de Rentabilidade", nome: "EVA (Valor Econômico Agregado)", formula: "NOPAT − (Capital Investido × custo de capital), com Capital Investido = Patrimônio Líquido + Capital de Terceiros + Partes Relacionadas (o mesmo do ROIC). Equivale a (ROIC − custo de capital) × Capital Investido. Positivo = criou valor além do custo do capital; negativo = houve lucro contábil, mas não o suficiente para remunerar o capital empregado. Exige um custo de capital definido — no Valuation e no Business Plan vem do WACC do próprio modelo.", tipoDado: "R$" },
 

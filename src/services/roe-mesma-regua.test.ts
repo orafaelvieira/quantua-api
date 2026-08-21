@@ -19,7 +19,7 @@ import { calculateIndicators } from "./indicator-calculator";
  * exatamente o que aconteceu. Por isso esta bancada compara TODOS os períodos.
  */
 
-const P = ["2024", "30/11/2025", "31/12/2025"];
+const P = ["31/12/2024", "30/11/2025", "31/12/2025"];
 const v = (...x: number[]) => Object.fromEntries(P.map((p, i) => [p, x[i]]));
 const bpL = (conta: string, classificacao: string, nivel: number, ...x: number[]): BPLineItem =>
   ({ conta, classificacao, nivel, editado: false, valores: v(...x) } as BPLineItem);
@@ -46,13 +46,16 @@ function serie() {
     dreL("EBITDA", true, 15_440_000, 12_910_000, 13_800_000),
     dreL("Lucro Líquido", true, 11_581_723, 9_669_025, 6_454_351),
   ];
-  return { bp, dre, periodos: [...P] };
+  // TODOS balancete (formato de produção da Belagro): a DRE é acumulada e os
+  // dias saem da régua mês×30 — 31/12 cobre o ano (fator 1 pelo piso de 360).
+  const arvoresBalancete = P.map((periodo) => ({ periodo }));
+  return { bp, dre, periodos: [...P], arvoresBalancete, balancetes: arvoresBalancete };
 }
 
 /** ROE que a aba Indicadores publica para um período. */
 function roeDosIndicadores(periodo: string): number {
   const d = serie();
-  const inds = calculateIndicators(d.bp, d.dre, d.periodos);
+  const inds = calculateIndicators(d.bp, d.dre, d.periodos, undefined, undefined, [...P]);
   const roe = inds.find((i) => i.nome.startsWith("ROE"))!;
   const v = roe.valores[periodo];
   expect(typeof v, `ROE dos Indicadores em ${periodo}`).toBe("number");
@@ -62,7 +65,7 @@ function roeDosIndicadores(periodo: string): number {
 describe("o DuPont do relatório usa a régua dos Indicadores", () => {
   it("coincidem em TODOS os períodos, não só no primeiro", () => {
     let comparados = 0;
-    for (const par of [["2024", "30/11/2025"], ["2024", "31/12/2025"], ["30/11/2025", "31/12/2025"]] as const) {
+    for (const par of [["31/12/2024", "30/11/2025"], ["31/12/2024", "31/12/2025"], ["30/11/2025", "31/12/2025"]] as const) {
       const p = buildPontesVariacao({ ...serie() } as never, { par: { de: par[0], ate: par[1] } });
       const dup = p?.dupont;
       if (!dup) continue;
@@ -79,20 +82,63 @@ describe("o DuPont do relatório usa a régua dos Indicadores", () => {
     // No PRIMEIRO período da série não há anterior e a base média vira pontual —
     // ali as duas réguas tendem a coincidir por construção. Conferir só o
     // primeiro não prova nada; foi assim que a divergência passou despercebida.
-    const alvos = ["2024", "30/11/2025", "31/12/2025"];
+    const alvos = [...P];
     const valores = alvos.map((p) => roeDosIndicadores(p));
     expect(new Set(valores.map((v) => v.toFixed(6))).size, "os períodos precisam ter ROE distinto").toBeGreaterThan(1);
   });
 
   it("no ÚLTIMO período a régua nova NÃO é a antiga (senão o teste não testa nada)", () => {
     const antiga = 6_454_351 / 16_101_635; // LL ÷ PL da data de fechamento = 40,09%
-    const p = buildPontesVariacao({ ...serie() } as never, { par: { de: "2024", ate: "31/12/2025" } })!;
+    const p = buildPontesVariacao({ ...serie() } as never, { par: { de: "31/12/2024", ate: "31/12/2025" } })!;
     const nova = p.dupont!.roeFinal;
     expect(Math.abs(nova - antiga), "a régua nova precisa diferir da antiga aqui").toBeGreaterThan(0.05);
   });
 
+  it("NA PRÓPRIA ABA: Margem × Giro × Alavancagem = linha ROE, em todos os períodos", () => {
+    // Era a contradição interna da régua: o produto dava 40,09% e a linha ROE
+    // publicava 34,78%, com a fórmula "DuPont: ROA × Alavancagem" impressa ao
+    // lado. Agora Giro e Alavancagem saem da MESMA base (anualizado, médias).
+    const d = serie();
+    const inds = calculateIndicators(d.bp, d.dre, d.periodos, undefined, undefined, [...P]);
+    const val = (nome: string, p: string): number | null => {
+      const i = inds.find((x) => x.nome === nome || x.nome.startsWith(nome));
+      const v = i?.valores[p];
+      return typeof v === "number" ? v : null;
+    };
+    let conferidos = 0;
+    for (const p of P) {
+      const m = val("Margem Líquida", p), g = val("Giro do Ativo", p), a = val("Alavancagem", p), roe = val("ROE", p), roa = val("ROA", p);
+      if (m === null || g === null || a === null || roe === null || roa === null) continue;
+      expect(m * g, `Margem×Giro=ROA em ${p}`).toBeCloseTo(roa, 10);
+      expect(roa * a, `ROA×Alavancagem=ROE em ${p}`).toBeCloseTo(roe, 10);
+      conferidos++;
+    }
+    expect(conferidos, "nenhum período conferido — o teste não testou nada").toBe(P.length);
+  });
+
+  it("os COMPONENTES do DuPont do relatório são as linhas da aba, dígito a dígito", () => {
+    const d = serie();
+    const inds = calculateIndicators(d.bp, d.dre, d.periodos, undefined, undefined, [...P]);
+    const val = (nome: string, p: string): number => {
+      const i = inds.find((x) => x.nome === nome || x.nome.startsWith(nome));
+      return i?.valores[p] as number;
+    };
+    const p = buildPontesVariacao({ ...serie() } as never, { par: { de: "31/12/2024", ate: "31/12/2025" } })!;
+    const dup = p.dupont!;
+    expect(dup.componentes!.giro[1]).toBeCloseTo(val("Giro do Ativo", "31/12/2025"), 5);
+    expect(dup.componentes!.alavancagem[1]).toBeCloseTo(val("Alavancagem", "31/12/2025"), 5);
+    expect(dup.componentes!.margem[1]).toBeCloseTo(val("Margem Líquida", "31/12/2025"), 5);
+  });
+
+  it("ANO FECHADO: o ROE é o lucro do ano sobre o PL médio, sem anualizar", () => {
+    // 31/12/2025 cobre 365 dias → fator 1. A regra do dono, literal:
+    // LL 6.454.351 ÷ média(24.956.057, 16.101.635) = 31,44%.
+    const plMedio = (24_956_057 + 16_101_635) / 2;
+    expect(roeDosIndicadores("31/12/2025")).toBeCloseTo(6_454_351 / plMedio, 6);
+  });
+
   it("a identidade Margem × Giro × Alavancagem continua fechando no ROE", () => {
-    const p = buildPontesVariacao({ ...serie() } as never, { par: { de: "2024", ate: "31/12/2025" } });
+    const p = buildPontesVariacao({ ...serie() } as never, { par: { de: "31/12/2024", ate: "31/12/2025" } });
     const d = p?.dupont;
     if (!d?.componentes) return;
     const [m0, m1] = d.componentes.margem, [g0, g1] = d.componentes.giro, [a0, a1] = d.componentes.alavancagem;

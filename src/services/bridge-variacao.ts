@@ -586,19 +586,30 @@ function dupontDe(
 ): DupontRoe | null {
   // Base MEDIA com o periodo imediatamente anterior da serie; no primeiro
   // periodo nao ha anterior e a base e' pontual — mesma regra do motor.
-  const baseMedia = (conta: string, p: string): number => {
-    const atual = bpVal(bp, conta, p);
+  // ESPELHO DIGITAL do motor (indicator-calculator.ts, mediaDe/giroDe/alavDe):
+  // o PL entra em MÓDULO POR PERÍODO antes da média — é assim que `plPor` nasce
+  // lá (l.153, Math.abs por período). Média do módulo e módulo da média diferem
+  // quando o PL troca de sinal entre períodos; espelhar "quase igual" é como as
+  // três réguas nasceram.
+  const baseMedia = (conta: string, p: string, absPorPeriodo: boolean): number => {
+    const cru = (x: string): number => {
+      const v = bpVal(bp, conta, x);
+      return absPorPeriodo ? Math.abs(v) : v;
+    };
+    const atual = cru(p);
     const i = periodosOrd.indexOf(p);
-    const ant = i > 0 ? bpVal(bp, conta, periodosOrd[i - 1]!) : null;
+    const ant = i > 0 ? cru(periodosOrd[i - 1]!) : null;
     return ant !== null && ant !== 0 ? (atual + ant) / 2 : atual;
   };
   const comp = (p: string): { m: number; g: number; a: number } | null => {
     const ll = dreVal(dre, "Lucro Líquido", p);
     const rl = dreVal(dre, "Receita Líquida", p);
-    const at = baseMedia("Ativo Total", p);
-    const pl = Math.abs(baseMedia("Patrimônio Líquido", p));
+    const at = baseMedia("Ativo Total", p, false);
+    const pl = baseMedia("Patrimônio Líquido", p, true);
     if (rl === 0 || at === 0 || pl === 0) return null;
-    const fator = 365 / (diasPorPeriodo[p] || 365);
+    // Espelho do fatorAno do motor: ano inteiro (>= 360 dias) não anualiza.
+    const d = diasPorPeriodo[p] || 365;
+    const fator = d >= 360 ? 1 : 365 / d;
     return { m: ll / rl, g: (rl * fator) / at, a: at / pl };
   };
   const c0 = comp(de);
@@ -609,9 +620,9 @@ function dupontDe(
   // Passivo Total inteiro vem negativo, o sinal do PL é convenção; quando o PT é
   // positivo e o PL negativo, é prejuízo acumulado de verdade (caso distressed).
   const plEconomico = (p: string): number => {
-    // A GUARDA OLHA O MESMO DENOMINADOR DA CONTA: se a alavancagem usa PL medio,
-    // checar o PL pontual deixaria passar uma media <= 0 (ou barrar uma > 0).
-    const plRaw = baseMedia("Patrimônio Líquido", p);
+    // A guarda olha o SINAL REAL da base média (sem módulo): módulo esconderia
+    // um PL economicamente negativo. A convenção crédito-negativo vem do PT.
+    const plRaw = baseMedia("Patrimônio Líquido", p, false);
     const pt = bpVal(bp, "Passivo Total", p);
     return pt < 0 ? -plRaw : plRaw;
   };
@@ -895,6 +906,9 @@ export function buildPontesVariacao(
     return { ...base, bloqueio: "Mês a mês indisponível: falta o mês anterior na série para isolar o resultado do mês (a DRE do balancete é acumulada no exercício)." };
   }
   dre = dreAjustada;
+  // FOTO DOS DIAS ANTES DA MUTAÇÃO DO MoM: o DuPont fala a régua da aba
+  // Indicadores (YTD anualizado), e os dias dela são os originais.
+  const diasIndicadores = { ...diasPorPeriodo };
   if (escolhido.regua === "mes") {
     diasPorPeriodo[de] = 30;
     diasPorPeriodo[ate] = 30;
@@ -933,6 +947,10 @@ export function buildPontesVariacao(
     ponteLucro: ponteResultadoDe(dre, "Lucro Líquido", de, ate),
     hierarquiaCaixa: fc ? hierarquiaCaixaDe(dre, fc, ate, opts?.regimeCadastro ?? null, ytd, escolhido.regua === "mes") : null,
     ponteNcg: ponteNcgDe(bp, dre, de, ate, diasPorPeriodo),
-    dupont: dupontDe(bp, dre, de, ate, escolhido.mesesJanela, periodos, diasPorPeriodo),
+    // DRE ORIGINAL, nunca a mensalizada: o ROE de "04/2026" no relatório tem de
+    // ser o MESMO da aba Indicadores para 04/2026 — o acumulado anualizado. Com
+    // a DRE do mês isolado o DuPont publicava "ROE 363%" ao lado de uma aba
+    // dizendo −77% para o mesmo período. Régua única (dono, 21/08/2026).
+    dupont: dupontDe(bp, dreOriginal, de, ate, escolhido.mesesJanela, periodos, diasIndicadores),
   };
 }

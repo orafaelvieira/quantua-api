@@ -416,17 +416,62 @@ export function calculateIndicators(
     "ROE (Retorno sobre Patrimônio Líquido)": plPor,
     "ROA (Retorno sobre Ativos)": ativoPor,
   };
-  const retornoDe = (nome: string, periodo: string): number | null => {
-    const base = RETORNOS[nome];
-    if (!base) return null;
+  // BASE MÉDIA compartilhada por TODA a cascata DuPont: média com o período
+  // imediatamente anterior da série; primeiro período fica pontual.
+  const mediaDe = (base: Record<string, number | null>, periodo: string): number | null => {
     const idx = periodosOrd.indexOf(periodo);
     const antP = idx > 0 ? periodosOrd[idx - 1] : null;
     const atual = base[periodo], ant = antP ? base[antP] : null;
-    const den = atual != null && ant != null ? (atual + ant) / 2 : atual;
+    return atual != null && ant != null ? (atual + ant) / 2 : atual;
+  };
+  // ANO FECHADO NÃO ANUALIZA (regra do dono, 21/08/2026: "quando o ano for
+  // fechado é o lucro do ano pelo PL"). Na régua mês×30 o YTD de dezembro vale
+  // 360 dias — sem este piso, o ano cheio ainda ganharia ×365/360 = +1,4% de
+  // fator, e "lucro do ano" viraria "lucro do ano inflado".
+  const fatorAno = (periodo: string): number => {
+    const d = diasPorPeriodo[periodo] || 365;
+    return d >= 360 ? 1 : 365 / d;
+  };
+
+  const retornoDe = (nome: string, periodo: string): number | null => {
+    const base = RETORNOS[nome];
+    if (!base) return null;
+    const den = mediaDe(base, periodo);
     const lucro = lucroPor[periodo];
     if (lucro == null || !ehDenominadorValido(den) || den <= 0) return null;
-    const dias = diasPorPeriodo[periodo] || 365;
-    return (lucro * (365 / dias)) / den;
+    return (lucro * fatorAno(periodo)) / den;
+  };
+
+  /**
+   * GIRO E ALAVANCAGEM NA MESMA RÉGUA DO ROE (decisão do dono, 21/08/2026:
+   * "DuPont e método direto têm que fechar o mesmo valor").
+   *
+   * Eram pontuais e não anualizados enquanto ROE/ROA saíam anualizados sobre
+   * base média — e a cascata impressa na aba ("Margem × Giro = ROA; ROA ×
+   * Alavancagem = ROE") NÃO multiplicava: na Belagro em 31/12/2025 o produto
+   * dava 40,09% e a linha ROE publicava 34,78%. O teste de identidade da suíte
+   * não via porque a fixture tem UM período — ali média=pontual e fator=1, e
+   * as duas réguas coincidem por construção.
+   *
+   *   Margem = LL ÷ RL                       (o fator de anualização cancela)
+   *   Giro   = RL anualizada ÷ Ativo MÉDIO
+   *   Alav   = Ativo MÉDIO ÷ PL MÉDIO
+   *   Margem × Giro × Alav = LL anualizado ÷ PL médio = o ROE da linha de cima.
+   *
+   * Ano fechado: fator = 1 (365/365) — o lucro do ano sobre o PL médio, como o
+   * dono definiu. Ano parcial (ex.: YTD 2026): anualiza.
+   */
+  const giroDe = (periodo: string): number | null => {
+    const rl = rlPor[periodo];
+    const den = mediaDe(ativoPor, periodo);
+    if (rl == null || !ehDenominadorValido(den) || den <= 0) return null;
+    return (rl * fatorAno(periodo)) / den;
+  };
+  const alavDe = (periodo: string): number | null => {
+    const at = mediaDe(ativoPor, periodo);
+    const pl = mediaDe(plPor, periodo);
+    if (at == null || !ehDenominadorValido(pl) || pl <= 0) return null;
+    return at / pl;
   };
 
   return INDICADORES_TEMPLATE.map(template => {
@@ -446,6 +491,10 @@ export function calculateIndicators(
         val = cur != null && ehDenominadorValido(antV) ? (cur - antV) / Math.abs(antV) : null;
       } else if (template.nome in RETORNOS) {
         val = retornoDe(template.nome, periodo);
+      } else if (template.nome === "Giro do Ativo") {
+        val = giroDe(periodo);
+      } else if (template.nome === "Alavancagem") {
+        val = alavDe(periodo);
       } else {
         val = computeIndicator(template.nome, bp, dre, periodo, computed, diasPorPeriodo[periodo], extras?.custoCapital);
       }
