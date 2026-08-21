@@ -1214,21 +1214,25 @@ const anotarPeriodosSecundarios = (
 // Períodos vindos de BALANCETE no IBR (DRE acumulada YTD): base dos dias dos
 // prazos médios e da leitura mensal.
 /**
- * COLUNAS DE DRE ACUMULADA — a lista que dá a base de dias aos indicadores.
+ * COLUNAS DE DRE ACUMULADA — a lista que dá a base de dias aos indicadores, aos
+ * cards, às pontes e ao relatório. TODOS leem esta, e é isso que importa: duas
+ * listas diferentes de "o que acumula" no mesmo IBR fazem o motor publicar o
+ * prazo sobre uma base e o relatório calcular o preço sobre outra.
  *
- * Era só `arvoresBalancete`, e isso deixava de fora o acervo gravado antes das
- * árvores, que tem `balancetes` sem árvore. Nesse acervo a lista saía VAZIA e a
- * base de dias caía na mediana do espaçamento da série: 30 dias para uma coluna
- * de maio que acumula cinco meses — prazos médios e fôlego de caixa 5× fora.
- *
- * Passa a usar o DETECTOR CANÔNICO do produto, o mesmo da proporcionalidade e do
- * prompt. Duas listas diferentes de "o que acumula" no mesmo IBR é a divergência
- * que já publicou dois preços para o mesmo movimento — e o motor de indicadores
- * e quem monta o relatório TÊM de ler a mesma.
+ * BURACO CONHECIDO, medido e ainda ABERTO: o acervo gravado antes das árvores
+ * tem `balancetes` sem árvore, e nele esta lista sai VAZIA — a base de dias cai
+ * na mediana do espaçamento da série (30 dias para uma coluna de maio que
+ * acumula cinco meses). Tentamos trocar pelo detector canônico
+ * (`periodosQueAcumulam`) e o A/B reprovou: ele NÃO é superconjunto desta lista
+ * — descarta rótulo curto "MM/AAAA" (que o `diasYTD` sabe ler), coluna com erro
+ * e coluna de exercício encerrado, e o /process não lhe passa `balancetes`, o
+ * que abria divergência /process × /refold no mesmo IBR (Ciclo Financeiro 14 vs
+ * 24 dias, sem tocar em insumo). Fechar o buraco exige acertar o detector
+ * primeiro, com bancada própria; meia troca troca um erro por vários.
  */
 const periodosBalanceteDe = (dados: unknown): string[] => {
-  const d = (dados ?? {}) as { dre?: never; balancetes?: unknown; arvoresBalancete?: unknown };
-  return periodosQueAcumulam({ dre: d.dre ?? [], balancetes: d.balancetes, arvoresBalancete: d.arvoresBalancete });
+  const arr = Array.isArray((dados as any)?.arvoresBalancete) ? (dados as any).arvoresBalancete : [];
+  return arr.map((b: any) => b?.periodo).filter((p: unknown): p is string => typeof p === "string" && p.length > 0);
 };
 
 // Aplica as PROVAS DETERMINÍSTICAS dos balancetes à validação do modelo.
@@ -1984,10 +1988,11 @@ router.post("/:id/process", async (req: AuthRequest, res: Response): Promise<voi
 
     // DRE já normalizada/recalculada e validada na cascata (avalia) → só os indicadores.
     // Meses de balancete = DRE acumulada YTD → prazos médios com dias-base do mês.
-    // MESMO detector do /refold e do relatório (`periodosBalanceteDe`): se o
-    // /process usar uma lista e o /refold outra, os prazos médios do mesmo IBR
-    // mudam sozinhos entre um reprocessamento e o outro.
-    const periodosYTDProc = periodosQueAcumulam({ dre: structuredDRE, arvoresBalancete });
+    // MESMA lista do /refold e do relatório (`periodosBalanceteDe`): se o
+    // /process usar uma e o /refold outra, os prazos médios do mesmo IBR mudam
+    // sozinhos entre um reprocessamento e o outro — medido, Ciclo Financeiro 14
+    // contra 24 dias numa coluna de encerramento fora de dezembro.
+    const periodosYTDProc = arvoresBalancete.map((a) => a.periodo).filter(Boolean);
     const indicadores = await buildIndicators(structuredBP, structuredDRE, allPeriodos, rowsIBRDe(analysis.indicadorConfig), periodosYTDProc);
     console.log(`[process] Validação: confiança=${validacao.confiancaGeral}%, equação=${validacao.equacaoPatrimonial}, alertas=${validacao.alertas.length}`);
     for (const alerta of validacao.alertas) {

@@ -17,6 +17,8 @@
  * Nunca inventa: se faltar o insumo, o campo volta null e a frase não é gerada.
  */
 
+import { diasBaseDe } from "./indicator-calculator";
+
 export interface LinhaFin { conta: string; valores: Record<string, number> }
 
 export interface ContaRegressiva {
@@ -54,15 +56,20 @@ const reais = (v: number): string => {
 
 /**
  * @param periodo período mais recente (o retrato que vale para a decisão)
- * @param diasDoPeriodo 365 no anual; menor em balancete acumulado (mês × 30)
+ * @param base a janela do período: passe a SÉRIE e deixe a régua do motor de
+ *   indicadores decidir (`{ periodos, periodosYTD }`). O número solto existe só
+ *   para a bancada provar um valor específico — foi um número solto (365 cru)
+ *   que fez o mesmo relatório publicar 17,2 dias de fôlego enquanto os prazos
+ *   médios ao lado eram calculados sobre 150.
  */
 export function calcularContaRegressiva(
   bp: LinhaFin[],
   dre: LinhaFin[],
   periodo: string,
   fcoDoPeriodo: number | null,
-  diasDoPeriodo = 365,
+  base: number | { periodos: string[]; periodosYTD?: string[] },
 ): ContaRegressiva | null {
+  const diasDoPeriodo = typeof base === "number" ? base : diasBaseDe(periodo, base.periodos, base.periodosYTD);
   const caixa = val(bp, "Caixa e Equivalentes de Caixa", periodo);
   if (caixa == null) return null;
 

@@ -248,7 +248,10 @@ describe("bancada Belagro · a prioridade que o motor manda", () => {
   const agendaDe = (covenants: Array<{ name: string; metric: string; operator: string; threshold: number }> = []) =>
     montarAgenda({
       indicadores: inds, periodos: P, periodo: ULT, bp: BP, dre: DRE,
-      periodosYTD: ACUM, diasDoPeriodo: 150, covenants,
+      // SEM `diasDoPeriodo`: a agenda deriva pela mesma régua da produção. Passar
+      // 150 à mão fazia a bancada provar um número que o código nunca calcula —
+      // foi assim que a divergência das duas réguas passou despercebida.
+      periodosYTD: ACUM, covenants,
     });
 
   it("a ordem NÃO é o alfabeto — e é isso que autoriza publicar rótulo", () => {

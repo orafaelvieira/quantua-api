@@ -284,7 +284,10 @@ export const PRECO_DO_SINAL: Record<string, DefSinal> = {
  * bancada prova, conferindo contra `calculateIndicators`, não contra si mesma.
  */
 export function precoDeVoltar(
-  nome: string, bp: BPLineItem[], dre: DRELineItem[], periodo: string, alvo: number, dias = 365,
+  // `dias` é OBRIGATÓRIO: um default de 365 aqui é a mesma armadilha que fez o
+  // relatório publicar dois preços para o mesmo movimento. Quem chama sabe a
+  // janela (ou pede a `diasBaseDe`); esta função não adivinha.
+  nome: string, bp: BPLineItem[], dre: DRELineItem[], periodo: string, alvo: number, dias: number,
 ): { brl: number; alavanca: string } | null {
   const def = PRECO_DO_SINAL[nome];
   if (!def) return null;

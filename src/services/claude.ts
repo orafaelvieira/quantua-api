@@ -583,11 +583,11 @@ export async function generateAnalysis(
     ? calcularContaRegressiva(
         bp, dre as Array<{ conta: string; valores: Record<string, number> }>, ultimoPeriodo,
         fluxoCaixa?.totais?.fco?.[ultimoPeriodo] ?? null,
-        // dias-base do período: A MESMA RÉGUA DO MOTOR DE INDICADORES. Aqui havia
-        // `: diasBaseDe(ultimoPeriodo, periodos, periodosYTD)` cru, que erra sempre que a série é sub-anual sem estar
-        // registrada como balancete — o fôlego de caixa saía inflado na mesma
-        // proporção do denominador.
-        365,
+        // A SÉRIE, não um número: quem decide a janela é a régua do motor de
+        // indicadores. Aqui havia um 365 cru, que erra sempre que a série é
+        // sub-anual — o fôlego de caixa saía inflado na mesma proporção do
+        // denominador, ao lado de prazos médios calculados sobre outra base.
+        { periodos, periodosYTD },
       )
     : null;
   // PRIORIDADE PELO MOTOR — a ordem do plano priorizado sai DAQUI, não da IA.

@@ -58,10 +58,11 @@ describe("o fôlego de caixa depende da BASE DE DIAS, e ela precisa ser a certa"
     expect(diasBaseDe(P, serie, acumuladas), "coluna acumulada de maio").toBe(150);
 
     // SEM A DECLARAÇÃO a régua cai no espaçamento da série — mediana de 1 mês —
-    // e trata cinco meses de despesa como um. É o buraco que a rota fecha ao
-    // passar o detector canônico de colunas acumuladas em vez da lista de
-    // árvores: um IBR gravado antes das árvores tem `balancetes` sem árvore e
-    // chegava aqui com a lista VAZIA.
+    // e trata cinco meses de despesa como um. BURACO CONHECIDO E AINDA ABERTO: o
+    // acervo gravado antes das árvores tem `balancetes` sem árvore e chega aqui
+    // com a lista vazia. Fechar exige acertar o detector de colunas acumuladas
+    // primeiro (ele descarta rótulo "MM/AAAA" e coluna de encerramento, que
+    // COBREM a janela mesmo assim) — meia troca troca um erro por vários.
     expect(diasBaseDe(P, serie, []), "sem declarar, a régua não adivinha").toBe(30);
     const r = calcularContaRegressiva(BP, DRE, P, null, diasBaseDe(P, serie, []))!;
     expect(r.diasDeCaixa!, "e o fôlego publicado sai 5× menor que o real").toBeCloseTo(1.41, 2);
@@ -109,6 +110,26 @@ describe("o que a conta regressiva publica", () => {
   });
 });
 
+describe("a conta regressiva deriva a janela da SÉRIE", () => {
+  // O jeito de errar era passar um número solto. Agora quem chama entrega a
+  // série e a régua do motor decide — não há mais 365 para cravar por engano.
+  const SERIE = ["2024", "30/11/2025", "31/12/2025", "31/01/2026", "28/02/2026", "31/03/2026", "30/04/2026", P];
+  const ACUM = SERIE.filter((x) => /^\d{2}\//.test(x));
+
+  it("com a série declarada, entrega os mesmos 7,1 dias do cálculo direto", () => {
+    const pelaSerie = calcularContaRegressiva(BP, DRE, P, null, { periodos: SERIE, periodosYTD: ACUM })!;
+    const pelaMao = calcularContaRegressiva(BP, DRE, P, null, 150)!;
+    expect(pelaSerie.diasDeCaixa).toBeCloseTo(pelaMao.diasDeCaixa!, 9);
+    expect(pelaSerie.diasDeCaixa!).toBeCloseTo(7.073, 3);
+  });
+
+  it("a janela sai da MESMA régua que publica os prazos médios", () => {
+    const pelaSerie = calcularContaRegressiva(BP, DRE, P, null, { periodos: SERIE, periodosYTD: ACUM })!;
+    const dias = diasBaseDe(P, SERIE, ACUM);
+    expect(pelaSerie.desembolsoDiario).toBeCloseTo(DESEMBOLSO / dias, 6);
+  });
+});
+
 describe("A RÉGUA DE DIAS É UMA SÓ no repositório", () => {
   // Esta guarda existe porque o defeito passou por 108 arquivos e 1.743 testes
   // verdes: quem monta o prompt não é exercitado por teste nenhum (as chamadas de
@@ -116,30 +137,42 @@ describe("A RÉGUA DE DIAS É UMA SÓ no repositório", () => {
   // Reverter a régua para `: 365` deixava a suíte inteira verde e o relatório
   // publicando dois preços para o mesmo movimento. Um assert sobre o código-fonte
   // é grosseiro, mas é o que vê o ponto exato onde o defeito viveu.
-  const ler = (arquivo: string): string => readFileSync(join(__dirname, arquivo), "utf8");
+  /**
+   * SÓ O CÓDIGO, sem comentário — e esta linha nasceu de um falso verde.
+   *
+   * Ao testar a mutação eu troquei o `365` de dentro do COMENTÁRIO em vez do
+   * código: a chamada ficou com o literal e o comentário ficou com a chamada.
+   * A guarda continuou verde porque a regex casava no comentário, o `tsc`
+   * passou (o import só ficou sem uso) e a suíte inteira também. Guarda que lê
+   * comentário não guarda nada.
+   */
+  const ler = (arquivo: string): string =>
+    readFileSync(join(__dirname, arquivo), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/(^|[^:])\/\/.*/g, "$1 ");
 
   it("ninguém mais assume 365 dias como base do período", () => {
-    for (const arquivo of ["claude.ts", "cards-decisao.ts", "valor-na-mesa.ts", "bridge-variacao.ts", "prioridade-motor.ts"]) {
+    for (const arquivo of ["claude.ts", "cards-decisao.ts", "valor-na-mesa.ts", "bridge-variacao.ts", "prioridade-motor.ts", "conta-regressiva.ts"]) {
       const src = ler(arquivo);
-      expect(src, `${arquivo} voltou a cravar 365 como base de dias`).not.toMatch(/:\s*365/);
+      // Em QUALQUER posicao de argumento ou default, nao so depois de ":" — o
+      // literal que passou pela guarda estava sozinho numa linha, como "365,".
+      expect(src, `${arquivo} voltou a cravar 365 como base de dias`).not.toMatch(/[:(,=]\s*365\s*[,)]/);
     }
   });
 
   it("os consumidores da base de dias chamam diasBaseDe", () => {
-    for (const arquivo of ["claude.ts", "cards-decisao.ts", "valor-na-mesa.ts", "bridge-variacao.ts", "prioridade-motor.ts"]) {
+    for (const arquivo of ["cards-decisao.ts", "valor-na-mesa.ts", "bridge-variacao.ts", "prioridade-motor.ts", "conta-regressiva.ts"]) {
       expect(ler(arquivo), `${arquivo} não usa a régua única`).toMatch(/diasBaseDe\(/);
     }
   });
 
-  it("UMA lista só de colunas acumuladas: o motor de indicadores e o relatório leem a mesma", () => {
-    // A régua de dias é única, mas ela recebe a LISTA de colunas acumuladas de
-    // fora. Duas listas diferentes no mesmo IBR reproduzem o defeito por outro
-    // caminho: os indicadores publicariam o prazo sobre uma base e o relatório
-    // calcularia o preço sobre outra.
-    const rota = readFileSync(join(__dirname, "..", "routes", "analyses.ts"), "utf8");
-    expect(rota, "voltou a montar a lista de colunas acumuladas à mão")
-      .not.toMatch(/arvoresBalancete[\s\S]{0,40}\.map\((?:\(|\w)[^)]*\)\s*=>\s*\w*\??\.?periodo/);
-    expect(rota).toMatch(/const periodosBalanceteDe[\s\S]{0,600}periodosQueAcumulam\(/);
+  it("quem monta o relatório NÃO fabrica um número de dias — entrega a série", () => {
+    // claude.ts é o arquivo onde a divergência nasceu, duas vezes. Ele não deve
+    // calcular nem escolher a janela: passa `{ periodos, periodosYTD }` e a
+    // função decide. Assim não sobra argumento numérico para cravar por engano.
+    const src = ler("claude.ts");
+    expect(src, "voltou a fabricar a base de dias").not.toMatch(/diasYTD\(|diasDoPeriodo\(/);
+    expect(src, "a conta regressiva precisa receber a série").toMatch(/\{\s*periodos,\s*periodosYTD\s*\}/);
   });
 
   it("e ninguém reimplanta a expressão que ela substituiu", () => {
