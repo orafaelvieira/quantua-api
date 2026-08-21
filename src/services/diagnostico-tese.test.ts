@@ -153,12 +153,16 @@ describe("o prompt ensina as DEFINIÇÕES EXATAS, não as imprecisas", () => {
     expect(prompt).toMatch(/Kanitz e Altman NÃO são citados em nenhum dos três cartões/);
   });
 
-  it("uma contagem só: 4 ou 5 números na situação, dois por FRASE, um parágrafo", async () => {
+  it("uma contagem só: 4 ou 5 números na situação, dois por FRASE, 2 ou 3 parágrafos", async () => {
     const { prompt } = await gerar();
     expect(prompt).not.toMatch(/3 a 5 números/);
     expect(prompt).toMatch(/provada por 4 ou 5 números/);
     expect(prompt).toMatch(/no máximo dois indicadores por FRASE/);
-    expect(prompt).toMatch(/UM parágrafo corrido, sem quebra de linha/);
+    // 2 ou 3 parágrafos por cartão (dono, 21/08/2026: "colocar parágrafos nos
+    // textos para não ficar tudo corrido") — a tela e o PDF respeitam a linha
+    // em branco via `paragrafosDe`.
+    expect(prompt).toMatch(/2 ou 3 parágrafos curtos separados por uma linha em branco/);
+    expect(prompt).not.toMatch(/UM parágrafo corrido/);
     expect(prompt).not.toMatch(/no máximo dois indicadores por parágrafo/);
   });
 
@@ -298,6 +302,10 @@ describe("a justificativa do estágio (escrita pelo MOTOR) segue o documento", (
     // A ressalva só cita o que EXISTE na série (há exercício fechado antes).
     expect(j).toMatch(/lido junto com o exercício fechado anterior e com a sazonalidade, se o negócio a tiver/);
     expect(j.length, "estágio é uma frase curta, não um painel").toBeLessThan(420);
+    // A ressalva é parágrafo próprio: o fato num bloco, como lê-lo no outro.
+    const QUEBRA = String.fromCharCode(10, 10);
+    expect(j.split(QUEBRA).length).toBe(2);
+    expect(j.split(QUEBRA)[1]).toMatch(/^Esse resultado é de uma janela parcial/);
   });
 
   it("COLUNA FECHADA: abre em maiúscula e não fala de janela", async () => {

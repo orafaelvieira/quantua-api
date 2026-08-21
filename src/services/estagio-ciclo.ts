@@ -294,7 +294,9 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
       // mesmos; muda a palavra que abre a conversa. Rótulos antigos gravados
       // ("Crise de caixa", "Dificuldade de caixa") seguem mapeados na matriz.
       estagio: "Pressão de caixa",
-      justificativa: `${abertura}${evidencia}${implicacao}${sinalEstrutural}${consequencia}`,
+      // A ressalva/consequência vira parágrafo próprio (a tela e o PDF respeitam
+      // a linha em branco): o fato num bloco, como lê-lo no outro.
+      justificativa: `${abertura}${evidencia}${implicacao}${sinalEstrutural}${consequencia ? `\n\n${consequencia.trim()}` : ""}`,
     });
   }
 
