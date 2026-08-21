@@ -553,14 +553,53 @@ function ponteNcgDe(
 
 // ── DuPont do ROE: margem × giro × alavancagem (sequencial exata) ─────────────
 
-function dupontDe(bp: BPLineItem[], dre: DRELineItem[], de: string, ate: string, mesesJanela: number): DupontRoe | null {
+/**
+ * UMA REGUA SO' DE RETORNO (dono, 20/08/2026: "nao pode ter diferencas de
+ * metodologias entre o Documento e os Indicadores").
+ *
+ * A aba Indicadores calcula ROE por `retornoDe` (indicator-calculator.ts:420):
+ * lucro ANUALIZADO sobre a base MEDIA entre o periodo e o imediatamente
+ * anterior. O DuPont usava lucro cru sobre PL da data de fechamento — e as duas
+ * leituras conviviam no MESMO relatorio. Medido na Belagro: em 31/12/2025 o
+ * DuPont publicava 40,09% enquanto os Indicadores publicavam 31,44%, oito
+ * pontos e meio de diferenca. Em 2024 elas coincidiam por acidente (primeiro
+ * periodo da serie, sem base media) — foi o que escondeu a divergencia.
+ *
+ * A identidade multiplicativa se mantem porque a anualizacao entra no GIRO e as
+ * bases medias entram no giro e na alavancagem:
+ *   Margem = LL/RL                         (o fator cancela: nao entra aqui)
+ *   Giro   = (RL x 365/dias) / Ativo MEDIO
+ *   Alav   = Ativo MEDIO / PL MEDIO
+ *   m x g x a = (LL x 365/dias) / PL MEDIO = exatamente o ROE dos Indicadores.
+ * Conferido com os numeros reais: diferenca de 1e-16 (zero de maquina).
+ */
+function dupontDe(
+  bp: BPLineItem[],
+  dre: DRELineItem[],
+  de: string,
+  ate: string,
+  mesesJanela: number,
+  /** Serie ordenada — de onde sai o periodo ANTERIOR de cada base media. */
+  periodosOrd: string[],
+  /** Dias cobertos por cada coluna, para anualizar o fluxo como os Indicadores. */
+  diasPorPeriodo: Record<string, number>,
+): DupontRoe | null {
+  // Base MEDIA com o periodo imediatamente anterior da serie; no primeiro
+  // periodo nao ha anterior e a base e' pontual — mesma regra do motor.
+  const baseMedia = (conta: string, p: string): number => {
+    const atual = bpVal(bp, conta, p);
+    const i = periodosOrd.indexOf(p);
+    const ant = i > 0 ? bpVal(bp, conta, periodosOrd[i - 1]!) : null;
+    return ant !== null && ant !== 0 ? (atual + ant) / 2 : atual;
+  };
   const comp = (p: string): { m: number; g: number; a: number } | null => {
     const ll = dreVal(dre, "Lucro Líquido", p);
     const rl = dreVal(dre, "Receita Líquida", p);
-    const at = bpVal(bp, "Ativo Total", p);
-    const pl = Math.abs(bpVal(bp, "Patrimônio Líquido", p));
+    const at = baseMedia("Ativo Total", p);
+    const pl = Math.abs(baseMedia("Patrimônio Líquido", p));
     if (rl === 0 || at === 0 || pl === 0) return null;
-    return { m: ll / rl, g: rl / at, a: at / pl };
+    const fator = 365 / (diasPorPeriodo[p] || 365);
+    return { m: ll / rl, g: (rl * fator) / at, a: at / pl };
   };
   const c0 = comp(de);
   const c1 = comp(ate);
@@ -570,7 +609,9 @@ function dupontDe(bp: BPLineItem[], dre: DRELineItem[], de: string, ate: string,
   // Passivo Total inteiro vem negativo, o sinal do PL é convenção; quando o PT é
   // positivo e o PL negativo, é prejuízo acumulado de verdade (caso distressed).
   const plEconomico = (p: string): number => {
-    const plRaw = bpVal(bp, "Patrimônio Líquido", p);
+    // A GUARDA OLHA O MESMO DENOMINADOR DA CONTA: se a alavancagem usa PL medio,
+    // checar o PL pontual deixaria passar uma media <= 0 (ou barrar uma > 0).
+    const plRaw = baseMedia("Patrimônio Líquido", p);
     const pt = bpVal(bp, "Passivo Total", p);
     return pt < 0 ? -plRaw : plRaw;
   };
@@ -892,6 +933,6 @@ export function buildPontesVariacao(
     ponteLucro: ponteResultadoDe(dre, "Lucro Líquido", de, ate),
     hierarquiaCaixa: fc ? hierarquiaCaixaDe(dre, fc, ate, opts?.regimeCadastro ?? null, ytd, escolhido.regua === "mes") : null,
     ponteNcg: ponteNcgDe(bp, dre, de, ate, diasPorPeriodo),
-    dupont: dupontDe(bp, dre, de, ate, escolhido.mesesJanela),
+    dupont: dupontDe(bp, dre, de, ate, escolhido.mesesJanela, periodos, diasPorPeriodo),
   };
 }
