@@ -196,7 +196,7 @@ function narrarFluxos(fco: number, fci: number, fcf: number, eps: number, col: s
 
 /**
  * Classifica o estágio (eixo 1) e anexa a solidez (eixo 2). Regra em ordem — o
- * primeiro que casa vence; rótulo entre: Dificuldade de caixa | Crescimento | Maturidade |
+ * primeiro que casa vence; rótulo entre: Pressão de caixa | Crescimento | Maturidade |
  * Platô | Retração. Retorna null com < 2 períodos (sem base para tendência).
  */
 export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[], fluxoCaixa?: FluxoCaixaLite | null): EstagioResult | null {
@@ -246,7 +246,12 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
       ? " Uma empresa pode dar lucro e ainda assim não ter dinheiro para pagar o que vence, e é exatamente isso que acontece aqui: o resultado existe, mas está preso em prazos, estoques ou já saiu em retiradas e dívidas. Enquanto o caixa não for recomposto, qualquer atraso de cliente vira problema de pagamento no mesmo mês."
       : " Enquanto a operação não voltar a cobrir os próprios custos, o caixa continuará encolhendo mês a mês.";
     return com({
-      estagio: "Dificuldade de caixa",
+      // "PRESSÃO DE CAIXA", não "Dificuldade de caixa" (dono, 21/08/2026: o termo
+      // soa forte demais para quem construiu a empresa). O FATO não muda — falta
+      // dinheiro para os compromissos de curto prazo, e os números continuam os
+      // mesmos; muda a palavra que abre a conversa. Rótulos antigos gravados
+      // ("Crise de caixa", "Dificuldade de caixa") seguem mapeados na matriz.
+      estagio: "Pressão de caixa",
       justificativa: `${abertura}${evidencia}${sinalEstrutural}${consequencia}`,
     });
   }

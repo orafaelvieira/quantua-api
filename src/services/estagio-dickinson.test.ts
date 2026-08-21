@@ -54,7 +54,7 @@ describe("classifyEstagio — Dickinson pelos sinais do FC", () => {
       ind("Liquidez Corrente", { "2022": 0.9, "2023": 0.8 }),
       ind("Liquidez Imediata", { "2022": 0.03, "2023": 0.02 }),
     ] as never[];
-    expect(classifyEstagio(emCrise, ["2022", "2023"], fc(500, -200, -150))?.estagio).toBe("Dificuldade de caixa");
+    expect(classifyEstagio(emCrise, ["2022", "2023"], fc(500, -200, -150))?.estagio).toBe("Pressão de caixa");
   });
 
   it("sem FC → heurística de receita/margem continua funcionando (fallback)", () => {

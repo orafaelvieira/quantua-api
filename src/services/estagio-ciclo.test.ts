@@ -95,7 +95,7 @@ describe("estagio-ciclo — materialidade + persistência + solidez (2 eixos)", 
     expect(r?.justificativa.toLowerCase()).toContain("crescimento"); // narra os dois padrões
   });
 
-  it("solvência COLAPSADA + caixa mínimo = Dificuldade de caixa mesmo com margem positiva", () => {
+  it("solvência COLAPSADA + caixa mínimo = Pressão de caixa mesmo com margem positiva", () => {
     const inds = [
       ind("Receita Líquida", { "2023": 1000, "2024": 1020 }),
       ind("Margem EBITDA", { "2024": 0.05 }), // positiva — a regra antiga NÃO dispararia
@@ -106,7 +106,7 @@ describe("estagio-ciclo — materialidade + persistência + solidez (2 eixos)", 
       ind("Altman Z-Score (EM)", { "2024": 0.6 }),
     ] as never[];
     const r = classifyEstagio(inds, ["2023", "2024"], null);
-    expect(r?.estagio).toBe("Dificuldade de caixa");
+    expect(r?.estagio).toBe("Pressão de caixa");
     expect(r?.justificativa).toContain("solidez financeira"); // o sinal que disparou aparece no texto
   });
 
