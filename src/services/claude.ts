@@ -46,7 +46,7 @@ export interface AnalysisResult {
   coberturaJuros?: number;
   dreData: Array<{ mes: string; receita: number; custos: number; bruto: number; operacional: number; liquido: number }>;
   semaforo: Array<{ area: string; status: "ok" | "atencao" | "critico"; descricao: string }>;
-  recomendacoes: Array<{ titulo: string; prioridade: "Alta" | "Média" | "Baixa"; impacto: string; horizonte: string; descricao: string }>;
+  recomendacoes: Array<{ titulo: string; prioridade: "Alta" | "Média" | "Baixa"; horizonte: string; descricao: string }>;
   swot: { forcas: string[]; fraquezas: string[]; oportunidades: string[]; riscos: string[] };
   confianca: number;
   destaques: string[];
@@ -577,7 +577,7 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
       "estimatedImpactBRL": <impacto_em_reais_ou_omita>, "impactoRacional": "<como chegou nesse impacto: a base de cálculo/premissa, ex.: 'reduzir PMR de 155→75d × receita/365 ≈ R$X de caixa liberado'. Omita só se não houver impacto em R$>", "horizonMonths": <meses_ou_omita>,
       "priority": "p0|p1|p2" }
   ],
-  "recomendacoes": [ { "titulo": "<qual OPÇÃO priorizar>", "prioridade": "Alta|Média|Baixa", "impacto": "Alto|Médio|Baixo", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<por que primeiro e como sequenciar; referencia uma opção acima>" } ],
+  "recomendacoes": [ { "titulo": "<qual OPÇÃO priorizar>", "prioridade": "Alta|Média|Baixa", "horizonte": "0–30d|30–90d|90–180d", "descricao": "<por que primeiro e como sequenciar; referencia uma opção acima>" } ],
   "revelacoes": [
     { "titulo": "<a descoberta em 1 frase direta e forte — tom 'você não sabia disso'>",
       "dadoEscondido": "<o CRUZAMENTO que revela: quais números, de quais fontes, conectados>",
