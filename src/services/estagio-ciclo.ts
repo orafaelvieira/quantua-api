@@ -35,9 +35,11 @@ export interface SolidezResult {
   score: number;
   max: number;
   tendencia: "melhorando" | "estável" | "deteriorando" | null;
-  /** O QUE DEFINE O FÔLEGO, com todas as letras: a pontuação nos testes de
-   *  estrutura e a régua que separa sólida/intermediária/frágil. É o que o
-   *  quadro de Fôlego abre — o leitor tem de saber por que está nessa coluna. */
+  /** O QUE DEFINE O FÔLEGO: os FATOS da empresa que a colocaram nesta coluna.
+   *  NUNCA o método (dono, 22/08/2026: "nunca coloque o método de cálculo da
+   *  matriz; a explicação tem que ser dos fatores que trouxeram a empresa para
+   *  esta posição") — nada de pontos, placar, número de testes ou faixa de
+   *  corte. Já vem com os componentes embutidos; quem exibe não os repete. */
   oQueDefine: string;
   /** Legível para o relatório: ["Estrutura de giro (Fleuriet): Insuficiente", …] */
   componentes: string[];
@@ -167,6 +169,14 @@ const PERGUNTA_DO_TESTE: Array<[RegExp, string]> = [
   [/^Consegue honrar os compromissos\?/i, "solvência"],
   [/^Como um banco enxergaria a empresa\?/i, "risco de insolvência"],
 ];
+/** O que o leitor perde quando um teste não roda — dito pela PERGUNTA, não pelo
+ *  nome do modelo: o quadro não fala da régua, fala da empresa. */
+const PERGUNTA_SEM_BASE: Record<string, string> = {
+  "capital de giro": "se a operação se financia sozinha",
+  "solvência": "se a empresa consegue honrar os compromissos",
+  "risco de insolvência": "como um banco enxergaria a empresa",
+};
+
 export function testesDosComponentes(componentes?: string[] | null): string[] | null {
   if (!componentes || !componentes.length) return null;
   const nomes = componentes
@@ -176,40 +186,51 @@ export function testesDosComponentes(componentes?: string[] | null): string[] | 
 }
 
 /**
- * A FRASE DO GATILHO DA COLUNA, como função pura dos números (dono, 21/08/2026:
- * "deixar muito claro ao leitor o que levou a empresa a estar naquela coluna").
+ * A FRASE DO GATILHO DA COLUNA (dono, 21/08/2026: "deixar muito claro ao leitor
+ * o que levou a empresa a estar naquela coluna") — pelos FATORES, nunca pelo
+ * método (dono, 22/08/2026). O placar (score/max, 2 pontos por teste, corte de
+ * 40%) continua decidindo a coluna, mas é maquinário interno: publicá-lo fazia
+ * o quadro explicar a matriz em vez de explicar a empresa.
  * Exportada porque o app a reproduz para o acervo gravado antes desta frase
  * existir (score/max/tendência já estavam persistidos) — a bancada dos dois
  * lados prova que as duas cópias escrevem a mesma coisa.
  */
-export function oQueDefineDaSolidez(x: { nivel: string; score: number; max: number; tendencia: string | null; testes?: string[]; componentes?: string[] | null }): string {
-  const n = Math.round(x.max / 2);
-  // Ordem da confiança: os nomes que o motor gravou > os nomes que as perguntas
-  // dos componentes revelam > (só com os TRÊS testes) a lista canônica. Sem
-  // nenhum dos três, o texto NÃO chuta nome: diz quantos testes couberam.
-  const nomes = (x.testes && x.testes.length ? x.testes : testesDosComponentes(x.componentes))
-    ?? (n === TODOS_OS_TESTES.length ? TODOS_OS_TESTES : null);
+export function oQueDefineDaSolidez(x: { nivel: string; score?: number; max?: number; tendencia: string | null; testes?: string[]; componentes?: string[] | null }): string {
+  const nomes = (x.testes && x.testes.length ? x.testes : testesDosComponentes(x.componentes)) ?? null;
   const faltam = nomes ? TODOS_OS_TESTES.filter((t) => !nomes.includes(t)) : [];
-  const fmtPts = (v: number) => v.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
-  const regua = x.nivel === "sólida"
-    ? "é sólida quando soma pelo menos três quartos dos pontos"
-    : x.nivel === "intermediária"
-    ? "é intermediária quando fica entre 40% e três quartos dos pontos"
-    : "é frágil quando fica abaixo de 40% dos pontos";
-  const direcao = x.tendencia === "deteriorando" ? ", e piorou em relação ao período anterior"
-    : x.tendencia === "melhorando" ? ", e melhorou em relação ao período anterior"
-    : x.tendencia === "estável" ? ", sem mudança em relação ao período anterior"
+  // OS FATORES são os componentes: cada um é uma leitura da empresa, em
+  // português de gente. É o que o leitor precisa — não a régua que os converte
+  // em coluna da matriz.
+  const ponto = (t: string): string => {
+    const u = t.trim();
+    return /[.!?…]$/.test(u) ? u : /[,;:]$/.test(u) ? `${u.slice(0, -1)}.` : `${u}.`;
+  };
+  const fatores = (x.componentes ?? []).map((c) => c.trim()).filter(Boolean).map(ponto);
+  const direcao = x.tendencia === "deteriorando" ? " A estrutura piorou em relação ao período anterior."
+    : x.tendencia === "melhorando" ? " A estrutura melhorou em relação ao período anterior."
+    : x.tendencia === "estável" ? " A estrutura não mudou em relação ao período anterior."
     : "";
-  const semNome = !nomes && n < TODOS_OS_TESTES.length;
-  const ressalva = faltam.length
-    ? ` ${faltam.length > 1 ? `Os testes de ${listaPt(faltam)} não puderam ser aplicados` : `O teste de ${listaPt(faltam)} não pôde ser aplicado`} com os dados deste período${n === 1 ? ", então o nível se apoia num único teste" : ""}.`
-    : semNome
-    ? ` Os demais testes não puderam ser aplicados com os dados deste período${n === 1 ? ", então o nível se apoia num único teste" : ""}.`
+  // O que NÃO deu para olhar entra pela pergunta que ficou sem resposta, nunca
+  // pelo nome do teste que não rodou.
+  // A COLUNA APOIADA NUMA LEITURA SÓ tem de ser declarada — o acervo antigo, cujos
+  // componentes não seguem o formato de pergunta, perdia essa ressalva.
+  const soUma = fatores.length === 1 ? ", então o nível se apoia numa leitura só" : "";
+  const semBase = faltam.length
+    ? ` Não há base neste período para avaliar ${listaPt(faltam.map((t) => PERGUNTA_SEM_BASE[t] ?? t))}${soUma}.`
+    : !nomes && fatores.length > 0 && fatores.length < TODOS_OS_TESTES.length
+    ? ` As demais leituras da estrutura não tinham base neste período${soUma}.`
     : "";
-  return (
-    `O que define o fôlego financeiro: a estrutura da empresa passa por ${n} teste${n === 1 ? "" : "s"}${nomes ? ` (${listaPt(nomes)})` : " de estrutura"}, ` +
-    `cada um valendo até 2 pontos, e somou ${fmtPts(x.score)} de ${x.max}${direcao}. A estrutura ${regua}.${ressalva}`
-  );
+  // "sólida/intermediária/frágil" concordam com A ESTRUTURA (feminino), não
+  // com O fôlego: "o fôlego financeiro está sólida" é erro de concordância.
+  if (!fatores.length) return `A estrutura financeira está ${x.nivel}.${direcao}${semBase}`.trim();
+  const primeiro = fatores[0]!;
+  // Minúscula depois dos dois-pontos em ARTIGO ("A operação") e em palavra
+  // comum ("Consegue"); sigla ("EBITDA"), símbolo ("R$") e inicial isolada
+  // ("C") ficam como estão — "ebitda" num relatório de credor é erro.
+  const primeiraPalavra = primeiro.split(/\s+/)[0] ?? "";
+  const ehComum = /^[AaOoEe]$/.test(primeiraPalavra) || /[a-zà-ÿ]/.test(primeiraPalavra);
+  const abre = ehComum ? primeiro.charAt(0).toLowerCase() + primeiro.slice(1) : primeiro;
+  return `O que define o fôlego financeiro: ${[abre, ...fatores.slice(1)].join(" ")}${direcao}${semBase}`;
 }
 
 /** Solidez do período mais recente + tendência vs o anterior. */
@@ -235,6 +256,14 @@ export function avaliarSolidez(indicadores: IndicadorLite[], periodos: string[])
 
 type Sig = -1 | 0 | 1;
 const sigDe = (v: number, eps: number): Sig => (Math.abs(v) <= eps ? 0 : v > 0 ? 1 : -1);
+
+/** Emenda depois dos dois-pontos: artigo e palavra comum caem para minúscula;
+ *  sigla ("EBITDA"), símbolo ("R$") e inicial isolada ficam como estão. */
+function minuscula(t: string): string {
+  const u = t.trim();
+  const p1 = u.split(/\s+/)[0] ?? "";
+  return /^[AaOoEe]$/.test(p1) || /[a-zà-ÿ]/.test(p1) ? u.charAt(0).toLowerCase() + u.slice(1) : u;
+}
 
 /** "31/12/2025" → "2025"; "31/05/2026" → "05/2026"; "2024" → "2024". Nunca a data crua. */
 function rotuloCurto(p: string): string {
@@ -381,8 +410,13 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
     // estágio só aponta que a estrutura também acendeu.
     if (solvenciaColapsada && caixaMinimo) gatilhos.push(
       liCitada
-        ? "os testes de solidez da estrutura ficaram no nível frágil (detalhado no quadro de fôlego financeiro)"
-        : `os testes de solidez da estrutura ficaram no nível frágil (detalhado no quadro de fôlego financeiro) e o dinheiro em conta cobre só ${liPct} dos compromissos de curto prazo`,
+        // SÓ A POSIÇÃO, sem detalhar: o placar diz que a estrutura está no nível
+        // frágil, mas NÃO diz qual leitura falhou (com 25% do máximo um dos
+        // testes ainda pode estar em zona cinzenta, e um deles pode nem ter
+        // rodado). Quem detalha, com o resultado de cada leitura, é o quadro de
+        // fôlego financeiro ao lado.
+        ? "a estrutura financeira está no nível frágil"
+        : `a estrutura financeira está no nível frágil e o dinheiro em conta cobre só ${liPct} dos compromissos de curto prazo`,
     );
     const evidencia = gatilhos.length
       ? ` O que define o estágio: ${gatilhos.join("; e ")}. Essa combinação coloca o caixa à frente de qualquer outra leitura do momento do negócio.`
@@ -402,7 +436,7 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
     // senão o dono lê "o negócio vai bem" sem saber qual sinal acendeu.
     // Quando o gatilho estrutural já foi declarado acima, não se repete.
     const sinalEstrutural = solvenciaColapsada && !(solvenciaColapsada && caixaMinimo)
-      ? " Os indicadores de solidez financeira, que olham a estrutura e não só o mês, também estão no nível que pede atenção imediata."
+      ? " A estrutura financeira — e não só o resultado do mês — também está no nível que pede atenção imediata."
       : "";
     // SÓ SE AFIRMA O QUE FOI MEDIDO: sem margem na série o motor não sabe se a
     // operação cobre os próprios custos, e a frase da consequência ficava em
@@ -470,7 +504,10 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
       const persistencia = ant?.estagio === rec.estagio ? ` O mesmo padrão se repete em ${rotuloCurto(colAnt!)} — leitura consistente.` : "";
       return com({
         estagio: rec.estagio,
-        justificativa: `O que define o estágio: o sentido dos três fluxos de caixa (operação, investimento e financiamento) no período mais recente, pelo método Dickinson. ${narrarFluxos(rec.fco, rec.fci, rec.fcf, rec.eps, rotuloCurto(colRecente!))} É o ${explicaDe(rec.estagio, rec)}.${persistencia}`,
+        // OS FATOS, nunca a régua (dono, 22/08/2026): o nome do modelo e a
+        // descrição do critério ("o sentido dos três fluxos… no período mais
+        // recente") saíram. O que define o estágio é o que o caixa fez.
+        justificativa: `O que define o estágio: ${minuscula(narrarFluxos(rec.fco, rec.fci, rec.fcf, rec.eps, rotuloCurto(colRecente!)))} É o ${explicaDe(rec.estagio, rec)}.${persistencia}`,
       });
     }
     if (rec.estagio && ant?.estagio && ant.estagio !== rec.estagio) {
@@ -521,7 +558,9 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
     // fixo anterior afirmava "sem aperto de caixa" sem ter olhado a liquidez, e
     // publicava "vem encolhendo, 180% no acumulado" quando o gatilho era a queda
     // dos dois últimos anos numa série que cresceu no total.
-    const gatilho = "O que define o estágio: a trajetória do faturamento e o sinal da margem ao longo do período.";
+    // Sem enunciar o critério: a frase abre direto no que aconteceu com o
+    // faturamento e a margem desta empresa.
+    const gatilho = "O que define o estágio:";
     if (quedaUlt || cresc < -0.1) {
       const queda = caiuDuasVezes
         ? ` O faturamento caiu em dois períodos seguidos: ${reais(serie[n - 3]!.r)} em ${serie[n - 3]!.p}, ${reais(serie[n - 2]!.r)} em ${serie[n - 2]!.p} e ${reais(serie[n - 1]!.r)} em ${serie[n - 1]!.p}${cresc < 0 ? ` (${pctSinal(cresc)} no acumulado do período)` : ", ainda que o acumulado do período siga positivo"}.`
@@ -535,17 +574,17 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
         : liqCorr < 1
         ? ` E a queda vem junto com aperto de curto prazo: para cada R$ 1,00 de obrigações de curto prazo há R$ ${num(liqCorr, 2)} em ativos de curto prazo.`
         : ` O aperto está em vender menos: a folga de curto prazo ainda cobre as obrigações do período (liquidez corrente de ${num(liqCorr, 2)}).`;
-      return { estagio: "Retração", justificativa: `${gatilho}${queda}${margemTxt}${fecho}` };
+      return { estagio: "Retração", justificativa: `${gatilho} ${minuscula(queda)}${margemTxt}${fecho}` };
     }
     if ((cresceUlt && crescUltAno > 0.15 && margemPos) || (saiuDoZero && margemPos)) {
       const alta = saiuDoZero
         ? ` O faturamento saiu de zero em ${serie[n - 2]!.p} para ${reais(last)} em ${serie[n - 1]!.p}.`
         : ` O faturamento está em expansão, com alta de ${pctSinal(crescUltAno)} no último período.`;
-      return { estagio: "Crescimento", justificativa: `${gatilho}${alta}${margemTxt}` };
+      return { estagio: "Crescimento", justificativa: `${gatilho} ${minuscula(alta)}${margemTxt}` };
     }
     if (crescMedivel && Math.abs(cresc) <= 0.1 && margemPos && (liqCorr == null || liqCorr >= 1)) {
       const folga = liqCorr != null ? ` Para cada R$ 1,00 de obrigações de curto prazo há R$ ${num(liqCorr, 2)} em ativos de curto prazo (liquidez corrente de ${num(liqCorr, 2)}).` : "";
-      return { estagio: "Maturidade", justificativa: `${gatilho} O faturamento se manteve estável no período (${pctSinal(cresc)}).${margemTxt}${folga}` };
+      return { estagio: "Maturidade", justificativa: `${gatilho} o faturamento se manteve estável no período (${pctSinal(cresc)}).${margemTxt}${folga}` };
     }
     // Platô: diz a trajetória REAL e por que não é Crescimento nem Maturidade.
     const traj = !crescMedivel
@@ -567,6 +606,6 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
     const fechoPlato = crescMedivel && cresc > 0.1
       ? " O faturamento avança, mas ainda não se sustenta como crescimento."
       : " A empresa se mantém, mas não avança.";
-    return { estagio: "Platô", justificativa: `${gatilho} O faturamento ${traj}.${margemTxt}${porque}${fechoPlato}` };
+    return { estagio: "Platô", justificativa: `${gatilho} o faturamento ${traj}.${margemTxt}${porque}${fechoPlato}` };
   }
 }

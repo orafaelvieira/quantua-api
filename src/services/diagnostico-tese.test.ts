@@ -120,7 +120,9 @@ describe("o quadro ESTÁGIO (linha): o motor escreve o que o define", () => {
     ];
     const r = await generateAnalysis(ind, ["2023", "2024", "2025"], { razaoSocial: "X", setor: "Y", porte: "Z" }, "2025");
     expect(r.result.estagioCicloVida?.estagio).toBe("Retração");
-    expect(r.result.estagioCicloVida?.justificativa).toMatch(/^O que define o estágio: a trajetória do faturamento e o sinal da margem/);
+    expect(r.result.estagioCicloVida?.justificativa).toMatch(/^O que define o estágio: o faturamento /);
+    // NADA de método: nem o critério enunciado, nem o nome do modelo.
+    expect(r.result.estagioCicloVida?.justificativa).not.toMatch(/trajetória do faturamento e o sinal da margem|Dickinson|método/i);
   });
 
   it("COLUNA FECHADA: abre em maiúscula e não fala de janela", async () => {
@@ -169,14 +171,23 @@ describe("o quadro ESTÁGIO (linha): o motor escreve o que o define", () => {
 });
 
 describe("o quadro FÔLEGO FINANCEIRO (coluna): o motor escreve o que o define", () => {
-  it("declara a pontuação nos testes de estrutura e a régua que separa os níveis", async () => {
+  it("declara os FATORES da estrutura — e nenhuma palavra do método", async () => {
     const { result } = await gerar();
     const so = result.estagioCicloVida?.solidez;
     expect(so?.nivel).toBe("frágil");
-    expect(so?.oQueDefine).toMatch(/^O que define o fôlego financeiro: a estrutura da empresa passa por 3 testes/);
-    expect(so?.oQueDefine).toMatch(/somou 0 de 6/);
-    expect(so?.oQueDefine).toMatch(/é frágil quando fica abaixo de 40% dos pontos/);
-    expect(so?.oQueDefine).toMatch(/piorou em relação ao período anterior/);
+    // OS FATORES, na ordem em que o motor os leu — e nada da régua que os
+    // converte em coluna (dono, 22/08/2026).
+    expect(so?.oQueDefine).toMatch(/^O que define o fôlego financeiro: a operação se financia sozinha\?/);
+    expect(so?.oQueDefine).toMatch(/Consegue honrar os compromissos\?/);
+    expect(so?.oQueDefine).toMatch(/Como um banco enxergaria a empresa\?/);
+    expect(so?.oQueDefine).toMatch(/A estrutura piorou em relação ao período anterior\./);
+    for (const proibido of [/pontos?\b/i, /somou \d/i, /de 6\b/, /\d+ testes?\b/i, /três quartos/i, /40%/, /Fleuriet|Kanitz|Altman/i, /a matriz|o motor|metodologia/i]) {
+      expect(so?.oQueDefine).not.toMatch(proibido);
+    }
+    // e o que o motor manda para a IA também não carrega o método
+    for (const proibido of ["valendo até 2 pontos", "somou 0 de 6", "abaixo de 40% dos pontos"]) {
+      expect(result.estagioCicloVida?.solidez?.oQueDefine ?? "").not.toContain(proibido);
+    }
   });
 
   it("o nível do quadro de fôlego É o nível da solidez do motor (título e coluna da mesma fonte)", async () => {
@@ -218,15 +229,15 @@ describe("o quadro FÔLEGO FINANCEIRO (coluna): o motor escreve o que o define",
     expect(r.result.folegoFinanceiro?.leitura).toBe("Leitura do fôlego pela IA.");
   });
 
-  it("a frase do fôlego nomeia SÓ os testes aplicados, e diz qual faltou", async () => {
+  it("o que não pôde ser lido entra pela PERGUNTA sem resposta, não pelo nome do teste", async () => {
     criar.mockReset(); criar.mockResolvedValueOnce(resposta({}));
     const semFleuriet = INDICADORES.filter((i) => !/Fleuriet/.test(i.nome));
     const r = await generateAnalysis(semFleuriet as never, [P0, P1, P], { razaoSocial: "X", setor: "Y", porte: "Z" }, P);
     const f = r.result.estagioCicloVida?.solidez?.oQueDefine ?? "";
-    expect(f).toMatch(/passa por 2 testes \(solvência e risco de insolvência\)/);
-    expect(f).toMatch(/somou 0 de 4/);
-    expect(f).toMatch(/O teste de capital de giro não pôde ser aplicado/);
-    expect(f).not.toMatch(/capital de giro, solvência e risco/);
+    expect(f).toContain("Não há base neste período para avaliar se a operação se financia sozinha.");
+    expect(f).not.toMatch(/passa por \d+ testes?/);
+    expect(f).not.toMatch(/somou \d/);
+    expect(f).not.toMatch(/O teste de capital de giro/);
   });
 });
 

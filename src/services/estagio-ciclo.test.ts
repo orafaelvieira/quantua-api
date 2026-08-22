@@ -111,7 +111,7 @@ describe("estagio-ciclo — materialidade + persistência + solidez (2 eixos)", 
     // "O que define o estágio: os testes de solidez da estrutura ficaram no
     // nível frágil (detalhado no quadro de fôlego financeiro) e o dinheiro em
     // conta cobre só X% dos compromissos de curto prazo".
-    expect(r?.justificativa).toMatch(/O que define o estágio: os testes de solidez da estrutura ficaram no nível frágil/);
+    expect(r?.justificativa).toMatch(/O que define o estágio: a estrutura financeira está no nível frágil/);
     expect(r?.justificativa).toMatch(/dinheiro em conta cobre só/);
     // E o placar da coluna NÃO se repete aqui (ele abre o quadro de fôlego).
     expect(r?.justificativa).not.toMatch(/somaram \d+ de \d+/);
@@ -156,7 +156,7 @@ describe("a heurística de receita/margem declara SÓ o que testou, com os núme
     const { ps, indicadores } = ind([1000, 1300], -0.05, 1.5);
     const r = classifyEstagio(indicadores, ps)!;
     expect(r.estagio).toBe("Platô");
-    expect(r.justificativa).toMatch(/O faturamento cresceu \+30% no período/);
+    expect(r.justificativa).toMatch(/o faturamento cresceu \+30% no período/);
     expect(r.justificativa).toMatch(/fecha no vermelho: margem EBITDA de -5,0%/);
     expect(r.justificativa).toMatch(/A margem negativa impede a leitura de crescimento ou maturidade/);
     expect(r.justificativa).not.toMatch(/praticamente parado|sem aperto de caixa/);
@@ -179,11 +179,25 @@ describe("a heurística de receita/margem declara SÓ o que testou, com os núme
     expect(r.justificativa).toMatch(/liquidez corrente de 1,60/);
   });
 
-  it("a frase do fôlego nomeia só os testes aplicados", () => {
-    expect(oQueDefineDaSolidez({ nivel: "sólida", score: 2, max: 2, tendencia: null, testes: ["solvência"] }))
-      .toBe("O que define o fôlego financeiro: a estrutura da empresa passa por 1 teste (solvência), cada um valendo até 2 pontos, e somou 2 de 2. A estrutura é sólida quando soma pelo menos três quartos dos pontos. Os testes de capital de giro e risco de insolvência não puderam ser aplicados com os dados deste período, então o nível se apoia num único teste.");
-    expect(oQueDefineDaSolidez({ nivel: "frágil", score: 0, max: 6, tendencia: "deteriorando", testes: ["capital de giro", "solvência", "risco de insolvência"] }))
-      .toBe("O que define o fôlego financeiro: a estrutura da empresa passa por 3 testes (capital de giro, solvência e risco de insolvência), cada um valendo até 2 pontos, e somou 0 de 6, e piorou em relação ao período anterior. A estrutura é frágil quando fica abaixo de 40% dos pontos.");
+  it("a frase do fôlego fala dos FATORES, nunca do placar", () => {
+    // Um só fator lido: o que ficou sem base entra pela PERGUNTA, e o placar
+    // (2 de 2) não aparece em lugar nenhum.
+    expect(oQueDefineDaSolidez({
+      nivel: "sólida", score: 2, max: 2, tendencia: null, testes: ["solvência"],
+      componentes: ["Consegue honrar os compromissos? A nota está em terreno confortável."],
+    })).toBe("O que define o fôlego financeiro: consegue honrar os compromissos? A nota está em terreno confortável. Não há base neste período para avaliar se a operação se financia sozinha e como um banco enxergaria a empresa, então o nível se apoia numa leitura só.");
+    // Três fatores lidos + a direção da estrutura, sem uma palavra de régua.
+    const tres = oQueDefineDaSolidez({
+      nivel: "frágil", score: 0, max: 6, tendencia: "deteriorando",
+      testes: ["capital de giro", "solvência", "risco de insolvência"],
+      componentes: [
+        "A operação se financia sozinha? Não, o giro depende de dinheiro de curto prazo.",
+        "Consegue honrar os compromissos? A nota exige atenção imediata.",
+        "Como um banco enxergaria a empresa? Pouca margem para absorver um período ruim.",
+      ],
+    });
+    expect(tres).toBe("O que define o fôlego financeiro: a operação se financia sozinha? Não, o giro depende de dinheiro de curto prazo. Consegue honrar os compromissos? A nota exige atenção imediata. Como um banco enxergaria a empresa? Pouca margem para absorver um período ruim. A estrutura piorou em relação ao período anterior.");
+    expect(tres).not.toMatch(METODO_DA_MATRIZ);
   });
 
   it("Dickinson Maturidade com financiamento no zero NÃO diz 'remunera sócios e credores'", () => {
@@ -224,7 +238,8 @@ describe("o estágio NUNCA publica data crua (dono: mm/aaaa ou o ano, nunca 31/1
     const p = ["31/12/2024", "31/12/2025"];
     const r = classifyEstagio(ind(p, [50e6, 55e6], [0.08, 0.075], 1.3), p, fluxo(p, [3e6, 4e6], [-1e6, -1.2e6], [-5e5, -8e5]));
     expect(r?.estagio).toBe("Maturidade");
-    expect(r!.justificativa).toContain("Em 2025, a operação gerou");
+    expect(r!.justificativa).toContain("O que define o estágio: em 2025, a operação gerou");
+    expect(r!.justificativa).not.toMatch(/Dickinson|pelo método|o sentido dos três fluxos/i);
     expect(r!.justificativa).toContain("O mesmo padrão se repete em 2024");
     expect(DATA_CRUA.test(r!.justificativa)).toBe(false);
   });
@@ -248,6 +263,14 @@ describe("o estágio NUNCA publica data crua (dono: mm/aaaa ou o ano, nunca 31/1
   });
 });
 
+/**
+ * O MÉTODO DA MATRIZ NUNCA VAI PARA O DOCUMENTO (dono, 22/08/2026: "nunca
+ * coloque o método de cálculo da matriz; a explicação tem que ser dos fatores
+ * que trouxeram a empresa para esta posição"). Esta régua é aplicada a TODO
+ * texto publicado pelos dois quadros.
+ */
+const METODO_DA_MATRIZ = /pontos?\b|placar|somou \d|de 6\b|\d+ testes?\b|passa por \d|três quartos|40%|Fleuriet|Kanitz|Altman|Z-Score|Dickinson|a matriz|o motor|metodologia|crit[ée]rio de classifica/i;
+
 describe("o texto só afirma o que o motor mediu (achados da revisão adversarial 21/08)", () => {
   const ind = (vals: Record<string, Record<string, number>>) =>
     Object.entries(vals).map(([nome, valores]) => ({ nome, valores })) as never;
@@ -261,21 +284,24 @@ describe("o texto só afirma o que o motor mediu (achados da revisão adversaria
       "Como um banco enxergaria a empresa? Pouca margem para absorver um período ruim.",
     ];
     const t = oQueDefineDaSolidez({ nivel: "sólida", score: 4, max: 4, tendencia: null, componentes });
-    expect(t).toContain("passa por 2 testes (solvência e risco de insolvência)");
-    expect(t).toContain("O teste de capital de giro não pôde ser aplicado");
-    expect(t).not.toContain("(capital de giro e solvência)");
+    expect(t).toBe(
+      "O que define o fôlego financeiro: consegue honrar os compromissos? A nota exige atenção imediata. " +
+      "Como um banco enxergaria a empresa? Pouca margem para absorver um período ruim. " +
+      "Não há base neste período para avaliar se a operação se financia sozinha.",
+    );
+    expect(t).not.toMatch(METODO_DA_MATRIZ);
   });
 
   it("#2 sem componentes reconhecíveis o texto NÃO inventa nome de teste", () => {
     const t = oQueDefineDaSolidez({ nivel: "frágil", score: 1, max: 4, tendencia: null, componentes: ["texto de acervo antigo", "outro"] });
-    expect(t).toContain("passa por 2 testes de estrutura");
-    expect(t).toContain("Os demais testes não puderam ser aplicados");
-    expect(t).not.toContain("capital de giro");
+    expect(t).toBe("O que define o fôlego financeiro: texto de acervo antigo. outro. As demais leituras da estrutura não tinham base neste período.");
+    expect(t).not.toMatch(METODO_DA_MATRIZ);
   });
 
-  it("#2 com os três testes o nome canônico continua valendo", () => {
+  it("#2 sem componentes não há fator para mostrar: só o nível, sem placar", () => {
     const t = oQueDefineDaSolidez({ nivel: "frágil", score: 0, max: 6, tendencia: null });
-    expect(t).toContain("passa por 3 testes (capital de giro, solvência e risco de insolvência)");
+    expect(t).toBe("A estrutura financeira está frágil."); // concorda com A ESTRUTURA
+    expect(t).not.toMatch(METODO_DA_MATRIZ);
   });
 
   it("#4 margem que arredonda para 0,0% é empate, não 'resultado operacional negativo'", () => {
@@ -473,14 +499,15 @@ describe("ESPELHO: a frase do fôlego é idêntica nos dois repos (mesma fixture
   const COMPONENTES_SEM_FLEURIET = ['Consegue honrar os compromissos? A nota exige atenção imediata.', 'Como um banco enxergaria a empresa? Pouca margem para absorver um período ruim.'];
   const COMPONENTES_SO_ALTMAN = ['Como um banco enxergaria a empresa? Pouca margem para absorver um período ruim.'];
 
-  it("Fleuriet indisponível: nomeia solvência e risco de insolvência, e diz que faltou o capital de giro", () => {
+  it("Fleuriet indisponível: publica os dois fatores lidos e diz o que ficou sem base", () => {
     expect(oQueDefineDaSolidez({ nivel: "intermediária", score: 3, max: 4, tendencia: null, componentes: COMPONENTES_SEM_FLEURIET }))
-      .toBe('O que define o fôlego financeiro: a estrutura da empresa passa por 2 testes (solvência e risco de insolvência), cada um valendo até 2 pontos, e somou 3 de 4. A estrutura é intermediária quando fica entre 40% e três quartos dos pontos. O teste de capital de giro não pôde ser aplicado com os dados deste período.');
+      .toBe("O que define o fôlego financeiro: consegue honrar os compromissos? A nota exige atenção imediata. Como um banco enxergaria a empresa? Pouca margem para absorver um período ruim. Não há base neste período para avaliar se a operação se financia sozinha.");
   });
 
-  it("só o Altman: singular no teste aplicado, PLURAL nos dois que faltaram", () => {
-    expect(oQueDefineDaSolidez({ nivel: "frágil", score: 0, max: 2, tendencia: null, componentes: COMPONENTES_SO_ALTMAN }))
-      .toBe('O que define o fôlego financeiro: a estrutura da empresa passa por 1 teste (risco de insolvência), cada um valendo até 2 pontos, e somou 0 de 2. A estrutura é frágil quando fica abaixo de 40% dos pontos. Os testes de capital de giro e solvência não puderam ser aplicados com os dados deste período, então o nível se apoia num único teste.');
+  it("só o Altman: um fator lido, dois sem base — e nenhuma palavra de método", () => {
+    const t = oQueDefineDaSolidez({ nivel: "frágil", score: 0, max: 2, tendencia: null, componentes: COMPONENTES_SO_ALTMAN });
+    expect(t).toBe("O que define o fôlego financeiro: como um banco enxergaria a empresa? Pouca margem para absorver um período ruim. Não há base neste período para avaliar se a operação se financia sozinha e se a empresa consegue honrar os compromissos, então o nível se apoia numa leitura só.");
+    expect(t).not.toMatch(METODO_DA_MATRIZ);
   });
 
   it("o motor GRAVA os testes que rodaram, para o app não ter de deduzi-los", () => {
@@ -492,7 +519,8 @@ describe("ESPELHO: a frase do fôlego é idêntica nos dois repos (mesma fixture
       ["2024", "2025"],
     );
     expect(s?.testes).toEqual(["solvência", "risco de insolvência"]);
-    expect(s?.oQueDefine).toContain("passa por 2 testes (solvência e risco de insolvência)");
+    expect(s?.oQueDefine).toContain("Não há base neste período para avaliar se a operação se financia sozinha");
+    expect(s?.oQueDefine).not.toMatch(METODO_DA_MATRIZ);
   });
 
   it("o componente do capital de giro não usa travessão (o PDF o troca por vírgula)", () => {
@@ -502,5 +530,74 @@ describe("ESPELHO: a frase do fôlego é idêntica nos dois repos (mesma fixture
     );
     expect(s?.componentes[0]).toContain("A operação se financia sozinha? Não, ");
     expect(s?.componentes.join(" ")).not.toContain("—");
+  });
+});
+
+describe("NENHUM ramo do estágio publica o método (dono, 22/08/2026)", () => {
+  const ind = (p: string[], receita: number[], margem: number[], liq: number) =>
+    [
+      { nome: "Receita Líquida", valores: Object.fromEntries(p.map((k, i) => [k, receita[i]!])) },
+      { nome: "Margem EBITDA", valores: Object.fromEntries(p.map((k, i) => [k, margem[i]!])) },
+      { nome: "Liquidez Corrente", valores: { [p[p.length - 1]!]: liq } },
+    ] as never;
+  const fluxo = (p: string[], fco: number[], fci: number[], fcf: number[]): FluxoCaixaLite => ({
+    colunas: p,
+    totais: {
+      fco: Object.fromEntries(p.map((k, i) => [k, fco[i]!])),
+      fci: Object.fromEntries(p.map((k, i) => [k, fci[i]!])),
+      fcf: Object.fromEntries(p.map((k, i) => [k, fcf[i]!])),
+    },
+    prova: p.map((periodo) => ({ periodo, fecha: true })),
+  });
+
+  it("ramo dos FLUXOS: conta o que o caixa fez, sem nomear o modelo nem o critério", () => {
+    const p = ["2024", "2025"];
+    const r = classifyEstagio(ind(p, [50e6, 55e6], [0.08, 0.075], 1.3), p, fluxo(p, [3e6, 4e6], [-1e6, -1.2e6], [-5e5, -8e5]));
+    expect(r?.estagio).toBe("Maturidade");
+    expect(r!.justificativa).toContain("O que define o estágio: em 2025, a operação gerou");
+    expect(r!.justificativa).not.toMatch(METODO_DA_MATRIZ);
+    expect(r!.justificativa).not.toMatch(/o sentido dos três fluxos/i);
+  });
+
+  it("ramo da TRAJETÓRIA: abre no faturamento, sem enunciar o critério", () => {
+    const p = ["2023", "2024", "2025"];
+    const r = classifyEstagio(ind(p, [100e6, 90e6, 70e6], [0.05, 0.04, 0.03], 1.4), p, null);
+    expect(r?.estagio).toBe("Retração");
+    expect(r!.justificativa).toMatch(/^O que define o estágio: o faturamento caiu/);
+    expect(r!.justificativa).not.toMatch(METODO_DA_MATRIZ);
+    expect(r!.justificativa).not.toMatch(/a trajetória do faturamento e o sinal da margem/i);
+  });
+
+  it("ramo da PRESSÃO DE CAIXA: os gatilhos são fatos, e a estrutura entra só como posição", () => {
+    const p = ["2024", "2025"];
+    const r = classifyEstagio(
+      [
+        { nome: "Receita Líquida", valores: { "2024": 10e6, "2025": 9e6 } },
+        { nome: "Margem EBITDA", valores: { "2024": 0.01, "2025": -0.03 } },
+        { nome: "Liquidez Corrente", valores: { "2024": 1.05, "2025": 0.88 } },
+        { nome: "Liquidez Imediata", valores: { "2024": 0.2, "2025": 0.01 } },
+        { nome: "Termômetro de Kanitz", valores: { "2024": -4, "2025": -6 } },
+        { nome: "Altman Z-Score (EM)", valores: { "2024": 0.4, "2025": 0.2 } },
+      ] as never,
+      p,
+    );
+    expect(r?.estagio).toBe("Pressão de caixa");
+    expect(r!.justificativa).not.toMatch(METODO_DA_MATRIZ);
+    expect(r!.justificativa).not.toMatch(/testes? de solidez|detalhado no quadro/i);
+  });
+
+  it("a solidez completa que vai para o documento também não carrega método", () => {
+    const s = avaliarSolidez(
+      [
+        { nome: "Situação de Liquidez (Fleuriet)", valores: { "2024": "Insuficiente", "2025": "Muito Ruim" } },
+        { nome: "Termômetro de Kanitz", valores: { "2024": -4, "2025": -6 } },
+        { nome: "Altman Z-Score (EM)", valores: { "2024": 0.4, "2025": 0.2 } },
+      ] as never,
+      ["2024", "2025"],
+    );
+    expect(s?.oQueDefine).toMatch(/^O que define o fôlego financeiro: a operação se financia sozinha\?/);
+    expect(s?.oQueDefine).not.toMatch(METODO_DA_MATRIZ);
+    // e os componentes, que a frase embute, também não
+    for (const c of s?.componentes ?? []) expect(c).not.toMatch(/pontos?\b|placar|somou \d|de 6\b/i);
   });
 });

@@ -22,11 +22,16 @@ const fc = (fco: number, fci: number, fcf: number, fecha = true): FluxoCaixaLite
   prova: [{ periodo: "2023", fecha }],
 });
 
+/** Assinatura do ramo que decide pelos FLUXOS: a frase abre contando o que o
+ *  caixa fez no período. O nome do modelo não vai mais para o documento
+ *  (dono, 22/08/2026), então ele deixou de servir de marcador. */
+const RAMO_DOS_FLUXOS = /^O que define o estágio: em .+?, a opera[çc][ãa]o /;
+
 describe("classifyEstagio — Dickinson pelos sinais do FC", () => {
   it("FCO+ FCI− FCF− → Maturidade", () => {
     const r = classifyEstagio(INDS, ["2022", "2023"], fc(500, -200, -150));
     expect(r?.estagio).toBe("Maturidade");
-    expect(r?.justificativa).toContain("Dickinson");
+    expect(r?.justificativa).toMatch(RAMO_DOS_FLUXOS); // o nome do modelo saiu do documento (22/08)
   });
 
   it("FCO+ FCI− FCF+ → Crescimento", () => {
@@ -44,7 +49,7 @@ describe("classifyEstagio — Dickinson pelos sinais do FC", () => {
   it("prova NÃO fecha → ignora o FC e cai na heurística de receita (verde só com prova)", () => {
     const r = classifyEstagio(INDS, ["2022", "2023"], fc(-300, 250, 100, false));
     expect(r?.estagio).not.toBe("Retração"); // receita cresce 10% c/ margem ok → não é declínio
-    expect(r?.justificativa).not.toContain("Dickinson");
+    expect(r?.justificativa).not.toMatch(RAMO_DOS_FLUXOS);
   });
 
   it("DIFICULDADE DE CAIXA tem prioridade sobre Dickinson (aperto agudo manda)", () => {
@@ -60,7 +65,7 @@ describe("classifyEstagio — Dickinson pelos sinais do FC", () => {
   it("sem FC → heurística de receita/margem continua funcionando (fallback)", () => {
     const r = classifyEstagio(INDS, ["2022", "2023"], null);
     expect(r).not.toBeNull();
-    expect(r?.justificativa).not.toContain("Dickinson");
+    expect(r?.justificativa).not.toMatch(RAMO_DOS_FLUXOS);
   });
 
   // ─── Multi-anual: o gate valida a coluna que os SINAIS realmente usam (a mais recente) ───
@@ -82,13 +87,13 @@ describe("classifyEstagio — Dickinson pelos sinais do FC", () => {
     // padrão-ouro mesmo com a coluna usada (a recente) provada. Sinais 2023: FCO+ FCI− FCF− = Maturidade.
     const r = classifyEstagio(INDS, ["2021", "2022", "2023"], fcMulti(false, true));
     expect(r?.estagio).toBe("Maturidade");
-    expect(r?.justificativa).toContain("Dickinson");
+    expect(r?.justificativa).toMatch(RAMO_DOS_FLUXOS); // o nome do modelo saiu do documento (22/08)
   });
 
   it("coluna RECENTE não fecha → NÃO classifica por Dickinson (mesmo com a antiga fechando)", () => {
     // Nunca classificar o estágio ATUAL por sinais de uma coluna velha ("verde só com prova"
     // vale para a coluna que os sinais usam).
     const r = classifyEstagio(INDS, ["2021", "2022", "2023"], fcMulti(true, false));
-    expect(r?.justificativa).not.toContain("Dickinson");
+    expect(r?.justificativa).not.toMatch(RAMO_DOS_FLUXOS);
   });
 });
