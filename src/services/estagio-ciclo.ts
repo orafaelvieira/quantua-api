@@ -35,8 +35,16 @@ export interface SolidezResult {
   score: number;
   max: number;
   tendencia: "melhorando" | "estável" | "deteriorando" | null;
+  /** O QUE DEFINE O FÔLEGO, com todas as letras: a pontuação nos testes de
+   *  estrutura e a régua que separa sólida/intermediária/frágil. É o que o
+   *  quadro de Fôlego abre — o leitor tem de saber por que está nessa coluna. */
+  oQueDefine: string;
   /** Legível para o relatório: ["Estrutura de giro (Fleuriet): Insuficiente", …] */
   componentes: string[];
+  /** Os testes que DE FATO entraram no placar, na ordem. Fica gravado no
+   *  resultado para o app não precisar deduzi-los pela ordem canônica — dedução
+   *  que publicava o nome errado quando o teste ausente não era o último. */
+  testes: string[];
 }
 
 export interface EstagioResult {
@@ -96,27 +104,34 @@ function pontosAltman(v: number): { pts: number; rotulo: string } {
  *  LEITOR = DONO DA EMPRESA: cada componente é escrito com o SIGNIFICADO na frente
  *  e o nome técnico entre parênteses no fim (o analista continua rastreando a
  *  fonte, o dono entende sem dicionário). */
-function solidezEm(indicadores: IndicadorLite[], p: string): { score: number; max: number; componentes: string[] } | null {
+function solidezEm(indicadores: IndicadorLite[], p: string): { score: number; max: number; componentes: string[]; testes: string[] } | null {
   const fmtN = (v: number) => v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   let score = 0, max = 0;
   const componentes: string[] = [];
+  // Os NOMES dos testes que de fato entraram: a frase "o que define o fôlego"
+  // listava os três sempre, e com Fleuriet "Indefinida" publicava "passa por 2
+  // testes (capital de giro, solvência e risco de insolvência)" — dois testes,
+  // três nomes, e o de capital de giro não tinha sido aplicado.
+  const testes: string[] = [];
 
   // Cada componente = UMA frase curta: o que o teste responde, seguido da
   // resposta. O texto longo anterior virava um parágrafo denso no cartão.
   const fle = pontosFleuriet(acha(indicadores, "Situação de Liquidez (Fleuriet)")?.valores[p]);
   if (fle) {
-    score += fle.pts; max += 2;
+    score += fle.pts; max += 2; testes.push("capital de giro");
     const leitura = fle.pts === 2
       ? "as vendas do dia a dia se financiam sozinhas"
       : fle.pts === 1
       ? "as vendas do dia a dia dependem em parte de dinheiro de curto prazo"
       : "as vendas do dia a dia dependem de dinheiro de curto prazo, como cheque especial e antecipação de recebíveis";
-    componentes.push(`A operação se financia sozinha? ${fle.pts === 2 ? "Sim" : "Não"} — ${leitura}.`);
+    // Vírgula, não travessão: o saneador de fonte do PDF troca " — " por ", " e
+    // a mesma frase saía diferente na tela e no documento.
+    componentes.push(`A operação se financia sozinha? ${fle.pts === 2 ? "Sim" : "Não"}, ${leitura}.`);
   }
 
   const kan = numOf(acha(indicadores, "Termômetro de Kanitz")?.valores[p]);
   if (kan != null) {
-    const r = pontosKanitz(kan); score += r.pts; max += 2;
+    const r = pontosKanitz(kan); score += r.pts; max += 2; testes.push("solvência");
     const leitura = r.pts === 2
       ? "está em terreno confortável"
       : r.pts === 1
@@ -127,7 +142,7 @@ function solidezEm(indicadores: IndicadorLite[], p: string): { score: number; ma
 
   const alt = numOf(acha(indicadores, "Altman Z-Score (EM)")?.valores[p]);
   if (alt != null) {
-    const r = pontosAltman(alt); score += r.pts; max += 2;
+    const r = pontosAltman(alt); score += r.pts; max += 2; testes.push("risco de insolvência");
     const leitura = r.pts === 2
       ? "tem folga para atravessar um período ruim"
       : r.pts === 1
@@ -136,7 +151,65 @@ function solidezEm(indicadores: IndicadorLite[], p: string): { score: number; ma
     componentes.push(`Como um banco enxergaria a empresa? Pela nota que eles usam, ela ${leitura} (${fmtN(alt)} numa escala em que acima de 2,6 é confortável).`);
   }
 
-  return max > 0 ? { score, max, componentes } : null;
+  return max > 0 ? { score, max, componentes, testes } : null;
+}
+
+const TODOS_OS_TESTES = ["capital de giro", "solvência", "risco de insolvência"];
+const listaPt = (xs: string[]): string => xs.length <= 1 ? (xs[0] ?? "") : `${xs.slice(0, -1).join(", ")} e ${xs[xs.length - 1]}`;
+
+/** Cada componente abre com a pergunta do seu teste — é por ela que o acervo
+ *  (gravado antes de `testes` existir) descobre QUAIS testes rodaram. Deduzir
+ *  pela ordem canônica ("os n primeiros") publicava o nome errado sempre que o
+ *  teste ausente não era o último: com Fleuriet indisponível, o texto afirmava
+ *  ao credor que o capital de giro fora testado e que o Altman faltara. */
+const PERGUNTA_DO_TESTE: Array<[RegExp, string]> = [
+  [/^A opera[çc][ãa]o se financia sozinha\?/i, "capital de giro"],
+  [/^Consegue honrar os compromissos\?/i, "solvência"],
+  [/^Como um banco enxergaria a empresa\?/i, "risco de insolvência"],
+];
+export function testesDosComponentes(componentes?: string[] | null): string[] | null {
+  if (!componentes || !componentes.length) return null;
+  const nomes = componentes
+    .map((c) => PERGUNTA_DO_TESTE.find(([re]) => re.test(c.trim()))?.[1])
+    .filter((x): x is string => !!x);
+  return nomes.length === componentes.length ? nomes : null;
+}
+
+/**
+ * A FRASE DO GATILHO DA COLUNA, como função pura dos números (dono, 21/08/2026:
+ * "deixar muito claro ao leitor o que levou a empresa a estar naquela coluna").
+ * Exportada porque o app a reproduz para o acervo gravado antes desta frase
+ * existir (score/max/tendência já estavam persistidos) — a bancada dos dois
+ * lados prova que as duas cópias escrevem a mesma coisa.
+ */
+export function oQueDefineDaSolidez(x: { nivel: string; score: number; max: number; tendencia: string | null; testes?: string[]; componentes?: string[] | null }): string {
+  const n = Math.round(x.max / 2);
+  // Ordem da confiança: os nomes que o motor gravou > os nomes que as perguntas
+  // dos componentes revelam > (só com os TRÊS testes) a lista canônica. Sem
+  // nenhum dos três, o texto NÃO chuta nome: diz quantos testes couberam.
+  const nomes = (x.testes && x.testes.length ? x.testes : testesDosComponentes(x.componentes))
+    ?? (n === TODOS_OS_TESTES.length ? TODOS_OS_TESTES : null);
+  const faltam = nomes ? TODOS_OS_TESTES.filter((t) => !nomes.includes(t)) : [];
+  const fmtPts = (v: number) => v.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
+  const regua = x.nivel === "sólida"
+    ? "é sólida quando soma pelo menos três quartos dos pontos"
+    : x.nivel === "intermediária"
+    ? "é intermediária quando fica entre 40% e três quartos dos pontos"
+    : "é frágil quando fica abaixo de 40% dos pontos";
+  const direcao = x.tendencia === "deteriorando" ? ", e piorou em relação ao período anterior"
+    : x.tendencia === "melhorando" ? ", e melhorou em relação ao período anterior"
+    : x.tendencia === "estável" ? ", sem mudança em relação ao período anterior"
+    : "";
+  const semNome = !nomes && n < TODOS_OS_TESTES.length;
+  const ressalva = faltam.length
+    ? ` ${faltam.length > 1 ? `Os testes de ${listaPt(faltam)} não puderam ser aplicados` : `O teste de ${listaPt(faltam)} não pôde ser aplicado`} com os dados deste período${n === 1 ? ", então o nível se apoia num único teste" : ""}.`
+    : semNome
+    ? ` Os demais testes não puderam ser aplicados com os dados deste período${n === 1 ? ", então o nível se apoia num único teste" : ""}.`
+    : "";
+  return (
+    `O que define o fôlego financeiro: a estrutura da empresa passa por ${n} teste${n === 1 ? "" : "s"}${nomes ? ` (${listaPt(nomes)})` : " de estrutura"}, ` +
+    `cada um valendo até 2 pontos, e somou ${fmtPts(x.score)} de ${x.max}${direcao}. A estrutura ${regua}.${ressalva}`
+  );
 }
 
 /** Solidez do período mais recente + tendência vs o anterior. */
@@ -154,7 +227,8 @@ export function avaliarSolidez(indicadores: IndicadorLite[], periodos: string[])
   if (ant && ant.max === atual.max) {
     tendencia = atual.score > ant.score ? "melhorando" : atual.score < ant.score ? "deteriorando" : "estável";
   }
-  return { nivel, score: atual.score, max: atual.max, tendencia, componentes: atual.componentes };
+  const oQueDefine = oQueDefineDaSolidez({ nivel, score: atual.score, max: atual.max, tendencia, testes: atual.testes, componentes: atual.componentes });
+  return { nivel, score: atual.score, max: atual.max, tendencia, componentes: atual.componentes, testes: atual.testes, oQueDefine };
 }
 
 /* ───────────────────────── EIXO 1 — ESTÁGIO (Dickinson robusto) ───────────────────────── */
@@ -162,10 +236,22 @@ export function avaliarSolidez(indicadores: IndicadorLite[], periodos: string[])
 type Sig = -1 | 0 | 1;
 const sigDe = (v: number, eps: number): Sig => (Math.abs(v) <= eps ? 0 : v > 0 ? 1 : -1);
 
+/** "31/12/2025" → "2025"; "31/05/2026" → "05/2026"; "2024" → "2024". Nunca a data crua. */
+function rotuloCurto(p: string): string {
+  const m = p.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (m) return m[2] === "12" ? m[3]! : `${m[2]}/${m[3]}`;
+  return p.trim();
+}
+
 /** R$ em linguagem de gente: "R$ 4,0 milhões", "R$ 25 mil". */
 function reais(v: number): string {
   const a = Math.abs(v);
-  if (a >= 1_000_000) return `R$ ${(a / 1_000_000).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${a >= 2_000_000 ? "milhões" : "milhão"}`;
+  if (a >= 1_000_000) {
+    // O plural segue o número QUE VAI SAIR IMPRESSO, não o bruto: R$ 1.950.000
+    // arredonda para "2,0" e saía "R$ 2,0 milhão".
+    const m = Math.round(a / 100_000) / 10;
+    return `R$ ${m.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${m >= 2 ? "milhões" : "milhão"}`;
+  }
   if (a >= 1_000) return `R$ ${Math.round(a / 1_000).toLocaleString("pt-BR")} mil`;
   return `R$ ${Math.round(a).toLocaleString("pt-BR")}`;
 }
@@ -209,7 +295,7 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
   const margemOp = val("Margem EBITDA", ult);
   const liqCorr = val("Liquidez Corrente", ult);
   const liqImed = val("Liquidez Imediata", ult);
-  const pct = (r: number) => `${(r * 100).toFixed(0)}%`;
+  const num = (v: number, casas: number) => v.toLocaleString("pt-BR", { minimumFractionDigits: casas, maximumFractionDigits: casas });
 
   const solidez = avaliarSolidez(indicadores, ord) ?? undefined;
   const com = (r: Omit<EstagioResult, "solidez">): EstagioResult => ({ ...r, ...(solidez ? { solidez } : {}) });
@@ -225,8 +311,11 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
     // LEITOR = DONO. A frase começa pela CONCLUSÃO (o que está acontecendo com o
     // negócio) e só depois cita o número que a sustenta — o inverso do texto
     // antigo, que abria com três índices seguidos e enterrava o significado.
-    const num = (v: number, casas: number) => v.toLocaleString("pt-BR", { minimumFractionDigits: casas, maximumFractionDigits: casas });
-    const operacaoVai = margemOp != null && margemOp > 0;
+    // Margem que ARREDONDA para 0,0% não é lucro nem prejuízo: dizer "resultado
+    // operacional negativo (margem EBITDA de 0,0%)" é afirmar o que o número não
+    // diz, e "sobram cerca de R$ 0" no ramo positivo é pior ainda.
+    const margemZero = margemOp != null && Math.abs(margemOp) * 100 < 0.05;
+    const operacaoVai = margemOp != null && margemOp > 0 && !margemZero;
 
     // A JANELA VAI DECLARADA (dono, 21/08/2026, "ajustes relatório ibr4"). O
     // texto dizia "a operação está gastando mais do que fatura" como se fosse
@@ -259,13 +348,45 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
     // mandava a IA prová-las ali, o mesmo número saía nos dois cartões, com a
     // mesma frase.
     const abertura = operacaoVai
-      ? cap(`${janela}o negócio em si está saudável: de cada R$ 100 que a empresa fatura, sobram cerca de R$ ${num(margemOp * 100, 0)} depois de pagar os custos e as despesas do dia a dia. O problema não está em vender nem em produzir, está no dinheiro em conta.`)
+      ? cap(`${janela}o negócio em si está saudável: de cada R$ 100 que a empresa fatura, sobra${
+          margemOp! * 100 < 1 ? "m menos de R$ 1" : `m cerca de R$ ${num(margemOp! * 100, 0)}`
+        } depois de pagar os custos e as despesas do dia a dia. O problema não está em vender nem em produzir, está no dinheiro em conta.`)
+      : margemZero
+      ? cap(`${janela}a operação empata: o que a empresa fatura cobre os custos e as despesas do dia a dia e não sobra nada (margem EBITDA de 0,0%).`)
       : margemOp != null
       ? cap(`${janela}a operação ainda não cobre integralmente os custos e as despesas: cada R$ 100 de receita deixam ${
           Math.abs(margemOp) * 100 < 1 ? "menos de R$ 1" : `cerca de R$ ${num(Math.abs(margemOp) * 100, 0)}`
         } de resultado operacional negativo (margem EBITDA de ${num(margemOp * 100, 1)}%).`)
       : cap(`${janela}a empresa está sem fôlego de caixa.`);
-    const evidencia = "";
+
+    // O QUE DEFINIU O ESTÁGIO, com todas as letras (dono, 21/08/2026: "deixar
+    // muito claro ao leitor o que levou a empresa a estar naquela linha"). A
+    // regra que disparou é declarada com os números DESTA empresa. A liquidez
+    // aparece aqui como GATILHO (uma linha, sem definição longa); quem a define
+    // e a desdobra é o quadro de fôlego.
+    // Liquidez corrente que arredonda para 1,00 ainda é < 1 — a frase declara
+    // a borda em vez de publicar "superam os ativos (liquidez corrente de 1,00)".
+    const lcTxt = liqCorr != null ? num(liqCorr, 2) : "";
+    const lcFrase = lcTxt === "1,00" ? "liquidez corrente logo abaixo de 1,00"
+      : lcTxt === "0,00" ? "liquidez corrente abaixo de 0,01"
+      : `liquidez corrente de ${lcTxt}`;
+    // A liquidez imediata entra SÓ em %, com piso: "4,6% (liquidez imediata de
+    // 0,05)" eram duas arredondagens do mesmo número na mesma frase.
+    const liPct = liqImed != null ? (liqImed * 100 < 0.1 ? "menos de 0,1%" : `${num(liqImed * 100, 1)}%`) : "";
+    const gatilhos: string[] = [];
+    let liCitada = false;
+    if (margemNeg && liqBaixa) gatilhos.push(`a operação fecha no vermelho e, ao mesmo tempo, os compromissos de curto prazo superam os ativos de curto prazo (${lcFrase})`);
+    else if (margemNeg && caixaMinimo) { gatilhos.push(`a operação fecha no vermelho e o dinheiro em conta cobre só ${liPct} dos compromissos de curto prazo`); liCitada = true; }
+    // O placar da coluna NÃO se repete aqui (ele abre o quadro de fôlego); o
+    // estágio só aponta que a estrutura também acendeu.
+    if (solvenciaColapsada && caixaMinimo) gatilhos.push(
+      liCitada
+        ? "os testes de solidez da estrutura ficaram no nível frágil (detalhado no quadro de fôlego financeiro)"
+        : `os testes de solidez da estrutura ficaram no nível frágil (detalhado no quadro de fôlego financeiro) e o dinheiro em conta cobre só ${liPct} dos compromissos de curto prazo`,
+    );
+    const evidencia = gatilhos.length
+      ? ` O que define o estágio: ${gatilhos.join("; e ")}. Essa combinação coloca o caixa à frente de qualquer outra leitura do momento do negócio.`
+      : "";
     const implicacao = "";
 
     // A RESSALVA DA JANELA só cita o que EXISTE na série: "exercício fechado
@@ -279,14 +400,20 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
       : "";
     // Quando foi o TRIO que disparou a classificação, o texto precisa dizer —
     // senão o dono lê "o negócio vai bem" sem saber qual sinal acendeu.
-    const sinalEstrutural = solvenciaColapsada
+    // Quando o gatilho estrutural já foi declarado acima, não se repete.
+    const sinalEstrutural = solvenciaColapsada && !(solvenciaColapsada && caixaMinimo)
       ? " Os indicadores de solidez financeira, que olham a estrutura e não só o mês, também estão no nível que pede atenção imediata."
       : "";
-    const consequencia = operacaoVai
+    // SÓ SE AFIRMA O QUE FOI MEDIDO: sem margem na série o motor não sabe se a
+    // operação cobre os próprios custos, e a frase da consequência ficava em
+    // branco. E a ressalva da janela parcial vale para os DOIS sinais — antes
+    // ela era descartada justamente quando o número bom era o parcial.
+    const consequenciaBase = operacaoVai
       ? " Uma empresa pode dar lucro e ainda assim não ter dinheiro para pagar o que vence, e é exatamente isso que acontece aqui: o resultado existe, mas está preso em prazos, estoques ou já saiu em retiradas e dívidas."
-      : parcial
-      ? ressalvaJanela
+      : margemOp == null || margemZero || parcial
+      ? ""
       : " Enquanto a operação não voltar a cobrir os próprios custos, o caixa continuará encolhendo mês a mês.";
+    const consequencia = `${consequenciaBase}${parcial ? ressalvaJanela : ""}`;
     return com({
       // "PRESSÃO DE CAIXA", não "Dificuldade de caixa" (dono, 21/08/2026: o termo
       // soa forte demais para quem construiu a empresa). O FATO não muda — falta
@@ -323,18 +450,27 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
     const antOk = colAnt != null && fecha(colAnt);
     const ant = antOk ? leitura(colAnt!) : null;
 
-    const EXPLICA: Record<string, string> = {
-      "Crescimento": "padrão de crescimento: o negócio expande e atrai recursos para acelerar",
-      "Maturidade": "padrão maduro: a própria operação sustenta a empresa e ainda remunera sócios e credores",
-      "Platô": "padrão de acomodação: gera caixa mas desfaz posições, sem novas frentes de crescimento",
-      "Retração": "padrão de retração: a operação ainda não se sustenta sozinha",
+    // A explicação segue os SINAIS da coluna: "ainda remunera sócios e credores"
+    // era texto fixo e saía logo depois de "sem movimento relevante com sócios e
+    // credores" quando o financiamento ficou no zero.
+    const explicaDe = (estagio: string, l: { fco: number; fci: number; fcf: number; eps: number }): string => {
+      const fcfZero = Math.abs(l.fcf) <= l.eps, fciZero = Math.abs(l.fci) <= l.eps;
+      switch (estagio) {
+        case "Crescimento": return "padrão de crescimento: o negócio expande e atrai recursos para acelerar";
+        case "Maturidade": return fcfZero
+          ? `padrão maduro: a própria operação sustenta a empresa, sem depender de sócios nem credores${fciZero ? " e sem novos investimentos relevantes" : ""}`
+          : "padrão maduro: a própria operação sustenta a empresa e ainda devolve dinheiro a sócios e credores";
+        case "Platô": return "padrão de acomodação: gera caixa mas desfaz posições, sem novas frentes de crescimento";
+        case "Retração": return "padrão de retração: a operação ainda não se sustenta sozinha";
+        default: return "";
+      }
     };
     if (rec.estagio && (!ant || !ant.estagio || ant.estagio === rec.estagio)) {
       // Sem coluna anterior provada, ou padrão CONSISTENTE nos dois anos → Dickinson decide.
-      const persistencia = ant?.estagio === rec.estagio ? ` O mesmo padrão se repete em ${colAnt} — leitura consistente.` : "";
+      const persistencia = ant?.estagio === rec.estagio ? ` O mesmo padrão se repete em ${rotuloCurto(colAnt!)} — leitura consistente.` : "";
       return com({
         estagio: rec.estagio,
-        justificativa: `${narrarFluxos(rec.fco, rec.fci, rec.fcf, rec.eps, colRecente!)} ${EXPLICA[rec.estagio] ?? ""} (classificação pelos sinais do fluxo de caixa, método Dickinson).${persistencia}`,
+        justificativa: `O que define o estágio: o sentido dos três fluxos de caixa (operação, investimento e financiamento) no período mais recente, pelo método Dickinson. ${narrarFluxos(rec.fco, rec.fci, rec.fcf, rec.eps, rotuloCurto(colRecente!))} É o ${explicaDe(rec.estagio, rec)}.${persistencia}`,
       });
     }
     if (rec.estagio && ant?.estagio && ant.estagio !== rec.estagio) {
@@ -343,7 +479,7 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
       if (porTendencia) {
         return com({
           estagio: porTendencia.estagio,
-          justificativa: `${porTendencia.justificativa} Os sinais do fluxo de caixa mudaram entre os anos (${colAnt}: ${ant.estagio.toLowerCase()}; ${colRecente}: ${rec.estagio.toLowerCase()}) — transição em curso; um ano isolado não define o estágio.${solidez?.tendencia === "deteriorando" ? " A solidez financeira vem se deteriorando, o que pede atenção ao caixa nesta transição." : ""}`,
+          justificativa: `${porTendencia.justificativa} Os sinais do fluxo de caixa mudaram entre os períodos (${rotuloCurto(colAnt!)}: ${ant.estagio.toLowerCase()}; ${rotuloCurto(colRecente!)}: ${rec.estagio.toLowerCase()}) — transição em curso; um período isolado não define o estágio.${solidez?.tendencia === "deteriorando" ? " A solidez financeira vem se deteriorando, o que pede atenção ao caixa nesta transição." : ""}`,
         });
       }
     }
@@ -355,19 +491,82 @@ export function classifyEstagio(indicadores: IndicadorLite[], periodos: string[]
   return fallback ? com(fallback) : null;
 
   function porReceitaMargem(): Omit<EstagioResult, "solidez"> | null {
-    if (receita.length < 2) return null;
-    const first = receita[0], last = receita[receita.length - 1], n = receita.length;
-    const cresc = first !== 0 ? (last - first) / Math.abs(first) : 0;
-    const quedaUlt = receita[n - 1] < receita[n - 2] && (n < 3 || receita[n - 2] <= receita[n - 3]);
-    const cresceUlt = receita[n - 1] > receita[n - 2] && (n < 3 || receita[n - 2] >= receita[n - 3]);
+    // Pares (período, receita) para o rótulo acompanhar o número — filtrar só
+    // a receita desalinhava os índices quando uma coluna vinha sem valor.
+    const serie = ord.map((p) => ({ p: rotuloCurto(p), r: val("Receita Líquida", p) })).filter((x): x is { p: string; r: number } => x.r != null);
+    if (serie.length < 2) return null;
+    const n = serie.length;
+    const first = serie[0]!.r, last = serie[n - 1]!.r;
+    // Percentual de crescimento só existe com base não nula: de R$ 0 para R$ 5
+    // milhões o "0" de fallback saía impresso como "estável (0%)".
+    const crescMedivel = first !== 0;
+    const cresc = crescMedivel ? (last - first) / Math.abs(first) : 0;
+    const quedaUlt = serie[n - 1]!.r < serie[n - 2]!.r && (n < 3 || serie[n - 2]!.r <= serie[n - 3]!.r);
+    // "Caiu em DOIS períodos seguidos" exige duas quedas de verdade: com
+    // 10 / 10 / 8 a lista de números desmentia a frase acima dela.
+    const caiuDuasVezes = n >= 3 && serie[n - 1]!.r < serie[n - 2]!.r && serie[n - 2]!.r < serie[n - 3]!.r;
+    const cresceUlt = serie[n - 1]!.r > serie[n - 2]!.r && (n < 3 || serie[n - 2]!.r >= serie[n - 3]!.r);
+    const saiuDoZero = serie[n - 2]!.r === 0 && serie[n - 1]!.r > 0;
     const margemPos = margemOp != null && margemOp > 0;
-    const crescUltAno = receita[n - 2] !== 0 ? (receita[n - 1] - receita[n - 2]) / Math.abs(receita[n - 2]) : 0;
+    const crescUltAno = serie[n - 2]!.r !== 0 ? (serie[n - 1]!.r - serie[n - 2]!.r) / Math.abs(serie[n - 2]!.r) : 0;
+    // Sinal só onde ele informa: "recuou -20%" é o mesmo sinal duas vezes, e
+    // "-0%" é sinal em cima de zero.
+    const pctSinal = (r: number) => Math.abs(r * 100) < 0.5 ? "0%" : `${r > 0 ? "+" : ""}${(r * 100).toFixed(0)}%`;
+    const pctAbs = (r: number) => `${Math.abs(r * 100).toFixed(0)}%`;
+    const margemTxt = margemOp == null ? "" : margemPos
+      ? ` A operação fecha no azul: de cada R$ 100 de receita sobram cerca de R$ ${num(margemOp * 100, 0)} depois de custos e despesas (margem EBITDA de ${num(margemOp * 100, 1)}%).`
+      : ` A operação fecha no vermelho: margem EBITDA de ${num(margemOp * 100, 1)}%.`;
 
-    // Frases que se explicam sozinhas: o que aconteceu com o faturamento e o que
-    // isso significa, sem exigir que o leitor saiba o que é "margem operacional".
-    if (quedaUlt || cresc < -0.1) return { estagio: "Retração", justificativa: `O faturamento vem encolhendo ao longo do período analisado, ${pct(cresc)} no acumulado, mas sem aperto agudo de caixa por enquanto: a empresa ainda consegue pagar suas contas, e o problema está em vender menos a cada ano.` };
-    if (cresceUlt && crescUltAno > 0.15 && margemPos) return { estagio: "Crescimento", justificativa: `O faturamento está em expansão, com alta de ${pct(crescUltAno)} no último ano, e a operação fecha no azul: o que sobra das vendas depois de custos e despesas do dia a dia é positivo.` };
-    if (Math.abs(cresc) <= 0.1 && margemPos && (liqCorr == null || liqCorr >= 1)) return { estagio: "Maturidade", justificativa: `O faturamento se manteve estável no período, variação de ${pct(cresc)}, a operação fecha no azul e a empresa tem folga para pagar as contas de curto prazo.` };
-    return { estagio: "Platô", justificativa: `O faturamento está praticamente parado, variação de ${pct(cresc)} no período, sem sinal claro de crescimento nem de queda, e sem aperto de caixa: a empresa se mantém, mas não avança.` };
+    // CADA RAMO DECLARA SÓ O QUE TESTOU, com os números desta empresa. O texto
+    // fixo anterior afirmava "sem aperto de caixa" sem ter olhado a liquidez, e
+    // publicava "vem encolhendo, 180% no acumulado" quando o gatilho era a queda
+    // dos dois últimos anos numa série que cresceu no total.
+    const gatilho = "O que define o estágio: a trajetória do faturamento e o sinal da margem ao longo do período.";
+    if (quedaUlt || cresc < -0.1) {
+      const queda = caiuDuasVezes
+        ? ` O faturamento caiu em dois períodos seguidos: ${reais(serie[n - 3]!.r)} em ${serie[n - 3]!.p}, ${reais(serie[n - 2]!.r)} em ${serie[n - 2]!.p} e ${reais(serie[n - 1]!.r)} em ${serie[n - 1]!.p}${cresc < 0 ? ` (${pctSinal(cresc)} no acumulado do período)` : ", ainda que o acumulado do período siga positivo"}.`
+        : quedaUlt
+        ? ` O faturamento caiu de ${reais(serie[n - 2]!.r)} em ${serie[n - 2]!.p} para ${reais(serie[n - 1]!.r)} em ${serie[n - 1]!.p}${crescMedivel ? ` (${pctSinal(cresc)} no acumulado do período)` : ""}.`
+        : ` O faturamento recuou de ${reais(first)} em ${serie[0]!.p} para ${reais(last)} em ${serie[n - 1]!.p} (${pctAbs(cresc)} no acumulado do período).`;
+      // O fecho declara SÓ o que foi medido: sem olhar a liquidez, "não é pagar
+      // as contas do mês" contradizia o quadro de fôlego no mesmo relatório.
+      const fecho = liqCorr == null
+        ? ""
+        : liqCorr < 1
+        ? ` E a queda vem junto com aperto de curto prazo: para cada R$ 1,00 de obrigações de curto prazo há R$ ${num(liqCorr, 2)} em ativos de curto prazo.`
+        : ` O aperto está em vender menos: a folga de curto prazo ainda cobre as obrigações do período (liquidez corrente de ${num(liqCorr, 2)}).`;
+      return { estagio: "Retração", justificativa: `${gatilho}${queda}${margemTxt}${fecho}` };
+    }
+    if ((cresceUlt && crescUltAno > 0.15 && margemPos) || (saiuDoZero && margemPos)) {
+      const alta = saiuDoZero
+        ? ` O faturamento saiu de zero em ${serie[n - 2]!.p} para ${reais(last)} em ${serie[n - 1]!.p}.`
+        : ` O faturamento está em expansão, com alta de ${pctSinal(crescUltAno)} no último período.`;
+      return { estagio: "Crescimento", justificativa: `${gatilho}${alta}${margemTxt}` };
+    }
+    if (crescMedivel && Math.abs(cresc) <= 0.1 && margemPos && (liqCorr == null || liqCorr >= 1)) {
+      const folga = liqCorr != null ? ` Para cada R$ 1,00 de obrigações de curto prazo há R$ ${num(liqCorr, 2)} em ativos de curto prazo (liquidez corrente de ${num(liqCorr, 2)}).` : "";
+      return { estagio: "Maturidade", justificativa: `${gatilho} O faturamento se manteve estável no período (${pctSinal(cresc)}).${margemTxt}${folga}` };
+    }
+    // Platô: diz a trajetória REAL e por que não é Crescimento nem Maturidade.
+    const traj = !crescMedivel
+      ? `saiu de ${reais(first)} em ${serie[0]!.p} para ${reais(last)} em ${serie[n - 1]!.p}`
+      : cresc > 0.1 ? `cresceu ${pctSinal(cresc)} no período`
+      : cresc < -0.1 ? `recuou ${pctAbs(cresc)} no período`
+      : `ficou praticamente estável (${pctSinal(cresc)} no período)`;
+    // Margem AUSENTE não é margem negativa: o texto afirmava prejuízo em série
+    // que não trazia margem nenhuma.
+    const porque = margemOp == null
+      ? " A margem não está disponível nesta série, o que impede a leitura de maturidade."
+      : margemOp < 0
+      ? " A margem negativa impede a leitura de crescimento ou maturidade."
+      : !margemPos
+      ? " A operação empata (margem EBITDA de 0,0%), o que impede a leitura de maturidade."
+      : liqCorr != null && liqCorr < 1
+      ? ` A folga de curto prazo está abaixo de 1 (liquidez corrente de ${num(liqCorr, 2)}), o que impede a leitura de maturidade.`
+      : " Sem alta consistente nos últimos períodos, não há leitura de crescimento.";
+    const fechoPlato = crescMedivel && cresc > 0.1
+      ? " O faturamento avança, mas ainda não se sustenta como crescimento."
+      : " A empresa se mantém, mas não avança.";
+    return { estagio: "Platô", justificativa: `${gatilho} O faturamento ${traj}.${margemTxt}${porque}${fechoPlato}` };
   }
 }

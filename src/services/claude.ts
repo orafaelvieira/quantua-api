@@ -87,11 +87,18 @@ export interface AnalysisResult {
   avisoPeriodo?: string | null;
   /** DIAGNÓSTICO de IBR (camada rica) — leitura universal (empresa boa, estável ou sob pressão).
    *  solidez = eixo 2 do motor (trio Fleuriet/Kanitz/Altman) — presente quando calculável. */
-  estagioCicloVida?: { estagio: string; justificativa: string; solidez?: import("./estagio-ciclo").SolidezResult };
+  /** QUADRO "ESTÁGIO" (a linha da matriz). `estagio` e `justificativa` são do
+   *  MOTOR — a justificativa abre com "O que define o estágio" e os gatilhos
+   *  desta empresa. `leitura` é da IA: como a empresa chegou aqui (trajetória,
+   *  janela, sazonalidade, particularidades). */
+  estagioCicloVida?: { estagio: string; justificativa: string; solidez?: import("./estagio-ciclo").SolidezResult; leitura?: string };
+  /** QUADRO "FÔLEGO FINANCEIRO" (a coluna da matriz). `nivel` e `diasDeCaixa`
+   *  são do MOTOR; `leitura` é da IA: a estrutura com definições exatas, o
+   *  relógio, a cobertura de juros e o que precisa acontecer. */
+  folegoFinanceiro?: { nivel: string; diasDeCaixa?: number | null; leitura: string };
+  /** LEGADO (análises geradas antes de 21/08/2026): não é mais produzido. */
   situacao?: { classificacao: string; racional: string };
-  /** `mesesDeCaixa` deixou de ser pedido à IA (21/08/2026): o motor publica UM
-   *  relógio (dias) e uma estimativa paralela da IA era a segunda voz que
-   *  contradizia o título. O campo fica opcional só para leitura de acervo. */
+  /** LEGADO (antes de 21/08/2026): virou `folegoFinanceiro`. Fica só para o acervo. */
   saudeFinanceira?: { status: string; mesesDeCaixa?: number | null; leitura: string; diasDeCaixa?: number | null };
   /** Conta regressiva de caixa — quanto tempo o dinheiro dura (motor, determinística). */
   contaRegressiva?: import("./conta-regressiva").ContaRegressiva;
@@ -261,7 +268,7 @@ function kpisDeterministicos(indicadores: IndicadorLite[], periodos: string[]) {
 // Estágio do ciclo: motor extraído para ./estagio-ciclo (2 eixos: Dickinson robusto
 // com materialidade+persistência × SOLIDEZ pelo trio Fleuriet/Kanitz/Altman).
 export { classifyEstagio, type EstagioResult, type FluxoCaixaLite, type SolidezResult } from "./estagio-ciclo";
-import { classifyEstagio, type EstagioResult, type FluxoCaixaLite } from "./estagio-ciclo";
+import { avaliarSolidez, classifyEstagio, type EstagioResult, type FluxoCaixaLite } from "./estagio-ciclo";
 
 interface PeerBlockInput {
   year: number | null;
@@ -543,17 +550,28 @@ export function recomendacoesDoMotor(
  * a defesa principal é o PROMPT não pedir o segundo relógio — esta camada é a
  * rede, não a parede.
  */
-const FORMAS_DO_SEGUNDO_RELOGIO: RegExp[] = [
-  /\b(se\s+esgot\w+|esgot\w+-se)\s+em\b/i,
-  /\bdurari?a(m)?\s+(cerca\s+de\s+|aproximadamente\s+|uns?\s+)?\d+([,.]\d+)?\s*(m[eê]s(es)?|anos?)\b/i,
-  /\bsustentari?a(m)?\s+a\s+opera[cç][aã]o\s+por\b/i,
+/** Formas que JÁ SÃO o segundo relógio, sozinhas — não precisam de contexto. */
+const FORMAS_INEQUIVOCAS: RegExp[] = [
+  /\brunway\b/i,
+  /\bsustentari?a(m)?\s+a\s+opera[cç][aã]o\s+por\s+(cerca\s+de\s+|aproximadamente\s+|uns?\s+)?\d/i,
   /\b\d+([,.]\d+)?\s*m[eê]s(es)?\s+de\s+(f[oô]lego|respiro|runway)\b/i,
   /\b\d+([,.]\d+)?\s*m[eê]s(es)?\s+(at[eé]|para)\s+(o\s+caixa\s+)?zerar\b/i,
-  /\bcaixa\s+(acab\w*|zer\w*|termin\w*)\s+em\s+(cerca\s+de\s+|aproximadamente\s+)?\d/i,
   /(?<!(?:[uú]ltimos|pr[oó]ximos|primeiros)\s)\b\d+([,.]\d+)?\s*m[eê]s(es)?\s+de\s+caixa\b/i,
-  /\brunway\b/i,
 ];
-const ehSegundoRelogio = (frase: string): boolean => FORMAS_DO_SEGUNDO_RELOGIO.some((re) => re.test(frase));
+/** Formas que só são relógio QUANDO O SUJEITO É O CAIXA e há unidade de tempo.
+ *  Sem as duas exigências o filtro apagava história legítima — "o caixa terminou
+ *  em 2025 com R$ 3,4 milhões", "a concessão se esgota em 2028" —, e frase
+ *  legítima apagada em silêncio é pior que relógio repetido. */
+const PALAVRA_DE_CAIXA = /\b(caixa|reserva|f[oô]lego)\b/i;
+// Verbo NO PRESENTE/FUTURO: "o caixa acaba em 16 meses" é relógio; "a reserva
+// acabou em 3 meses de atraso dos clientes" é história, e sumia inteira.
+const FORMAS_QUE_EXIGEM_CAIXA: RegExp[] = [
+  /\b(se\s+esgota(r[áa]|ria)?|esgota-se|acaba(r[áa]|ria)?|zera(r[áa]|ria)?|termina(r[áa]|ria)?)\s+em\s+(cerca\s+de\s+|aproximadamente\s+|uns?\s+)?\d+([,.]\d+)?\s*(dias?|semanas?|m[eê]s(es)?|anos?|trimestres?)\b/i,
+  /\bdurari?a(m)?\s+(cerca\s+de\s+|aproximadamente\s+|uns?\s+)?\d+([,.]\d+)?\s*(dias?|semanas?|m[eê]s(es)?|anos?|trimestres?)\b/i,
+];
+const ehSegundoRelogio = (frase: string): boolean =>
+  FORMAS_INEQUIVOCAS.some((re) => re.test(frase)) ||
+  (PALAVRA_DE_CAIXA.test(frase) && FORMAS_QUE_EXIGEM_CAIXA.some((re) => re.test(frase)));
 /** O relógio DO MOTOR, que nunca pode ser removido junto. */
 const RELOGIO_DO_MOTOR = /\b\d+\s*dias?\s+de\s+(desembolso|opera[cç][aã]o)/i;
 
@@ -595,6 +613,8 @@ export function removerSegundoRelogio(result: AnalysisResult): void {
     if (!Array.isArray(lista)) return;
     lista.forEach((item, i) => campos.forEach((c) => limpa(item as Record<string, unknown>, c, `${onde}[${i}].${c}`)));
   };
+  limpa(result.folegoFinanceiro as unknown as Record<string, unknown>, "leitura", "folegoFinanceiro.leitura");
+  limpa(result.estagioCicloVida as unknown as Record<string, unknown>, "leitura", "estagioCicloVida.leitura");
   limpa(result.saudeFinanceira as unknown as Record<string, unknown>, "leitura", "saudeFinanceira.leitura");
   limpa(result.situacao as unknown as Record<string, unknown>, "racional", "situacao.racional");
   limpa(result.parecerExecutivo as unknown as Record<string, unknown>, "tese", "parecerExecutivo.tese");
@@ -726,7 +746,11 @@ REGRA OBRIGATÓRIA: ao afirmar QUALQUER coisa sobre margem, EBITDA, cobertura de
     : null;
   const baseRetornoBlock = baseRetorno?.alerta ? `\n${baseRetorno.alerta}` : "";
   const estagioBlock = estagioDet
-    ? `\nESTÁGIO DO CICLO (determinado pelo MOTOR a partir do histórico — use como VERDADE, NÃO reclassifique): ${estagioDet.estagio}. ${estagioDet.justificativa}`
+    ? `\nESTÁGIO DO CICLO (determinado pelo MOTOR a partir do histórico — use como VERDADE, NÃO reclassifique): ${estagioDet.estagio}. ${estagioDet.justificativa}${
+        estagioDet.solidez
+          ? `\nFÔLEGO FINANCEIRO (determinado pelo MOTOR — use como VERDADE, NÃO reclassifique): ${estagioDet.solidez.nivel}. ${estagioDet.solidez.oQueDefine} ${estagioDet.solidez.componentes.join(" ")}`
+          : ""
+      }`
     : periodoInsuficiente
       ? `\nATENÇÃO — SÓ 1 PERÍODO: não há histórico para avaliar tendência. NÃO afirme crescimento/declínio; trate o estágio como "Indeterminado (período curto)" e seja explícito sobre a limitação em toda a leitura.`
       : "";
@@ -760,9 +784,8 @@ MÉTODO DE RACIOCÍNIO (siga NESTA ordem — cada etapa condiciona a próxima):
 Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta estrutura. Evite REPETIR conteúdo entre seções — cada uma tem um papel distinto (veja as regras):
 {
   "perfilEmpresa": "<apresentação da empresa em TEXTO CORRIDO de 15 a 20 linhas (2-3 parágrafos separados por \\n\\n): quem é, quando e como nasceu, o que faz e para quem, modelo de negócio e proposta de valor, canais/clientes, mercado e concorrência, momento atual. Escreva como NARRATIVA de abertura de relatório (o leitor vai conhecer a empresa antes das análises) — frases completas encadeadas, como se estivesse contando a história da empresa a um investidor. PROIBIDO: seções numeradas ('1) Dados cadastrais'), rótulos 'Campo: valor', separadores '|', listas, repetir minúcias cadastrais (CNPJ, CEP, código CNAE, tipo de natureza jurídica), recomendações de consulta (TJSP/Serasa) e citação de arquivos/fontes. Use a pesquisa web e os materiais como matéria-prima digerida, não como transcrição.>",
-  "estagioCicloVida": { "estagio": "Crescimento|Maturidade|Platô|Retração|Pressão de caixa", "justificativa": "<1-2 frases citando a tendência dos números>" },
-  "situacao": { "classificacao": "saudável|estável|atenção|pressão operacional|pressão financeira|pressão de caixa", "racional": "<POR QUE A EMPRESA ESTÁ AQUI e O QUE ISSO SIGNIFICA: a tese em uma frase, provada por 4 ou 5 números da ESTRUTURA (liquidez, endividamento, concentração da dívida, patrimônio, dívida líquida), cada um com a definição exata; depois O QUE MUDA A LEITURA (sazonalidade, exercício fechado anterior, particularidades do negócio)>" },
-  "saudeFinanceira": { "status": "sólida|adequada|apertada|frágil", "leitura": "<O QUE PRECISA ACONTECER: a variável que decide o próximo ciclo e a consequência gerencial. Usa SÓ os números de CAIXA e FLUXO (o relógio do motor, cobertura de juros, geração operacional), nunca os da estrutura já usados na situação; a solvência entra pelo sistema, não a cite. Termina com o que acontece se a variável decisiva não se realizar>" },
+  "estagioCicloVida": { "leitura": "<COMO A EMPRESA CHEGOU A ESTE ESTÁGIO: o motor já escreveu o que o define (os gatilhos) — NÃO repita nem reclassifique; EXPLIQUE. Conte a trajetória com os números de FLUXO: faturamento, margem e geração de caixa ao longo dos períodos, o ponto de virada quando houver, a janela parcial, a sazonalidade e as particularidades do negócio que mudam a leitura. 2 ou 3 parágrafos curtos>" },
+  "folegoFinanceiro": { "leitura": "<POR QUE A EMPRESA ESTÁ NESTE FÔLEGO e O QUE PRECISA ACONTECER: quando o motor escreveu o que o define (a pontuação nos testes de estrutura), explique-o; quando não escreveu, o nível não foi medido e você NÃO o classifica, só descreve a estrutura. Explique com os números de SALDO e de CAIXA, cada um com a definição exata: endividamento geral, concentração da dívida no curto prazo, patrimônio dos sócios, dívida líquida, liquidez corrente e imediata QUANDO o gatilho do Estágio ainda não as tiver citado (se citou, não repita o número — abra pelos que o Estágio não usou); depois o relógio do motor e a cobertura de juros; e feche com a variável que decide o próximo ciclo e o que acontece se ela não se realizar. 2 ou 3 parágrafos curtos>" },
   "fatoresChave": [ { "fator": "<vetor de desempenho, positivo ou negativo>", "hipotese": "<causa-raiz provável>", "natureza": "interna|externa|mista", "evidencia": "<número/par/fato>", "confianca": "alta|media|baixa", "verificar": "<o que perguntar/pedir>" } ],
   "semaforo": [
     { "area": "Receita e Crescimento", "status": "ok|atencao|critico", "descricao": "<1 frase citando número e percentil vs pares>" },
@@ -796,7 +819,7 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
   "confrontoDores": [ { "dor": "<a dor declarada, resumida>", "veredicto": "confirmada|desmentida|parcial", "evidencia": "<os números que confirmam/desmentem>", "leitura": "<o que isso muda na prioridade — 1-2 frases diretas>" } ],
   "pontosCegos": [ { "titulo": "<problema que os números mostram e NINGUÉM declarou como dor>", "evidencia": "<número/tendência>", "porQueImporta": "<consequência em R$/caixa se continuar invisível>", "acaoSugerida": "<primeiro passo concreto>" } ],
   "parecerExecutivo": {
-    "tese": "<VEREDICTO em no MÁXIMO 3 frases, conclusão primeiro: onde a empresa está, do que isso decorre e o que exige agora. Linguagem de quem decide, sem sigla não explicada. NÃO repita destaques nem o racional da situação.>",
+    "tese": "<VEREDICTO em no MÁXIMO 3 frases, conclusão primeiro: onde a empresa está, do que isso decorre e o que exige agora. Linguagem de quem decide, sem sigla não explicada. NÃO repita destaques nem o que os quadros de estágio e de fôlego já disseram.>",
     "numeros": [ { "indicador": "<NOME EXATO de um indicador da série acima, copiado caractere a caractere. NÃO escreva o valor: o sistema busca o número no motor. Nome que não existir na série é DESCARTADO.>", "leitura": "<1 frase: o que esse indicador significa para a decisão, com o de→para quando houver>" } ],
     "decisoes": [ { "decisao": "<o que fazer, no imperativo>", "prazo": "0–30d|30–90d|90–180d", "valor": "<TEXTO (nunca numero cru): o R$ em jogo, ex.: \"R$ 1,2 mi\" — ou null>", "porque": "<1 frase com o número que justifica>" } ],
     "proteger": ["<o que não pode ser perdido — 1 linha cada>"]
@@ -809,13 +832,13 @@ Retorne APENAS um JSON válido (sem markdown, sem \`\`\`) com EXATAMENTE esta es
 Pilares das opções (quatro frentes de valor): strategic_repositioning = Reposicionamento Estratégico (onde competir/como vencer) · value_focused_business_model = Modelo de Negócio orientado a Valor (proposta e captura de valor) · operational_excellence = Excelência Operacional (custos/processos/eficiência) · financial_restructuring = Estrutura Financeira (capital/dívida/liquidez/alocação).
 
 PAPÉIS DAS SEÇÕES (NÃO haja overlap — cada uma responde a uma pergunta diferente):
-- estagioCicloVida + situacao + saudeFinanceira + fatoresChave + semaforo = o DIAGNÓSTICO ("onde a empresa está e por quê"). O semaforo é o placar por área; os fatoresChave são as hipóteses de causa. NÃO repita os números do semáforo dentro do swot.
-- O DIAGNÓSTICO É UMA TESE, NÃO UM PAINEL (inegociável). A matriz já concluiu onde a empresa está (o ESTÁGIO vem do motor e você não o reavalia). Os três cartões respondem, NESTA ORDEM e SEM repetir um ao outro: onde estamos (estágio, já dado) → por que estamos aqui e o que isso significa (situacao.racional) → o que precisa acontecer (saudeFinanceira.leitura). A primeira frase de situacao.racional é a TESE ("a empresa está sob pressão de caixa porque a operação ainda não recompõe o caixa, enquanto a estrutura tem pouca folga e concentra a dívida no curto prazo") e os números vêm DEPOIS, como prova dela. Selecione os 4 ou 5 números que explicam a história e descarte o resto: o cartão que enfileira liquidez, endividamento, concentração da dívida, patrimônio e cobertura de juros perdeu a hierarquia.
-- CADA NÚMERO APARECE EM UM CARTÃO SÓ. O estágio (texto do motor, já dado) fala da margem da janela e de mais nada; a situação é dona dos números da ESTRUTURA (liquidez corrente e imediata, endividamento geral, concentração da dívida no curto prazo, patrimônio dos sócios, dívida líquida); a saúde financeira é dona dos números de CAIXA e FLUXO (o relógio do motor, cobertura de juros, geração operacional). A SOLVÊNCIA (Fleuriet, Kanitz, Altman) é emendada ao cartão de saúde pelo sistema, com o texto do motor: NÃO cite Kanitz, Altman nem "indicadores de solvência" em saudeFinanceira.leitura, senão o cartão publica os dois duas vezes. Um número citado nos dois cartões é repetição, e repetição com palavras diferentes vira contradição.
-- DEFINIÇÕES EXATAS (inegociável, o credor confere): liquidez corrente é ativo circulante sobre passivo circulante, então escreva "para cada R$ 1,00 de obrigações de curto prazo, a empresa possui R$ X em ativos circulantes", NUNCA "tem R$ X para cobrir o que vence"; liquidez imediata é "para cada R$ 1,00 de obrigações de curto prazo existem R$ X em disponibilidades imediatas", seguido da implicação ("depende da conversão de recebíveis, estoques ou da renovação de crédito"); endividamento geral é "X% dos ativos são financiados por capital de terceiros" (não "apoiada quase inteiramente em dívida de terceiros"); cobertura de juros é EBITDA sobre despesas financeiras, então diga "o resultado operacional disponível para cobrir as despesas financeiras está negativo (cobertura de juros de X)" e só depois traduza; Kanitz e Altman NÃO são citados em nenhum dos três cartões do diagnóstico (o sistema os publica no cartão de saúde com o texto do motor); fora deles, se precisar, entram em UMA frase ("os indicadores de solvência reforçam a deterioração: ambos passaram a território negativo, sinalizando menor capacidade de absorver estresse financeiro"), sem "termômetros" e sem "os piores entre os pares" a menos que o percentil dos DOIS esteja na série acima.
+- estagioCicloVida + folegoFinanceiro + fatoresChave + semaforo = o DIAGNÓSTICO ("onde a empresa está e por quê"). O semaforo é o placar por área; os fatoresChave são as hipóteses de causa. NÃO repita os números do semáforo dentro do swot.
+- DOIS QUADROS, UM POR EIXO DA MATRIZ (inegociável). A matriz cruza ESTÁGIO (linha) e FÔLEGO FINANCEIRO (coluna), e o motor já determinou os dois e escreveu o que os define. Você escreve, para cada eixo, COMO A EMPRESA CHEGOU ALI — sem reclassificar, sem repetir o gatilho do motor, sem cruzar os eixos. estagioCicloVida.leitura explica a LINHA com a trajetória (fluxo): faturamento, margem, geração de caixa, ponto de virada, janela parcial, sazonalidade, particularidades do negócio. folegoFinanceiro.leitura explica a COLUNA com a estrutura (saldo) e o caixa: liquidez, endividamento, concentração da dívida, patrimônio, dívida líquida, o relógio, a cobertura de juros — e fecha com o que precisa acontecer. Cada empresa tem a sua história: os números, a ordem e o que importa mudam de uma para outra; não há texto padrão.
+- CADA NÚMERO APARECE EM UM QUADRO SÓ, pela natureza do dado: FLUXO e TRAJETÓRIA (receita, margem, geração de caixa, ciclo, crescimento) pertencem ao Estágio; SALDO e ESTRUTURA (liquidez, endividamento, concentração, patrimônio, dívida líquida) e CAIXA (relógio, cobertura de juros) pertencem ao Fôlego. O gatilho que o motor escreveu no Estágio ESGOTA aquele número: se ele citou a liquidez corrente ou a imediata, elas não voltam no Fôlego, nem com outra apresentação — o Fôlego abre pelos números de estrutura que o Estágio não usou e, se precisar, refere-se ao gatilho em palavras ("a mesma folga de curto prazo apontada no estágio"), sem repetir a cifra. A SOLVÊNCIA (Fleuriet, Kanitz, Altman) é emendada ao quadro de fôlego pelo sistema, com o texto do motor: NÃO cite Kanitz, Altman nem "indicadores de solvência" em folegoFinanceiro.leitura, senão o quadro publica os dois duas vezes.
+- DEFINIÇÕES EXATAS (inegociável, o credor confere): liquidez corrente é ativo circulante sobre passivo circulante, então escreva "para cada R$ 1,00 de obrigações de curto prazo, a empresa possui R$ X em ativos circulantes", NUNCA "tem R$ X para cobrir o que vence"; liquidez imediata é "para cada R$ 1,00 de obrigações de curto prazo existem R$ X em disponibilidades imediatas", seguido da implicação ("depende da conversão de recebíveis, estoques ou da renovação de crédito"); endividamento geral é "X% dos ativos são financiados por capital de terceiros" (não "apoiada quase inteiramente em dívida de terceiros"); cobertura de juros é EBITDA sobre despesas financeiras, então diga "o resultado operacional disponível para cobrir as despesas financeiras está negativo (cobertura de juros de X)" e só depois traduza; Kanitz e Altman NÃO são citados em nenhum dos dois quadros do diagnóstico (o sistema os publica no quadro de fôlego financeiro com o texto do motor); fora deles, se precisar, entram em UMA frase ("os indicadores de solvência reforçam a deterioração: ambos passaram a território negativo, sinalizando menor capacidade de absorver estresse financeiro"), sem "termômetros" e sem "os piores entre os pares" a menos que o percentil dos DOIS esteja na série acima.
 - O QUE MUDA A LEITURA: toda afirmação sobre margem ou resultado de uma coluna PARCIAL vai ancorada na janela ("na janela de 2026 analisada") e acompanhada do exercício fechado anterior e da sazonalidade quando ela existir no contexto da empresa. "A empresa dá prejuízo" como conclusão estrutural a partir de um acumulado de meses é proibido.
 - O RELÓGIO É UM SÓ. O bloco CONTA REGRESSIVA DE CAIXA traz a única medida de fôlego do relatório, com a definição dela. NÃO invente uma segunda ("duraria X meses", "se esgota em"), NÃO converta dias em meses e NÃO estime fôlego por conta própria: duas medidas de fôlego na mesma página destroem a credibilidade do diagnóstico.
-- A CLASSE DA SITUAÇÃO SEGUE O ESTÁGIO: quando o motor determinou "Pressão de caixa", situacao.classificacao é "pressão de caixa" (caixa e finanças são conceitos diferentes; não troque um pelo outro).
+- SEM CLASSIFICAÇÃO PRÓPRIA: o título de cada quadro é o rótulo do motor (o estágio e o nível do fôlego); você não inventa um terceiro rótulo.
 - swot = POSIÇÃO ESTRATÉGICA/COMPETITIVA ("como se posiciona no mercado"). Use Porter, pares e contexto (web/materiais). NÃO re-liste índices financeiros aqui — força/fraqueza aqui é de mercado, modelo, marca, capacidade, dependência, canal.
 - opcoesEstrategicas = o LEQUE de movimentos possíveis por pilar ("o que dá para fazer").
 - recomendacoes = o PLANO PRIORIZADO ("por onde começar"): escreva uma ação para cada item da AGENDA DO MOTOR, NA ORDEM EM QUE ELA VEM, declarando o sinalId. A ORDEM E A PRIORIDADE JÁ ESTÃO DECIDIDAS pelo motor — você não as escolhe, não as reordena e não as inventa; você redige o que fazer, com o número da agenda dentro do texto. Se a agenda vier vazia, escreva o plano derivado das opcoesEstrategicas e OMITA sinalId. NÃO invente ações fora das opções.
@@ -823,7 +846,7 @@ PAPÉIS DAS SEÇÕES (NÃO haja overlap — cada uma responde a uma pergunta dif
 - valorNaMesa/alavancasAdicionais = o PLACAR: quando o motor entregou as ALAVANCAS CANÔNICAS (bloco acima), elas JÁ ESTÃO CONTADAS — você só ADICIONA alavancas específicas que o motor não calcula, cada uma com memória em prosa; NUNCA repita prazos-vs-mediana ou gap-de-margem-vs-mediana. Sem o bloco canônico, monte o placar completo você mesmo. SEM DUPLA CONTAGEM; ordem de grandeza, não promessa.
 - protecoes = O QUE NÃO PODE QUEBRAR: 2-3 forças que sustentam o resultado atual e como blindá-las (pessoa-chave, contrato, canal, licença, cliente-âncora). Em empresa saudável esta seção é TÃO importante quanto as opções — manter o que funciona também é resultado.
 - confrontoDores = REALIDADE × PERCEPÇÃO: cada dor declarada julgada pelos números (confirmada/desmentida/parcial) com honestidade — desmentir uma dor liberta energia da gestão; confirmar dá prioridade. pontosCegos = o INVERSO: problema numérico relevante que NINGUÉM declarou — apresente com respeito, mas sem suavizar.
-- parecerExecutivo = O ESSENCIAL, a leitura de 30 SEGUNDOS de quem decide (dono de PME, diretor ou conselheiro). É VEREDICTO + DECISÃO, não diagnóstico: a tese conclui (não descreve), os "numeros" são 3 ou 4 indicadores (nunca mais que 4) que sustentam a conclusão, escolhidos pelo NOME EXATO da série (prefira os que mudaram; o sistema busca o valor no motor, você NÃO escreve número nesse campo), as "decisoes" saem das recomendacoes já priorizadas (mesmo horizonte, com o R$ em jogo quando existir) e "proteger" condensa as protecoes. NÃO repita frases de destaques/situacao/saudeFinanceira: aqui o texto é mais curto e mais duro. Escreva para quem tem 30 segundos e vai agir — se a empresa está bem, a tese diz o que consolidar; se está sob pressão, diz o que estancar primeiro.
+- parecerExecutivo = O ESSENCIAL, a leitura de 30 SEGUNDOS de quem decide (dono de PME, diretor ou conselheiro). É VEREDICTO + DECISÃO, não diagnóstico: a tese conclui (não descreve), os "numeros" são 3 ou 4 indicadores (nunca mais que 4) que sustentam a conclusão, escolhidos pelo NOME EXATO da série (prefira os que mudaram; o sistema busca o valor no motor, você NÃO escreve número nesse campo), as "decisoes" saem das recomendacoes já priorizadas (mesmo horizonte, com o R$ em jogo quando existir) e "proteger" condensa as protecoes. NÃO repita frases de destaques nem dos dois quadros do diagnóstico: aqui o texto é mais curto e mais duro. Escreva para quem tem 30 segundos e vai agir — se a empresa está bem, a tese diz o que consolidar; se está sob pressão, diz o que estancar primeiro.
 
 PRINCÍPIOS (inegociáveis):
 - Hipótese e FATO sempre separados. A IA NÃO inventa nem recalcula número — cita os números já prontos (indicadores, DRE, pares).
@@ -835,16 +858,16 @@ PRINCÍPIOS (inegociáveis):
 - confianca: maior com 2+ períodos e indicadores/DRE completos.
 - ESTILO (todo campo de texto): prosa profissional em português; NUNCA use travessão (— ou –) nem marcação markdown (**, *, #, listas com hífen) — o texto vai direto para o relatório do cliente. Separe ideias com vírgula, dois-pontos ou ponto.
 - EXPLIQUE O INDICADOR NA HORA DE CITÁ-LO (inegociável): NUNCA cite um indicador como se o leitor soubesse o que ele mede. Todo indicador citado vem com o SIGNIFICADO na mesma frase, em linguagem de dono de empresa, e de preferência traduzido para dinheiro ou consequência prática. NÃO escreva "liquidez corrente de 0,01"; escreva "para cada R$ 1,00 de obrigações de curto prazo a empresa possui apenas R$ 0,01 em ativos circulantes (liquidez corrente)". NÃO escreva "capital de giro negativo em R$ 3,07 milhões"; escreva "faltam R$ 3,07 milhões de recursos próprios para bancar o dia a dia da operação, ou seja, o funcionamento da empresa está sendo financiado por dívida de curto prazo (capital de giro negativo)". NÃO escreva "endividamento geral de 58,3%"; escreva "de cada R$ 1,00 que a empresa tem, R$ 0,58 pertencem a terceiros, bancos e fornecedores (endividamento geral de 58,3%)". Mesma regra para margem, prazos médios, ROE, EBITDA, cobertura de juros, Kanitz, Altman e Fleuriet. O nome técnico pode aparecer, mas SEMPRE depois da explicação, entre parênteses, como referência para o contador.
-- COMECE PELA CONCLUSÃO, NÃO PELO ÍNDICE (inegociável nos três cartões do diagnóstico — situacao.racional e saudeFinanceira.leitura). A primeira frase diz O QUE ESTÁ ACONTECENDO COM O NEGÓCIO em português de dono; o número entra DEPOIS, como prova. Errado: "Liquidez corrente de 0,01 e liquidez imediata de 0,011 indicam aperto severo". Certo: "O negócio em si está saudável: de cada R$ 100 faturados sobram R$ 65 depois dos custos do dia a dia. O problema está no dinheiro em conta: para cada R$ 1,00 de obrigações de curto prazo há R$ 0,01 em disponibilidades imediatas". Nunca abra um cartão com dois ou mais índices seguidos.
+- COMECE PELA CONCLUSÃO, NÃO PELO ÍNDICE (inegociável nos dois quadros do diagnóstico — estagioCicloVida.leitura e folegoFinanceiro.leitura). A primeira frase diz O QUE ESTÁ ACONTECENDO COM O NEGÓCIO em português de dono; o número entra DEPOIS, como prova. Errado: "Liquidez corrente de 0,01 e liquidez imediata de 0,011 indicam aperto severo". Certo: "O negócio em si está saudável: de cada R$ 100 faturados sobram R$ 65 depois dos custos do dia a dia. O problema está no dinheiro em conta: para cada R$ 1,00 de obrigações de curto prazo há R$ 0,01 em disponibilidades imediatas". Nunca abra um quadro com dois ou mais índices seguidos.
 - TERMINE COM O "E DAÍ" (inegociável): todo cartão fecha dizendo o que aquilo significa na prática para o dono — o que ele consegue ou deixa de conseguir fazer, ou o que acontece se nada mudar. "Enquanto o caixa não for recomposto, qualquer atraso de cliente vira problema de pagamento no mesmo mês" vale mais que qualquer índice repetido. Um cartão que só descreve números está incompleto.
-- SEM ENFILEIRAR ÍNDICE: no máximo dois indicadores por FRASE, cada um com o significado colado nele, e o cartão inteiro com os 4 ou 5 que provam a tese (a situação) ou os 2 ou 3 que decidem o próximo ciclo (a saúde). Cada cartão tem 2 ou 3 parágrafos curtos separados por uma linha em branco (o caractere de nova linha duas vezes), nunca lista nem marcador — a tela e o relatório respeitam a linha em branco. Na situação: a tese e as provas num parágrafo, o que muda a leitura no seguinte. Na saúde: o relógio e o que precisa acontecer, depois a consequência. O cartão é leitura, não painel.
+- SEM ENFILEIRAR ÍNDICE: no máximo dois indicadores por FRASE, cada um com o significado colado nele, e o quadro inteiro com os 4 ou 5 números que explicam aquele eixo. Cada quadro tem 2 ou 3 parágrafos curtos separados por uma linha em branco (o caractere de nova linha duas vezes), nunca lista nem marcador — a tela e o relatório respeitam a linha em branco. No Estágio: a trajetória num parágrafo, o que muda a leitura (janela, sazonalidade, particularidades) no seguinte. No Fôlego: a estrutura num parágrafo, o relógio e a cobertura no seguinte, o que precisa acontecer e a consequência no último. O quadro é leitura, não painel.
 - TOM: RECOMENDAÇÃO, NÃO SENTENÇA (inegociável). Quem lê construiu esta empresa; palavra dura soa como ofensa e trava a conversa que o relatório quer abrir. Seja FRANCO com o fato e RESPEITOSO com a pessoa: os números e a gravidade permanecem exatamente os mesmos, muda o vocabulário. Escreva "pressão de caixa" e não "crise" nem "dificuldade"; "retração" e não "declínio"; "a estrutura não se sustenta no ritmo atual" e não "a empresa vai quebrar"; "risco elevado" e não "insolvência iminente"; "atenção elevada" e não "zona de perigo"; "vale rever" e não "está errado"; "a decisão ainda é da empresa" e não "antes que seja tarde". PROIBIDO julgar a gestão ("má gestão", "descontrole", "irresponsável", "amadorismo") — descreva o EFEITO no número, nunca a qualidade de quem decidiu. Nada de dramatização ("sangria", "colapso", "beira do abismo", "situação insustentável"). Suavizar o FATO continua proibido: se o caixa paga 6 dias de operação, diga os 6 dias.
-- O RELÓGIO (quando houver o bloco CONTA REGRESSIVA DE CAIXA): comece a saudeFinanceira.leitura pelo TEMPO, não pelo índice, e diga o que o número É na mesma frase ("o caixa de hoje cobre X dias de desembolsos da operação, isto é, o caixa disponível dividido pelo gasto diário com custos e despesas"). Use os números do bloco como estão, sem recalcular e sem acrescentar outra medida de fôlego.
+- O RELÓGIO (quando houver o bloco CONTA REGRESSIVA DE CAIXA): em folegoFinanceiro.leitura, o relógio entra depois da estrutura, com o que o número É na mesma frase ("o caixa de hoje cobre X dias de desembolsos da operação, isto é, o caixa disponível dividido pelo gasto diário com custos e despesas"). Use os números do bloco como estão, sem recalcular e sem acrescentar outra medida de fôlego.
 - O CUSTO DE NÃO FAZER NADA: em recomendacoes.descricao das ações do TOPO da agenda, feche com a consequência de adiar, em dinheiro ou em tempo, ancorada em número já existente ("cada mês sem renegociar esse prazo mantém cerca de R$ X parados no estoque"; "adiar um trimestre consome metade do fôlego de caixa restante"). Sem número disponível, descreva a consequência concreta, nunca uma frase genérica de urgência.
 - ESTA SEMANA, NESTA ORDEM: as recomendacoes de horizonte "0–30d" começam por uma ação que cabe nos PRÓXIMOS SETE DIAS e que dependa só da empresa (ligar para o banco, listar os dez maiores clientes em atraso, suspender uma retirada, renegociar um contrato). Escreva o primeiro passo como se fosse item de agenda de segunda-feira, com quem faz e o que traz de volta.
 - COMPARAÇÃO QUE O DONO ENTENDE: ao usar os pares, traduza percentil em gente, não em estatística. Em vez de "percentil 22 em prazo médio de recebimento", escreva "sete de cada dez empresas parecidas recebem dos clientes em cerca de 45 dias, esta recebe em 155". Diga também o que a diferença vale em dinheiro quando for calculável.
 - O QUE ESTÁ FUNCIONANDO: relatório só de problema paralisa. Garanta que protecoes nomeie de 2 a 3 forças REAIS e concretas que sustentam o resultado (margem, cliente-âncora, produto, equipe, canal), com o número que as comprova, e que ao menos um dos destaques seja um ponto positivo quando existir. Em empresa sob pressão isso é ainda mais importante: é o ativo com que ela vai virar o jogo.
-- CONTE A HISTÓRIA, NÃO SÓ A FOTO (inegociável em estagioCicloVida.justificativa, situacao.racional e saudeFinanceira.leitura): o dono quer entender COMO chegou até aqui. Amarre a trajetória do período (o que aconteceu do primeiro ao último ano com faturamento, margem e caixa), o ponto de virada quando existir ("o resultado financeiro saltou de R$ 265 mil para R$ 1,43 milhão em três anos") e o que isso significa daqui para frente, incluindo a consequência prática de não fazer nada. Escreva como quem explica a situação a um sócio na mesa, com frases completas encadeadas.
+- CONTE A HISTÓRIA, NÃO SÓ A FOTO (inegociável em estagioCicloVida.leitura): o dono quer entender COMO chegou até aqui. Amarre a trajetória do período (o que aconteceu do primeiro ao último ano com faturamento, margem e caixa), o ponto de virada quando existir ("o resultado financeiro saltou de R$ 265 mil para R$ 1,43 milhão em três anos") e o que isso significa daqui para frente. Escreva como quem explica a situação a um sócio na mesa, com frases completas encadeadas.
 - LEITOR LEIGO (inegociável): quem lê o relatório é o DONO DA EMPRESA, sem formação em finanças. Em todo campo de texto: frases COMPLETAS, nunca telegrama de fórmula. NENHUMA sigla sem tradução: escreva "necessidade de capital de giro, o dinheiro que fica preso entre pagar fornecedores e receber dos clientes" (não NCG), "prazo médio de recebimento dos clientes" (não PMR), "prazo médio de pagamento aos fornecedores" (não PMP), "caixa gerado pela operação" (não FCO), "patrimônio dos sócios" (não PL), "dívida de curto prazo" (não CP). "percentil 78" vira "melhor que 78% das empresas comparáveis"; "YoY" vira "em relação ao ano anterior"; "p.p." vira "pontos percentuais". NADA de termos em inglês: em vez de due diligence escreva auditoria prévia, em vez de SLA escreva prazo de entrega acordado, em vez de pipeline escreva carteira de negociações, em vez de valuation escreva valor da empresa na negociação. NADA de setas, sinais de vezes ou til no texto (em vez de "43->69d = 26d × R$51,7k ~ R$1,35M", escreva "alongar o prazo de pagamento aos fornecedores de 43 para 69 dias, que é a prática dos concorrentes, mantém no caixa cerca de R$ 1,35 milhão"). Valores por extenso na escala: "R$ 1,3 milhão", "R$ 692 mil".
 - PROFUNDIDADE das recomendações: recomendacoes.descricao e opcoesEstrategicas.description têm 3 a 5 frases completas cada, nesta lógica: o que fazer na prática, por que (o problema explicado em linguagem simples, com o número), o que a empresa ganha se fizer, e o primeiro passo concreto. impactoRacional e comoChegou: a conta explicada em PROSA, passo a passo, sem símbolos. destaques continuam curtos, mas sem sigla.
 - Responda APENAS com o JSON.`;
@@ -921,9 +944,11 @@ PRINCÍPIOS (inegociáveis):
           priority: ["p0", "p1", "p2"].includes(o.priority) ? o.priority : "p1",
         }))
       : [],
+    // Os dois quadros: o motor manda o rótulo e o gatilho; a IA só explica.
     estagioCicloVida: ai.estagioCicloVida && typeof ai.estagioCicloVida === "object" ? ai.estagioCicloVida : undefined,
-    situacao: ai.situacao && typeof ai.situacao === "object" ? ai.situacao : undefined,
-    saudeFinanceira: ai.saudeFinanceira && typeof ai.saudeFinanceira === "object" ? ai.saudeFinanceira : undefined,
+    folegoFinanceiro: ai.folegoFinanceiro && typeof ai.folegoFinanceiro === "object" && typeof ai.folegoFinanceiro.leitura === "string"
+      ? { nivel: "", leitura: ai.folegoFinanceiro.leitura }
+      : undefined,
     fatoresChave: Array.isArray(ai.fatoresChave) ? ai.fatoresChave : [],
     revelacoes: Array.isArray(ai.revelacoes) ? ai.revelacoes.filter((r: any) => r && r.titulo) : [],
     valorNaMesa: (() => {
@@ -1022,25 +1047,50 @@ PRINCÍPIOS (inegociáveis):
   // contradizia o título ("7 dias" em cima, "17,5 meses" embaixo).
   if (contaRegressiva) {
     result.contaRegressiva = contaRegressiva;
-    if (result.saudeFinanceira && contaRegressiva.diasDeCaixa != null) {
-      result.saudeFinanceira.diasDeCaixa = Math.round(contaRegressiva.diasDeCaixa);
-      result.saudeFinanceira.mesesDeCaixa = null;
-    }
     // A PROSA TAMBÉM. Zerar o campo numérico não impedia "no ritmo atual o caixa
     // acaba em cerca de 16 meses" na leitura ou numa revelação — a contradição
     // do documento do dono reaberta em outra seção. Frase com segundo relógio é
     // removida (e registrada); revelação cujo achado É o segundo relógio sai.
     if (contaRegressiva.diasDeCaixa != null) removerSegundoRelogio(result);
   }
-  // E A CLASSE DA SITUAÇÃO SEGUE O ESTÁGIO DO MOTOR: "Pressão de caixa" no estágio
-  // com "dificuldade financeira" na situação eram dois nomes para o mesmo fato.
-  if (estagioDet?.estagio === "Pressão de caixa" && result.situacao) {
-    result.situacao.classificacao = "pressão de caixa";
+  // Estágio: o MOTOR manda o rótulo, a justificativa e a solidez; da IA fica só
+  // a `leitura` (como chegou aqui). O nível do fôlego é o da solidez do motor —
+  // o título do quadro e a coluna da matriz saem da MESMA fonte, por construção.
+  const leituraIA = typeof (result.estagioCicloVida as { leitura?: unknown } | undefined)?.leitura === "string"
+    ? (result.estagioCicloVida as { leitura: string }).leitura : undefined;
+  if (estagioDet) {
+    result.estagioCicloVida = { ...estagioDet, ...(leituraIA ? { leitura: leituraIA } : {}) };
+  } else {
+    // SEM ESTÁGIO DO MOTOR (1 período, ou série sem receita): o quadro continua
+    // existindo, com o rótulo e o motivo declarados — "Indeterminado" é um
+    // veredicto honesto, não ausência. A revisão pegou o `else if` pendurado no
+    // `if` errado: o quadro saía com título VAZIO e a leitura da IA solta.
+    // E a SOLIDEZ (a coluna) é calculável com 1 período — o motor já sabia,
+    // só não era chamado nesse caminho.
+    const solidezSozinha = avaliarSolidez(indicadores, periodos) ?? undefined;
+    result.estagioCicloVida = {
+      estagio: "Indeterminado (período curto)",
+      justificativa: periodoInsuficiente
+        ? "O que define o estágio: só há um período na série, sem histórico para avaliar tendência. O estágio fica indeterminado até que haja pelo menos dois períodos comparáveis."
+        : "O que define o estágio: a série não traz receita suficiente para avaliar a trajetória, e o estágio fica indeterminado.",
+      ...(solidezSozinha ? { solidez: solidezSozinha } : {}),
+      ...(leituraIA ? { leitura: leituraIA } : {}),
+    };
   }
-  // Estágio: o MOTOR manda. Sobrescreve o que a IA disser (rótulo estável, "verde só com prova").
-  if (estagioDet) result.estagioCicloVida = estagioDet;
-  else if (periodoInsuficiente && !result.estagioCicloVida) {
-    result.estagioCicloVida = { estagio: "Indeterminado (período curto)", justificativa: "Só há 1 período — sem histórico para avaliar tendência." };
+  // O nível do fôlego é o da solidez do motor — o título do quadro e a coluna
+  // da matriz saem da MESMA fonte. Sem solidez, o quadro fica com o relógio e
+  // a leitura, sem nível: a coluna não foi medida e o título não a inventa.
+  // O QUADRO DE FÔLEGO É DO MOTOR. O nível (a coluna da matriz) e o relógio são
+  // FATOS determinísticos: se a IA omitir o objeto `folegoFinanceiro`, eles
+  // sumiam do quadro junto com a leitura que ela deixou de escrever.
+  const solidezFinal = result.estagioCicloVida?.solidez;
+  const diasDoMotor = contaRegressiva?.diasDeCaixa != null ? Math.round(contaRegressiva.diasDeCaixa) : undefined;
+  if (!result.folegoFinanceiro && (solidezFinal || diasDoMotor != null)) {
+    result.folegoFinanceiro = { nivel: "", leitura: "" };
+  }
+  if (result.folegoFinanceiro) {
+    result.folegoFinanceiro.nivel = solidezFinal?.nivel ?? "";
+    if (diasDoMotor != null) result.folegoFinanceiro.diasDeCaixa = diasDoMotor;
   }
   // Aviso de período curto — some quando há 2+ períodos.
   result.avisoPeriodo = periodoInsuficiente
